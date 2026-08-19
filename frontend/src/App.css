@@ -18,3 +18,8 @@
   font-size: 1.125rem;
   color: #555;
 }
+
+.placeholder .api-status {
+  font-size: 0.875rem;
+  color: #999;
+}

@@ -1,0 +1,11 @@
+[build]
+  base = "frontend"
+  command = "npm run build"
+  # Relative to base — publishes frontend/dist.
+  publish = "dist"
+
+# SPA fallback: every route serves the app shell; client-side routing takes over.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

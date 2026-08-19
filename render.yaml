@@ -1,0 +1,34 @@
+# Render blueprint — dev environment only (backend serves from develop).
+# Prod backend service and custom domain are a later phase.
+services:
+  - type: web
+    name: covey-keep-api
+    runtime: python
+    region: ohio
+    # preDeployCommand requires a paid instance type; free would need
+    # migrations folded into buildCommand instead.
+    plan: starter
+    branch: develop
+    rootDir: backend
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: alembic upgrade head
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.1
+      - key: DATABASE_URL
+        fromDatabase:
+          name: covey-keep-db-dev
+          property: connectionString
+      - key: ALLOWED_ORIGINS
+        value: https://covey-keep.netlify.app,https://develop--covey-keep.netlify.app
+
+databases:
+  - name: covey-keep-db-dev
+    region: ohio
+    # Matches the postgres:16 dev container.
+    postgresMajorVersion: "16"
+    # Free Postgres expires after 30 days; basic-256mb (~$7/mo) does not.
+    plan: basic-256mb
