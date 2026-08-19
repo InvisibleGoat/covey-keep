@@ -1,0 +1,17 @@
+services:
+  covey-keep-db:
+    image: postgres:16
+    container_name: covey-keep-db
+    environment:
+      POSTGRES_USER: covey
+      POSTGRES_PASSWORD: covey
+      POSTGRES_DB: covey_keep_dev
+    ports:
+      # 5434 on the host: a native Windows PostgreSQL service occupies 5432,
+      # and the (stopped) crowdproof-postgres container maps 5433.
+      - "5434:5432"
+    volumes:
+      - covey_keep_db_data:/var/lib/postgresql/data
+
+volumes:
+  covey_keep_db_data:
