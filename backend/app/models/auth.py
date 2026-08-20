@@ -21,6 +21,10 @@ class MagicLinkToken(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     requested_ip: Mapped[Optional[str]] = mapped_column(INET, nullable=True)
+    # The ToS version the requester affirmatively accepted on the sign-in form.
+    # NULL only on pre-CK-6 rows, which recorded no consent — verify refuses to
+    # create an account from a NULL-version token.
+    tos_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = created_at_col()
 
 

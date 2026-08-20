@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app import __version__
+from app.api import auth as auth_api
 from app.api.auth import MAX_REQUESTS_PER_EMAIL
 from app.config import settings
 from app.main import app
@@ -17,9 +18,22 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 LINK_RE = re.compile(r"http://testserver/auth/verify\?token=[A-Za-z0-9_\-]+")
 
+# Verify answers with a 302 into the frontend callback; the payload rides the
+# URL fragment (never the query string — fragments don't reach servers or logs).
+TOKEN_REDIRECT_RE = re.compile(
+    r"^http://localhost:5173/auth/callback"
+    r"#token=[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+$"
+)
+ERROR_REDIRECT = "http://localhost:5173/auth/callback#error=invalid_link"
+
 
 async def _request_link(client, address: str):
-    return await client.post("/auth/request-link", json={"email": address})
+    # The sign-in form always submits affirmative ToS consent (it cannot know
+    # whether the address is new — that would be enumeration).
+    return await client.post(
+        "/auth/request-link",
+        json={"email": address, "tos_accepted": True, "tos_version": 1},
+    )
 
 
 async def _capture_link(client, capsys, address: str) -> str:
@@ -31,11 +45,19 @@ async def _capture_link(client, capsys, address: str) -> str:
     return match.group(0)
 
 
+async def _verify(client, link: str) -> str:
+    """GET the magic link and return the redirect Location."""
+    response = await client.get(link)
+    assert response.status_code == 302, response.text
+    return response.headers["location"]
+
+
 async def _sign_in(client, capsys, address: str) -> str:
     link = await _capture_link(client, capsys, address)
-    response = await client.get(link)
-    assert response.status_code == 200, response.text
-    return response.json()["token"]
+    location = await _verify(client, link)
+    match = TOKEN_REDIRECT_RE.match(location)
+    assert match, f"expected a token-fragment redirect, got {location!r}"
+    return location.split("#token=", 1)[1]
 
 
 async def test_happy_path_end_to_end(client, capsys, db_session_factory):
@@ -75,26 +97,27 @@ async def test_expired_token_rejected(client, capsys, db_session_factory):
         row = (await db.execute(select(MagicLinkToken))).scalars().one()
         row.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
         await db.commit()
-    response = await client.get(link)
-    assert response.status_code == 400
+    assert (await _verify(client, link)) == ERROR_REDIRECT
 
 
 async def test_reused_token_rejected(client, capsys):
     link = await _capture_link(client, capsys, "replay@example.com")
-    assert (await client.get(link)).status_code == 200
-    assert (await client.get(link)).status_code == 400
+    assert TOKEN_REDIRECT_RE.match(await _verify(client, link))
+    assert (await _verify(client, link)) == ERROR_REDIRECT
 
 
 async def test_garbage_token_rejected(client):
-    response = await client.get("/auth/verify", params={"token": "not-a-real-token"})
-    assert response.status_code == 400
+    # Garbage and absent tokens both land on the same uniform error redirect —
+    # a mangled copy-paste gets the expired-link screen, not a JSON error.
+    assert (await _verify(client, "/auth/verify?token=not-a-real-token")) == ERROR_REDIRECT
+    assert (await _verify(client, "/auth/verify")) == ERROR_REDIRECT
 
 
 async def test_new_link_invalidates_outstanding_one(client, capsys):
     first = await _capture_link(client, capsys, "again@example.com")
     second = await _capture_link(client, capsys, "again@example.com")
-    assert (await client.get(first)).status_code == 400
-    assert (await client.get(second)).status_code == 200
+    assert (await _verify(client, first)) == ERROR_REDIRECT
+    assert TOKEN_REDIRECT_RE.match(await _verify(client, second))
 
 
 async def test_unknown_and_known_email_responses_byte_identical(client, capsys):
@@ -138,6 +161,60 @@ async def test_rate_limit_trips(client):
     assert (await _request_link(client, "eager@example.com")).status_code == 429
 
 
+async def test_request_link_requires_affirmative_tos(client, db_session_factory):
+    # Absent and unchecked are both rejected before any token is minted — an
+    # account must never be creatable from a request that carried no consent.
+    absent = await client.post("/auth/request-link", json={"email": "keen@example.com"})
+    unchecked = await client.post(
+        "/auth/request-link",
+        json={"email": "keen@example.com", "tos_accepted": False, "tos_version": 1},
+    )
+    assert absent.status_code == 422
+    assert unchecked.status_code == 422
+    async with db_session_factory() as db:
+        assert (await db.scalar(select(func.count()).select_from(MagicLinkToken))) == 0
+
+
+async def test_unknown_tos_version_rejected(client):
+    response = await client.post(
+        "/auth/request-link",
+        json={"email": "keen@example.com", "tos_accepted": True, "tos_version": 99},
+    )
+    assert response.status_code == 422
+
+
+async def test_acceptance_records_the_version_the_client_sent(
+    client, capsys, monkeypatch, db_session_factory
+):
+    # The acceptance row must carry what the person actually agreed to, not a
+    # hardcoded 1: publish version 2, accept version 2, expect 2 recorded.
+    monkeypatch.setattr(auth_api, "TOS_VERSION", 2)
+    response = await client.post(
+        "/auth/request-link",
+        json={"email": "versioned@example.com", "tos_accepted": True, "tos_version": 2},
+    )
+    assert response.status_code == 202
+    match = LINK_RE.search(capsys.readouterr().out)
+    assert match, "no magic link in console output"
+    assert TOKEN_REDIRECT_RE.match(await _verify(client, match.group(0)))
+    async with db_session_factory() as db:
+        acceptance = (await db.execute(select(TosAcceptance))).scalars().one()
+        assert acceptance.version == 2
+
+
+async def test_pre_ck6_token_cannot_create_account(client, capsys, db_session_factory):
+    # A token minted before CK-6 (tos_version NULL) recorded no consent, so it
+    # must never create an account — that would be the assumed-consent bug back.
+    link = await _capture_link(client, capsys, "grandfathered@example.com")
+    async with db_session_factory() as db:
+        row = (await db.execute(select(MagicLinkToken))).scalars().one()
+        row.tos_version = None
+        await db.commit()
+    assert (await _verify(client, link)) == ERROR_REDIRECT
+    async with db_session_factory() as db:
+        assert (await db.scalar(select(func.count()).select_from(Person))) == 0
+
+
 async def test_tokens_stored_hashed_only(client, capsys, db_session_factory):
     link = await _capture_link(client, capsys, "hashed@example.com")
     raw_token = link.split("token=", 1)[1]
@@ -166,12 +243,13 @@ async def test_forwarded_client_ip_recorded_not_proxy_peer(capsys, db_session_fa
         headers={"X-Forwarded-For": forwarded_ip},
     ) as forwarded:
         response = await forwarded.post(
-            "/auth/request-link", json={"email": "behind-proxy@example.com"}
+            "/auth/request-link",
+            json={"email": "behind-proxy@example.com", "tos_accepted": True, "tos_version": 1},
         )
         assert response.status_code == 202
         match = LINK_RE.search(capsys.readouterr().out)
         assert match, "no magic link in console output"
-        assert (await forwarded.get(match.group(0))).status_code == 200
+        assert (await forwarded.get(match.group(0))).status_code == 302
 
     async with db_session_factory() as db:
         token_row = (await db.execute(select(MagicLinkToken))).scalars().one()

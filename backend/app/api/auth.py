@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,9 +35,18 @@ REQUEST_LINK_RESPONSE = {
     "detail": "If that address can receive email, a sign-in link is on its way."
 }
 
-# Missing, expired, and already-consumed tokens are deliberately
-# indistinguishable — one uniform rejection.
-_INVALID_LINK = "This sign-in link is invalid, expired, or already used."
+# Missing, expired, already-consumed, and consent-less tokens are deliberately
+# indistinguishable — one uniform error redirect into the frontend callback.
+_ERROR_FRAGMENT = "error=invalid_link"
+
+
+def _callback_redirect(fragment: str) -> RedirectResponse:
+    # The payload rides the URL FRAGMENT, never the query string: fragments are
+    # not sent to servers, do not land in access logs, and are not leaked in
+    # Referer (decisions/2026-08-20-browser-session-storage.md).
+    return RedirectResponse(
+        f"{settings.app_base_url}/auth/callback#{fragment}", status_code=302
+    )
 
 
 def _client_ip(request: Request) -> Optional[str]:
@@ -51,6 +61,11 @@ def _client_ip(request: Request) -> Optional[str]:
 
 class RequestLinkBody(BaseModel):
     email: str
+    # Roadmap §2: ToS agreed by affirmative checkbox at signup. The form cannot
+    # know whether the address is new (that would be enumeration), so consent is
+    # collected on every request and recorded only at account creation.
+    tos_accepted: bool
+    tos_version: int
 
     @field_validator("email")
     @classmethod
@@ -58,6 +73,21 @@ class RequestLinkBody(BaseModel):
         value = value.strip().lower()
         if "@" not in value.strip("@") or " " in value or len(value) > 320:
             raise ValueError("not an email address")
+        return value
+
+    @field_validator("tos_accepted")
+    @classmethod
+    def _affirmative(cls, value: bool) -> bool:
+        if value is not True:
+            raise ValueError("the Terms of Service must be affirmatively accepted")
+        return value
+
+    @field_validator("tos_version")
+    @classmethod
+    def _known_version(cls, value: int) -> int:
+        # Module global read at call time, not bound at class creation.
+        if not 1 <= value <= TOS_VERSION:
+            raise ValueError("unknown Terms of Service version")
         return value
 
 
@@ -107,6 +137,7 @@ async def request_link(
             token_hash=hash_token(raw_token),
             expires_at=now + TOKEN_TTL,
             requested_ip=client_ip,
+            tos_version=body.tos_version,
         )
     )
     # Commit before the send: the token record exists whether or not delivery works.
@@ -127,7 +158,9 @@ async def request_link(
 
 
 @router.get("/verify")
-async def verify(token: str, request: Request, db: AsyncSession = Depends(get_db)) -> dict:
+async def verify(
+    request: Request, db: AsyncSession = Depends(get_db), token: str = ""
+) -> RedirectResponse:
     now = datetime.now(timezone.utc)
     supplied_hash = hash_token(token)
     row = (
@@ -139,23 +172,30 @@ async def verify(token: str, request: Request, db: AsyncSession = Depends(get_db
         or row.consumed_at is not None
         or row.expires_at <= now
     ):
-        raise HTTPException(400, _INVALID_LINK)
-
-    row.consumed_at = now
+        return _callback_redirect(_ERROR_FRAGMENT)
 
     person = (
         await db.execute(select(Person).where(Person.email == row.email))
     ).scalar_one_or_none()
+    if person is None and row.tos_version is None:
+        # Pre-CK-6 token: no consent was collected when it was minted, so no
+        # account may be created from it. (Existing people are unaffected —
+        # a returning sign-in records no new acceptance.)
+        return _callback_redirect(_ERROR_FRAGMENT)
+
+    row.consumed_at = now
+
     if person is None:
-        # New account: local-part placeholder display name; ToS acceptance is
-        # recorded at creation (roadmap §2), versioned — the copy is a later pass.
+        # New account: local-part placeholder display name; the ToS acceptance
+        # is recorded from the version the person actually agreed to on the
+        # sign-in form (carried on the token row), never assumed.
         person = Person(display_name=row.email.split("@", 1)[0], email=row.email)
         db.add(person)
         await db.flush()
         db.add(
             TosAcceptance(
                 person_id=person.id,
-                version=TOS_VERSION,
+                version=row.tos_version,
                 accepted_at=now,
                 accepted_ip=_client_ip(request),
             )
@@ -177,8 +217,7 @@ async def verify(token: str, request: Request, db: AsyncSession = Depends(get_db
         expires_at=session.expires_at,
         secret=settings.session_secret,
     )
-    # Dev-only JSON response — CK-6 replaces this with a redirect into the frontend.
-    return {"token": jwt, "token_type": "bearer"}
+    return _callback_redirect(f"token={jwt}")
 
 
 @router.get("/me")
