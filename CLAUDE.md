@@ -1,11 +1,12 @@
 # Covey Keep — Repo Operational Guide
 
-**Version:** 1.2.0
+**Version:** 1.3.0
 **Last Updated:** 2026-08-19
-**Source:** Phase CK-2 (code repo creation + scaffolds); Phase CK-3 (first migration); Phase CK-4 (deploy skeleton).
+**Source:** Phase CK-2 (code repo creation + scaffolds); Phase CK-3 (first migration); Phase CK-4 (deploy skeleton); Phase CK-5 (magic-link auth, console-mode email).
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.3.0** (2026-08-19): Phase CK-5 — auth endpoints + migration 0002, pytest suite (requirements-dev.txt, test DB on the docker container), auth env surface (SESSION_SECRET et al.), PWA autoUpdate.
 - **1.2.0** (2026-08-19): Phase CK-4 — Netlify + Render dev deploys (netlify.toml, render.yaml), CORS via ALLOWED_ORIGINS, frontend /health probe.
 - **1.1.0** (2026-08-18): Phase CK-3 — dev DB via docker compose (host port 5434), SQLAlchemy models, Alembic migration 0001.
 - **1.0.0** (2026-08-17): Initial creation at repo scaffold (Phase CK-2).
@@ -31,17 +32,24 @@ docker compose down              # stop it (named volume persists data)
 
 The container maps host port **5434** (not 5432 — a native Windows PostgreSQL 17
 service owns 5432, and the stopped crowdproof-postgres container maps 5433).
-`DATABASE_URL` lives in `backend/.env` (gitignored; template in `backend/.env.example`).
+All backend env vars live in `backend/.env` (gitignored; template with the full
+surface in `backend/.env.example` — since CK-5 that includes `SESSION_SECRET`,
+`APP_BASE_URL`, `API_BASE_URL`, `EMAIL_MODE`; the first three are required, so
+an `.env` missing them crashes uvicorn/alembic on boot).
 
 ### Backend (`backend/`)
 
 ```
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # runtime deps + pytest/httpx (dev machines)
 uvicorn app.main:app --reload    # run from backend/
 alembic upgrade head             # apply migrations (dev DB must be up)
 alembic downgrade base           # tear schema back down
 alembic revision --autogenerate -m "..."   # new migration; always hand-review
+pytest                           # dev DB container must be up: the suite drops +
+                                 # recreates covey_keep_test on it and migrates to head
 ```
+
+Render installs `requirements.txt` only — test deps stay in `requirements-dev.txt`.
 
 ### Deploys (push-driven; no local commands)
 
@@ -60,6 +68,15 @@ alembic revision --autogenerate -m "..."   # new migration; always hand-review
   automatically; a failing migration aborts the deploy.
 - Backend CORS origins come from `ALLOWED_ORIGINS` (comma-separated), set in
   `render.yaml`; code default is `http://localhost:5173`.
+- Auth env surface (CK-5): `APP_BASE_URL` / `API_BASE_URL` / `EMAIL_MODE=console`
+  are literal values in `render.yaml`; **`SESSION_SECRET` is `sync: false`** —
+  the blueprint declares the slot, the Render dashboard holds the value (Render
+  never populates a `sync: false` var added after the service exists). The app
+  crashes on boot without it, by design.
+- Email is **console mode**: magic links print to the Render service logs; no
+  provider, no real sends. The flip to real delivery is its own later phase
+  (family transactional-email standard v1.0.0) — never flip `EMAIL_MODE` as a
+  side effect of another change.
 - No backend prod service yet — dev-first; prod cutover is its own later phase.
 
 ## Directory map
@@ -70,12 +87,16 @@ covey-keep/
 │   ├── src/           # App entry (main.tsx, App.tsx — /health probe placeholder)
 │   └── public/        # static assets
 ├── backend/           # Python + FastAPI
-│   ├── app/           # main.py — FastAPI instance, CORS, GET /health
-│   │   ├── config.py  # pydantic-settings; DATABASE_URL (asyncpg-normalized), ALLOWED_ORIGINS
+│   ├── app/           # main.py — FastAPI instance, CORS, GET /health, auth router
+│   │   ├── config.py  # pydantic-settings; DATABASE_URL (asyncpg-normalized), ALLOWED_ORIGINS, auth surface
 │   │   ├── db.py      # async engine + session factory
-│   │   └── models/    # Phase 1 spine (one module per cluster; enums in enums.py)
-│   ├── alembic/       # async-template env; versions/0001 = Phase 1 spine
-│   └── .env.example   # DATABASE_URL template (copy to .env)
+│   │   ├── security.py# token hashing + stdlib HS256 session JWT
+│   │   ├── api/       # deps.py (get_db + get_auth_context — every endpoint's auth gate), auth.py
+│   │   ├── services/  # email.py — two-mode adapter (console | provider), standard v1.0.0
+│   │   └── models/    # Phase 1 spine + auth (one module per cluster; enums in enums.py)
+│   ├── alembic/       # async-template env; 0001 = Phase 1 spine, 0002 = auth + household ladder
+│   ├── tests/         # pytest + httpx ASGI suite (test_auth.py; conftest owns the test DB)
+│   └── .env.example   # full env template (copy to .env)
 ├── docker-compose.yml # dev DB: covey-keep-db, postgres:16, host port 5434
 ├── netlify.toml       # frontend build + SPA redirect
 ├── render.yaml        # Render blueprint: covey-keep-api + covey-keep-db-dev

@@ -24,6 +24,19 @@ services:
           property: connectionString
       - key: ALLOWED_ORIGINS
         value: https://covey-keep.netlify.app,https://develop--covey-keep.netlify.app
+      - key: APP_BASE_URL
+        value: https://develop--covey-keep.netlify.app
+      - key: API_BASE_URL
+        value: https://covey-keep-api.onrender.com
+      # Console mode prints magic links to the service logs. The flip to real
+      # delivery (provider mode) is its own later phase, per the family
+      # transactional-email standard.
+      - key: EMAIL_MODE
+        value: console
+      # Slot only — Render never populates a sync:false var added after the
+      # service exists; the value is hand-set in the dashboard (CK-5 OOB step).
+      - key: SESSION_SECRET
+        sync: false
 
 databases:
   - name: covey-keep-db-dev

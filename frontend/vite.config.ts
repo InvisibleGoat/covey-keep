@@ -7,6 +7,9 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
+      // Replace the app shell on deploy — the default strategy kept serving a
+      // stale bundle across deploys (bit during CK-4 verification).
+      registerType: 'autoUpdate',
       manifest: {
         name: 'Covey Keep',
         short_name: 'Covey Keep',
