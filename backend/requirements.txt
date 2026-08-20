@@ -4,3 +4,7 @@ sqlalchemy[asyncio]
 asyncpg
 alembic
 pydantic-settings
+# IANA tz database for zoneinfo. Load-bearing on Windows dev machines (no
+# system tzdb → available_timezones() would be empty and every profile
+# timezone would 422); on Linux it is a consistent first-party source.
+tzdata

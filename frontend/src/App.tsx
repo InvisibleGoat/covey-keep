@@ -3,6 +3,7 @@ import './App.css'
 import { RequireAuth } from './components/RequireAuth'
 import { AuthCallback } from './routes/AuthCallback'
 import { Home } from './routes/Home'
+import { Settings } from './routes/Settings'
 import { SignIn } from './routes/SignIn'
 import { Tos } from './routes/Tos'
 
@@ -16,6 +17,14 @@ function App() {
         element={
           <RequireAuth>
             <Home />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <RequireAuth>
+            <Settings />
           </RequireAuth>
         }
       />

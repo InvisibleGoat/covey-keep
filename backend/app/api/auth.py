@@ -226,6 +226,9 @@ async def me(ctx: AuthContext = Depends(get_auth_context)) -> dict:
         "id": str(ctx.person.id),
         "display_name": ctx.person.display_name,
         "email": ctx.person.email,
+        # The auth context is what the frontend holds; timezone rides along so
+        # the client can tell "never captured" (null) from a set value (CK-7).
+        "timezone": ctx.person.timezone,
     }
 
 

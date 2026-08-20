@@ -1,11 +1,12 @@
 # Covey Keep — Repo Operational Guide
 
-**Version:** 1.4.0
+**Version:** 1.5.0
 **Last Updated:** 2026-08-20
-**Source:** Phase CK-2 (code repo creation + scaffolds); Phase CK-3 (first migration); Phase CK-4 (deploy skeleton); Phase CK-5 (magic-link auth, console-mode email); Phase CK-6 (sign-in UI, token handoff, affirmative ToS consent).
+**Source:** Phase CK-2 (code repo creation + scaffolds); Phase CK-3 (first migration); Phase CK-4 (deploy skeleton); Phase CK-5 (magic-link auth, console-mode email); Phase CK-6 (sign-in UI, token handoff, affirmative ToS consent); Phase CK-7 (profile core: display name + IANA timezone).
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.5.0** (2026-08-20): Phase CK-7 — migration 0004 (`people.timezone` **IANA zone name, never a UTC offset**; `people.updated_at`; display-name CHECK), `/me/profile` GET+PATCH, `/settings` screen, silent one-time browser-timezone capture on first sign-in; `tzdata` in requirements (Windows has no system tzdb).
 - **1.4.0** (2026-08-20): Phase CK-6 — frontend auth (sign-in screen, `/auth/callback` fragment handoff, localStorage session, react-router-dom); `/auth/verify` now 302s into the frontend; request-link body carries affirmative ToS consent; migration 0003.
 - **1.3.0** (2026-08-19): Phase CK-5 — auth endpoints + migration 0002, pytest suite (requirements-dev.txt, test DB on the docker container), auth env surface (SESSION_SECRET et al.), PWA autoUpdate.
 - **1.2.0** (2026-08-19): Phase CK-4 — Netlify + Render dev deploys (netlify.toml, render.yaml), CORS via ALLOWED_ORIGINS, frontend /health probe.
@@ -94,19 +95,19 @@ covey-keep/
 │   ├── src/           # main.tsx (router + AuthProvider), App.tsx (route table)
 │   │   ├── auth/      # AuthContext.tsx — session state, signIn/signOut, /auth/me load
 │   │   ├── components/# RequireAuth route guard
-│   │   ├── lib/       # api.ts (fetch wrappers, 401 → clear session), session.ts (localStorage)
-│   │   └── routes/    # SignIn (ToS checkbox + /health probe), AuthCallback, Home, Tos
+│   │   ├── lib/       # api.ts (fetch wrappers, 401 → clear session), session.ts (localStorage), timezone.ts (IANA helpers)
+│   │   └── routes/    # SignIn (ToS checkbox + /health probe), AuthCallback, Home, Settings, Tos
 │   └── public/        # static assets
 ├── backend/           # Python + FastAPI
 │   ├── app/           # main.py — FastAPI instance, CORS, GET /health, auth router
 │   │   ├── config.py  # pydantic-settings; DATABASE_URL (asyncpg-normalized), ALLOWED_ORIGINS, auth surface
 │   │   ├── db.py      # async engine + session factory
 │   │   ├── security.py# token hashing + stdlib HS256 session JWT
-│   │   ├── api/       # deps.py (get_db + get_auth_context — every endpoint's auth gate), auth.py
+│   │   ├── api/       # deps.py (get_db + get_auth_context — every endpoint's auth gate), auth.py, profile.py
 │   │   ├── services/  # email.py — two-mode adapter (console | provider), standard v1.0.0
 │   │   └── models/    # Phase 1 spine + auth (one module per cluster; enums in enums.py)
-│   ├── alembic/       # async-template env; 0001 = Phase 1 spine, 0002 = auth + household ladder, 0003 = token ToS version
-│   ├── tests/         # pytest + httpx ASGI suite (test_auth.py; conftest owns the test DB)
+│   ├── alembic/       # async-template env; 0001 = Phase 1 spine, 0002 = auth + household ladder, 0003 = token ToS version, 0004 = profile columns (IANA timezone, updated_at)
+│   ├── tests/         # pytest + httpx ASGI suite (test_auth.py, test_profile.py; conftest owns the test DB)
 │   └── .env.example   # full env template (copy to .env)
 ├── docker-compose.yml # dev DB: covey-keep-db, postgres:16, host port 5434
 ├── netlify.toml       # frontend build + SPA redirect

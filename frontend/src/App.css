@@ -48,11 +48,14 @@
   font-size: 0.9375rem;
 }
 
-.auth-card input[type='email'] {
+.auth-card input[type='email'],
+.auth-card input[type='text'],
+.auth-card select {
   padding: 0.5rem 0.625rem;
   font-size: 1rem;
   border: 1px solid #bbb;
   border-radius: 0.25rem;
+  background: #fff;
 }
 
 .tos-row {
@@ -90,6 +93,16 @@
 .form-error {
   font-size: 0.9375rem;
   color: #b3261e;
+}
+
+.form-success {
+  font-size: 0.9375rem;
+  color: #1a7f37;
+}
+
+.auth-card .field-hint {
+  font-size: 0.8125rem;
+  color: #888;
 }
 
 .auth-screen .api-status {
