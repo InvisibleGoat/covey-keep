@@ -5,14 +5,20 @@ from zoneinfo import available_timezones
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, get_auth_context, get_db
-from app.models import Person
+from app.models import MagicLinkToken, Person, Session
 
 router = APIRouter(prefix="/me", tags=["me"])
 
 MAX_DISPLAY_NAME_LENGTH = 120
+
+# The neutral historical label an anonymized person's contributions are
+# attributed to (decision record 2026-08-19). Deliberately lowercase — it
+# reads as a description in "shared by a former member", not as a name.
+ANONYMIZED_DISPLAY_NAME = "a former member"
 
 
 @lru_cache(maxsize=1)
@@ -26,7 +32,7 @@ def iana_zones() -> frozenset[str]:
 
 class ProfilePatch(BaseModel):
     # Nothing else on people is patchable. Email is deliberately NOT here —
-    # changing the sign-in address is a security surface of its own (CK-8),
+    # changing the sign-in address is a security surface of its own (CK-9),
     # never a settings-form field. extra="forbid" makes an attempt a 422
     # instead of a silent no-op.
     model_config = ConfigDict(extra="forbid")
@@ -94,3 +100,56 @@ async def patch_profile(
     person.updated_at = datetime.now(timezone.utc)
     await db.commit()
     return _profile_body(person)
+
+
+class DeleteAccountBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: str
+
+    @field_validator("confirm")
+    @classmethod
+    def _typed_confirmation(cls, value: str) -> str:
+        # The literal string, exactly — no trimming, no case-folding. The
+        # typed confirmation is the whole point of the field; a forgiving
+        # match would quietly weaken it.
+        if value != "DELETE":
+            raise ValueError('account deletion requires the exact confirmation "DELETE"')
+        return value
+
+
+@router.post("/delete", status_code=204)
+async def delete_account(
+    body: DeleteAccountBody,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Account deletion by anonymization (CK-8, decision record 2026-08-19).
+
+    Identity and auth material are destroyed; contributions stay where they
+    are, attributed to the anonymized row — cascade deletion would let any
+    member hollow out every group they ever contributed to. Irreversibility is
+    a requirement: nothing derived from the old address (hash, fingerprint)
+    may be stored anywhere. `tos_acceptances` is deliberately retained — the
+    audit record of contract formation, now pointing at a row with no PII.
+    """
+    person = ctx.person
+    old_email = person.email
+    now = datetime.now(timezone.utc)
+
+    person.email = None
+    person.display_name = ANONYMIZED_DISPLAY_NAME
+    person.timezone = None
+    person.anonymized_at = now
+    person.updated_at = now
+
+    # Hard-delete (not revoke) every piece of auth material: all sessions —
+    # every device, not just this one — and any magic-link tokens for the old
+    # address, consumed or not, since their rows carry the address itself.
+    await db.execute(delete(Session).where(Session.person_id == person.id))
+    if old_email is not None:
+        await db.execute(delete(MagicLinkToken).where(MagicLinkToken.email == old_email))
+
+    # One commit = one transaction: anonymization and auth-material deletion
+    # land together or not at all.
+    await db.commit()

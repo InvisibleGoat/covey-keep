@@ -110,3 +110,33 @@
   font-size: 0.875rem;
   color: #999;
 }
+
+/* Destructive section (CK-8): visually separated from routine settings —
+   the red border is the "this card is different" signal, not decoration. */
+.danger-zone {
+  margin-top: 1.5rem;
+  border-color: #b3261e;
+}
+
+.danger-zone h2 {
+  font-size: 1.125rem;
+  color: #b3261e;
+  text-align: left;
+}
+
+.auth-card .danger-explainer {
+  font-size: 0.9375rem;
+  text-align: left;
+}
+
+.auth-screen .danger-button {
+  border-color: #b3261e;
+  color: #b3261e;
+  background: #fff;
+}
+
+.auth-screen .danger-button:disabled {
+  border-color: #bbb;
+  color: #999;
+  cursor: not-allowed;
+}

@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import './App.css'
 import { RequireAuth } from './components/RequireAuth'
+import { AccountDeleted } from './routes/AccountDeleted'
 import { AuthCallback } from './routes/AuthCallback'
 import { Home } from './routes/Home'
 import { Settings } from './routes/Settings'
@@ -29,6 +30,7 @@ function App() {
         }
       />
       <Route path="/tos" element={<Tos />} />
+      <Route path="/account-deleted" element={<AccountDeleted />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

@@ -62,7 +62,11 @@ async def get_auth_context(
         raise _unauthorized()
 
     person = await db.get(Person, person_id)
-    if person is None:
+    if person is None or person.anonymized_at is not None:
+        # An anonymized person is no longer a user. Deletion hard-deletes the
+        # sessions rows, so normally this arm is unreachable — but a token
+        # minted before deletion must fail HERE too, not merely usually: this
+        # check is what makes the guarantee true rather than likely (CK-8).
         raise _unauthorized()
 
     session.last_seen_at = now

@@ -39,4 +39,12 @@ class Person(Base):
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Set once, by account deletion (CK-8). This stamp ALONE marks a row as
+    # anonymized — there is deliberately no boolean that could disagree with
+    # it. An anonymized row keeps its contributions (provenance) but has no
+    # email, a neutral display name, and no auth material; the auth gate
+    # rejects it even on a validly signed JWT.
+    anonymized_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = created_at_col()

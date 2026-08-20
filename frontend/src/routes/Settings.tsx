@@ -1,7 +1,8 @@
 import { useMemo, useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { authFetch } from '../lib/api'
+import { clearToken } from '../lib/session'
 import { detectTimeZone, groupedTimeZones, timeZoneLabel } from '../lib/timezone'
 import type { Person } from '../auth/context'
 
@@ -25,12 +26,15 @@ function humanize(msg: string): string {
 
 export function Settings() {
   const { person, updatePerson } = useAuth()
+  const navigate = useNavigate()
   const [displayName, setDisplayName] = useState(person?.display_name ?? '')
   // Pre-select the stored zone; a never-captured profile falls back to the
   // browser-detected one so the select opens on something sensible.
   const [timeZone, setTimeZone] = useState(person?.timezone ?? detectTimeZone() ?? '')
   const [saveState, setSaveState] = useState<SaveState>('idle')
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
+  const [deleteConfirm, setDeleteConfirm] = useState('')
+  const [deleteState, setDeleteState] = useState<'idle' | 'deleting' | 'failed'>('idle')
 
   const groups = useMemo(() => groupedTimeZones(person?.timezone), [person?.timezone])
 
@@ -74,6 +78,29 @@ export function Settings() {
       }
     } catch {
       setSaveState('failed')
+    }
+  }
+
+  async function handleDelete() {
+    setDeleteState('deleting')
+    try {
+      // The typed value is sent as-is — the server independently verifies the
+      // literal string, so the disabled-button check is UX, not the gate.
+      const response = await authFetch('/me/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: deleteConfirm }),
+      })
+      if (response.status === 204) {
+        // Batched with the navigation: the confirmation screen renders, not a
+        // RequireAuth bounce to the sign-in form with no explanation.
+        navigate('/account-deleted', { replace: true })
+        clearToken()
+      } else {
+        setDeleteState('failed')
+      }
+    } catch {
+      setDeleteState('failed')
     }
   }
 
@@ -129,6 +156,40 @@ export function Settings() {
           <p className="form-error">Something went wrong saving your settings. Try again.</p>
         )}
       </form>
+
+      {/* Deliberately a section, not part of the form above: Enter in a
+          profile field must never reach anything destructive. */}
+      <section className="auth-card danger-zone" aria-labelledby="delete-heading">
+        <h2 id="delete-heading">Delete your account</h2>
+        <p className="danger-explainer">
+          Your account and your name are removed; what you contributed stays with the
+          gatherings you gave it to. This cannot be undone.
+        </p>
+        <label htmlFor="delete-confirm">
+          Type <strong>DELETE</strong> to confirm
+        </label>
+        <input
+          id="delete-confirm"
+          type="text"
+          autoComplete="off"
+          value={deleteConfirm}
+          onChange={(event) => {
+            setDeleteConfirm(event.target.value)
+            if (deleteState === 'failed') setDeleteState('idle')
+          }}
+        />
+        <button
+          type="button"
+          className="danger-button"
+          disabled={deleteConfirm !== 'DELETE' || deleteState === 'deleting'}
+          onClick={() => void handleDelete()}
+        >
+          {deleteState === 'deleting' ? 'Deleting…' : 'Delete my account'}
+        </button>
+        {deleteState === 'failed' && (
+          <p className="form-error">Something went wrong deleting your account. Try again.</p>
+        )}
+      </section>
 
       <Link to="/home">Back to your gatherings</Link>
     </main>
