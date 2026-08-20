@@ -13,7 +13,14 @@ services:
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
     preDeployCommand: alembic upgrade head
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # --forwarded-allow-ips="*" is safe HERE ONLY because Render's load
+    # balancer is the sole ingress to the service port — the app is not
+    # otherwise reachable, so every peer is the proxy. Never copy the
+    # wildcard to a service whose port is directly reachable. Without these
+    # flags uvicorn trusts only 127.0.0.1, ignores X-Forwarded-For, and every
+    # request records the load balancer's address as the client (breaking the
+    # per-IP rate limit and the tos_acceptances.accepted_ip audit trail).
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION

@@ -1,13 +1,19 @@
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app import __version__
 from app.api.auth import MAX_REQUESTS_PER_EMAIL
 from app.config import settings
+from app.main import app
 from app.models import MagicLinkToken, Person, Session, TosAcceptance
 from app.services import email as email_service
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 LINK_RE = re.compile(r"http://testserver/auth/verify\?token=[A-Za-z0-9_\-]+")
 
@@ -140,6 +146,52 @@ async def test_tokens_stored_hashed_only(client, capsys, db_session_factory):
         assert row.token_hash != raw_token
         assert raw_token not in row.token_hash
         assert re.fullmatch(r"[0-9a-f]{64}", row.token_hash)
+
+
+async def test_forwarded_client_ip_recorded_not_proxy_peer(capsys, db_session_factory):
+    # On Render the socket peer is always the load balancer; the real client
+    # arrives in X-Forwarded-For. This wraps the app in the exact middleware
+    # uvicorn applies when render.yaml's start command passes
+    # --proxy-headers --forwarded-allow-ips="*", and asserts the recorded IPs
+    # are the forwarded client, not the immediate peer.
+    forwarded_ip = "203.0.113.9"
+    proxy_peer = "10.210.4.7"
+    transport = ASGITransport(
+        app=ProxyHeadersMiddleware(app, trusted_hosts="*"),
+        client=(proxy_peer, 51234),
+    )
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={"X-Forwarded-For": forwarded_ip},
+    ) as forwarded:
+        response = await forwarded.post(
+            "/auth/request-link", json={"email": "behind-proxy@example.com"}
+        )
+        assert response.status_code == 202
+        match = LINK_RE.search(capsys.readouterr().out)
+        assert match, "no magic link in console output"
+        assert (await forwarded.get(match.group(0))).status_code == 200
+
+    async with db_session_factory() as db:
+        token_row = (await db.execute(select(MagicLinkToken))).scalars().one()
+        assert str(token_row.requested_ip) == forwarded_ip
+        tos_row = (await db.execute(select(TosAcceptance))).scalars().one()
+        assert str(tos_row.accepted_ip) == forwarded_ip
+
+
+def test_render_start_command_trusts_proxy_headers():
+    # Config pin: the middleware test above proves the mechanism, but only
+    # these flags in render.yaml make it real on the deployed service — and
+    # they are exactly the kind of flag a future tidy-up deletes. Without
+    # them uvicorn trusts only 127.0.0.1 and every deployed request records
+    # Render's load balancer as the client.
+    render_yaml = (REPO_ROOT / "render.yaml").read_text(encoding="utf-8")
+    start_line = next(
+        line for line in render_yaml.splitlines() if "startCommand:" in line
+    )
+    assert "--proxy-headers" in start_line
+    assert '--forwarded-allow-ips="*"' in start_line
 
 
 def test_provider_request_sends_real_user_agent(monkeypatch):

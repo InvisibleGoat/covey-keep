@@ -19,6 +19,10 @@ TOKEN_TTL = timedelta(minutes=15)
 SESSION_TTL = timedelta(days=30)
 RATE_WINDOW = timedelta(minutes=15)
 MAX_REQUESTS_PER_EMAIL = 5
+# Defence-in-depth only. Behind the proxy the client identity comes from
+# X-Forwarded-For, whose leftmost value a caller can rotate at will — so this
+# cap is evadable and must never be treated as the load-bearing limit.
+# MAX_REQUESTS_PER_EMAIL above is what actually protects an account.
 MAX_REQUESTS_PER_IP = 20
 TOS_VERSION = 1
 
@@ -36,6 +40,12 @@ _INVALID_LINK = "This sign-in link is invalid, expired, or already used."
 
 
 def _client_ip(request: Request) -> Optional[str]:
+    # request.client is the real client (not Render's load balancer) only
+    # because the deployed start command (render.yaml) runs uvicorn with
+    # --proxy-headers --forwarded-allow-ips="*", which rewrites the peer
+    # address from X-Forwarded-For at the server layer. Never hand-parse
+    # forwarding headers here — that would be a second, divergent
+    # implementation of what uvicorn already does.
     return request.client.host if request.client else None
 
 
