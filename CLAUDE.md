@@ -1,11 +1,12 @@
 # Covey Keep — Repo Operational Guide
 
-**Version:** 1.6.0
+**Version:** 1.7.0
 **Last Updated:** 2026-08-20
-**Source:** Phase CK-2 (code repo creation + scaffolds); Phase CK-3 (first migration); Phase CK-4 (deploy skeleton); Phase CK-5 (magic-link auth, console-mode email); Phase CK-6 (sign-in UI, token handoff, affirmative ToS consent); Phase CK-7 (profile core: display name + IANA timezone); Phase CK-8 (account deletion by anonymization).
+**Source:** Phase CK-2 (code repo creation + scaffolds); Phase CK-3 (first migration); Phase CK-4 (deploy skeleton); Phase CK-5 (magic-link auth, console-mode email); Phase CK-6 (sign-in UI, token handoff, affirmative ToS consent); Phase CK-7 (profile core: display name + IANA timezone); Phase CK-8 (account deletion by anonymization); Phase CK-8.1 (PWA update lifecycle owned in application code).
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.7.0** (2026-08-20): Phase CK-8.1 — service-worker registration owned by `PwaUpdatePrompt` (`virtual:pwa-register/react`; update notice instead of any forced reload; hourly + tab-visible `registration.update()`); `injectRegister: null` in `vite.config.ts` **must stay `null`** — removing it registers the worker twice, and `false` silently strips `skipWaiting`/`clientsClaim` from the generated worker (loose `== null` check in vite-plugin-pwa 1.3.0).
 - **1.6.0** (2026-08-20): Phase CK-8 — migration 0005 (`people.anonymized_at` — the stamp alone marks anonymization, no boolean), `POST /me/delete` (typed `DELETE` confirmation; anonymize + hard-delete auth material in one transaction; **deletion is anonymization, never cascade** — contributions and `tos_acceptances` retained), `get_auth_context` 401s anonymized people even on a valid JWT, `/settings` destructive section + `/account-deleted` screen.
 - **1.5.0** (2026-08-20): Phase CK-7 — migration 0004 (`people.timezone` **IANA zone name, never a UTC offset**; `people.updated_at`; display-name CHECK), `/me/profile` GET+PATCH, `/settings` screen, silent one-time browser-timezone capture on first sign-in; `tzdata` in requirements (Windows has no system tzdb).
 - **1.4.0** (2026-08-20): Phase CK-6 — frontend auth (sign-in screen, `/auth/callback` fragment handoff, localStorage session, react-router-dom); `/auth/verify` now 302s into the frontend; request-link body carries affirmative ToS consent; migration 0003.
@@ -95,7 +96,7 @@ covey-keep/
 ├── frontend/          # Vite + React + TypeScript PWA (vite-plugin-pwa, react-router-dom)
 │   ├── src/           # main.tsx (router + AuthProvider), App.tsx (route table)
 │   │   ├── auth/      # AuthContext.tsx — session state, signIn/signOut, /auth/me load
-│   │   ├── components/# RequireAuth route guard
+│   │   ├── components/# RequireAuth route guard, PwaUpdatePrompt (SW registration + update notice)
 │   │   ├── lib/       # api.ts (fetch wrappers, 401 → clear session), session.ts (localStorage), timezone.ts (IANA helpers)
 │   │   └── routes/    # SignIn (ToS checkbox + /health probe), AuthCallback, Home, Settings (incl. delete-account section), Tos, AccountDeleted
 │   └── public/        # static assets

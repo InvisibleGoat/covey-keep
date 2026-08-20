@@ -140,3 +140,35 @@
   color: #999;
   cursor: not-allowed;
 }
+
+/* PWA update notice (CK-8.1): fixed and non-blocking — bottom corner so it
+   never covers a screen's primary actions, persistent until acted on. */
+.update-notice {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: calc(100vw - 2rem);
+  padding: 0.75rem 1rem;
+  border: 1px solid #888;
+  border-radius: 0.5rem;
+  background: #fff;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
+}
+
+.update-notice p {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.update-notice button {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.9375rem;
+  border: 1px solid #888;
+  border-radius: 0.25rem;
+  background: #f5f5f5;
+  cursor: pointer;
+}

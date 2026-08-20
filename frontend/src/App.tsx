@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import './App.css'
+import { PwaUpdatePrompt } from './components/PwaUpdatePrompt'
 import { RequireAuth } from './components/RequireAuth'
 import { AccountDeleted } from './routes/AccountDeleted'
 import { AuthCallback } from './routes/AuthCallback'
@@ -10,29 +11,32 @@ import { Tos } from './routes/Tos'
 
 function App() {
   return (
-    <Routes>
-      <Route path="/" element={<SignIn />} />
-      <Route path="/auth/callback" element={<AuthCallback />} />
-      <Route
-        path="/home"
-        element={
-          <RequireAuth>
-            <Home />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/settings"
-        element={
-          <RequireAuth>
-            <Settings />
-          </RequireAuth>
-        }
-      />
-      <Route path="/tos" element={<Tos />} />
-      <Route path="/account-deleted" element={<AccountDeleted />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <>
+      <PwaUpdatePrompt />
+      <Routes>
+        <Route path="/" element={<SignIn />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route
+          path="/home"
+          element={
+            <RequireAuth>
+              <Home />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <RequireAuth>
+              <Settings />
+            </RequireAuth>
+          }
+        />
+        <Route path="/tos" element={<Tos />} />
+        <Route path="/account-deleted" element={<AccountDeleted />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </>
   )
 }
 
