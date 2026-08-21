@@ -1,11 +1,12 @@
 # Covey Keep — Repo Operational Guide
 
-**Version:** 1.8.0
-**Last Updated:** 2026-08-20
-**Source:** Phase CK-2 (code repo creation + scaffolds); Phase CK-3 (first migration); Phase CK-4 (deploy skeleton); Phase CK-5 (magic-link auth, console-mode email); Phase CK-6 (sign-in UI, token handoff, affirmative ToS consent); Phase CK-7 (profile core: display name + IANA timezone); Phase CK-8 (account deletion by anonymization); Phase CK-8.1 (PWA update lifecycle owned in application code); Phase CK-9 (email change with proof of control; sliding trusted-device sessions).
+**Version:** 1.9.0
+**Last Updated:** 2026-08-21
+**Source:** Phase CK-2 (code repo creation + scaffolds); Phase CK-3 (first migration); Phase CK-4 (deploy skeleton); Phase CK-5 (magic-link auth, console-mode email); Phase CK-6 (sign-in UI, token handoff, affirmative ToS consent); Phase CK-7 (profile core: display name + IANA timezone); Phase CK-8 (account deletion by anonymization); Phase CK-8.1 (PWA update lifecycle owned in application code); Phase CK-9 (email change with proof of control; sliding trusted-device sessions); Phase CK-10 (passkey enrolment and usernameless passkey sign-in).
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.9.0** (2026-08-21): Phase CK-10 — migration 0007 (`webauthn_credentials`, `webauthn_challenges` — single-use 5-minute challenges, same discipline as every token), passkey enrolment (`/me/passkeys/*`, attestation `none`) and **usernameless** sign-in (`/auth/passkey/begin|complete` — empty `allowCredentials`, **no email field accepted in any form**: narrowing by address is the CK-5/CK-9 enumeration oracle again). Sign-in mints its session through `mint_session` in `auth.py` — **the one session-birth path**, shared with `/auth/verify`. py_webauthn + @simplewebauthn/browser are the deliberate library exception (crypto protocol surface, never hand-rolled). Deletion purges both new tables. **Passkeys are the security path, never presented as the easy one; a passkey is bound to its RP ID (`WEBAUTHN_RP_ID`) and dies with a domain change — UI stays unpromoted until the custom domain is final.**
 - **1.8.0** (2026-08-20): Phase CK-9 — migration 0006 (`email_change_requests`, hashed-token conventions mirrored from `magic_link_tokens`), `POST`/`DELETE /me/email-change` + unauthenticated `GET /auth/email-change/verify` (**email is a credential, changed only by proof of control over the new inbox** — byte-identical 202 whether or not the address is taken, same enumeration rule as `/auth/request-link`); verification revokes every session but the requesting one; deletion purges `email_change_requests`. Sessions now **90-day sliding** (refresh at most daily, 365-day absolute cap from `issued_at`; JWT `exp` minted at the cap — the sessions row is the live authority); `/settings` email section + `/email-change` result screen.
 - **1.7.0** (2026-08-20): Phase CK-8.1 — service-worker registration owned by `PwaUpdatePrompt` (`virtual:pwa-register/react`; update notice instead of any forced reload; hourly + tab-visible `registration.update()`); `injectRegister: null` in `vite.config.ts` **must stay `null`** — removing it registers the worker twice, and `false` silently strips `skipWaiting`/`clientsClaim` from the generated worker (loose `== null` check in vite-plugin-pwa 1.3.0).
 - **1.6.0** (2026-08-20): Phase CK-8 — migration 0005 (`people.anonymized_at` — the stamp alone marks anonymization, no boolean), `POST /me/delete` (typed `DELETE` confirmation; anonymize + hard-delete auth material in one transaction; **deletion is anonymization, never cascade** — contributions and `tos_acceptances` retained), `get_auth_context` 401s anonymized people even on a valid JWT, `/settings` destructive section + `/account-deleted` screen.
@@ -78,6 +79,14 @@ Render installs `requirements.txt` only — test deps stay in `requirements-dev.
   the blueprint declares the slot, the Render dashboard holds the value (Render
   never populates a `sync: false` var added after the service exists). The app
   crashes on boot without it, by design.
+- WebAuthn env surface (CK-10): `WEBAUTHN_RP_ID` (bare domain) and
+  `WEBAUTHN_ORIGIN` (full origin) are literal values in `render.yaml`;
+  `config.py` defaults cover local dev (`localhost` / `http://localhost:5173`).
+  **A passkey is cryptographically bound to its RP ID and does not survive a
+  domain change** — every credential enrolled on `*.netlify.app` dies at the
+  custom-domain cutover, so the passkey UI stays quiet (settings-only, never
+  promoted) until that domain is final, and the prod-cutover phase must warn
+  that existing passkeys need re-enrolment.
 - Browser session (CK-6, lifetime CK-9): `/auth/verify` 302s to
   `${APP_BASE_URL}/auth/callback#token=<jwt>` — the JWT rides the URL
   **fragment**, never the query string; the frontend stores it in
@@ -101,20 +110,20 @@ covey-keep/
 ├── frontend/          # Vite + React + TypeScript PWA (vite-plugin-pwa, react-router-dom)
 │   ├── src/           # main.tsx (router + AuthProvider), App.tsx (route table)
 │   │   ├── auth/      # AuthContext.tsx — session state, signIn/signOut, /auth/me load
-│   │   ├── components/# RequireAuth route guard, PwaUpdatePrompt (SW registration + update notice)
-│   │   ├── lib/       # api.ts (fetch wrappers, 401 → clear session), session.ts (localStorage), timezone.ts (IANA helpers)
-│   │   └── routes/    # SignIn (ToS checkbox + /health probe), AuthCallback, Home, Settings (email-change + delete-account sections), Tos, EmailChangeResult, AccountDeleted
+│   │   ├── components/# RequireAuth route guard, PwaUpdatePrompt (SW registration + update notice), PasskeySection (settings-only, quiet by default)
+│   │   ├── lib/       # api.ts (fetch wrappers, 401 → clear session), session.ts (localStorage), timezone.ts (IANA helpers), passkeys.ts (WebAuthn ceremonies, usernameless sign-in)
+│   │   └── routes/    # SignIn (ToS checkbox + /health probe + secondary "Use a passkey"), AuthCallback, Home, Settings (passkeys + email-change + delete-account sections), Tos, EmailChangeResult, AccountDeleted
 │   └── public/        # static assets
 ├── backend/           # Python + FastAPI
 │   ├── app/           # main.py — FastAPI instance, CORS, GET /health, auth router
 │   │   ├── config.py  # pydantic-settings; DATABASE_URL (asyncpg-normalized), ALLOWED_ORIGINS, auth surface
 │   │   ├── db.py      # async engine + session factory
 │   │   ├── security.py# token hashing + stdlib HS256 session JWT
-│   │   ├── api/       # deps.py (get_db + get_auth_context — every endpoint's auth gate; owns the session slide), auth.py, profile.py
+│   │   ├── api/       # deps.py (get_db + get_auth_context — every endpoint's auth gate; owns the session slide), auth.py (owns mint_session — the one session-birth path), profile.py, passkeys.py (enrolment + usernameless sign-in)
 │   │   ├── services/  # email.py — two-mode adapter (console | provider), standard v1.0.0
 │   │   └── models/    # Phase 1 spine + auth (one module per cluster; enums in enums.py)
-│   ├── alembic/       # async-template env; 0001 = Phase 1 spine, 0002 = auth + household ladder, 0003 = token ToS version, 0004 = profile columns (IANA timezone, updated_at), 0005 = anonymized_at (deletion = anonymization, never cascade), 0006 = email_change_requests
-│   ├── tests/         # pytest + httpx ASGI suite (test_auth.py, test_profile.py, test_account_deletion.py, test_email_change.py, test_sessions.py; conftest owns the test DB)
+│   ├── alembic/       # async-template env; 0001 = Phase 1 spine, 0002 = auth + household ladder, 0003 = token ToS version, 0004 = profile columns (IANA timezone, updated_at), 0005 = anonymized_at (deletion = anonymization, never cascade), 0006 = email_change_requests, 0007 = webauthn credentials + challenges
+│   ├── tests/         # pytest + httpx ASGI suite (test_auth.py, test_profile.py, test_account_deletion.py, test_email_change.py, test_sessions.py, test_passkeys.py — SoftPasskey software authenticator; conftest owns the test DB)
 │   └── .env.example   # full env template (copy to .env)
 ├── docker-compose.yml # dev DB: covey-keep-db, postgres:16, host port 5434
 ├── netlify.toml       # frontend build + SPA redirect

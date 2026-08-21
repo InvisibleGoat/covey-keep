@@ -2,7 +2,14 @@
 Base.metadata (alembic autogenerate depends on that)."""
 
 from app.models.attendance import AttendanceRecord
-from app.models.auth import EmailChangeRequest, MagicLinkToken, Session, TosAcceptance
+from app.models.auth import (
+    EmailChangeRequest,
+    MagicLinkToken,
+    Session,
+    TosAcceptance,
+    WebauthnChallenge,
+    WebauthnCredential,
+)
 from app.models.base import Base
 from app.models.capability import CapabilityProfile, Role, RoleLadder
 from app.models.consent import ConsentRecord
@@ -50,4 +57,6 @@ __all__ = [
     "Session",
     "SubGroup",
     "TosAcceptance",
+    "WebauthnChallenge",
+    "WebauthnCredential",
 ]

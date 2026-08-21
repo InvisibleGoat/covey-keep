@@ -35,6 +35,16 @@ services:
         value: https://develop--covey-keep.netlify.app
       - key: API_BASE_URL
         value: https://covey-keep-api.onrender.com
+      # WebAuthn Relying Party (CK-10). A passkey is cryptographically BOUND to
+      # its RP ID: every credential enrolled against this *.netlify.app name
+      # becomes useless the day the app moves to a custom domain (the name is
+      # not cleared yet). That is why the passkey UI stays unpromoted until the
+      # domain is final, and why the prod-cutover phase must warn that existing
+      # passkeys need re-enrolment when these values change.
+      - key: WEBAUTHN_RP_ID
+        value: develop--covey-keep.netlify.app
+      - key: WEBAUTHN_ORIGIN
+        value: https://develop--covey-keep.netlify.app
       # Console mode prints magic links to the service logs. The flip to real
       # delivery (provider mode) is its own later phase, per the family
       # transactional-email standard.

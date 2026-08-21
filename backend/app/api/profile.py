@@ -12,7 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.auth import RATE_WINDOW
 from app.api.deps import AuthContext, client_ip, get_auth_context, get_db, normalize_email
 from app.config import settings
-from app.models import EmailChangeRequest, MagicLinkToken, Person, Session
+from app.models import (
+    EmailChangeRequest,
+    MagicLinkToken,
+    Person,
+    Session,
+    WebauthnChallenge,
+    WebauthnCredential,
+)
 from app.security import hash_token
 from app.services.email import send_email
 
@@ -313,6 +320,16 @@ async def delete_account(
     await db.execute(delete(Session).where(Session.person_id == person.id))
     if old_email is not None:
         await db.execute(delete(MagicLinkToken).where(MagicLinkToken.email == old_email))
+    # Passkeys too (CK-10): a credential outliving the account it
+    # authenticates is worse than orphaned PII, and pending enrolment
+    # challenges go with it. (Sign-in challenges have person_id NULL, belong
+    # to no one, and die by TTL — nothing of this person's is in them.)
+    await db.execute(
+        delete(WebauthnCredential).where(WebauthnCredential.person_id == person.id)
+    )
+    await db.execute(
+        delete(WebauthnChallenge).where(WebauthnChallenge.person_id == person.id)
+    )
 
     # One commit = one transaction: anonymization and auth-material deletion
     # land together or not at all.

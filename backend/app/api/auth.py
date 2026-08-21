@@ -55,6 +55,37 @@ def _callback_redirect(fragment: str) -> RedirectResponse:
     )
 
 
+async def mint_session(
+    db: AsyncSession, person: Person, request: Request, now: datetime
+) -> str:
+    """Create the sessions row and mint its bearer JWT — the ONE place a
+    session is born. Magic-link verify and passkey sign-in (CK-10) both call
+    this, so the two credentials cannot drift: same TTL, same absolute cap,
+    same JWT shape. The caller commits.
+
+    The JWT's exp is the ABSOLUTE cap, not the row's expires_at: the window
+    slides (deps.py pushes the row forward on use), and a bearer token that
+    died at the first 90-day mark would silently undo the slide. The row is
+    what actually gates every request — the JWT alone is never sufficient —
+    so exp only needs to bound the credential's outer life, and the cap is
+    exactly that bound: one forced re-authentication a year.
+    """
+    session = Session(
+        person_id=person.id,
+        issued_at=now,
+        expires_at=now + SESSION_TTL,
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.add(session)
+    await db.flush()
+    return encode_session_jwt(
+        person_id=str(person.id),
+        session_id=str(session.id),
+        expires_at=now + SESSION_ABSOLUTE_CAP,
+        secret=settings.session_secret,
+    )
+
+
 class RequestLinkBody(BaseModel):
     email: str
     # Roadmap §2: ToS agreed by affirmative checkbox at signup. The form cannot
@@ -194,28 +225,8 @@ async def verify(
             )
         )
 
-    session = Session(
-        person_id=person.id,
-        issued_at=now,
-        expires_at=now + SESSION_TTL,
-        user_agent=request.headers.get("user-agent"),
-    )
-    db.add(session)
-    await db.flush()
+    jwt = await mint_session(db, person, request, now)
     await db.commit()
-
-    # The JWT's exp is the ABSOLUTE cap, not the row's expires_at: the window
-    # slides (deps.py pushes the row forward on use), and a bearer token that
-    # died at the first 90-day mark would silently undo the slide. The row is
-    # what actually gates every request — the JWT alone is never sufficient —
-    # so exp only needs to bound the credential's outer life, and the cap is
-    # exactly that bound: one forced re-authentication a year.
-    jwt = encode_session_jwt(
-        person_id=str(person.id),
-        session_id=str(session.id),
-        expires_at=now + SESSION_ABSOLUTE_CAP,
-        secret=settings.session_secret,
-    )
     return _callback_redirect(f"token={jwt}")
 
 

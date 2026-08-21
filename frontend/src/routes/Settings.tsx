@@ -1,6 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { PasskeySection } from '../components/PasskeySection'
 import { authFetch } from '../lib/api'
 import { clearToken } from '../lib/session'
 import { detectTimeZone, groupedTimeZones, timeZoneLabel } from '../lib/timezone'
@@ -267,6 +268,8 @@ export function Settings() {
           {emailError && <p className="form-error">{emailError}</p>}
         </form>
       )}
+
+      <PasskeySection />
 
       {/* Deliberately a section, not part of the form above: Enter in a
           profile field must never reach anything destructive. */}

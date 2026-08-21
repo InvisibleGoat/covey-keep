@@ -8,3 +8,10 @@ pydantic-settings
 # system tzdb → available_timezones() would be empty and every profile
 # timezone would 422); on Linux it is a consistent first-party source.
 tzdata
+# py_webauthn (CK-10). A DELIBERATE exception to the transactional-email
+# standard's "plain stdlib, no new dependency" precedent: that rule was about
+# an HTTP POST, while WebAuthn is attestation parsing, COSE key handling, and
+# signature verification — hand-rolling those would be the single worst
+# decision available in the passkey phase. Do not read this pin as license to
+# add dependencies for problems that are actually simple.
+webauthn==3.0.0

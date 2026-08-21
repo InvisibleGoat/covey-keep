@@ -31,6 +31,16 @@ class Settings(BaseSettings):
     app_base_url: str
     api_base_url: str
 
+    # WebAuthn Relying Party identity (CK-10). rp_id is the BARE DOMAIN a
+    # passkey is cryptographically bound to; origin is the full origin the
+    # browser reports during the ceremony. A passkey does not survive an rp_id
+    # change — every credential enrolled against *.netlify.app dies the day the
+    # app moves to a custom domain, which is why the passkey UI stays
+    # unpromoted until that domain is final (docs-root CLAUDE.md, Gotchas).
+    # Defaults cover local dev; render.yaml overrides both.
+    webauthn_rp_id: str = "localhost"
+    webauthn_origin: str = "http://localhost:5173"
+
     # Email delivery mode: "console" prints the full message to the service logs;
     # "provider" does real sends. The flip to provider is its own later phase.
     email_mode: str = "console"

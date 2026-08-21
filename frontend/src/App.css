@@ -146,6 +146,19 @@
   cursor: not-allowed;
 }
 
+/* Passkey list rows (CK-10). */
+.passkey-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.passkey-row p {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
 /* PWA update notice (CK-8.1): fixed and non-blocking — bottom corner so it
    never covers a screen's primary actions, persistent until acted on. */
 .update-notice {

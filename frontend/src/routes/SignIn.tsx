@@ -2,15 +2,23 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { apiFetch, TOS_VERSION } from '../lib/api'
+import {
+  browserSupportsWebAuthn,
+  isCeremonyCancelled,
+  signInWithPasskey,
+} from '../lib/passkeys'
 
 type SubmitState = 'idle' | 'submitting' | 'sent' | 'rateLimited' | 'failed'
 
 export function SignIn() {
-  const { status } = useAuth()
+  const { status, signIn } = useAuth()
   const [email, setEmail] = useState('')
   const [tosAccepted, setTosAccepted] = useState(false)
   const [submitState, setSubmitState] = useState<SubmitState>('idle')
   const [apiStatus, setApiStatus] = useState('checking…')
+  const [passkeySupported] = useState(() => browserSupportsWebAuthn())
+  const [passkeyState, setPasskeyState] = useState<'idle' | 'working'>('idle')
+  const [passkeyError, setPasskeyError] = useState<string | null>(null)
 
   // The CK-4 deploy end-to-end check: frontend reaching the API it was built for.
   useEffect(() => {
@@ -46,6 +54,23 @@ export function SignIn() {
     } catch {
       setSubmitState('failed')
     }
+  }
+
+  async function handlePasskey() {
+    setPasskeyError(null)
+    setPasskeyState('working')
+    try {
+      // No ToS gate here, deliberately: a passkey can only sign in an account
+      // that already exists, and consent was recorded when it was created.
+      const token = await signInWithPasskey()
+      signIn(token)
+      // status flips to 'loading' → the redirect above navigates to /home.
+    } catch (err) {
+      if (!isCeremonyCancelled(err)) {
+        setPasskeyError("Passkey sign-in didn't work. Emailing yourself a link still does.")
+      }
+    }
+    setPasskeyState('idle')
   }
 
   return (
@@ -94,6 +119,22 @@ export function SignIn() {
           {submitState === 'failed' && (
             <p className="form-error">Something went wrong sending the link. Try again.</p>
           )}
+          {/* Secondary, never primary or default (sign-in-ergonomics §4):
+              passkeys are the security path for people who already know what
+              they are — the emailed link stays the way in. Hidden entirely
+              where WebAuthn is unavailable. No address is collected on this
+              path, in any form. */}
+          {passkeySupported && (
+            <button
+              type="button"
+              className="link-button"
+              disabled={passkeyState === 'working'}
+              onClick={() => void handlePasskey()}
+            >
+              {passkeyState === 'working' ? 'Waiting for your passkey…' : 'Use a passkey'}
+            </button>
+          )}
+          {passkeyError && <p className="form-error">{passkeyError}</p>}
         </form>
       )}
 
