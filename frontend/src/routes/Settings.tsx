@@ -33,6 +33,13 @@ export function Settings() {
   const [timeZone, setTimeZone] = useState(person?.timezone ?? detectTimeZone() ?? '')
   const [saveState, setSaveState] = useState<SaveState>('idle')
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
+  const [newEmail, setNewEmail] = useState('')
+  // The address a confirmation link is out for. Component state only: on a
+  // fresh visit the section simply shows the change form again, and any new
+  // request supersedes the outstanding one server-side.
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null)
+  const [emailState, setEmailState] = useState<'idle' | 'sending' | 'cancelling'>('idle')
+  const [emailError, setEmailError] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState('')
   const [deleteState, setDeleteState] = useState<'idle' | 'deleting' | 'failed'>('idle')
 
@@ -79,6 +86,58 @@ export function Settings() {
     } catch {
       setSaveState('failed')
     }
+  }
+
+  async function handleEmailSubmit(event: FormEvent) {
+    event.preventDefault()
+    setEmailError(null)
+    const target = newEmail.trim().toLowerCase()
+    // A purely client-side courtesy — the person's own current address is no
+    // secret to them, so this reveals nothing the server's byte-identical
+    // response is protecting.
+    if (person && target === person.email) {
+      setEmailError("That's already your sign-in address.")
+      return
+    }
+    setEmailState('sending')
+    try {
+      const response = await authFetch('/me/email-change', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_email: target }),
+      })
+      if (response.status === 202) {
+        // The server says the same thing whether or not the address was
+        // available — the pending copy mirrors that and promises nothing.
+        setPendingEmail(target)
+        setNewEmail('')
+      } else if (response.status === 429) {
+        setEmailError('Too many attempts. Wait a few minutes and try again.')
+      } else if (response.status === 422) {
+        setEmailError("That doesn't look like an email address.")
+      } else {
+        setEmailError('Something went wrong sending the link. Try again.')
+      }
+    } catch {
+      setEmailError('Something went wrong sending the link. Try again.')
+    }
+    setEmailState('idle')
+  }
+
+  async function handleEmailCancel() {
+    setEmailState('cancelling')
+    setEmailError(null)
+    try {
+      const response = await authFetch('/me/email-change', { method: 'DELETE' })
+      if (response.status === 204) {
+        setPendingEmail(null)
+      } else {
+        setEmailError('Something went wrong cancelling. Try again.')
+      }
+    } catch {
+      setEmailError('Something went wrong cancelling. Try again.')
+    }
+    setEmailState('idle')
   }
 
   async function handleDelete() {
@@ -156,6 +215,58 @@ export function Settings() {
           <p className="form-error">Something went wrong saving your settings. Try again.</p>
         )}
       </form>
+
+      {/* Email is the credential, not a profile field (CK-9): it changes only
+          by proof of control over the new inbox, so this is its own form —
+          never a field on the profile PATCH above. */}
+      {pendingEmail ? (
+        <section className="auth-card" aria-labelledby="email-heading">
+          <h2 id="email-heading">Sign-in email</h2>
+          <p className="field-hint">
+            We sent a confirmation link to <strong>{pendingEmail}</strong> — check that inbox.
+            The link works for one hour. Until it's used, you still sign in as{' '}
+            <strong>{person?.email}</strong>.
+          </p>
+          <button
+            type="button"
+            onClick={() => void handleEmailCancel()}
+            disabled={emailState === 'cancelling'}
+          >
+            {emailState === 'cancelling' ? 'Cancelling…' : 'Cancel the change'}
+          </button>
+          {emailError && <p className="form-error">{emailError}</p>}
+        </section>
+      ) : (
+        <form
+          className="auth-card"
+          onSubmit={(event) => void handleEmailSubmit(event)}
+          aria-labelledby="email-heading"
+        >
+          <h2 id="email-heading">Sign-in email</h2>
+          <p className="field-hint">
+            You sign in as <strong>{person?.email}</strong>.
+          </p>
+          <label htmlFor="new-email">New email address</label>
+          <input
+            id="new-email"
+            type="email"
+            required
+            autoComplete="email"
+            value={newEmail}
+            onChange={(event) => {
+              setNewEmail(event.target.value)
+              setEmailError(null)
+            }}
+          />
+          <p className="field-hint">
+            We'll send a confirmation link there — nothing changes until you open it.
+          </p>
+          <button type="submit" disabled={emailState === 'sending'}>
+            {emailState === 'sending' ? 'Sending…' : 'Send confirmation link'}
+          </button>
+          {emailError && <p className="form-error">{emailError}</p>}
+        </form>
+      )}
 
       {/* Deliberately a section, not part of the form above: Enter in a
           profile field must never reach anything destructive. */}

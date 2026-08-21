@@ -4,6 +4,7 @@ import { PwaUpdatePrompt } from './components/PwaUpdatePrompt'
 import { RequireAuth } from './components/RequireAuth'
 import { AccountDeleted } from './routes/AccountDeleted'
 import { AuthCallback } from './routes/AuthCallback'
+import { EmailChangeResult } from './routes/EmailChangeResult'
 import { Home } from './routes/Home'
 import { Settings } from './routes/Settings'
 import { SignIn } from './routes/SignIn'
@@ -33,6 +34,7 @@ function App() {
           }
         />
         <Route path="/tos" element={<Tos />} />
+        <Route path="/email-change" element={<EmailChangeResult />} />
         <Route path="/account-deleted" element={<AccountDeleted />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

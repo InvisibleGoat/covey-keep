@@ -48,6 +48,11 @@
   font-size: 0.9375rem;
 }
 
+.auth-card h2 {
+  font-size: 1.125rem;
+  text-align: left;
+}
+
 .auth-card input[type='email'],
 .auth-card input[type='text'],
 .auth-card select {

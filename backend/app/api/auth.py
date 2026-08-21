@@ -1,6 +1,5 @@
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -8,16 +7,23 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import AuthContext, get_auth_context, get_db
+from app.api.deps import (
+    SESSION_ABSOLUTE_CAP,
+    SESSION_TTL,
+    AuthContext,
+    client_ip,
+    get_auth_context,
+    get_db,
+    normalize_email,
+)
 from app.config import settings
-from app.models import MagicLinkToken, Person, Session, TosAcceptance
+from app.models import EmailChangeRequest, MagicLinkToken, Person, Session, TosAcceptance
 from app.security import encode_session_jwt, hash_token
 from app.services.email import send_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 TOKEN_TTL = timedelta(minutes=15)
-SESSION_TTL = timedelta(days=30)
 RATE_WINDOW = timedelta(minutes=15)
 MAX_REQUESTS_PER_EMAIL = 5
 # Defence-in-depth only. Behind the proxy the client identity comes from
@@ -49,16 +55,6 @@ def _callback_redirect(fragment: str) -> RedirectResponse:
     )
 
 
-def _client_ip(request: Request) -> Optional[str]:
-    # request.client is the real client (not Render's load balancer) only
-    # because the deployed start command (render.yaml) runs uvicorn with
-    # --proxy-headers --forwarded-allow-ips="*", which rewrites the peer
-    # address from X-Forwarded-For at the server layer. Never hand-parse
-    # forwarding headers here — that would be a second, divergent
-    # implementation of what uvicorn already does.
-    return request.client.host if request.client else None
-
-
 class RequestLinkBody(BaseModel):
     email: str
     # Roadmap §2: ToS agreed by affirmative checkbox at signup. The form cannot
@@ -70,10 +66,7 @@ class RequestLinkBody(BaseModel):
     @field_validator("email")
     @classmethod
     def _normalize(cls, value: str) -> str:
-        value = value.strip().lower()
-        if "@" not in value.strip("@") or " " in value or len(value) > 320:
-            raise ValueError("not an email address")
-        return value
+        return normalize_email(value)
 
     @field_validator("tos_accepted")
     @classmethod
@@ -97,7 +90,7 @@ async def request_link(
 ) -> dict:
     now = datetime.now(timezone.utc)
     window_start = now - RATE_WINDOW
-    client_ip = _client_ip(request)
+    requester_ip = client_ip(request)
 
     # Rate limit on request volume (in-DB counts), never on account existence —
     # a 429 reveals nothing about whether the address is known.
@@ -107,12 +100,12 @@ async def request_link(
         .where(MagicLinkToken.email == body.email, MagicLinkToken.created_at > window_start)
     )
     ip_count = 0
-    if client_ip is not None:
+    if requester_ip is not None:
         ip_count = await db.scalar(
             select(func.count())
             .select_from(MagicLinkToken)
             .where(
-                MagicLinkToken.requested_ip == client_ip,
+                MagicLinkToken.requested_ip == requester_ip,
                 MagicLinkToken.created_at > window_start,
             )
         )
@@ -136,7 +129,7 @@ async def request_link(
             email=body.email,
             token_hash=hash_token(raw_token),
             expires_at=now + TOKEN_TTL,
-            requested_ip=client_ip,
+            requested_ip=requester_ip,
             tos_version=body.tos_version,
         )
     )
@@ -197,7 +190,7 @@ async def verify(
                 person_id=person.id,
                 version=row.tos_version,
                 accepted_at=now,
-                accepted_ip=_client_ip(request),
+                accepted_ip=client_ip(request),
             )
         )
 
@@ -211,13 +204,101 @@ async def verify(
     await db.flush()
     await db.commit()
 
+    # The JWT's exp is the ABSOLUTE cap, not the row's expires_at: the window
+    # slides (deps.py pushes the row forward on use), and a bearer token that
+    # died at the first 90-day mark would silently undo the slide. The row is
+    # what actually gates every request — the JWT alone is never sufficient —
+    # so exp only needs to bound the credential's outer life, and the cap is
+    # exactly that bound: one forced re-authentication a year.
     jwt = encode_session_jwt(
         person_id=str(person.id),
         session_id=str(session.id),
-        expires_at=session.expires_at,
+        expires_at=now + SESSION_ABSOLUTE_CAP,
         secret=settings.session_secret,
     )
     return _callback_redirect(f"token={jwt}")
+
+
+def _email_change_redirect(status: str) -> RedirectResponse:
+    # Same fragment discipline as the sign-in callback (CK-6): the payload
+    # rides the URL fragment, never the query string. Unlike the sign-in
+    # verify's deliberately uniform error, the failure states here are
+    # DISTINGUISHED — the person opened this link from their own inbox, so
+    # telling them which thing went wrong costs nothing and a blank page is
+    # never acceptable (kickoff CK-9).
+    return RedirectResponse(
+        f"{settings.app_base_url}/email-change#status={status}", status_code=302
+    )
+
+
+@router.get("/email-change/verify")
+async def verify_email_change(db: AsyncSession = Depends(get_db), token: str = "") -> RedirectResponse:
+    """Complete an email change. UNAUTHENTICATED, deliberately: the person
+    often opens the link on a different device with no session — the token IS
+    the authorization, which is exactly why it is single-use, one hour,
+    ≥32 bytes, hashed at rest, and compared with compare_digest."""
+    now = datetime.now(timezone.utc)
+    supplied_hash = hash_token(token)
+    row = (
+        await db.execute(
+            select(EmailChangeRequest).where(EmailChangeRequest.token_hash == supplied_hash)
+        )
+    ).scalar_one_or_none()
+    if row is None or not secrets.compare_digest(supplied_hash, row.token_hash):
+        return _email_change_redirect("invalid")
+    if row.consumed_at is not None:
+        return _email_change_redirect("used")
+    if row.expires_at <= now:
+        return _email_change_redirect("expired")
+
+    # The race is real: two people can request the same new address inside the
+    # window, and only the request endpoint's availability check has run so
+    # far. Re-check inside this transaction; people.email's UNIQUE constraint
+    # backstops it. The token is deliberately NOT consumed on this failure —
+    # the proof of inbox control stands, so if the address frees up within the
+    # hour (the holder deletes their account), retrying the link is correct.
+    holder = (
+        await db.execute(select(Person).where(Person.email == row.new_email))
+    ).scalar_one_or_none()
+    if holder is not None:
+        return _email_change_redirect("taken")
+
+    person = await db.get(Person, row.person_id)
+    if person is None or person.anonymized_at is not None:
+        # Deletion purges this table in the same transaction that anonymizes,
+        # so this arm should be unreachable — belt and braces, same as the
+        # auth gate's anonymized check.
+        return _email_change_redirect("invalid")
+
+    # One transaction: the address moves, the token dies, outstanding requests
+    # die, and every other session dies — email is the credential, so a change
+    # must not leave old sessions alive. The requesting session survives (the
+    # device the person asked from stays signed in); if it was revoked in the
+    # meantime it stays revoked — being spared here never resurrects anything.
+    person.email = row.new_email
+    person.updated_at = now
+    row.consumed_at = now
+    await db.execute(
+        update(EmailChangeRequest)
+        .where(
+            EmailChangeRequest.person_id == person.id,
+            EmailChangeRequest.id != row.id,
+            EmailChangeRequest.consumed_at.is_(None),
+            EmailChangeRequest.expires_at > now,
+        )
+        .values(expires_at=now)
+    )
+    await db.execute(
+        update(Session)
+        .where(
+            Session.person_id == person.id,
+            Session.id != row.requested_session_id,
+            Session.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+    await db.commit()
+    return _email_change_redirect("success")
 
 
 @router.get("/me")

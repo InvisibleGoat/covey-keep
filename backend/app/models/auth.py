@@ -28,6 +28,31 @@ class MagicLinkToken(Base):
     created_at: Mapped[datetime] = created_at_col()
 
 
+class EmailChangeRequest(Base):
+    """One requested sign-in-address change (CK-9). Mirrors MagicLinkToken's
+    conventions: only the SHA-256 hash is stored — the raw token exists solely
+    in the link emailed to the NEW address, because controlling that inbox is
+    the entire proof. A row exists for every request, including requests for an
+    address that was already taken (where no link is ever sent): the rows feed
+    the per-person rate limit, which must not diverge between the two cases —
+    that divergence would be the enumeration oracle wearing a 429."""
+
+    __tablename__ = "email_change_requests"
+
+    id: Mapped[UUID] = uuid_pk()
+    person_id: Mapped[UUID] = mapped_column(ForeignKey("people.id"), nullable=False, index=True)
+    # The session that made the request. Verification revokes every OTHER
+    # session (email is the credential; a change must not leave old sessions
+    # alive) — this column is how the device that asked stays signed in.
+    requested_session_id: Mapped[UUID] = mapped_column(ForeignKey("sessions.id"), nullable=False)
+    new_email: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    requested_ip: Mapped[Optional[str]] = mapped_column(INET, nullable=True)
+    created_at: Mapped[datetime] = created_at_col()
+
+
 class Session(Base):
     """A trusted-device session (~30 days). The JWT carries this row's id as
     `sid`; the row is what makes the JWT revocable — a valid signature alone is

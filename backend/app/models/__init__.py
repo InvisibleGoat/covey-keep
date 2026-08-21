@@ -2,7 +2,7 @@
 Base.metadata (alembic autogenerate depends on that)."""
 
 from app.models.attendance import AttendanceRecord
-from app.models.auth import MagicLinkToken, Session, TosAcceptance
+from app.models.auth import EmailChangeRequest, MagicLinkToken, Session, TosAcceptance
 from app.models.base import Base
 from app.models.capability import CapabilityProfile, Role, RoleLadder
 from app.models.consent import ConsentRecord
@@ -23,6 +23,7 @@ __all__ = [
     "Base",
     "CapabilityProfile",
     "ConsentRecord",
+    "EmailChangeRequest",
     "Event",
     "EventSeries",
     "EventType",

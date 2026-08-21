@@ -81,8 +81,12 @@ async def test_happy_path_end_to_end(client, capsys, db_session_factory):
         assert token_row.consumed_at is not None
         session_row = (await db.execute(select(Session))).scalars().one()
         assert session_row.revoked_at is None
-        # ~30-day trusted-device session.
-        assert session_row.expires_at - session_row.issued_at == timedelta(days=30)
+        # 90-day sliding trusted-device session (CK-9; was 30 fixed days
+        # through CK-8 — the single assertion updated by the change). The
+        # /auth/me call above already slid the window by a few milliseconds
+        # (first authenticated request), so assert length, not exact equality.
+        lifetime = session_row.expires_at - session_row.issued_at
+        assert timedelta(days=90) <= lifetime < timedelta(days=90, minutes=5)
 
     # A returning sign-in reuses the person — no duplicate account, no second ToS row.
     await _sign_in(client, capsys, "maya.finch@example.com")

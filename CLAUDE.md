@@ -1,11 +1,12 @@
 # Covey Keep — Repo Operational Guide
 
-**Version:** 1.7.0
+**Version:** 1.8.0
 **Last Updated:** 2026-08-20
-**Source:** Phase CK-2 (code repo creation + scaffolds); Phase CK-3 (first migration); Phase CK-4 (deploy skeleton); Phase CK-5 (magic-link auth, console-mode email); Phase CK-6 (sign-in UI, token handoff, affirmative ToS consent); Phase CK-7 (profile core: display name + IANA timezone); Phase CK-8 (account deletion by anonymization); Phase CK-8.1 (PWA update lifecycle owned in application code).
+**Source:** Phase CK-2 (code repo creation + scaffolds); Phase CK-3 (first migration); Phase CK-4 (deploy skeleton); Phase CK-5 (magic-link auth, console-mode email); Phase CK-6 (sign-in UI, token handoff, affirmative ToS consent); Phase CK-7 (profile core: display name + IANA timezone); Phase CK-8 (account deletion by anonymization); Phase CK-8.1 (PWA update lifecycle owned in application code); Phase CK-9 (email change with proof of control; sliding trusted-device sessions).
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.8.0** (2026-08-20): Phase CK-9 — migration 0006 (`email_change_requests`, hashed-token conventions mirrored from `magic_link_tokens`), `POST`/`DELETE /me/email-change` + unauthenticated `GET /auth/email-change/verify` (**email is a credential, changed only by proof of control over the new inbox** — byte-identical 202 whether or not the address is taken, same enumeration rule as `/auth/request-link`); verification revokes every session but the requesting one; deletion purges `email_change_requests`. Sessions now **90-day sliding** (refresh at most daily, 365-day absolute cap from `issued_at`; JWT `exp` minted at the cap — the sessions row is the live authority); `/settings` email section + `/email-change` result screen.
 - **1.7.0** (2026-08-20): Phase CK-8.1 — service-worker registration owned by `PwaUpdatePrompt` (`virtual:pwa-register/react`; update notice instead of any forced reload; hourly + tab-visible `registration.update()`); `injectRegister: null` in `vite.config.ts` **must stay `null`** — removing it registers the worker twice, and `false` silently strips `skipWaiting`/`clientsClaim` from the generated worker (loose `== null` check in vite-plugin-pwa 1.3.0).
 - **1.6.0** (2026-08-20): Phase CK-8 — migration 0005 (`people.anonymized_at` — the stamp alone marks anonymization, no boolean), `POST /me/delete` (typed `DELETE` confirmation; anonymize + hard-delete auth material in one transaction; **deletion is anonymization, never cascade** — contributions and `tos_acceptances` retained), `get_auth_context` 401s anonymized people even on a valid JWT, `/settings` destructive section + `/account-deleted` screen.
 - **1.5.0** (2026-08-20): Phase CK-7 — migration 0004 (`people.timezone` **IANA zone name, never a UTC offset**; `people.updated_at`; display-name CHECK), `/me/profile` GET+PATCH, `/settings` screen, silent one-time browser-timezone capture on first sign-in; `tzdata` in requirements (Windows has no system tzdb).
@@ -77,12 +78,16 @@ Render installs `requirements.txt` only — test deps stay in `requirements-dev.
   the blueprint declares the slot, the Render dashboard holds the value (Render
   never populates a `sync: false` var added after the service exists). The app
   crashes on boot without it, by design.
-- Browser session (CK-6): `/auth/verify` 302s to
+- Browser session (CK-6, lifetime CK-9): `/auth/verify` 302s to
   `${APP_BASE_URL}/auth/callback#token=<jwt>` — the JWT rides the URL
   **fragment**, never the query string; the frontend stores it in
-  `localStorage` (must survive a browser restart — the 30-day trusted-device
-  promise; httpOnly cookie deferred to the prod cutover). Decision record:
-  docs root `decisions/2026-08-20-browser-session-storage.md`.
+  `localStorage` (must survive a browser restart — the trusted-device
+  promise; httpOnly cookie deferred to the prod cutover). Sessions are
+  **90-day sliding** (pushed forward on use, refreshed at most daily) with a
+  **365-day absolute cap** from `issued_at`; revoked/expired sessions are
+  never extended. Decision records: docs root
+  `decisions/2026-08-20-browser-session-storage.md`,
+  `decisions/2026-08-20-sign-in-ergonomics.md` §2.
 - Email is **console mode**: magic links print to the Render service logs; no
   provider, no real sends. The flip to real delivery is its own later phase
   (family transactional-email standard v1.0.0) — never flip `EMAIL_MODE` as a
@@ -98,18 +103,18 @@ covey-keep/
 │   │   ├── auth/      # AuthContext.tsx — session state, signIn/signOut, /auth/me load
 │   │   ├── components/# RequireAuth route guard, PwaUpdatePrompt (SW registration + update notice)
 │   │   ├── lib/       # api.ts (fetch wrappers, 401 → clear session), session.ts (localStorage), timezone.ts (IANA helpers)
-│   │   └── routes/    # SignIn (ToS checkbox + /health probe), AuthCallback, Home, Settings (incl. delete-account section), Tos, AccountDeleted
+│   │   └── routes/    # SignIn (ToS checkbox + /health probe), AuthCallback, Home, Settings (email-change + delete-account sections), Tos, EmailChangeResult, AccountDeleted
 │   └── public/        # static assets
 ├── backend/           # Python + FastAPI
 │   ├── app/           # main.py — FastAPI instance, CORS, GET /health, auth router
 │   │   ├── config.py  # pydantic-settings; DATABASE_URL (asyncpg-normalized), ALLOWED_ORIGINS, auth surface
 │   │   ├── db.py      # async engine + session factory
 │   │   ├── security.py# token hashing + stdlib HS256 session JWT
-│   │   ├── api/       # deps.py (get_db + get_auth_context — every endpoint's auth gate), auth.py, profile.py
+│   │   ├── api/       # deps.py (get_db + get_auth_context — every endpoint's auth gate; owns the session slide), auth.py, profile.py
 │   │   ├── services/  # email.py — two-mode adapter (console | provider), standard v1.0.0
 │   │   └── models/    # Phase 1 spine + auth (one module per cluster; enums in enums.py)
-│   ├── alembic/       # async-template env; 0001 = Phase 1 spine, 0002 = auth + household ladder, 0003 = token ToS version, 0004 = profile columns (IANA timezone, updated_at), 0005 = anonymized_at (deletion = anonymization, never cascade)
-│   ├── tests/         # pytest + httpx ASGI suite (test_auth.py, test_profile.py, test_account_deletion.py; conftest owns the test DB)
+│   ├── alembic/       # async-template env; 0001 = Phase 1 spine, 0002 = auth + household ladder, 0003 = token ToS version, 0004 = profile columns (IANA timezone, updated_at), 0005 = anonymized_at (deletion = anonymization, never cascade), 0006 = email_change_requests
+│   ├── tests/         # pytest + httpx ASGI suite (test_auth.py, test_profile.py, test_account_deletion.py, test_email_change.py, test_sessions.py; conftest owns the test DB)
 │   └── .env.example   # full env template (copy to .env)
 ├── docker-compose.yml # dev DB: covey-keep-db, postgres:16, host port 5434
 ├── netlify.toml       # frontend build + SPA redirect
