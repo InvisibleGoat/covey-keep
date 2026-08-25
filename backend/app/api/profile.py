@@ -22,6 +22,7 @@ from app.models import (
 )
 from app.security import hash_token
 from app.services.email import send_email
+from app.services.keeping import lapse_kept_statuses
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -330,7 +331,14 @@ async def delete_account(
     await db.execute(
         delete(WebauthnChallenge).where(WebauthnChallenge.person_id == person.id)
     )
+    # Kept statuses lapse (CK-13, keeper model §8): the person's kept rows are
+    # hard-deleted, admin is relinquished, and any gathering that just lost
+    # its last keeper enters grace exactly as an unkeep would put it there —
+    # a deleted account must not silently hold a gathering alive forever.
+    # (The accounts row itself is retained: it carries no PII, and the
+    # person's gatherings and contributions still reference it.)
+    await lapse_kept_statuses(db, person.account_id, now=now)
 
-    # One commit = one transaction: anonymization and auth-material deletion
-    # land together or not at all.
+    # One commit = one transaction: anonymization, auth-material deletion,
+    # and the kept-status lapse land together or not at all.
     await db.commit()

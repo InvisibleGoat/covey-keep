@@ -21,11 +21,13 @@ class Group(Base):
         ForeignKey("capability_profiles.id"), nullable=False
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    # Stewardship lives on the group; nullable to represent the "Needs a steward" state.
-    steward_person_id: Mapped[Optional[UUID]] = mapped_column(
+    # Renamed from steward_person_id at CK-13, per the CK-11 narrowing of
+    # stewardship to admin. Nullable is the "needs an admin" state — the same
+    # encoding gatherings.admin_account_id uses for the claimable condition.
+    admin_person_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("people.id"), nullable=True
     )
-    backup_steward_person_id: Mapped[Optional[UUID]] = mapped_column(
+    backup_admin_person_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("people.id"), nullable=True
     )
     created_at: Mapped[datetime] = created_at_col()

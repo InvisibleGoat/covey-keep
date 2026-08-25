@@ -4,9 +4,12 @@ from sqlalchemy import func, select
 
 from app.api.profile import ANONYMIZED_DISPLAY_NAME
 from app.models import (
+    Account,
+    AccountKind,
     CapabilityProfile,
     Gathering,
     Group,
+    KeptGathering,
     MagicLinkToken,
     Occurrence,
     Person,
@@ -15,6 +18,7 @@ from app.models import (
     TosAcceptance,
 )
 from app.models.enums import GatheringType, GroupType, PublicationState
+from app.services.keeping import keep
 from tests.test_auth import _capture_link, _sign_in
 
 DELETE_BODY = {"confirm": "DELETE"}
@@ -167,12 +171,12 @@ async def test_contributions_survive_deletion(client, capsys, db_session_factory
             group_type=GroupType.HOUSEHOLD,
             capability_profile_id=profile.id,
             name="Finch family",
-            steward_person_id=person_id,
+            admin_person_id=person_id,
         )
         db.add(group)
         await db.flush()
         gathering = Gathering(
-            account_id=account_id,
+            created_by_account_id=account_id,
             gathering_type=GatheringType.POTLUCK,
             title="August potluck",
             publication_state=PublicationState.LIVE,
@@ -202,8 +206,92 @@ async def test_contributions_survive_deletion(client, capsys, db_session_factory
         # The gathering survives, still anchored to the anonymized person's
         # account (the accounts row is not PII and is never destroyed).
         gathering_row = (await db.execute(select(Gathering))).scalars().one()
-        assert gathering_row.account_id == account_id
+        assert gathering_row.created_by_account_id == account_id
         occurrence_row = (await db.execute(select(Occurrence))).scalars().one()
         assert occurrence_row.gathering_id == gathering_row.id
         group_row = (await db.execute(select(Group))).scalars().one()
-        assert group_row.steward_person_id == person_id
+        assert group_row.admin_person_id == person_id
+
+
+async def test_deletion_lapses_kept_statuses(client, capsys, db_session_factory):
+    """CK-13, keeper model §8: an anonymized person's kept statuses lapse —
+    their kept rows are hard-deleted, admin is relinquished, and a gathering
+    that just lost its LAST keeper enters grace exactly as an unkeep would put
+    it there. A gathering someone else still keeps is untouched: the whole
+    point of reference counting is that no single person's deletion can take
+    an archive from the people who keep it."""
+    address = "lastkeeper@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    now = datetime.now(timezone.utc)
+    async with db_session_factory() as db:
+        person = (
+            await db.execute(select(Person).where(Person.email == address))
+        ).scalars().one()
+        account = (
+            await db.execute(select(Account).where(Account.id == person.account_id))
+        ).scalars().one()
+        other = Account(kind=AccountKind.PERSON)
+        db.add(other)
+        await db.flush()
+        # Solo-kept, and admin'd, by the person being deleted.
+        solo = Gathering(
+            created_by_account_id=account.id,
+            admin_account_id=account.id,
+            gathering_type=GatheringType.POTLUCK,
+            title="solo-kept",
+            publication_state=PublicationState.LIVE,
+        )
+        # Kept by the person AND by someone else.
+        shared = Gathering(
+            created_by_account_id=account.id,
+            gathering_type=GatheringType.POTLUCK,
+            title="shared-kept",
+            publication_state=PublicationState.LIVE,
+        )
+        db.add_all([solo, shared])
+        await db.flush()
+        await keep(db, account, solo)
+        await keep(db, account, shared)
+        await keep(db, other, shared)
+        await db.commit()
+        account_id, other_id = account.id, other.id
+        solo_id, shared_id = solo.id, shared.id
+
+    assert (await client.post("/me/delete", json=DELETE_BODY, headers=headers)).status_code == 204
+
+    async with db_session_factory() as db:
+        # Every kept row of the deleted account is gone; the other keeper's stands.
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(KeptGathering)
+                .where(KeptGathering.account_id == account_id)
+            )
+        ) == 0
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(KeptGathering)
+                .where(KeptGathering.account_id == other_id)
+            )
+        ) == 1
+        solo_row = (
+            await db.execute(select(Gathering).where(Gathering.id == solo_id))
+        ).scalars().one()
+        shared_row = (
+            await db.execute(select(Gathering).where(Gathering.id == shared_id))
+        ).scalars().one()
+        # The solo-kept gathering lost its last keeper: stamped into grace,
+        # admin relinquished (claimable, not held by a dead account).
+        assert solo_row.last_keeper_left_at is not None
+        assert solo_row.last_keeper_left_at >= now
+        assert solo_row.admin_account_id is None
+        # The shared gathering lives on, unstamped, with its other keeper.
+        assert shared_row.last_keeper_left_at is None
+        # The accounts row itself survives (no PII; the gatherings still
+        # reference it as their historical creator).
+        assert (
+            await db.scalar(
+                select(func.count()).select_from(Account).where(Account.id == account_id)
+            )
+        ) == 1

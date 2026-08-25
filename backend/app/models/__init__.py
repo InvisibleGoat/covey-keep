@@ -22,7 +22,7 @@ from app.models.enums import (
     PublicationState,
     RSVPResponse,
 )
-from app.models.gathering import Gathering, GatheringInvitation, Occurrence
+from app.models.gathering import Gathering, GatheringInvitation, KeptGathering, Occurrence
 from app.models.group import Group, SubGroup
 from app.models.household import Household, Person
 from app.models.items import ItemClaim, ItemSlot
@@ -49,6 +49,7 @@ __all__ = [
     "Household",
     "ItemClaim",
     "ItemSlot",
+    "KeptGathering",
     "MagicLinkToken",
     "Media",
     "MediaStatus",

@@ -50,7 +50,7 @@ async def _mk_gathering(
     """A gathering with its owning account and n occurrences."""
     account = await _mk_account(db)
     gathering = Gathering(
-        account_id=account.id,
+        created_by_account_id=account.id,
         gathering_type=gathering_type,
         title="test gathering",
         publication_state=PublicationState.LIVE,
@@ -374,16 +374,18 @@ async def test_constraints_follow_the_0001_naming_convention(db_session_factory)
                 text(
                     "SELECT conname FROM pg_constraint WHERE conname IN "
                     "('ck_gathering_invitations_exactly_one_target', "
-                    " 'fk_gatherings_account_id', 'fk_occurrences_gathering_id', "
+                    " 'fk_gatherings_created_by_account_id', 'fk_occurrences_gathering_id', "
                     " 'uq_people_account_id', 'uq_organizations_account_id', "
                     " 'fk_media_gathering_id', 'fk_posts_gathering_id', "
                     " 'fk_rsvps_occurrence_id')"
                 )
             )
         }
+        # (CK-13 renamed gatherings.account_id → created_by_account_id; the
+        # constraint and index names below track the rename.)
         assert constraints == {
             "ck_gathering_invitations_exactly_one_target",
-            "fk_gatherings_account_id",
+            "fk_gatherings_created_by_account_id",
             "fk_occurrences_gathering_id",
             "uq_people_account_id",
             "uq_organizations_account_id",
@@ -399,7 +401,7 @@ async def test_constraints_follow_the_0001_naming_convention(db_session_factory)
                     "('uq_gathering_invitations_gathering_group', "
                     " 'uq_gathering_invitations_gathering_sub_group', "
                     " 'uq_gathering_invitations_gathering_person', "
-                    " 'uq_rsvps_occurrence_person', 'ix_gatherings_account_id', "
+                    " 'uq_rsvps_occurrence_person', 'ix_gatherings_created_by_account_id', "
                     " 'ix_occurrences_gathering_id')"
                 )
             )
