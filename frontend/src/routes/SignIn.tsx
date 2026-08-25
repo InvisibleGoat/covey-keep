@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { PRODUCT_NAME, TAGLINE } from '../brand'
 import { apiFetch, TOS_VERSION } from '../lib/api'
 import {
   browserSupportsWebAuthn,
@@ -75,8 +76,8 @@ export function SignIn() {
 
   return (
     <main className="auth-screen">
-      <h1>Covey Keep</h1>
-      <p className="tagline">Plan the gathering. Keep the day.</p>
+      <h1>{PRODUCT_NAME}</h1>
+      <p className="tagline">{TAGLINE}</p>
 
       {submitState === 'sent' ? (
         <section className="auth-card">

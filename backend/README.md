@@ -1,4 +1,4 @@
-# Covey Keep — backend
+# CoveyKeep — backend
 
 FastAPI skeleton.
 

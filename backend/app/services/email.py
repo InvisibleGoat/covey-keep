@@ -22,6 +22,7 @@ import json
 import urllib.request
 
 from app import __version__
+from app.brand import FROM_DISPLAY_NAME
 from app.config import settings
 
 # Load-bearing, not decoration: Cloudflare fronts the provider API and answers
@@ -39,7 +40,14 @@ def _recipient_ref(to: str) -> str:
 
 def build_provider_request(*, to: str, subject: str, body: str) -> urllib.request.Request:
     payload = json.dumps(
-        {"from": settings.email_from, "to": [to], "subject": subject, "text": body}
+        {
+            # EMAIL_FROM stays a bare address — it is environment, not brand;
+            # the display-name half rides in from app/brand.py (name-gate §4).
+            "from": f"{FROM_DISPLAY_NAME} <{settings.email_from}>",
+            "to": [to],
+            "subject": subject,
+            "text": body,
+        }
     ).encode()
     return urllib.request.Request(
         _PROVIDER_ENDPOINT,

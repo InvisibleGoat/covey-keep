@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import RATE_WINDOW
 from app.api.deps import AuthContext, client_ip, get_auth_context, get_db, normalize_email
+from app.brand import PRODUCT_NAME
 from app.config import settings
 from app.models import (
     EmailChangeRequest,
@@ -215,10 +216,10 @@ async def request_email_change(
         # entire proof.
         send_email(
             to=body.new_email,
-            subject="Confirm your new Covey Keep sign-in email",
+            subject=f"Confirm your new {PRODUCT_NAME} sign-in email",
             body=(
                 "A request was made to make this address the sign-in email for a "
-                "Covey Keep account.\n\n"
+                f"{PRODUCT_NAME} account.\n\n"
                 f"Confirm the change: {settings.api_base_url}/auth/email-change/verify?token={raw_token}\n\n"
                 "This link expires in 1 hour and can be used once. If you didn't "
                 "expect this, you can ignore this email and nothing will change."
@@ -233,9 +234,9 @@ async def request_email_change(
     if person.email is not None:
         send_email(
             to=person.email,
-            subject="A change to your Covey Keep sign-in email was requested",
+            subject=f"A change to your {PRODUCT_NAME} sign-in email was requested",
             body=(
-                "Someone signed in to your Covey Keep account asked to change its "
+                f"Someone signed in to your {PRODUCT_NAME} account asked to change its "
                 "sign-in email address just now.\n\n"
                 "If this was you, check the new address's inbox for the "
                 "confirmation link.\n\n"

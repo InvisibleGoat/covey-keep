@@ -4,7 +4,10 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Covey Keep</title>
+    <!-- %PRODUCT_NAME% is injected at build time from src/brand.ts (the
+         brand-title plugin in vite.config.ts) — static HTML cannot import
+         TypeScript, and the product name must have exactly one source. -->
+    <title>%PRODUCT_NAME%</title>
   </head>
   <body>
     <div id="root"></div>

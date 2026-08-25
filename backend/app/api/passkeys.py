@@ -55,6 +55,7 @@ from webauthn.helpers.structs import (
 
 from app.api.auth import mint_session
 from app.api.deps import AuthContext, get_auth_context, get_db
+from app.brand import PRODUCT_NAME
 from app.config import settings
 from app.models import Person, WebauthnChallenge, WebauthnCredential
 
@@ -64,7 +65,9 @@ signin_router = APIRouter(prefix="/auth/passkey", tags=["auth"])
 CHALLENGE_TTL = timedelta(minutes=5)
 MAX_NICKNAME_LENGTH = 60
 
-RP_NAME = "Covey Keep"
+# Display-only, shown in the browser's passkey prompt. Safe to track the brand:
+# a credential binds to WEBAUTHN_RP_ID (the domain), never to this string.
+RP_NAME = PRODUCT_NAME
 
 
 def _signin_failed() -> HTTPException:

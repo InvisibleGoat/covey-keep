@@ -1,4 +1,4 @@
-# Covey Keep — frontend
+# CoveyKeep — frontend
 
 Vite + React + TypeScript PWA shell.
 

@@ -16,6 +16,7 @@ from app.api.deps import (
     get_db,
     normalize_email,
 )
+from app.brand import PRODUCT_NAME
 from app.config import settings
 from app.models import (
     Account,
@@ -178,9 +179,9 @@ async def request_link(
     link = f"{settings.api_base_url}/auth/verify?token={raw_token}"
     send_email(
         to=body.email,
-        subject="Your Covey Keep sign-in link",
+        subject=f"Your {PRODUCT_NAME} sign-in link",
         body=(
-            "Sign in to Covey Keep:\n\n"
+            f"Sign in to {PRODUCT_NAME}:\n\n"
             f"{link}\n\n"
             "This link expires in 15 minutes and can be used once. "
             "If you didn't request it, you can ignore this email."
