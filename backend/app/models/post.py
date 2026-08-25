@@ -10,6 +10,10 @@ from app.models.enums import PUBLICATION_STATE, PublicationState
 
 
 class Post(Base):
+    """Discussion belongs to the GATHERING and continues across occurrences;
+    a post may optionally be about one date (occurrence_id) — a label, never
+    the owner (CK-12)."""
+
     __tablename__ = "posts"
     __table_args__ = (
         CheckConstraint(
@@ -18,7 +22,12 @@ class Post(Base):
     )
 
     id: Mapped[UUID] = uuid_pk()
-    event_id: Mapped[UUID] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    gathering_id: Mapped[UUID] = mapped_column(
+        ForeignKey("gatherings.id"), nullable=False, index=True
+    )
+    occurrence_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("occurrences.id"), nullable=True, index=True
+    )
     parent_post_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("posts.id"), nullable=True, index=True
     )

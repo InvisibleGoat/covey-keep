@@ -1,6 +1,7 @@
-"""Phase 1 spine models. Importing this package registers every table on
-Base.metadata (alembic autogenerate depends on that)."""
+"""Phase 1 spine models (keeper spine since CK-12). Importing this package
+registers every table on Base.metadata (alembic autogenerate depends on that)."""
 
+from app.models.account import Account
 from app.models.attendance import AttendanceRecord
 from app.models.auth import (
     EmailChangeRequest,
@@ -13,8 +14,15 @@ from app.models.auth import (
 from app.models.base import Base
 from app.models.capability import CapabilityProfile, Role, RoleLadder
 from app.models.consent import ConsentRecord
-from app.models.enums import EventType, GroupType, MediaStatus, PublicationState, RSVPResponse
-from app.models.event import Event, EventSeries
+from app.models.enums import (
+    AccountKind,
+    GatheringType,
+    GroupType,
+    MediaStatus,
+    PublicationState,
+    RSVPResponse,
+)
+from app.models.gathering import Gathering, GatheringInvitation, Occurrence
 from app.models.group import Group, SubGroup
 from app.models.household import Household, Person
 from app.models.items import ItemClaim, ItemSlot
@@ -26,14 +34,16 @@ from app.models.post import Post
 from app.models.rsvp import RSVP
 
 __all__ = [
+    "Account",
+    "AccountKind",
     "AttendanceRecord",
     "Base",
     "CapabilityProfile",
     "ConsentRecord",
     "EmailChangeRequest",
-    "Event",
-    "EventSeries",
-    "EventType",
+    "Gathering",
+    "GatheringInvitation",
+    "GatheringType",
     "Group",
     "GroupType",
     "Household",
@@ -46,6 +56,7 @@ __all__ = [
     "NextStepAcceptance",
     "NextStepDismissal",
     "NextStepTrigger",
+    "Occurrence",
     "Organization",
     "Person",
     "Post",

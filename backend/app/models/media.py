@@ -10,8 +10,10 @@ from app.models.enums import MEDIA_STATUS, PUBLICATION_STATE, MediaStatus, Publi
 
 
 class Media(Base):
-    """Provenance (uploader, timestamp, event) is NOT NULL by design — the book
-    cannot be built without it (roadmap §2)."""
+    """Provenance (uploader, timestamp, gathering) is NOT NULL by design — the
+    book cannot be built without it (roadmap §2). Media hangs off the
+    GATHERING because the gathering is the keeping and storage unit (CK-12);
+    the optional occurrence_id is a label, never an owner."""
 
     __tablename__ = "media"
     __table_args__ = (
@@ -21,7 +23,12 @@ class Media(Base):
     )
 
     id: Mapped[UUID] = uuid_pk()
-    event_id: Mapped[UUID] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    gathering_id: Mapped[UUID] = mapped_column(
+        ForeignKey("gatherings.id"), nullable=False, index=True
+    )
+    occurrence_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("occurrences.id"), nullable=True, index=True
+    )
     uploader_person_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("people.id"), nullable=True
     )

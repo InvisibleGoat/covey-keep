@@ -3,6 +3,11 @@ from enum import Enum
 from app.models.base import db_enum
 
 
+class AccountKind(str, Enum):
+    PERSON = "PERSON"
+    ORGANIZATION = "ORGANIZATION"
+
+
 class GroupType(str, Enum):
     HOUSEHOLD = "HOUSEHOLD"
     CONGREGATION = "CONGREGATION"
@@ -10,12 +15,20 @@ class GroupType(str, Enum):
     CLUB = "CLUB"
 
 
-class EventType(str, Enum):
+class GatheringType(str, Enum):
+    """The 0001 event types plus the keeper-model additions (CK-12): a season
+    (kept whole, one-year cap), a memorial (decedent-gated, quota-exempt), and
+    the church gathering (retreat/VBS/baptism — the keepable church object,
+    distinct from a service, which is not a gathering at all)."""
+
     POTLUCK = "potluck"
     HOSTED = "hosted"
     HOSTED_WITH_HELP = "hosted_with_help"
     SIMPLE = "simple"
     WEDDING = "wedding"
+    SEASON = "season"
+    MEMORIAL = "memorial"
+    CHURCH_GATHERING = "church_gathering"
 
 
 class RSVPResponse(str, Enum):
@@ -37,8 +50,9 @@ class PublicationState(str, Enum):
 
 # Single shared sa.Enum instance per Postgres type — several tables reference the
 # same type, and duplicating instances would mean duplicate CREATE TYPE attempts.
+ACCOUNT_KIND = db_enum(AccountKind, "account_kind")
 GROUP_TYPE = db_enum(GroupType, "group_type")
-EVENT_TYPE = db_enum(EventType, "event_type")
+GATHERING_TYPE = db_enum(GatheringType, "gathering_type")
 RSVP_RESPONSE = db_enum(RSVPResponse, "rsvp_response")
 MEDIA_STATUS = db_enum(MediaStatus, "media_status")
 PUBLICATION_STATE = db_enum(PublicationState, "publication_state")

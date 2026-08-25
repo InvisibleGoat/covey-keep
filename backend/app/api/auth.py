@@ -17,7 +17,15 @@ from app.api.deps import (
     normalize_email,
 )
 from app.config import settings
-from app.models import EmailChangeRequest, MagicLinkToken, Person, Session, TosAcceptance
+from app.models import (
+    Account,
+    AccountKind,
+    EmailChangeRequest,
+    MagicLinkToken,
+    Person,
+    Session,
+    TosAcceptance,
+)
 from app.security import encode_session_jwt, hash_token
 from app.services.email import send_email
 
@@ -212,8 +220,17 @@ async def verify(
     if person is None:
         # New account: local-part placeholder display name; the ToS acceptance
         # is recorded from the version the person actually agreed to on the
-        # sign-in form (carried on the token row), never assumed.
-        person = Person(display_name=row.email.split("@", 1)[0], email=row.email)
+        # sign-in form (carried on the token row), never assumed. Every person
+        # points at an accounts row (CK-12) — the anchor quota, subscription,
+        # and keeping will reference.
+        account = Account(kind=AccountKind.PERSON)
+        db.add(account)
+        await db.flush()
+        person = Person(
+            display_name=row.email.split("@", 1)[0],
+            email=row.email,
+            account_id=account.id,
+        )
         db.add(person)
         await db.flush()
         db.add(

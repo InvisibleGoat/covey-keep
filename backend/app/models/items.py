@@ -9,10 +9,15 @@ from app.models.base import Base, created_at_col, uuid_pk
 
 
 class ItemSlot(Base):
+    """You bring a dish to a DATE — slots and claims hang off the occurrence
+    (CK-12)."""
+
     __tablename__ = "item_slots"
 
     id: Mapped[UUID] = uuid_pk()
-    event_id: Mapped[UUID] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    occurrence_id: Mapped[UUID] = mapped_column(
+        ForeignKey("occurrences.id"), nullable=False, index=True
+    )
     category: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     target_quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -34,7 +39,9 @@ class ItemClaim(Base):
     )
 
     id: Mapped[UUID] = uuid_pk()
-    event_id: Mapped[UUID] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    occurrence_id: Mapped[UUID] = mapped_column(
+        ForeignKey("occurrences.id"), nullable=False, index=True
+    )
     item_slot_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("item_slots.id"), nullable=True, index=True
     )

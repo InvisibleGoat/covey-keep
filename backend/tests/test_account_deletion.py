@@ -5,16 +5,16 @@ from sqlalchemy import func, select
 from app.api.profile import ANONYMIZED_DISPLAY_NAME
 from app.models import (
     CapabilityProfile,
-    Event,
-    EventSeries,
+    Gathering,
     Group,
     MagicLinkToken,
+    Occurrence,
     Person,
     Post,
     Session,
     TosAcceptance,
 )
-from app.models.enums import EventType, GroupType, PublicationState
+from app.models.enums import GatheringType, GroupType, PublicationState
 from tests.test_auth import _capture_link, _sign_in
 
 DELETE_BODY = {"confirm": "DELETE"}
@@ -151,9 +151,13 @@ async def test_contributions_survive_deletion(client, capsys, db_session_factory
     # the default — asserted here rather than trusted (kickoff STEP 2).
     headers = await _signed_in_headers(client, capsys, "contributor@example.com")
     now = datetime.now(timezone.utc)
+    # (CK-12 translated the scaffolding below from Event/EventSeries to
+    # Gathering/Occurrence when the keeper spine replaced them — every
+    # anonymization assertion is unchanged in strength.)
     async with db_session_factory() as db:
         person = (await db.execute(select(Person))).scalars().one()
         person_id = person.id
+        account_id = person.account_id
         profile = (
             await db.execute(
                 select(CapabilityProfile).where(CapabilityProfile.name == "household-default")
@@ -167,24 +171,20 @@ async def test_contributions_survive_deletion(client, capsys, db_session_factory
         )
         db.add(group)
         await db.flush()
-        series = EventSeries(
-            group_id=group.id, title="Sunday dinners", created_by_person_id=person_id
-        )
-        db.add(series)
-        await db.flush()
-        event = Event(
-            series_id=series.id,
-            event_type=EventType.POTLUCK,
+        gathering = Gathering(
+            account_id=account_id,
+            gathering_type=GatheringType.POTLUCK,
             title="August potluck",
-            starts_at=now,
-            created_by_person_id=person_id,
             publication_state=PublicationState.LIVE,
         )
-        db.add(event)
+        db.add(gathering)
+        await db.flush()
+        occurrence = Occurrence(gathering_id=gathering.id, starts_at=now)
+        db.add(occurrence)
         await db.flush()
         db.add(
             Post(
-                event_id=event.id,
+                gathering_id=gathering.id,
                 author_person_id=person_id,
                 body="What a day!",
                 publication_state=PublicationState.LIVE,
@@ -199,9 +199,11 @@ async def test_contributions_survive_deletion(client, capsys, db_session_factory
         # anonymized) person — provenance intact for the book pipeline.
         post = (await db.execute(select(Post))).scalars().one()
         assert post.author_person_id == person_id
-        series_row = (await db.execute(select(EventSeries))).scalars().one()
-        assert series_row.created_by_person_id == person_id
-        event_row = (await db.execute(select(Event))).scalars().one()
-        assert event_row.created_by_person_id == person_id
+        # The gathering survives, still anchored to the anonymized person's
+        # account (the accounts row is not PII and is never destroyed).
+        gathering_row = (await db.execute(select(Gathering))).scalars().one()
+        assert gathering_row.account_id == account_id
+        occurrence_row = (await db.execute(select(Occurrence))).scalars().one()
+        assert occurrence_row.gathering_id == gathering_row.id
         group_row = (await db.execute(select(Group))).scalars().one()
         assert group_row.steward_person_id == person_id

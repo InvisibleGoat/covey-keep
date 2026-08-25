@@ -15,10 +15,11 @@ class RSVP(Base):
         CheckConstraint(
             "person_id IS NOT NULL OR guest_name IS NOT NULL", name="identity_present"
         ),
-        # One RSVP per account-holder per event; guests (person_id NULL) are unconstrained.
+        # One RSVP per account-holder per occurrence; guests (person_id NULL)
+        # are unconstrained.
         Index(
-            "uq_rsvps_event_person",
-            "event_id",
+            "uq_rsvps_occurrence_person",
+            "occurrence_id",
             "person_id",
             unique=True,
             postgresql_where=text("person_id IS NOT NULL"),
@@ -26,7 +27,10 @@ class RSVP(Base):
     )
 
     id: Mapped[UUID] = uuid_pk()
-    event_id: Mapped[UUID] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    # You RSVP to a DATE, not to the gathering (CK-12).
+    occurrence_id: Mapped[UUID] = mapped_column(
+        ForeignKey("occurrences.id"), nullable=False, index=True
+    )
     person_id: Mapped[Optional[UUID]] = mapped_column(ForeignKey("people.id"), nullable=True)
     guest_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     guest_email: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

@@ -20,7 +20,11 @@ class AttendanceRecord(Base):
     )
 
     id: Mapped[UUID] = uuid_pk()
-    event_id: Mapped[UUID] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    # Attendance is a fact about a DATE (CK-12) — and a permanent one: kept is
+    # a revocable status, attended never is (keeper record §2.4).
+    occurrence_id: Mapped[UUID] = mapped_column(
+        ForeignKey("occurrences.id"), nullable=False, index=True
+    )
     person_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("people.id"), nullable=True, index=True
     )

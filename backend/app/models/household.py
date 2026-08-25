@@ -17,8 +17,9 @@ class Household(Base):
 
 
 class Person(Base):
-    """Identity + memberships + attended-events index. NO quota fields — storage
-    belongs to the group (roadmap §2)."""
+    """Identity + memberships + attended-gatherings index. Still NO quota
+    columns — under the keeper model (CK-12) quota belongs to the person's
+    ACCOUNT and is computed at request time over what it keeps, never stored."""
 
     __tablename__ = "people"
     __table_args__ = (
@@ -26,6 +27,11 @@ class Person(Base):
     )
 
     id: Mapped[UUID] = uuid_pk()
+    # The accounts-supertype link (CK-12): the person points AT the account —
+    # accounts.id is the one FK target for quota/subscription/keeping.
+    account_id: Mapped[UUID] = mapped_column(
+        ForeignKey("accounts.id"), nullable=False, unique=True
+    )
     household_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("households.id"), nullable=True, index=True
     )
