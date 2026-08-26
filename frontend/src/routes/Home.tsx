@@ -7,7 +7,7 @@ export function Home() {
     <main className="auth-screen">
       <h1>{person ? `Welcome, ${person.display_name}` : 'Welcome'}</h1>
       {!person && <p>You're signed in, but your profile couldn't be loaded just now.</p>}
-      <p>Your gatherings will live here.</p>
+      <Link to="/gatherings">Your gatherings</Link>
       <Link to="/settings">Settings</Link>
       <button type="button" onClick={() => void signOut()}>
         Sign out

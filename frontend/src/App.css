@@ -55,6 +55,7 @@
 
 .auth-card input[type='email'],
 .auth-card input[type='text'],
+.auth-card input[type='datetime-local'],
 .auth-card select {
   padding: 0.5rem 0.625rem;
   font-size: 1rem;
@@ -144,6 +145,67 @@
   border-color: #bbb;
   color: #999;
   cursor: not-allowed;
+}
+
+/* Gatherings (CK-17): list entries, detail occurrences, the creation form's
+   per-date fieldsets. Still deliberately plain — theming is its own phase. */
+.gathering-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+  max-width: 24rem;
+}
+
+.gathering-item {
+  display: block;
+  padding: 0.75rem 1rem;
+  border: 1px solid #ddd;
+  border-radius: 0.5rem;
+  text-align: left;
+  text-decoration: none;
+  color: inherit;
+}
+
+.gathering-item strong {
+  font-size: 1.125rem;
+}
+
+.gathering-item p {
+  margin: 0.25rem 0 0;
+  font-size: 0.9375rem;
+}
+
+.occurrence-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.occurrence-item p {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.gathering-form .occurrence-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 0.5rem;
+}
+
+.gathering-form .occurrence-fields legend {
+  font-size: 0.9375rem;
+  padding: 0 0.25rem;
 }
 
 /* Passkey list rows (CK-10). */

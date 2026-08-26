@@ -5,6 +5,9 @@ import { RequireAuth } from './components/RequireAuth'
 import { AccountDeleted } from './routes/AccountDeleted'
 import { AuthCallback } from './routes/AuthCallback'
 import { EmailChangeResult } from './routes/EmailChangeResult'
+import { GatheringDetail } from './routes/GatheringDetail'
+import { GatheringNew } from './routes/GatheringNew'
+import { Gatherings } from './routes/Gatherings'
 import { Home } from './routes/Home'
 import { Settings } from './routes/Settings'
 import { SignIn } from './routes/SignIn'
@@ -22,6 +25,30 @@ function App() {
           element={
             <RequireAuth>
               <Home />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/gatherings"
+          element={
+            <RequireAuth>
+              <Gatherings />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/gatherings/new"
+          element={
+            <RequireAuth>
+              <GatheringNew />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/gatherings/:id"
+          element={
+            <RequireAuth>
+              <GatheringDetail />
             </RequireAuth>
           }
         />
