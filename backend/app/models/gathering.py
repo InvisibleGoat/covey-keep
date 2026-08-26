@@ -95,6 +95,11 @@ class Gathering(Base):
     removed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # 0010 (CK-16) — stamped on every successful PATCH, the people.updated_at
+    # precedent: the column arrives with the phase that makes the row mutable.
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = created_at_col()
 
 

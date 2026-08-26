@@ -14,11 +14,12 @@ request time:
 - A memorial is exempt by TYPE (keeper record §9.4): quota-free and never in
   grace, keyed on `gathering_type == MEMORIAL`, never a flag.
 
-No endpoints call this yet — gathering CRUD is a later phase; the account
-deletion path (profile.py) is the one live caller, via lapse_kept_statuses.
-Every function that writes leaves the commit to the caller, so the kept-row
-change and its side effects (grace stamp, admin relinquishment) land in the
-caller's transaction or not at all.
+Live callers: gathering creation (api/gatherings.py, CK-16) via keep — the
+creator becomes first keeper in the same transaction that births the
+gathering — and the account deletion path (profile.py) via
+lapse_kept_statuses. Every function that writes leaves the commit to the
+caller, so the kept-row change and its side effects (grace stamp, admin
+relinquishment) land in the caller's transaction or not at all.
 """
 
 from datetime import datetime, timedelta, timezone

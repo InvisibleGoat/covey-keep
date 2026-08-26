@@ -60,7 +60,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0009"
+EXPECTED_REVISION = "0010"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -284,6 +284,11 @@ async def verify(conn, ck: Checks) -> None:
         # never exist — grace is DERIVED from last_keeper_left_at, never stored.
         absent=("account_id", "archive_at", "delete_at"),
     )
+
+    print("\n-- gatherings updated_at (0010) --")
+    # CK-16 made gatherings user-mutable; the stamp column follows the
+    # people.updated_at precedent — nullable, stamped on patch.
+    assert_columns(ck, columns, "gatherings", present=("updated_at",), nullable=("updated_at",))
 
     print("\n-- groups steward -> admin rename (0009) --")
     assert_columns(

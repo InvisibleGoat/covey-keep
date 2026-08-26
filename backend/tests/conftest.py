@@ -71,8 +71,13 @@ def migrated_test_db():
 async def clean_tables(migrated_test_db):
     # Per-test isolation matters here: the rate limit counts magic_link_tokens
     # rows over a 15-minute window, so leftovers would trip it across tests.
+    # Since CK-16 the truncate includes `accounts`: gathering CRUD creates
+    # accounts-anchored rows (gatherings, occurrences, kept_gatherings) that a
+    # people-only truncate leaves behind — CASCADE from accounts takes the
+    # whole keeper spine with it. (Seed rows — the capability profile, the
+    # role ladder — reference neither table and survive, as they must.)
     async with async_session_factory() as db:
-        await db.execute(text("TRUNCATE magic_link_tokens, people CASCADE"))
+        await db.execute(text("TRUNCATE magic_link_tokens, people, accounts CASCADE"))
         await db.commit()
     yield
 
