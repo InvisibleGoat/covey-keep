@@ -33,6 +33,25 @@ test('round trip never changes the time', () => {
   }
 })
 
+test('load → render → save without editing returns the byte-identical instant, three times over', () => {
+  // The CK-18 hazard: the detail page renders a stored instant into the form
+  // (instantToWallClock) and every save converts the form value back
+  // (wallClockToInstant). A zone bug here does not fail loudly — it shifts
+  // the time by the offset, and shifts it AGAIN on the next save; three
+  // unedited saves would compound it. Both directions run in a zone forced to
+  // differ from the runner's, and in a DST-observing zone.
+  for (const testZone of [zone, 'America/Chicago']) {
+    for (const start of ['2026-07-04T23:30:00.000Z', '2026-01-15T06:00:00.000Z']) {
+      let instant = start
+      for (let i = 0; i < 3; i++) {
+        const rendered = instantToWallClock(instant, testZone)
+        instant = wallClockToInstant(rendered, testZone)
+        expect(instant).toBe(start)
+      }
+    }
+  }
+})
+
 test('DST-observing zone gets the offset of the date, not of today', () => {
   // America/Chicago: CDT (UTC-5) in July, CST (UTC-6) in January.
   expect(wallClockToInstant('2026-07-01T12:00', 'America/Chicago')).toBe(

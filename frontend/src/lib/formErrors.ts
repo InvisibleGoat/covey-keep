@@ -39,6 +39,25 @@ export function networkErrors(): FormErrors {
   return { fields: {}, form: ["Couldn't reach the server. Check your connection and try again."] }
 }
 
+// The id the inline error element carries and the input's aria-describedby
+// points at: "error-<field>", with an optional scope prefix
+// ("error-<scope>-<field>") for pages that render the same field key in more
+// than one form at once (the /gatherings/:id occurrence editors, CK-18) —
+// ids must stay unique per page for the aria wiring to resolve.
+export function errorId(field: string, scope?: string): string {
+  return scope ? `error-${scope}-${field}` : `error-${field}`
+}
+
+// What an input's aria-describedby should be: the inline error's id while
+// that field has an error, undefined otherwise.
+export function describedBy(
+  errors: FormErrors,
+  field: string,
+  scope?: string,
+): string | undefined {
+  return errors.fields[field] ? errorId(field, scope) : undefined
+}
+
 interface ValidationItem {
   loc?: (string | number)[]
   msg?: string

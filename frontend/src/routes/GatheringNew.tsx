@@ -1,9 +1,16 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { FieldError, FormLevelErrors } from '../components/FieldError'
 import { authFetch } from '../lib/api'
 import { effectiveZone, wallClockToInstant } from '../lib/datetime'
-import { errorsFromResponse, networkErrors, noErrors, type FormErrors } from '../lib/formErrors'
+import {
+  describedBy,
+  errorsFromResponse,
+  networkErrors,
+  noErrors,
+  type FormErrors,
+} from '../lib/formErrors'
 import { GATHERING_TYPES, type Gathering } from '../lib/gatherings'
 
 interface OccurrenceDraft {
@@ -18,21 +25,6 @@ let nextKey = 0
 function emptyOccurrence(): OccurrenceDraft {
   nextKey += 1
   return { key: nextKey, startsAt: '', endsAt: '', location: '', mapUrl: '' }
-}
-
-// Inline field error, targetable by the input's aria-describedby.
-function FieldError({ errors, field }: { errors: FormErrors; field: string }) {
-  const message = errors.fields[field]
-  if (!message) return null
-  return (
-    <p className="form-error" id={`error-${field}`}>
-      {message}
-    </p>
-  )
-}
-
-function describedBy(errors: FormErrors, field: string): string | undefined {
-  return errors.fields[field] ? `error-${field}` : undefined
 }
 
 export function GatheringNew() {
@@ -248,11 +240,7 @@ export function GatheringNew() {
         <button type="submit" disabled={!plausible || submitting}>
           {submitting ? 'Creating…' : 'Create gathering'}
         </button>
-        {errors.form.map((message, index) => (
-          <p key={index} className="form-error">
-            {message}
-          </p>
-        ))}
+        <FormLevelErrors errors={errors} />
       </form>
 
       <Link to="/gatherings">Back to your gatherings</Link>

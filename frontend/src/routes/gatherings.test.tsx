@@ -160,6 +160,279 @@ test('the empty list is a real screen with the call to action', async () => {
   expect(cta.getAttribute('href')).toBe('/gatherings/new')
 })
 
+// ---- CK-18: the editing surface on /gatherings/:id ----
+
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status })
+}
+
+const startsInstant = wallClockToInstant('2026-09-01T18:00', profileZone)
+
+function detailBody(over: Record<string, unknown> = {}) {
+  return {
+    id: 'g-1',
+    gathering_type: 'potluck',
+    title: 'Test Potluck',
+    memorial_decedent_name: null,
+    requires_approval: true,
+    publication_state: 'live',
+    created_by_account_id: 'acct-1',
+    admin_account_id: 'acct-1',
+    created_at: '2026-08-25T12:00:00+00:00',
+    updated_at: null,
+    occurrences: [
+      {
+        id: 'occ-1',
+        gathering_id: 'g-1',
+        starts_at: startsInstant,
+        ends_at: null,
+        location: null,
+        map_url: null,
+      },
+    ],
+    ...over,
+  }
+}
+
+interface StubRoute {
+  method: string
+  path: string
+  response: () => Response
+}
+
+function stubFetchRoutes(routes: StubRoute[]) {
+  const mock = vi.fn((url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET'
+    const route = routes.find((r) => r.method === method && String(url).endsWith(r.path))
+    if (!route) throw new Error(`no stub for ${method} ${String(url)}`)
+    return Promise.resolve(route.response())
+  })
+  vi.stubGlobal('fetch', mock)
+  return mock
+}
+
+function renderDetail() {
+  return renderWithAuth(
+    <Routes>
+      <Route path="/gatherings/:id" element={<GatheringDetail />} />
+    </Routes>,
+    ['/gatherings/g-1'],
+  )
+}
+
+const seasonCap422 = () =>
+  json(422, {
+    detail: [
+      {
+        loc: ['body', 'starts_at'],
+        msg: "Value error, a season's occurrences must all fall within one year of its earliest date — this would make the span 413 days",
+        type: 'value_error',
+      },
+    ],
+  })
+
+test('a non-admin viewer sees the read-only page with no edit controls at all', async () => {
+  // admin_account_id null is the claimable state — the one non-admin-reader
+  // shape the current model can name; the client cannot compare account ids
+  // (the API does not expose the caller's, a reported CK-18 gap), so the
+  // non-null admin fact is what gates every edit affordance.
+  stubFetchRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody({ admin_account_id: null })) },
+  ])
+  renderDetail()
+  await screen.findByText('Test Potluck')
+  expect(screen.queryByRole('button', { name: /edit gathering/i })).toBeNull()
+  expect(screen.queryByRole('button', { name: /edit this date/i })).toBeNull()
+  expect(screen.queryByRole('button', { name: /remove this date/i })).toBeNull()
+  expect(screen.queryByRole('button', { name: /add another date/i })).toBeNull()
+})
+
+test('the edit form carries the decedent field for a memorial only, with the constraint stated', async () => {
+  stubFetchRoutes([
+    {
+      method: 'GET',
+      path: '/gatherings/g-1',
+      response: () =>
+        json(200, detailBody({ gathering_type: 'memorial', memorial_decedent_name: 'Granddad' })),
+    },
+  ])
+  const memorial = renderDetail()
+  fireEvent.click(await screen.findByRole('button', { name: /edit gathering/i }))
+  expect(screen.getByLabelText(/decedent/i)).toBeTruthy()
+  // The null-is-not-provided constraint is labeled, never faked as clearable.
+  expect(screen.getByText('The name can be corrected, not removed.')).toBeTruthy()
+  memorial.unmount()
+  vi.unstubAllGlobals()
+
+  stubFetchRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
+  ])
+  renderDetail()
+  fireEvent.click(await screen.findByRole('button', { name: /edit gathering/i }))
+  expect(screen.queryByLabelText(/decedent/i)).toBeNull()
+})
+
+test('save stays disabled until something changes, and a no-op edit sends no PATCH', async () => {
+  const mock = stubFetchRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
+  ])
+  renderDetail()
+  fireEvent.click(await screen.findByRole('button', { name: /edit gathering/i }))
+  const save = screen.getByRole('button', { name: /^save$/i }) as HTMLButtonElement
+  expect(save.disabled).toBe(true)
+  fireEvent.change(screen.getByLabelText(/^title$/i), { target: { value: 'Renamed Potluck' } })
+  expect(save.disabled).toBe(false)
+  fireEvent.change(screen.getByLabelText(/^title$/i), { target: { value: 'Test Potluck' } })
+  expect(save.disabled).toBe(true)
+  const patches = mock.mock.calls.filter(
+    ([, init]) => (init as RequestInit | undefined)?.method === 'PATCH',
+  )
+  expect(patches).toHaveLength(0)
+})
+
+test('the nothing-to-update 422 still renders if it ever arrives', async () => {
+  stubFetchRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
+    {
+      method: 'PATCH',
+      path: '/gatherings/g-1',
+      response: () =>
+        json(422, {
+          detail: [
+            {
+              loc: ['body'],
+              msg: 'Value error, nothing to update — provide title and/or memorial_decedent_name',
+              type: 'value_error',
+            },
+          ],
+        }),
+    },
+  ])
+  renderDetail()
+  fireEvent.click(await screen.findByRole('button', { name: /edit gathering/i }))
+  fireEvent.change(screen.getByLabelText(/^title$/i), { target: { value: 'Renamed Potluck' } })
+  fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+  const message = await screen.findByText(
+    'Nothing to update — provide title and/or memorial_decedent_name',
+  )
+  // The no-op guard is client-side UX, but the server's answer still renders
+  // (with the CK-18 error affordance) rather than leaving a dead button.
+  expect(message.getAttribute('role')).toBe('alert')
+})
+
+test("the season cap at occurrence-add lands on the add form's starts field", async () => {
+  stubFetchRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody({ gathering_type: 'season' })) },
+    { method: 'POST', path: '/gatherings/g-1/occurrences', response: seasonCap422 },
+  ])
+  renderDetail()
+  fireEvent.click(await screen.findByRole('button', { name: /add another date/i }))
+  fireEvent.change(screen.getByLabelText(/^starts$/i), { target: { value: '2027-10-18T10:00' } })
+  fireEvent.click(screen.getByRole('button', { name: /add this date/i }))
+  const error = await screen.findByText(/would make the span 413 days/)
+  expect(error.id).toBe('error-starts_at')
+  expect(screen.getByLabelText(/^starts$/i).getAttribute('aria-describedby')).toBe(
+    'error-starts_at',
+  )
+})
+
+test("the season cap at a date move lands on that date's starts field", async () => {
+  stubFetchRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody({ gathering_type: 'season' })) },
+    { method: 'PATCH', path: '/occurrences/occ-1', response: seasonCap422 },
+  ])
+  renderDetail()
+  fireEvent.click(await screen.findByRole('button', { name: /edit this date/i }))
+  const starts = screen.getByLabelText(/^starts$/i)
+  fireEvent.change(starts, { target: { value: '2027-10-18T10:00' } })
+  fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+  const error = await screen.findByText(/would make the span 413 days/)
+  expect(error.id).toBe('error-occ-1-starts_at')
+  expect(starts.getAttribute('aria-describedby')).toBe('error-occ-1-starts_at')
+})
+
+test('the last-occurrence refusal renders beside the remove control, with the error affordance', async () => {
+  stubFetchRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
+    {
+      method: 'DELETE',
+      path: '/occurrences/occ-1',
+      response: () =>
+        json(422, {
+          detail: [
+            {
+              loc: ['path', 'occurrence_id'],
+              msg: 'a gathering keeps at least one occurrence',
+              type: 'value_error',
+            },
+          ],
+        }),
+    },
+  ])
+  renderDetail()
+  const remove = await screen.findByRole('button', { name: /remove this date/i })
+  fireEvent.click(remove)
+  const error = await screen.findByText('A gathering keeps at least one occurrence')
+  expect(error.id).toBe('error-occ-1-occurrence_id')
+  expect(remove.getAttribute('aria-describedby')).toBe('error-occ-1-occurrence_id')
+  expect(error.getAttribute('role')).toBe('alert')
+  expect(error.className).toContain('form-error')
+})
+
+test('a successful save re-renders from the server, not from local form state', async () => {
+  let title = 'Test Potluck'
+  const mock = vi.fn((url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET'
+    if (method === 'GET') return Promise.resolve(json(200, detailBody({ title })))
+    if (method === 'PATCH') {
+      title = 'Sunday Potluck (server-normalized)'
+      const { occurrences: _occurrences, ...body } = detailBody({ title })
+      return Promise.resolve(json(200, body))
+    }
+    throw new Error(`no stub for ${method} ${String(url)}`)
+  })
+  vi.stubGlobal('fetch', mock)
+  renderDetail()
+  fireEvent.click(await screen.findByRole('button', { name: /edit gathering/i }))
+  fireEvent.change(screen.getByLabelText(/^title$/i), { target: { value: 'Sunday Potluck' } })
+  fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+  // The heading shows what the SERVER holds — proof of a fresh GET rather
+  // than trust in the submitted form value (optimistic-free, CK-18).
+  await screen.findByRole('heading', { name: 'Sunday Potluck (server-normalized)' })
+  const gets = mock.mock.calls.filter(
+    ([, init]) => ((init as RequestInit | undefined)?.method ?? 'GET') === 'GET',
+  )
+  expect(gets).toHaveLength(2)
+})
+
+test('the season cap at create lands on the occurrences control, with the error affordance', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() =>
+      Promise.resolve(
+        json(422, {
+          detail: [
+            {
+              loc: ['body', 'occurrences'],
+              msg: "Value error, a season's occurrences must all fall within one year of its earliest date — this would make the span 413 days",
+              type: 'value_error',
+            },
+          ],
+        }),
+      ),
+    ),
+  )
+  renderWithAuth(<GatheringNew />)
+  fireEvent.change(screen.getByLabelText(/type of gathering/i), { target: { value: 'season' } })
+  fireEvent.change(screen.getByLabelText(/^title$/i), { target: { value: 'Fall ball' } })
+  fireEvent.change(screen.getByLabelText(/^starts$/i), { target: { value: '2026-08-31T10:00' } })
+  fireEvent.click(screen.getByRole('button', { name: /create gathering/i }))
+  const error = await screen.findByText(/would make the span 413 days/)
+  expect(error.id).toBe('error-occurrences')
+  expect(error.getAttribute('role')).toBe('alert')
+  expect(error.className).toContain('form-error')
+})
+
 test('a detail 404 renders the one not-found screen', async () => {
   vi.stubGlobal(
     'fetch',
