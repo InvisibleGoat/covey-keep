@@ -26,6 +26,7 @@ fact — never conflate the two).
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -102,12 +103,32 @@ def _clean_location(value: str) -> str:
     return value
 
 
+# One message for every scheme failure, and it never echoes the rejected
+# value — a rejection message that reflects its input is itself a small
+# injection surface (and a map link can identify a home, so it is never
+# logged either).
+MAP_URL_SCHEME_MESSAGE = "a map link must start with http:// or https://"
+
+
 def _clean_map_url(value: str) -> str:
     value = value.strip()
     if not value:
         raise ValueError("map link cannot be empty — leave it out instead")
     if len(value) > MAX_MAP_URL_LENGTH:
         raise ValueError(f"map link is limited to {MAX_MAP_URL_LENGTH} characters")
+    # Scheme allowlist (CK-21): the value is rendered as a link href, so any
+    # non-http(s) scheme — javascript:, data:, vbscript: — is script execution
+    # in a reader's browser: XSS with no HTML injection anywhere. The scheme
+    # is PARSED, never prefix-matched: urlsplit strips embedded tab/CR/LF the
+    # same way browsers do ("java\tscript:" parses as javascript), and the
+    # explicit control-character rejection closes the gap on runtimes whose
+    # parser disagrees. Requiring a netloc keeps the accepted set to what the
+    # message promises — a literal http:// or https:// prefix.
+    if any(c in value for c in "\t\r\n"):
+        raise ValueError(MAP_URL_SCHEME_MESSAGE)
+    parts = urlsplit(value)
+    if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+        raise ValueError(MAP_URL_SCHEME_MESSAGE)
     return value
 
 

@@ -489,6 +489,58 @@ test('the season cap at create lands on the occurrences control, with the error 
   expect(error.className).toContain('form-error')
 })
 
+// ---- CK-21: the map-link render guard ----
+
+function detailWithMapUrl(mapUrl: string) {
+  return detailBody({
+    occurrences: [
+      {
+        id: 'occ-1',
+        gathering_id: 'g-1',
+        starts_at: startsInstant,
+        ends_at: null,
+        location: null,
+        map_url: mapUrl,
+      },
+    ],
+  })
+}
+
+test('a stored javascript: map link renders as text with NO anchor element', async () => {
+  stubFetchRoutes([
+    {
+      method: 'GET',
+      path: '/gatherings/g-1',
+      response: () => json(200, detailWithMapUrl('javascript:alert(1)')),
+    },
+  ])
+  const { container } = renderDetail()
+  await screen.findByText('Test Potluck')
+  // The stored value is visible — a silently vanished field is its own bug —
+  // but it is text, never a link: assert the ABSENCE of the anchor, not just
+  // the presence of the text (the "Back to your gatherings" router link is
+  // the only anchor on the page).
+  expect(screen.getByText('javascript:alert(1)')).toBeTruthy()
+  expect(screen.queryByRole('link', { name: 'Map' })).toBeNull()
+  const anchors = Array.from(container.querySelectorAll('a'))
+  expect(anchors.map((a) => a.getAttribute('href'))).toEqual(['/gatherings'])
+})
+
+test('a valid https map link still renders as a new-tab link', async () => {
+  stubFetchRoutes([
+    {
+      method: 'GET',
+      path: '/gatherings/g-1',
+      response: () => json(200, detailWithMapUrl('https://maps.example.com/park')),
+    },
+  ])
+  renderDetail()
+  const link = await screen.findByRole('link', { name: 'Map' })
+  expect(link.getAttribute('href')).toBe('https://maps.example.com/park')
+  expect(link.getAttribute('target')).toBe('_blank')
+  expect(link.getAttribute('rel')).toBe('noreferrer')
+})
+
 test('a detail 404 renders the one not-found screen', async () => {
   vi.stubGlobal(
     'fetch',

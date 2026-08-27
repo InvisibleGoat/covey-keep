@@ -732,6 +732,102 @@ async def test_occurrence_location_and_map_url_reject_blank_and_trim(
         assert occurrence.map_url == "https://maps.example.com/park"
 
 
+# --- map_url scheme allowlist (CK-21) -----------------------------------------
+
+
+async def test_map_url_rejects_non_http_schemes_on_create_add_and_patch(
+    client, capsys, db_session_factory
+):
+    """A map_url is rendered as a link href, so a stored javascript: value is
+    script execution in a reader's browser — the scheme is allowlisted to
+    http/https everywhere an occurrence body is accepted. The scheme is
+    parsed, not prefix-matched: the obfuscated java\\tscript: case is why."""
+    headers = await _signed_in_headers(client, capsys, "mapkeeper@example.com")
+    created = await _create(client, headers)
+    occ_id = created["occurrences"][0]["id"]
+
+    bad_values = [
+        "javascript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "vbscript:msgbox(1)",
+        "//evil.example/map",
+        "java\tscript:alert(1)",
+    ]
+    for bad in bad_values:
+        # Create (OccurrenceIn under GatheringCreate)...
+        response = await client.post(
+            "/gatherings",
+            json={
+                "gathering_type": "potluck",
+                "title": "August potluck",
+                "occurrences": [
+                    {"starts_at": "2026-09-01T18:00:00+00:00", "map_url": bad}
+                ],
+            },
+            headers=headers,
+        )
+        assert response.status_code == 422, bad
+        assert "map_url" in _field_errors(response)
+        # ...occurrence-add (OccurrenceIn standalone)...
+        response = await client.post(
+            f"/gatherings/{created['id']}/occurrences",
+            json={"starts_at": "2026-10-01T18:00:00+00:00", "map_url": bad},
+            headers=headers,
+        )
+        assert response.status_code == 422, bad
+        assert "map_url" in _field_errors(response)
+        # ...and patch (OccurrencePatch).
+        response = await client.patch(
+            f"/occurrences/{occ_id}", json={"map_url": bad}, headers=headers
+        )
+        assert response.status_code == 422, bad
+        assert "map_url" in _field_errors(response)
+        # The message names the http/https requirement and never echoes the
+        # rejected value back (a reflecting rejection message is itself a
+        # small injection surface).
+        messages = [err["msg"] for err in response.json()["detail"]]
+        assert any("http://" in m for m in messages)
+        assert all(bad not in m for m in messages)
+
+    # Nothing above stored anything.
+    async with db_session_factory() as db:
+        stored = (await db.execute(select(Occurrence.map_url))).scalars().all()
+        assert stored == [None]
+
+
+async def test_map_url_accepts_http_and_https_and_still_trims(
+    client, capsys, db_session_factory
+):
+    headers = await _signed_in_headers(client, capsys, "mapmaker@example.com")
+    created = await _create(
+        client,
+        headers,
+        occurrences=[
+            {
+                "starts_at": "2026-09-01T18:00:00+00:00",
+                # Trimming still applies, and the scheme check reads the
+                # trimmed value (a leading space never defeats the allowlist).
+                "map_url": "  https://maps.example.com/park  ",
+            }
+        ],
+    )
+    occ = created["occurrences"][0]
+    assert occ["map_url"] == "https://maps.example.com/park"
+
+    # Plain http is allowed too — the allowlist is http AND https.
+    response = await client.patch(
+        f"/occurrences/{occ['id']}",
+        json={"map_url": "http://maps.example.com/park"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["map_url"] == "http://maps.example.com/park"
+
+    async with db_session_factory() as db:
+        occurrence = (await db.execute(select(Occurrence))).scalars().one()
+        assert occurrence.map_url == "http://maps.example.com/park"
+
+
 # --- the deletion lapse, with a real subject at last --------------------------
 
 

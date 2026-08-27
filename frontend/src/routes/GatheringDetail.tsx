@@ -21,6 +21,7 @@ import {
   type GatheringWithOccurrences,
   type Occurrence,
 } from '../lib/gatherings'
+import { safeHttpUrl } from '../lib/url'
 
 type DetailState =
   | { status: 'loading' }
@@ -508,13 +509,20 @@ export function GatheringDetail() {
                     </strong>
                   </p>
                   {occurrence.location && <p>{occurrence.location}</p>}
-                  {occurrence.map_url && (
-                    <p>
-                      <a href={occurrence.map_url} target="_blank" rel="noreferrer">
-                        Map
-                      </a>
-                    </p>
-                  )}
+                  {occurrence.map_url &&
+                    (safeHttpUrl(occurrence.map_url) ? (
+                      <p>
+                        <a href={occurrence.map_url} target="_blank" rel="noreferrer">
+                          Map
+                        </a>
+                      </p>
+                    ) : (
+                      // A stored value that fails the scheme guard renders as
+                      // plain text — the person can see what is stored (a
+                      // silently vanished field is its own bug), but nothing
+                      // navigates to it.
+                      <p>{occurrence.map_url}</p>
+                    ))}
                   {canEdit && (
                     <>
                       <button

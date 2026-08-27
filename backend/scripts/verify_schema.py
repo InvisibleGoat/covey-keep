@@ -387,6 +387,24 @@ async def verify(conn, ck: Checks) -> None:
             "no occurrence stores an empty-string location or map_url",
             f"{blank_text} occurrence row(s) with an empty-string location or map_url",
         )
+        # CK-21: map_url is rendered as a link href, so its scheme is
+        # allowlisted to http/https by the API validator — any other scheme
+        # here means something wrote around it, and a javascript: value is
+        # script execution in a reader's browser. The accepted set literally
+        # starts with http:// or https:// (the validator requires a netloc),
+        # so the prefix match IS the scheme check for stored rows. Detail
+        # prints the count only — a map link can identify a home, so the
+        # value itself is never printed.
+        bad_scheme = await scalar(
+            conn,
+            "SELECT count(*) FROM occurrences WHERE map_url IS NOT NULL "
+            "AND map_url !~* '^https?://'",
+        )
+        ck.check(
+            bad_scheme == 0,
+            "no occurrence stores a map_url with a non-http(s) scheme",
+            f"{bad_scheme} occurrence row(s) with a non-http(s) map_url scheme",
+        )
     else:
         ck.check(False, "occurrence text integrity", "occurrences table missing")
 
