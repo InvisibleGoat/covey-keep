@@ -3,12 +3,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { authFetch } from '../lib/api'
 import { effectiveZone, formatInstant } from '../lib/datetime'
-import {
-  gatheringTypeLabel,
-  nextOrMostRecent,
-  type Gathering,
-  type GatheringWithOccurrences,
-} from '../lib/gatherings'
+import { gatheringTypeLabel, type GatheringListItem } from '../lib/gatherings'
 
 type LoadStatus = 'loading' | 'loaded' | 'failed'
 
@@ -16,42 +11,25 @@ export function Gatherings() {
   const { person } = useAuth()
   const zone = effectiveZone(person?.timezone)
   const [status, setStatus] = useState<LoadStatus>('loading')
-  const [gatherings, setGatherings] = useState<Gathering[]>([])
-  // gathering id → the occurrence date its list entry leads with. Filled by
-  // per-gathering detail fetches: GET /gatherings carries no occurrence data
-  // (reported to the backend backlog as a CK-17 finding) — for the handful of
-  // gatherings an account keeps, parallel detail reads carry the list.
-  const [leadDates, setLeadDates] = useState<Record<string, string>>({})
+  const [gatherings, setGatherings] = useState<GatheringListItem[]>([])
 
   useEffect(() => {
     let cancelled = false
     async function load() {
+      // ONE request: since CK-20 each list item carries next_occurrence (the
+      // backend's next-or-most-recent rule) — the CK-17 per-gathering detail
+      // fetches and their per-row degrade are gone with the N+1 they existed
+      // to work around.
       try {
         const response = await authFetch('/gatherings')
         if (!response.ok) {
           if (!cancelled) setStatus('failed')
           return
         }
-        const body = (await response.json()) as { gatherings: Gathering[] }
+        const body = (await response.json()) as { gatherings: GatheringListItem[] }
         if (cancelled) return
         setGatherings(body.gatherings)
         setStatus('loaded')
-
-        const dates: Record<string, string> = {}
-        await Promise.all(
-          body.gatherings.map(async (gathering) => {
-            try {
-              const detail = await authFetch(`/gatherings/${gathering.id}`)
-              if (!detail.ok) return
-              const withOccurrences = (await detail.json()) as GatheringWithOccurrences
-              const lead = nextOrMostRecent(withOccurrences.occurrences, new Date())
-              if (lead) dates[gathering.id] = lead.starts_at
-            } catch {
-              // A missing date on one row is not a failed list.
-            }
-          }),
-        )
-        if (!cancelled) setLeadDates(dates)
       } catch {
         if (!cancelled) setStatus('failed')
       }
@@ -103,7 +81,8 @@ export function Gatherings() {
               <strong>{gathering.title}</strong>
               <p>
                 {gatheringTypeLabel(gathering.gathering_type)}
-                {leadDates[gathering.id] && ` · ${formatInstant(leadDates[gathering.id], zone)}`}
+                {gathering.next_occurrence &&
+                  ` · ${formatInstant(gathering.next_occurrence.starts_at, zone)}`}
               </p>
             </Link>
           </li>

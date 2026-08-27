@@ -11,8 +11,9 @@ CK-13 deletion lapse now has a real, API-created subject instead of a fixture.
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 
+from app.db import engine
 from app.models import Account, Gathering, KeptGathering, Occurrence, Person
 from app.services.keeping import account_usage
 from tests.test_auth import _sign_in
@@ -550,6 +551,185 @@ async def test_delete_occurrence_refuses_the_last_one(
     async with db_session_factory() as db:
         remaining = (await db.execute(select(Occurrence))).scalars().all()
         assert [str(o.id) for o in remaining] == [second_id]
+
+
+# --- the list's occurrence summary (CK-20) ------------------------------------
+
+
+async def test_list_carries_next_occurrence_and_count(client, capsys):
+    headers = await _signed_in_headers(client, capsys, "planner@example.com")
+
+    # All future: the lead is the EARLIEST upcoming date.
+    future = await _create(
+        client,
+        headers,
+        title="All future",
+        occurrences=[
+            {"starts_at": "2035-06-01T18:00:00+00:00"},
+            {"starts_at": "2035-01-01T18:00:00+00:00"},
+        ],
+    )
+    # All past: nothing upcoming, so the lead is the LATEST past date.
+    past = await _create(
+        client,
+        headers,
+        title="All past",
+        occurrences=[
+            {"starts_at": "2020-01-01T18:00:00+00:00"},
+            {"starts_at": "2020-06-01T18:00:00+00:00"},
+        ],
+    )
+    # Mixed: any upcoming date outranks every past one, however recent.
+    mixed = await _create(
+        client,
+        headers,
+        title="Mixed",
+        occurrences=[
+            {"starts_at": "2020-06-01T18:00:00+00:00"},
+            {"starts_at": "2035-06-01T18:00:00+00:00"},
+            {"starts_at": "2035-01-01T18:00:00+00:00"},
+        ],
+    )
+
+    response = await client.get("/gatherings", headers=headers)
+    assert response.status_code == 200
+    items = {g["title"]: g for g in response.json()["gatherings"]}
+    # Newest first, unchanged by the summary.
+    assert list(items) == ["Mixed", "All past", "All future"]
+
+    # Creation echoes occurrences sorted by starts_at, so the expected lead is
+    # addressable by index; comparing id AND starts_at pins the whole shape.
+    assert items["All future"]["next_occurrence"] == {
+        "id": future["occurrences"][0]["id"],
+        "starts_at": future["occurrences"][0]["starts_at"],
+    }
+    assert items["All future"]["occurrence_count"] == 2
+
+    assert items["All past"]["next_occurrence"] == {
+        "id": past["occurrences"][1]["id"],
+        "starts_at": past["occurrences"][1]["starts_at"],
+    }
+    assert items["All past"]["occurrence_count"] == 2
+
+    assert items["Mixed"]["next_occurrence"] == {
+        "id": mixed["occurrences"][1]["id"],
+        "starts_at": mixed["occurrences"][1]["starts_at"],
+    }
+    assert items["Mixed"]["occurrence_count"] == 3
+
+
+async def test_list_statement_count_does_not_scale_with_gatherings(client, capsys):
+    """The occurrence summary rides ONE query — moving CK-17's client-side N+1
+    into a server-side per-gathering loop would not have been a fix. Pinned by
+    counting the statements a list request executes at two very different
+    gathering counts: the counts must be equal, and exactly one statement in
+    the request may read gatherings."""
+    headers = await _signed_in_headers(client, capsys, "counter@example.com")
+    await _create(client, headers, title="One")
+
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record)
+    try:
+        assert (await client.get("/gatherings", headers=headers)).status_code == 200
+        at_one_gathering = len(statements)
+
+        for n in range(3):
+            await _create(client, headers, title=f"More {n}")
+        statements.clear()
+        assert (await client.get("/gatherings", headers=headers)).status_code == 200
+        at_four_gatherings = len(statements)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record)
+
+    assert at_four_gatherings == at_one_gathering
+    assert len([s for s in statements if "FROM gatherings" in s]) == 1
+
+
+# --- occurrence text: one representation of "no value" (CK-20) ----------------
+
+
+async def test_occurrence_location_and_map_url_reject_blank_and_trim(
+    client, capsys, db_session_factory
+):
+    headers = await _signed_in_headers(client, capsys, "placekeeper@example.com")
+
+    # Valid values are trimmed on the way in.
+    body = await _create(
+        client,
+        headers,
+        occurrences=[
+            {
+                "starts_at": "2026-09-01T18:00:00+00:00",
+                "location": "  the park  ",
+                "map_url": "  https://maps.example.com/park  ",
+            }
+        ],
+    )
+    occ = body["occurrences"][0]
+    assert occ["location"] == "the park"
+    assert occ["map_url"] == "https://maps.example.com/park"
+
+    # Blank or whitespace-only is a field-level 422 at create: NULL is the one
+    # representation of "no value", and a blank is not a second one.
+    for bad in ({"location": ""}, {"location": "   "}, {"map_url": ""}, {"map_url": "   "}):
+        response = await client.post(
+            "/gatherings",
+            json={
+                "gathering_type": "potluck",
+                "title": "August potluck",
+                "occurrences": [{"starts_at": "2026-09-01T18:00:00+00:00", **bad}],
+            },
+            headers=headers,
+        )
+        assert response.status_code == 422, bad
+        assert set(bad) <= _field_errors(response)
+
+    # The same on occurrence-add...
+    response = await client.post(
+        f"/gatherings/{body['id']}/occurrences",
+        json={"starts_at": "2026-10-01T18:00:00+00:00", "location": "   "},
+        headers=headers,
+    )
+    assert response.status_code == 422
+    assert "location" in _field_errors(response)
+
+    # ...and on patch.
+    for bad in ({"location": "  "}, {"map_url": ""}):
+        response = await client.patch(
+            f"/occurrences/{occ['id']}", json=bad, headers=headers
+        )
+        assert response.status_code == 422, bad
+        assert set(bad) <= _field_errors(response)
+
+    # A patched value is trimmed like a created one, and the caps hold.
+    response = await client.patch(
+        f"/occurrences/{occ['id']}", json={"location": "  the backyard  "}, headers=headers
+    )
+    assert response.status_code == 200
+    assert response.json()["location"] == "the backyard"
+
+    assert (
+        await client.patch(
+            f"/occurrences/{occ['id']}", json={"location": "x" * 201}, headers=headers
+        )
+    ).status_code == 422
+    assert (
+        await client.patch(
+            f"/occurrences/{occ['id']}",
+            json={"map_url": "https://" + "x" * 2000},
+            headers=headers,
+        )
+    ).status_code == 422
+
+    # The stored row holds the trimmed values; nothing stored a blank.
+    async with db_session_factory() as db:
+        occurrence = (await db.execute(select(Occurrence))).scalars().one()
+        assert occurrence.location == "the backyard"
+        assert occurrence.map_url == "https://maps.example.com/park"
 
 
 # --- the deletion lapse, with a real subject at last --------------------------

@@ -30,7 +30,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, get_auth_context, get_db
@@ -41,6 +41,10 @@ router = APIRouter(prefix="", tags=["gatherings"])
 
 MAX_TITLE_LENGTH = 200
 MAX_DECEDENT_NAME_LENGTH = 200
+MAX_LOCATION_LENGTH = 200
+# URLs run longer than names — a full Google Maps link with a data= segment
+# clears 200 easily — so the cap is the conventional URL bound, not the title's.
+MAX_MAP_URL_LENGTH = 2000
 
 # A season's occurrences must fall within one year of the earliest starts_at
 # (keeper record §9.2: beyond that is a new season). App-layer by design — the
@@ -85,6 +89,28 @@ def _clean_decedent_name(value: str) -> str:
     return value
 
 
+def _clean_location(value: str) -> str:
+    # NULL is the ONE representation of "no location" (the CK-13 discipline —
+    # no second representation that can disagree). A blank is not a value:
+    # omit the field instead. Nothing is clearable (null means "not provided"),
+    # so this refusal is the honest answer, never a fake clear.
+    value = value.strip()
+    if not value:
+        raise ValueError("location cannot be empty — leave it out instead")
+    if len(value) > MAX_LOCATION_LENGTH:
+        raise ValueError(f"location is limited to {MAX_LOCATION_LENGTH} characters")
+    return value
+
+
+def _clean_map_url(value: str) -> str:
+    value = value.strip()
+    if not value:
+        raise ValueError("map link cannot be empty — leave it out instead")
+    if len(value) > MAX_MAP_URL_LENGTH:
+        raise ValueError(f"map link is limited to {MAX_MAP_URL_LENGTH} characters")
+    return value
+
+
 def _season_span_error(span: timedelta) -> str:
     return (
         "a season's occurrences must all fall within one year of its earliest "
@@ -101,6 +127,16 @@ class OccurrenceIn(BaseModel):
     ends_at: Optional[AwareDatetime] = None
     location: Optional[str] = None
     map_url: Optional[str] = None
+
+    @field_validator("location")
+    @classmethod
+    def _location(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else _clean_location(value)
+
+    @field_validator("map_url")
+    @classmethod
+    def _map_url(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else _clean_map_url(value)
 
 
 class GatheringCreate(BaseModel):
@@ -190,6 +226,16 @@ class OccurrencePatch(BaseModel):
     location: Optional[str] = None
     map_url: Optional[str] = None
 
+    @field_validator("location")
+    @classmethod
+    def _location(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else _clean_location(value)
+
+    @field_validator("map_url")
+    @classmethod
+    def _map_url(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else _clean_map_url(value)
+
     @model_validator(mode="after")
     def _something_to_patch(self) -> "OccurrencePatch":
         if all(
@@ -231,6 +277,26 @@ def _gathering_body(
     if occurrences is not None:
         body["occurrences"] = [_occurrence_body(o) for o in occurrences]
     return body
+
+
+def _list_item(
+    gathering: Gathering,
+    occurrence_id: Optional[UUID],
+    starts_at: Optional[datetime],
+    occurrence_count: Optional[int],
+) -> dict:
+    """A GET /gatherings item: the gathering body plus the occurrence summary.
+    The LIST's own shape, deliberately — the detail body carries full
+    occurrences, and overloading one builder with both would couple the two
+    surfaces (CK-20)."""
+    item = _gathering_body(gathering)
+    item["next_occurrence"] = (
+        {"id": str(occurrence_id), "starts_at": starts_at.isoformat()}
+        if occurrence_id is not None and starts_at is not None
+        else None
+    )
+    item["occurrence_count"] = occurrence_count if occurrence_count is not None else 0
+    return item
 
 
 async def _gathering_for_read(
@@ -355,16 +421,63 @@ async def list_gatherings(
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """The gatherings the caller's account keeps, newest first."""
-    gatherings = (
-        await db.scalars(
-            select(Gathering)
+    """The gatherings the caller's account keeps, newest first — each with an
+    occurrence summary (CK-20): `next_occurrence` is the earliest occurrence
+    at or after now, or, when every date has passed, the latest past one (the
+    next-or-most-recent rule — a display decision that lives HERE so the list
+    view needs no per-gathering detail fetch), plus `occurrence_count`.
+
+    ONE query, deliberately: the lead occurrence and the count come from a
+    DISTINCT ON subquery with a window count, joined to the kept gatherings —
+    moving CK-17's client-side N+1 into a server-side loop would not have been
+    a fix (pinned by a query-count test)."""
+    now = datetime.now(timezone.utc)
+    upcoming = Occurrence.starts_at >= now
+    # One row per gathering: upcoming rows outrank past ones, the earliest
+    # upcoming wins among those (the CASE key is NULL for past rows), and the
+    # latest past wins when nothing is upcoming.
+    lead = (
+        select(
+            Occurrence.gathering_id.label("gathering_id"),
+            Occurrence.id.label("occurrence_id"),
+            Occurrence.starts_at.label("starts_at"),
+            func.count()
+            .over(partition_by=Occurrence.gathering_id)
+            .label("occurrence_count"),
+        )
+        .distinct(Occurrence.gathering_id)
+        .order_by(
+            Occurrence.gathering_id,
+            upcoming.desc(),
+            case((upcoming, Occurrence.starts_at)).asc(),
+            Occurrence.starts_at.desc(),
+            Occurrence.id,
+        )
+        .subquery("lead_occurrence")
+    )
+    rows = (
+        await db.execute(
+            select(
+                Gathering,
+                lead.c.occurrence_id,
+                lead.c.starts_at,
+                lead.c.occurrence_count,
+            )
             .join(KeptGathering, KeptGathering.gathering_id == Gathering.id)
+            # Outer join is defensive only: creation requires an occurrence and
+            # the last one is undeletable, so a NULL next_occurrence should not
+            # occur — but the list must not silently drop a row if it ever does.
+            .outerjoin(lead, lead.c.gathering_id == Gathering.id)
             .where(KeptGathering.account_id == ctx.person.account_id)
             .order_by(Gathering.created_at.desc(), Gathering.id)
         )
     ).all()
-    return {"gatherings": [_gathering_body(g) for g in gatherings]}
+    return {
+        "gatherings": [
+            _list_item(gathering, occurrence_id, starts_at, occurrence_count)
+            for gathering, occurrence_id, starts_at, occurrence_count in rows
+        ]
+    }
 
 
 @router.get("/gatherings/{gathering_id}")

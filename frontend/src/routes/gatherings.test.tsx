@@ -6,7 +6,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AuthContext, type AuthState, type Person } from '../auth/context'
-import { wallClockToInstant } from '../lib/datetime'
+import { formatInstant, wallClockToInstant } from '../lib/datetime'
 import { GatheringDetail } from './GatheringDetail'
 import { GatheringNew } from './GatheringNew'
 import { Gatherings } from './Gatherings'
@@ -23,6 +23,7 @@ const person: Person = {
   display_name: 'Steven',
   email: 'steven@example.com',
   timezone: profileZone,
+  account_id: 'acct-1',
 }
 
 const auth: AuthState = {
@@ -160,6 +161,45 @@ test('the empty list is a real screen with the call to action', async () => {
   expect(cta.getAttribute('href')).toBe('/gatherings/new')
 })
 
+test('the list renders each date from the list response alone — one request, no per-row fetches', async () => {
+  // CK-20: next_occurrence rides the list item, so the CK-17 per-gathering
+  // detail fetches (and their per-row degrade) are gone. The request count is
+  // the pin: one gathering, one request — a second request IS the regression.
+  const startsAt = wallClockToInstant('2035-01-01T18:00', profileZone)
+  const fetchMock = vi.fn(() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          gatherings: [
+            {
+              id: 'g-1',
+              gathering_type: 'potluck',
+              title: 'Test Potluck',
+              memorial_decedent_name: null,
+              requires_approval: true,
+              publication_state: 'live',
+              created_by_account_id: 'acct-1',
+              admin_account_id: 'acct-1',
+              created_at: '2026-08-25T12:00:00+00:00',
+              updated_at: null,
+              next_occurrence: { id: 'occ-1', starts_at: startsAt },
+              occurrence_count: 1,
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    ),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+
+  renderWithAuth(<Gatherings />)
+  await screen.findByText('Test Potluck')
+  const expectedDate = formatInstant(startsAt, profileZone)
+  expect(screen.getByText((content) => content.includes(expectedDate))).toBeTruthy()
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+})
+
 // ---- CK-18: the editing surface on /gatherings/:id ----
 
 function json(status: number, body: unknown): Response {
@@ -232,12 +272,28 @@ const seasonCap422 = () =>
   })
 
 test('a non-admin viewer sees the read-only page with no edit controls at all', async () => {
-  // admin_account_id null is the claimable state — the one non-admin-reader
-  // shape the current model can name; the client cannot compare account ids
-  // (the API does not expose the caller's, a reported CK-18 gap), so the
-  // non-null admin fact is what gates every edit affordance.
+  // admin_account_id null is the claimable state — no one's account matches,
+  // so the gate (the caller's account_id against the admin fact, CK-20)
+  // renders no edit affordance.
   stubFetchRoutes([
     { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody({ admin_account_id: null })) },
+  ])
+  renderDetail()
+  await screen.findByText('Test Potluck')
+  expect(screen.queryByRole('button', { name: /edit gathering/i })).toBeNull()
+  expect(screen.queryByRole('button', { name: /edit this date/i })).toBeNull()
+  expect(screen.queryByRole('button', { name: /remove this date/i })).toBeNull()
+  expect(screen.queryByRole('button', { name: /add another date/i })).toBeNull()
+})
+
+test("a gathering administered by someone ELSE renders no edit controls — the caller's account is compared, not just non-null", async () => {
+  // The case CK-18's interim gate (`admin_account_id !== null`) could not
+  // express: an admin exists and it is not the caller. Exact today only
+  // because every reader of an admin-held gathering is its admin; the moment
+  // invitations/keep/claim widen the audience, this comparison is what keeps
+  // a keeper-non-admin from probing edit controls that 404.
+  stubFetchRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody({ admin_account_id: 'acct-2' })) },
   ])
   renderDetail()
   await screen.findByText('Test Potluck')

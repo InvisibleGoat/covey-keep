@@ -217,15 +217,13 @@ export function GatheringDetail() {
   // Edit affordances render only for the admin — a non-admin sees the
   // read-only page with no edit controls at all, so no one can probe an edit
   // control to distinguish "not yours" from "does not exist" (the 404-not-403
-  // posture). The API does not yet expose the caller's account id (/auth/me
-  // carries the person id only), so the admin fact cannot be checked by
-  // comparing ids; under the shipped surface this test is exact anyway —
-  // creation is the only path to a kept row or to admin, so every reader of
-  // an admin-held gathering IS its admin, and a NULL admin (the claimable
-  // state) has no readers. The phase that widens the audience (invitations,
-  // keep/unkeep, claim) must first expose the caller's account id — reported
-  // as a backend gap at CK-18, not worked around by guessing.
-  const canEdit = gathering.admin_account_id !== null
+  // posture). The real comparison since CK-20: /auth/me carries the caller's
+  // account_id, so the gate is the admin fact itself — it holds however wide
+  // later phases (invitations, keep/unkeep, claim) open the read audience,
+  // where CK-18's interim `admin_account_id !== null` would have shown a
+  // keeper-non-admin edit controls that 404. A profile that failed to load
+  // (person null) gates closed, not open.
+  const canEdit = person !== null && gathering.admin_account_id === person.account_id
 
   const gatheringDirty = Object.keys(gatheringPatch(gatheringForm, gathering)).length > 0
   const editedOccurrence =

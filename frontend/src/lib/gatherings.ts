@@ -28,6 +28,17 @@ export interface GatheringWithOccurrences extends Gathering {
   occurrences: Occurrence[]
 }
 
+// A GET /gatherings item (CK-20): the gathering plus an occurrence summary.
+// next_occurrence is the earliest occurrence at or after now, or — when every
+// date has passed — the latest past one; the backend owns that rule (it is
+// documented in the api-reference), so the list never re-derives it from
+// per-gathering detail fetches. Null only defensively: creation requires an
+// occurrence and the last one is undeletable.
+export interface GatheringListItem extends Gathering {
+  next_occurrence: { id: string; starts_at: string } | null
+  occurrence_count: number
+}
+
 // The GatheringType values the API accepts, with their user-facing labels
 // (vocabulary rule: these are the typed Gathering variants).
 export const GATHERING_TYPES: { value: string; label: string }[] = [
@@ -43,17 +54,4 @@ export const GATHERING_TYPES: { value: string; label: string }[] = [
 
 export function gatheringTypeLabel(value: string): string {
   return GATHERING_TYPES.find((t) => t.value === value)?.label ?? value
-}
-
-// The date a list entry leads with: the soonest upcoming occurrence, or —
-// when every date has passed — the most recent one.
-export function nextOrMostRecent(occurrences: Occurrence[], now: Date): Occurrence | null {
-  if (occurrences.length === 0) return null
-  const upcoming = occurrences
-    .filter((o) => new Date(o.starts_at).getTime() >= now.getTime())
-    .sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime())
-  if (upcoming.length > 0) return upcoming[0]
-  return occurrences.reduce((latest, o) =>
-    new Date(o.starts_at).getTime() > new Date(latest.starts_at).getTime() ? o : latest,
-  )
 }

@@ -371,6 +371,25 @@ async def verify(conn, ck: Checks) -> None:
     else:
         ck.check(False, "keeper invariant", "gatherings/kept_gatherings missing")
 
+    print("\n-- occurrence text integrity (CK-20) --")
+    if "occurrences" in tables:
+        # NULL is the ONE representation of "no location / no map link" — the
+        # API validators trim and reject blanks (CK-20), so an empty string
+        # here means something wrote around them. Same class as the keeper
+        # invariant above: vacuous while the columns hold no blanks, written
+        # now because it is what will matter.
+        blank_text = await scalar(
+            conn,
+            "SELECT count(*) FROM occurrences WHERE location = '' OR map_url = ''",
+        )
+        ck.check(
+            blank_text == 0,
+            "no occurrence stores an empty-string location or map_url",
+            f"{blank_text} occurrence row(s) with an empty-string location or map_url",
+        )
+    else:
+        ck.check(False, "occurrence text integrity", "occurrences table missing")
+
     # --- Informational -----------------------------------------------------
     print("\n-- row counts (informational, not assertions) --")
     for table in ("people", "accounts", "gatherings", "kept_gatherings"):

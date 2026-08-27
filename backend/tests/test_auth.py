@@ -95,6 +95,19 @@ async def test_happy_path_end_to_end(client, capsys, db_session_factory):
         assert (await db.scalar(select(func.count()).select_from(TosAcceptance))) == 1
 
 
+async def test_me_carries_the_callers_account_id(client, capsys, db_session_factory):
+    # CK-20: keeping and admin are ACCOUNT facts (gatherings.admin_account_id),
+    # so the client needs its own account id to compare against them — the
+    # comparison the gathering detail's edit gate makes. It is the caller's own
+    # id and discloses nothing about anyone else.
+    jwt = await _sign_in(client, capsys, "accountful@example.com")
+    me = await client.get("/auth/me", headers={"Authorization": f"Bearer {jwt}"})
+    assert me.status_code == 200
+    async with db_session_factory() as db:
+        person = (await db.execute(select(Person))).scalars().one()
+    assert me.json()["account_id"] == str(person.account_id)
+
+
 async def test_expired_token_rejected(client, capsys, db_session_factory):
     link = await _capture_link(client, capsys, "late@example.com")
     async with db_session_factory() as db:
