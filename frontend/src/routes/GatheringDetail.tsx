@@ -61,13 +61,12 @@ function occurrenceToForm(occurrence: Occurrence, zone: string): OccurrenceForm 
   }
 }
 
-// PATCH bodies carry only what changed. `null` means "not provided" on every
-// PATCH (nothing is clearable — the /me/profile convention), so a field
-// blanked in the form cannot be expressed as a change: it is left out of the
-// patch and out of the dirty check, and the hint beside the form says so
-// plainly rather than letting a blank appear to clear. Text the backend
-// validates non-blank (title, the decedent name) is the exception: a blanked
-// one goes out as "" so the server's own refusal renders inline.
+// PATCH bodies carry only what changed, under merge-patch semantics (CK-22):
+// an ABSENT field leaves the stored value alone, an explicit `null` clears
+// it. On the gathering nothing is clearable — title is NOT NULL and the
+// decedent's name is pinned by the memorial CHECK — so a blanked one goes
+// out as "" and the server's own refusal renders inline (never a fake
+// clear, never a swallowed edit).
 function gatheringPatch(
   form: GatheringForm,
   gathering: GatheringWithOccurrences,
@@ -84,22 +83,36 @@ function gatheringPatch(
   return patch
 }
 
+// The occurrence's optional fields (ends_at, location, map_url) ARE clearable
+// (CK-22): "had a saved value, now blank" is a real change that goes out as
+// explicit `null`. A field that was empty and is still empty is OMITTED, not
+// sent as null — a no-op write would muddy what null means. A whitespace-only
+// entry is neither: it goes out as typed so the server's blank-rejection 422
+// renders (blank is never a clear — the backend refuses "" everywhere).
 function occurrencePatch(
   form: OccurrenceForm,
   server: OccurrenceForm,
   zone: string,
-): Record<string, string> {
-  const patch: Record<string, string> = {}
+): Record<string, string | null> {
+  const patch: Record<string, string | null> = {}
+  // starts_at is NOT NULL server-side: a date can be moved, never removed
+  // (the input is `required`, so a blank one simply isn't a change to send).
   if (form.startsAt !== '' && form.startsAt !== server.startsAt) {
     patch.starts_at = wallClockToInstant(form.startsAt, zone)
   }
-  if (form.endsAt !== '' && form.endsAt !== server.endsAt) {
-    patch.ends_at = wallClockToInstant(form.endsAt, zone)
+  if (form.endsAt !== server.endsAt) {
+    patch.ends_at = form.endsAt === '' ? null : wallClockToInstant(form.endsAt, zone)
   }
-  const location = form.location.trim()
-  if (location !== '' && location !== (server.location || '')) patch.location = location
-  const mapUrl = form.mapUrl.trim()
-  if (mapUrl !== '' && mapUrl !== (server.mapUrl || '')) patch.map_url = mapUrl
+  const textPatch = (raw: string, saved: string): string | null | undefined => {
+    const trimmed = raw.trim()
+    if (raw === '') return saved === '' ? undefined : null
+    if (trimmed === '') return raw
+    return trimmed === saved ? undefined : trimmed
+  }
+  const location = textPatch(form.location, server.location)
+  if (location !== undefined) patch.location = location
+  const mapUrl = textPatch(form.mapUrl, server.mapUrl)
+  if (mapUrl !== undefined) patch.map_url = mapUrl
   return patch
 }
 
@@ -480,12 +493,11 @@ export function GatheringDetail() {
                     />
                     <FieldError errors={occurrenceErrors} field="map_url" scope={occurrence.id} />
 
-                    {/* The null-is-not-provided constraint, stated rather than
-                        faked: a blanked field is left out of the patch, so
-                        what's saved stays saved. */}
+                    {/* Blanking clears (CK-22): a blanked optional field goes
+                        out as explicit null and the saved value is removed. */}
                     <p className="field-hint">
-                      A saved end time, location, or map link can be corrected, not removed —
-                      leaving one blank keeps what's already saved.
+                      Leaving the end time, location, or map link blank removes what's saved
+                      there.
                     </p>
 
                     <button type="submit" disabled={!occurrenceDirty || occurrenceSubmitting}>

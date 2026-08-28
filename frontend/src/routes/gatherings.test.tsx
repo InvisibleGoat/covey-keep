@@ -2,7 +2,7 @@
 // backend's 422s land inline on the right field (and unmappable ones still
 // render), the empty list is a real screen, and the detail 404 is one
 // undistinguishing not-found screen.
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AuthContext, type AuthState, type Person } from '../auth/context'
@@ -539,6 +539,137 @@ test('a valid https map link still renders as a new-tab link', async () => {
   expect(link.getAttribute('href')).toBe('https://maps.example.com/park')
   expect(link.getAttribute('target')).toBe('_blank')
   expect(link.getAttribute('rel')).toBe('noreferrer')
+})
+
+// ---- CK-22: blanking an optional occurrence field clears it ----
+
+const endsInstant = wallClockToInstant('2026-09-01T21:00', profileZone)
+
+function fullOccurrence(over: Record<string, unknown> = {}) {
+  return {
+    id: 'occ-1',
+    gathering_id: 'g-1',
+    starts_at: startsInstant,
+    ends_at: endsInstant,
+    location: 'the park',
+    map_url: 'https://maps.example.com/park',
+    ...over,
+  }
+}
+
+test('blanking a saved location sends an explicit null — and the untouched fields stay out of the patch', async () => {
+  // The absent-means-leave-alone half is the one a merge-patch bug breaks
+  // silently: the body must be EXACTLY { location: null }, with the map link
+  // and end time never sent at all.
+  let cleared = false
+  const mock = vi.fn((url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET'
+    if (method === 'GET') {
+      return Promise.resolve(
+        json(200, detailBody({ occurrences: [fullOccurrence(cleared ? { location: null } : {})] })),
+      )
+    }
+    if (method === 'PATCH') {
+      cleared = true
+      return Promise.resolve(json(200, fullOccurrence({ location: null })))
+    }
+    throw new Error(`no stub for ${method} ${String(url)}`)
+  })
+  vi.stubGlobal('fetch', mock)
+  renderDetail()
+  fireEvent.click(await screen.findByRole('button', { name: /edit this date/i }))
+  const save = screen.getByRole('button', { name: /^save$/i }) as HTMLButtonElement
+  expect(save.disabled).toBe(true)
+  // "Had a saved value, now blank" is a real change: Save enables.
+  fireEvent.change(screen.getByLabelText(/^location/i), { target: { value: '' } })
+  expect(save.disabled).toBe(false)
+  fireEvent.click(save)
+  // The re-fetched detail shows the location gone and the map link untouched.
+  await waitFor(() => expect(screen.queryByText('the park')).toBeNull())
+  expect(screen.getByRole('link', { name: 'Map' })).toBeTruthy()
+  const patchCall = mock.mock.calls.find(
+    ([, init]) => (init as RequestInit | undefined)?.method === 'PATCH',
+  )
+  const body = JSON.parse((patchCall![1] as RequestInit).body as string)
+  expect(body).toEqual({ location: null })
+})
+
+test('clearing the end time and the map link sends explicit nulls for both', async () => {
+  const mock = stubFetchRoutes([
+    {
+      method: 'GET',
+      path: '/gatherings/g-1',
+      response: () => json(200, detailBody({ occurrences: [fullOccurrence()] })),
+    },
+    {
+      method: 'PATCH',
+      path: '/occurrences/occ-1',
+      response: () => json(200, fullOccurrence({ ends_at: null, map_url: null })),
+    },
+  ])
+  renderDetail()
+  fireEvent.click(await screen.findByRole('button', { name: /edit this date/i }))
+  fireEvent.change(screen.getByLabelText(/^ends/i), { target: { value: '' } })
+  fireEvent.change(screen.getByLabelText(/^map link/i), { target: { value: '' } })
+  fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+  // The editor closes on success and the detail re-fetches.
+  await screen.findByRole('button', { name: /edit this date/i })
+  const patchCall = mock.mock.calls.find(
+    ([, init]) => (init as RequestInit | undefined)?.method === 'PATCH',
+  )
+  const body = JSON.parse((patchCall![1] as RequestInit).body as string)
+  expect(body).toEqual({ ends_at: null, map_url: null })
+})
+
+test('a field that was already empty and is still empty is omitted — no null, no PATCH', async () => {
+  // Sending null for an already-null field would be a no-op write that
+  // muddies what null means; empty → empty is simply not a change.
+  const mock = stubFetchRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
+  ])
+  renderDetail()
+  fireEvent.click(await screen.findByRole('button', { name: /edit this date/i }))
+  const save = screen.getByRole('button', { name: /^save$/i }) as HTMLButtonElement
+  const location = screen.getByLabelText(/^location/i)
+  fireEvent.change(location, { target: { value: 'somewhere' } })
+  expect(save.disabled).toBe(false)
+  fireEvent.change(location, { target: { value: '' } })
+  expect(save.disabled).toBe(true)
+  const patches = mock.mock.calls.filter(
+    ([, init]) => (init as RequestInit | undefined)?.method === 'PATCH',
+  )
+  expect(patches).toHaveLength(0)
+})
+
+test('a whitespace-only entry goes out as typed and the blank-rejection 422 renders — blank is never a clear', async () => {
+  const mock = stubFetchRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
+    {
+      method: 'PATCH',
+      path: '/occurrences/occ-1',
+      response: () =>
+        json(422, {
+          detail: [
+            {
+              loc: ['body', 'location'],
+              msg: 'Value error, location cannot be empty — leave it out instead',
+              type: 'value_error',
+            },
+          ],
+        }),
+    },
+  ])
+  renderDetail()
+  fireEvent.click(await screen.findByRole('button', { name: /edit this date/i }))
+  fireEvent.change(screen.getByLabelText(/^location/i), { target: { value: '   ' } })
+  fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+  const error = await screen.findByText(/location cannot be empty/i)
+  expect(error.id).toBe('error-occ-1-location')
+  const patchCall = mock.mock.calls.find(
+    ([, init]) => (init as RequestInit | undefined)?.method === 'PATCH',
+  )
+  const body = JSON.parse((patchCall![1] as RequestInit).body as string)
+  expect(body).toEqual({ location: '   ' })
 })
 
 test('a detail 404 renders the one not-found screen', async () => {

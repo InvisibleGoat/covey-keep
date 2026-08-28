@@ -22,6 +22,18 @@ OFF for HOUSEHOLD/CLUB-sourced invites. The column's server_default is false
 `requires_approval` governs contributions WITHIN the gathering; the gathering
 itself is created `live` (its own visibility is publication_state, a separate
 fact — never conflate the two).
+
+Patch semantics (CK-22 — JSON Merge Patch): a field ABSENT from a PATCH body
+leaves the stored value alone; an explicit `null` clears it, where the column
+allows. The clearable set is exactly ends_at, location, and map_url. starts_at
+and title are NOT NULL — an explicit null is a field-level 422 — and
+memorial_decedent_name is gated by the memorial CHECK (present iff the type is
+memorial), so clearing it on a memorial would violate the constraint and it is
+already NULL everywhere else: refused, never an IntegrityError-turned-500.
+Pydantic hands both absent and explicit-null to the model as None, so the
+distinction lives in `model_fields_set` — the set of fields actually present
+in the request body. Blank is NOT a clear: `""` keeps its field-level 422
+(decisions/2026-08-27-optional-field-clearing.md).
 """
 
 from datetime import datetime, timedelta, timezone
@@ -92,9 +104,10 @@ def _clean_decedent_name(value: str) -> str:
 
 def _clean_location(value: str) -> str:
     # NULL is the ONE representation of "no location" (the CK-13 discipline —
-    # no second representation that can disagree). A blank is not a value:
-    # omit the field instead. Nothing is clearable (null means "not provided"),
-    # so this refusal is the honest answer, never a fake clear.
+    # no second representation that can disagree). A blank is not a value and
+    # not a clear: clearing is an explicit null on a PATCH (CK-22), and this
+    # refusal is what keeps "" from becoming a second spelling of "absent"
+    # through the front door.
     value = value.strip()
     if not value:
         raise ValueError("location cannot be empty — leave it out instead")
@@ -218,21 +231,38 @@ class GatheringPatch(BaseModel):
     title: Optional[str] = None
     memorial_decedent_name: Optional[str] = None
 
+    # Field validators run only when the field is PRESENT in the body
+    # (validate_default is off), so a None inside one is an explicit null —
+    # the merge-patch "clear" request (CK-22) — and neither field here is
+    # clearable: title is NOT NULL, and the memorial CHECK requires the
+    # decedent's name present iff the type is memorial, so clearing it on a
+    # memorial would violate the constraint (and it is already NULL on
+    # everything else). Both refusals are field-level 422s, never the
+    # constraint firing as a 500.
+
     @field_validator("title")
     @classmethod
-    def _title(cls, value: Optional[str]) -> Optional[str]:
-        return None if value is None else _clean_title(value)
+    def _title(cls, value: Optional[str]) -> str:
+        if value is None:
+            raise ValueError("title cannot be cleared — provide a new title")
+        return _clean_title(value)
 
     @field_validator("memorial_decedent_name")
     @classmethod
-    def _decedent(cls, value: Optional[str]) -> Optional[str]:
+    def _decedent(cls, value: Optional[str]) -> str:
         # Shape only — whether the gathering may carry a name at all depends
         # on its type, which lives in the DB row (checked in the endpoint).
-        return None if value is None else _clean_decedent_name(value)
+        if value is None:
+            raise ValueError("the decedent's name can be corrected, never removed")
+        return _clean_decedent_name(value)
 
     @model_validator(mode="after")
     def _something_to_patch(self) -> "GatheringPatch":
-        if self.title is None and self.memorial_decedent_name is None:
+        # A patch is empty when no field was PROVIDED — not when every value
+        # is None: under merge-patch semantics an explicit null is a real
+        # request (refused above for these two fields, but the emptiness test
+        # must still be about presence, the same rule as OccurrencePatch).
+        if not self.model_fields_set:
             raise ValueError(
                 "nothing to update — provide title and/or memorial_decedent_name"
             )
@@ -242,14 +272,31 @@ class GatheringPatch(BaseModel):
 class OccurrencePatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # Merge-patch semantics (CK-22): absent means "leave alone", explicit null
+    # means "clear" — the clearable set is ends_at, location, and map_url
+    # (every one already nullable). starts_at is NOT NULL, so its explicit
+    # null is refused below. The endpoint reads model_fields_set to tell the
+    # two Nones apart.
     starts_at: Optional[AwareDatetime] = None
     ends_at: Optional[AwareDatetime] = None
     location: Optional[str] = None
     map_url: Optional[str] = None
 
+    @field_validator("starts_at")
+    @classmethod
+    def _starts_at(cls, value: Optional[AwareDatetime]) -> AwareDatetime:
+        # Runs only when the field is present, so this None is an explicit
+        # null — and the column is NOT NULL: a date can be moved, not removed.
+        if value is None:
+            raise ValueError("starts_at cannot be cleared — a date can be moved, not removed")
+        return value
+
     @field_validator("location")
     @classmethod
     def _location(cls, value: Optional[str]) -> Optional[str]:
+        # An explicit null passes through as the clear request; a blank stays
+        # rejected inside _clean_location — "" is never a second spelling of
+        # "no value", and never a clear (CK-20's discipline holds).
         return None if value is None else _clean_location(value)
 
     @field_validator("map_url")
@@ -259,10 +306,10 @@ class OccurrencePatch(BaseModel):
 
     @model_validator(mode="after")
     def _something_to_patch(self) -> "OccurrencePatch":
-        if all(
-            value is None
-            for value in (self.starts_at, self.ends_at, self.location, self.map_url)
-        ):
+        # Presence, not value: {"location": null} has all-None values and is a
+        # real patch (it clears the location). Testing values here would
+        # silently reject every explicit-null clear as "empty".
+        if not self.model_fields_set:
             raise ValueError("nothing to update — provide at least one field")
         return self
 
@@ -526,17 +573,20 @@ async def patch_gathering(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     gathering = await _gathering_for_admin(db, ctx, gathering_id)
-    if body.memorial_decedent_name is not None:
+    # Merge patch (CK-22): a field applies iff it was PRESENT in the body.
+    # Neither of these is clearable (the model refuses explicit null), so a
+    # provided value is always non-None here.
+    provided = body.model_fields_set
+    if "memorial_decedent_name" in provided:
         # The type-dependent half of the memorial gate needs the row: only a
         # memorial carries a decedent name (the CHECK would fire as a 500
-        # otherwise). A memorial's name can be corrected, never removed —
-        # None in this body means "not provided", same as /me/profile.
+        # otherwise). A memorial's name can be corrected, never removed.
         if gathering.gathering_type != GatheringType.MEMORIAL:
             raise _field_422(
                 "memorial_decedent_name", "only a memorial carries a decedent's name"
             )
         gathering.memorial_decedent_name = body.memorial_decedent_name
-    if body.title is not None:
+    if "title" in provided:
         gathering.title = body.title
     gathering.updated_at = datetime.now(timezone.utc)
     await db.commit()
@@ -573,18 +623,24 @@ async def patch_occurrence(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     occurrence, gathering = await _occurrence_for_admin(db, ctx, occurrence_id)
-    if body.starts_at is not None:
+    # Merge patch (CK-22): a field applies iff it was PRESENT in the body —
+    # an absent field leaves the stored value alone, and an explicit null on
+    # ends_at/location/map_url clears it (writes NULL, never ""; the blank
+    # rejection in the validators is untouched). starts_at can never arrive
+    # as null (the model refuses it), so a provided one is always a real move.
+    provided = body.model_fields_set
+    if "starts_at" in provided:
         # Moving a date is the third way a season's span can grow; the cap is
         # a property of the gathering, so it holds here exactly as it does at
         # create and at add.
         starts = await _sibling_starts(db, gathering.id, excluding=occurrence.id)
         _enforce_season_span(gathering, starts, body.starts_at)
         occurrence.starts_at = body.starts_at
-    if body.ends_at is not None:
+    if "ends_at" in provided:
         occurrence.ends_at = body.ends_at
-    if body.location is not None:
+    if "location" in provided:
         occurrence.location = body.location
-    if body.map_url is not None:
+    if "map_url" in provided:
         occurrence.map_url = body.map_url
     await db.commit()
     return _occurrence_body(occurrence)

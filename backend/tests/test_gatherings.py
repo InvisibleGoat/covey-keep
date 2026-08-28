@@ -828,6 +828,125 @@ async def test_map_url_accepts_http_and_https_and_still_trims(
         assert occurrence.map_url == "http://maps.example.com/park"
 
 
+# --- clearing an optional field: explicit null means remove (CK-22) -----------
+
+
+async def test_occurrence_patch_absent_null_and_blank_are_three_different_things(
+    client, capsys, db_session_factory
+):
+    """The merge-patch contract on OccurrencePatch, all three legs: an ABSENT
+    field leaves the stored value alone, an explicit NULL clears it (a real
+    NULL, never ""), and "" stays a field-level 422 — blank is never a clear
+    (decisions/2026-08-27-optional-field-clearing.md)."""
+    headers = await _signed_in_headers(client, capsys, "clearer@example.com")
+    created = await _create(
+        client,
+        headers,
+        occurrences=[
+            {
+                "starts_at": "2026-09-01T18:00:00+00:00",
+                "ends_at": "2026-09-01T21:00:00+00:00",
+                "location": "the park",
+                "map_url": "https://maps.example.com/park",
+            }
+        ],
+    )
+    occ_id = created["occurrences"][0]["id"]
+
+    # Blank is not a clear: still the CK-20 field-level 422, nothing stored.
+    response = await client.patch(
+        f"/occurrences/{occ_id}", json={"location": ""}, headers=headers
+    )
+    assert response.status_code == 422
+    assert "location" in _field_errors(response)
+
+    # A patch containing ONLY an explicit null is a real patch, not "empty" —
+    # the regression the model_fields_set rewrite exists to prevent: every
+    # value in this body is None, and the old all-values-None emptiness test
+    # would have wrongly rejected it.
+    response = await client.patch(
+        f"/occurrences/{occ_id}", json={"location": None}, headers=headers
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # The null cleared its field; the ABSENT fields kept their stored values —
+    # the leg a merge-patch bug breaks silently by nulling what wasn't sent.
+    assert body["location"] is None
+    assert body["ends_at"] == "2026-09-01T21:00:00+00:00"
+    assert body["map_url"] == "https://maps.example.com/park"
+
+    response = await client.patch(
+        f"/occurrences/{occ_id}",
+        json={"ends_at": None, "map_url": None},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["ends_at"] is None
+    assert response.json()["map_url"] is None
+    assert response.json()["starts_at"] == "2026-09-01T18:00:00+00:00"
+
+    # starts_at is NOT NULL: a date can be moved, never removed.
+    response = await client.patch(
+        f"/occurrences/{occ_id}", json={"starts_at": None}, headers=headers
+    )
+    assert response.status_code == 422
+    assert "starts_at" in _field_errors(response)
+
+    # The stored row holds real NULLs — never "" (CK-20's verifier assertion
+    # is the deployed backstop for exactly this).
+    async with db_session_factory() as db:
+        occurrence = (await db.execute(select(Occurrence))).scalars().one()
+        assert occurrence.location is None
+        assert occurrence.ends_at is None
+        assert occurrence.map_url is None
+        assert occurrence.starts_at == datetime(2026, 9, 1, 18, 0, tzinfo=timezone.utc)
+
+
+async def test_gathering_patch_refuses_explicit_null_on_both_fields(
+    client, capsys, db_session_factory
+):
+    """GatheringPatch has NO clearable field, and the refusals are usable
+    422s: title is NOT NULL, and the memorial CHECK requires the decedent's
+    name present iff the type is memorial — clearing it on a memorial would
+    violate the constraint (an IntegrityError-turned-500 without the model's
+    refusal), and it is already NULL on everything else. The absent leg holds
+    too: a title-only patch leaves the decedent's name alone."""
+    headers = await _signed_in_headers(client, capsys, "keeper@example.com")
+    memorial = await _create(
+        client,
+        headers,
+        gathering_type="memorial",
+        title="For Edith",
+        memorial_decedent_name="Edith Hanson",
+    )
+
+    response = await client.patch(
+        f"/gatherings/{memorial['id']}",
+        json={"memorial_decedent_name": None},
+        headers=headers,
+    )
+    assert response.status_code == 422
+    assert "memorial_decedent_name" in _field_errors(response)
+
+    response = await client.patch(
+        f"/gatherings/{memorial['id']}", json={"title": None}, headers=headers
+    )
+    assert response.status_code == 422
+    assert "title" in _field_errors(response)
+
+    # Absent means leave alone: a title-only patch does not touch the name.
+    response = await client.patch(
+        f"/gatherings/{memorial['id']}", json={"title": "For Edith Hanson"}, headers=headers
+    )
+    assert response.status_code == 200
+    assert response.json()["memorial_decedent_name"] == "Edith Hanson"
+
+    async with db_session_factory() as db:
+        gathering = (await db.execute(select(Gathering))).scalars().one()
+        assert gathering.title == "For Edith Hanson"
+        assert gathering.memorial_decedent_name == "Edith Hanson"
+
+
 # --- the deletion lapse, with a real subject at last --------------------------
 
 
