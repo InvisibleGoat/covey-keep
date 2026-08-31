@@ -29,7 +29,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, field_validator
-from sqlalchemy import delete, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from webauthn import (
     generate_authentication_options,
@@ -58,6 +58,7 @@ from app.api.deps import AuthContext, get_auth_context, get_db
 from app.brand import PRODUCT_NAME
 from app.config import settings
 from app.models import Person, WebauthnChallenge, WebauthnCredential
+from app.services.retention import purge_stale
 
 me_router = APIRouter(prefix="/me/passkeys", tags=["passkeys"])
 signin_router = APIRouter(prefix="/auth/passkey", tags=["auth"])
@@ -76,17 +77,6 @@ def _signin_failed() -> HTTPException:
     # assertion, not an identity, so there is nothing to enumerate — but a
     # distinguished error would still map the internals for no user benefit.
     return HTTPException(status_code=401, detail="Passkey sign-in failed.")
-
-
-async def _purge_stale_challenges(db: AsyncSession, now: datetime) -> None:
-    # Challenges live 5 minutes; rows an hour past expiry are pure noise.
-    # Opportunistic on each begin — cheaper than a scheduled job and keeps the
-    # unauthenticated begin endpoint from growing the table without bound.
-    await db.execute(
-        delete(WebauthnChallenge).where(
-            WebauthnChallenge.expires_at < now - timedelta(hours=1)
-        )
-    )
 
 
 def _options_body(options) -> dict:
@@ -116,7 +106,9 @@ async def register_begin(
 ) -> dict:
     person = ctx.person
     now = datetime.now(timezone.utc)
-    await _purge_stale_challenges(db, now)
+    # Challenges live 5 minutes; rows an hour past expiry are reaped through
+    # the shared opportunistic mechanism (CK-24) — no scheduled job.
+    await purge_stale(db, WebauthnChallenge, WebauthnChallenge.expires_at, now)
 
     # A new ceremony supersedes any outstanding one for the person — the same
     # rule every other token in this codebase follows.
@@ -333,7 +325,9 @@ async def signin_begin(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     now = datetime.now(timezone.utc)
-    await _purge_stale_challenges(db, now)
+    # Challenges live 5 minutes; rows an hour past expiry are reaped through
+    # the shared opportunistic mechanism (CK-24) — no scheduled job.
+    await purge_stale(db, WebauthnChallenge, WebauthnChallenge.expires_at, now)
 
     options = generate_authentication_options(
         rp_id=settings.webauthn_rp_id,

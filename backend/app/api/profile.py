@@ -24,6 +24,7 @@ from app.models import (
 from app.security import hash_token
 from app.services.email import send_email
 from app.services.keeping import lapse_kept_statuses
+from app.services.retention import purge_stale
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -158,6 +159,14 @@ async def request_email_change(
     """
     person = ctx.person
     now = datetime.now(timezone.utc)
+
+    # Reap email-change rows more than PURGE_GRACE past expiry (CK-24). A row
+    # carries an unverified new_email — sometimes an address belonging to a
+    # third party, written deliberately when the address is taken (below) —
+    # and has no reason to outlive its link. Keyed off expires_at, NEVER
+    # consumed_at, with PURGE_GRACE > RATE_WINDOW: the per-person count below
+    # must tally superseded rows too — see services/retention.py.
+    await purge_stale(db, EmailChangeRequest, EmailChangeRequest.expires_at, now)
 
     # Rate limit per person, same window and ceiling as /auth/request-link.
     # Counted over ALL request rows — a row is inserted below whether or not

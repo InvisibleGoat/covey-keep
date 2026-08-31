@@ -29,6 +29,7 @@ from app.models import (
 )
 from app.security import encode_session_jwt, hash_token
 from app.services.email import send_email
+from app.services.retention import purge_stale
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -131,6 +132,13 @@ async def request_link(
     now = datetime.now(timezone.utc)
     window_start = now - RATE_WINDOW
     requester_ip = client_ip(request)
+
+    # Reap magic-link rows more than PURGE_GRACE past expiry (CK-24) — the
+    # address-plus-IP rows this phase exists to stop accumulating. Keyed off
+    # expires_at, NEVER consumed_at, with PURGE_GRACE > RATE_WINDOW: the counts
+    # below tally every row created inside the window whether or not it was
+    # consumed or superseded — see services/retention.py for the arithmetic.
+    await purge_stale(db, MagicLinkToken, MagicLinkToken.expires_at, now)
 
     # Rate limit on request volume (in-DB counts), never on account existence —
     # a 429 reveals nothing about whether the address is known.
