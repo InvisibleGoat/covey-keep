@@ -108,7 +108,7 @@ export function SignIn() {
               onChange={(event) => setTosAccepted(event.target.checked)}
             />
             <span>
-              I agree to the <Link to="/tos">Terms of Service</Link>
+              I've read the <Link to="/tos">private test notice</Link> and agree to take part
             </span>
           </label>
           <button type="submit" disabled={!tosAccepted || submitState === 'submitting'}>
