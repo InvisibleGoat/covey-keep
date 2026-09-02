@@ -18,11 +18,18 @@ from app.models.enums import (
     AccountKind,
     GatheringType,
     GroupType,
+    InvitationChannel,
     MediaStatus,
     PublicationState,
     RSVPResponse,
 )
-from app.models.gathering import Gathering, GatheringInvitation, KeptGathering, Occurrence
+from app.models.gathering import (
+    Gathering,
+    GatheringInvitation,
+    GatheringInvitationPending,
+    KeptGathering,
+    Occurrence,
+)
 from app.models.group import Group, SubGroup
 from app.models.household import Household, Person
 from app.models.items import ItemClaim, ItemSlot
@@ -43,10 +50,12 @@ __all__ = [
     "EmailChangeRequest",
     "Gathering",
     "GatheringInvitation",
+    "GatheringInvitationPending",
     "GatheringType",
     "Group",
     "GroupType",
     "Household",
+    "InvitationChannel",
     "ItemClaim",
     "ItemSlot",
     "KeptGathering",

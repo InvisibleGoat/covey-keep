@@ -5,10 +5,12 @@ import { FieldError, FormLevelErrors } from '../components/FieldError'
 import { authFetch } from '../lib/api'
 import {
   effectiveZone,
+  formatInstant,
   formatInstantRange,
   instantToWallClock,
   wallClockToInstant,
 } from '../lib/datetime'
+import { type InvitationLists } from '../lib/invitations'
 import {
   describedBy,
   errorsFromResponse,
@@ -118,6 +120,7 @@ function occurrencePatch(
 
 const GATHERING_FIELDS = ['title', 'memorial_decedent_name']
 const OCCURRENCE_FIELDS = ['starts_at', 'ends_at', 'location', 'map_url']
+const INVITE_FIELDS = ['destination', 'channel']
 
 // The view-and-edit detail (CK-17 read-only; editing CK-18). Nothing here
 // surfaces requires_approval, keeper counts, or gathering removal: those are
@@ -158,6 +161,17 @@ export function GatheringDetail() {
     errors: FormErrors
   } | null>(null)
 
+  // The invitations section (CK-25, admin only) is COLLAPSED by default and
+  // its list loads only when opened — the detail page stays one request for
+  // everyone, and a non-admin never has the section at all.
+  const [invitationsOpen, setInvitationsOpen] = useState(false)
+  const [invitations, setInvitations] = useState<InvitationLists | null>(null)
+  const [invitationsFailed, setInvitationsFailed] = useState(false)
+  const [invitationsReloadKey, setInvitationsReloadKey] = useState(0)
+  const [inviteDestination, setInviteDestination] = useState('')
+  const [inviteErrors, setInviteErrors] = useState<FormErrors>(noErrors())
+  const [inviteSubmitting, setInviteSubmitting] = useState(false)
+
   // Cancel-on-unmount for mutation handlers (the CK-19 convention covers
   // every in-flight request, not just the load effect below).
   const alive = useRef(true)
@@ -167,6 +181,32 @@ export function GatheringDetail() {
       alive.current = false
     }
   }, [])
+
+  // Loads only once the admin opens the section; re-fetched after every
+  // successful send or revoke (optimistic-free, like everything else here).
+  useEffect(() => {
+    if (!invitationsOpen) return
+    let cancelled = false
+    async function load() {
+      try {
+        const response = await authFetch(`/gatherings/${id}/invitations`)
+        if (cancelled) return
+        if (response.ok) {
+          const body = (await response.json()) as Partial<InvitationLists>
+          setInvitations({ pending: body.pending ?? [], accepted: body.accepted ?? [] })
+          setInvitationsFailed(false)
+        } else {
+          setInvitationsFailed(true)
+        }
+      } catch {
+        if (!cancelled) setInvitationsFailed(true)
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [id, invitationsOpen, invitationsReloadKey])
 
   useEffect(() => {
     let cancelled = false
@@ -340,6 +380,56 @@ export function GatheringDetail() {
       if (alive.current) setAddErrors(networkErrors())
     }
     if (alive.current) setAddSubmitting(false)
+  }
+
+  async function sendInvitation(event: FormEvent) {
+    event.preventDefault()
+    setInviteSubmitting(true)
+    setInviteErrors(noErrors())
+    try {
+      // The channel is pinned to EMAIL: the API accepts SMS in its schema but
+      // refuses it as not-yet-available, and offering a control the API
+      // rejects is worse than none (the CK-18 lesson) — the UI grows the
+      // choice when SMS delivery actually ships.
+      const response = await authFetch(`/gatherings/${gathering.id}/invitations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: 'EMAIL', destination: inviteDestination.trim() }),
+      })
+      if (!alive.current) return
+      if (response.status === 201) {
+        setInviteDestination('')
+        setInvitationsReloadKey((key) => key + 1)
+      } else if (response.status === 429) {
+        // A rate limit is neither a validation failure nor a server error —
+        // it gets its own honest line instead of the mapper's generic one.
+        setInviteErrors({
+          fields: {},
+          form: ['Too many invitations just now. Try again in a few minutes.'],
+        })
+      } else {
+        setInviteErrors(await errorsFromResponse(response, INVITE_FIELDS))
+      }
+    } catch {
+      if (alive.current) setInviteErrors(networkErrors())
+    }
+    if (alive.current) setInviteSubmitting(false)
+  }
+
+  async function revokeInvitation(pendingId: string) {
+    try {
+      const response = await authFetch(`/invitations/pending/${pendingId}`, {
+        method: 'DELETE',
+      })
+      if (!alive.current) return
+      // A 404 means it stopped being pending (accepted, or already revoked
+      // elsewhere) — either way the list is stale, so re-fetch it too.
+      if (response.status === 204 || response.status === 404) {
+        setInvitationsReloadKey((key) => key + 1)
+      }
+    } catch {
+      // The row still shows as pending; retrying the control is the recovery.
+    }
   }
 
   // Deliberately not disabled when one date remains: the server owns the
@@ -657,6 +747,92 @@ export function GatheringDetail() {
           </form>
         )}
       </section>
+
+      {canEdit && (
+        <section className="auth-card" aria-labelledby="invitations-heading">
+          <h2 id="invitations-heading">Invitations</h2>
+          {!invitationsOpen ? (
+            <button
+              type="button"
+              className="link-button"
+              onClick={() => setInvitationsOpen(true)}
+            >
+              Invite people
+            </button>
+          ) : (
+            <>
+              <form onSubmit={(event) => void sendInvitation(event)}>
+                <label htmlFor="invite-destination">Email address</label>
+                <input
+                  id="invite-destination"
+                  type="email"
+                  required
+                  value={inviteDestination}
+                  aria-describedby={describedBy(inviteErrors, 'destination')}
+                  onChange={(event) => setInviteDestination(event.target.value)}
+                />
+                <FieldError errors={inviteErrors} field="destination" />
+                <FieldError errors={inviteErrors} field="channel" />
+                <p className="field-hint">
+                  They'll get an email with a link to this gathering. Invitations expire
+                  after 7 days.
+                </p>
+                <button
+                  type="submit"
+                  disabled={inviteDestination.trim() === '' || inviteSubmitting}
+                >
+                  {inviteSubmitting ? 'Sending…' : 'Send invitation'}
+                </button>
+                <FormLevelErrors errors={inviteErrors} />
+              </form>
+
+              {invitationsFailed && (
+                <p className="form-error" role="alert">
+                  <span aria-hidden="true">⚠ </span>
+                  The invitation list couldn't be loaded just now.
+                </p>
+              )}
+              {invitations && (
+                <>
+                  <h3>Waiting on</h3>
+                  {invitations.pending.length === 0 ? (
+                    <p className="field-hint">No pending invitations.</p>
+                  ) : (
+                    <ul className="occurrence-list">
+                      {invitations.pending.map((pending) => (
+                        <li key={pending.id}>
+                          {pending.destination}
+                          {' — '}
+                          {new Date(pending.expires_at).getTime() <= Date.now()
+                            ? 'expired'
+                            : `expires ${formatInstant(pending.expires_at, zone)}`}{' '}
+                          <button
+                            type="button"
+                            className="link-button"
+                            onClick={() => void revokeInvitation(pending.id)}
+                          >
+                            Revoke
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <h3>Accepted</h3>
+                  {invitations.accepted.length === 0 ? (
+                    <p className="field-hint">No one has accepted yet.</p>
+                  ) : (
+                    <ul className="occurrence-list">
+                      {invitations.accepted.map((accepted) => (
+                        <li key={accepted.id}>{accepted.display_name}</li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </section>
+      )}
 
       <Link to="/gatherings">Back to your gatherings</Link>
     </main>

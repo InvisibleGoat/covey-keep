@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { readInvitationToken } from '../lib/invitations'
 
 export function AuthCallback() {
   const { signIn } = useAuth()
@@ -20,7 +21,9 @@ export function AuthCallback() {
     history.replaceState(null, '', window.location.pathname)
     if (token) {
       signIn(token)
-      navigate('/home', { replace: true })
+      // An invitation parked before sign-in resumes now that a session
+      // exists: the acceptance screen picks the stored token back up (CK-25).
+      navigate(readInvitationToken() ? '/invitations/accept' : '/home', { replace: true })
     } else {
       setFailed(true)
     }

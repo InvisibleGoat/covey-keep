@@ -8,20 +8,23 @@ creation routes through services/keeping.py::keep and commits once.
 
 Authorization, applied uniformly: mutations require the caller's account to
 hold admin (`admin_account_id`); reads require the caller's account to keep
-the gathering OR hold admin. The checks are written against the keeper/admin
-facts, never "is creator" — today the creator is the only possible keeper,
-but the audience widens in later phases and a creator-shaped check would then
-be wrong. Non-permitted access is a 404, never a 403: the existence of a
-gathering is not public information.
+the gathering, OR the caller's person to hold an accepted invitation
+(a person-targeted gathering_invitations row — CK-25, the first widening of
+the read audience), OR admin. The checks are written against the
+keeper/admin/invitation facts, never "is creator" — a creator-shaped check
+would already be wrong now that invitees read. Non-permitted access is a
+404, never a 403: the existence of a gathering is not public information.
 
 Moderation: `requires_approval` is set to True explicitly on every create —
-fail closed (decided 2026-08-25). Invitations do not exist yet, so there is
-no inviting context to default from; the invitation phase later relaxes it to
-OFF for HOUSEHOLD/CLUB-sourced invites. The column's server_default is false
-(0008) and must never be relied on — see database-schema decision 22.
-`requires_approval` governs contributions WITHIN the gathering; the gathering
-itself is created `live` (its own visibility is publication_state, a separate
-fact — never conflate the two).
+fail closed (decided 2026-08-25). CK-25 shipped PERSON-targeted invitations
+and deliberately did NOT relax this: the recorded relaxation is a GROUP-TYPE
+rule (ON for TEAM/CONGREGATION-sourced invites, OFF for HOUSEHOLD/CLUB), and
+a person-targeted invite carries no group, so there is still no inviting
+context to default from. The trigger waits for group-targeted invitations.
+The column's server_default is false (0008) and must never be relied on —
+see database-schema decision 22. `requires_approval` governs contributions
+WITHIN the gathering; the gathering itself is created `live` (its own
+visibility is publication_state, a separate fact — never conflate the two).
 
 Patch semantics (CK-22 — JSON Merge Patch): a field ABSENT from a PATCH body
 leaves the stored value alone; an explicit `null` clears it, where the column
@@ -43,11 +46,19 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import case, func, select
+from sqlalchemy import case, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, get_auth_context, get_db
-from app.models import Account, Gathering, GatheringType, KeptGathering, Occurrence, PublicationState
+from app.models import (
+    Account,
+    Gathering,
+    GatheringInvitation,
+    GatheringType,
+    KeptGathering,
+    Occurrence,
+    PublicationState,
+)
 from app.services.keeping import keep
 
 router = APIRouter(prefix="", tags=["gatherings"])
@@ -370,8 +381,10 @@ def _list_item(
 async def _gathering_for_read(
     db: AsyncSession, ctx: AuthContext, gathering_id: UUID
 ) -> Gathering:
-    """Reads require the caller's account to keep the gathering or hold admin.
-    Checked against the keeper/admin facts, never creatorship."""
+    """Reads require the caller's account to keep the gathering, the caller's
+    person to hold an accepted invitation (CK-25 — an invitation grants
+    visibility, nothing more), or admin. Checked against the
+    keeper/admin/invitation facts, never creatorship."""
     gathering = await db.get(Gathering, gathering_id)
     if gathering is None:
         raise _not_found()
@@ -384,7 +397,18 @@ async def _gathering_for_read(
             KeptGathering.gathering_id == gathering_id,
         )
     )
-    if kept is None:
+    if kept is not None:
+        return gathering
+    # Keeping is an ACCOUNT fact; an invitation targets the PERSON — the
+    # invitee never chose to keep anything, so the checks live on different
+    # spines deliberately.
+    invited = await db.scalar(
+        select(GatheringInvitation.id).where(
+            GatheringInvitation.person_id == ctx.person.id,
+            GatheringInvitation.gathering_id == gathering_id,
+        )
+    )
+    if invited is None:
         raise _not_found()
     return gathering
 
@@ -489,16 +513,19 @@ async def list_gatherings(
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """The gatherings the caller's account keeps, newest first — each with an
-    occurrence summary (CK-20): `next_occurrence` is the earliest occurrence
-    at or after now, or, when every date has passed, the latest past one (the
+    """The gatherings the caller keeps OR holds an accepted invitation to
+    (CK-25 — without the invited half an invitee could reach a gathering only
+    through the emailed link, forever), newest first — each with an occurrence
+    summary (CK-20): `next_occurrence` is the earliest occurrence at or after
+    now, or, when every date has passed, the latest past one (the
     next-or-most-recent rule — a display decision that lives HERE so the list
     view needs no per-gathering detail fetch), plus `occurrence_count`.
 
     ONE query, deliberately: the lead occurrence and the count come from a
-    DISTINCT ON subquery with a window count, joined to the kept gatherings —
-    moving CK-17's client-side N+1 into a server-side loop would not have been
-    a fix (pinned by a query-count test)."""
+    DISTINCT ON subquery with a window count, joined to the caller's
+    gatherings (kept-or-invited via EXISTS, which also dedupes a person who
+    is somehow both) — moving CK-17's client-side N+1 into a server-side loop
+    would not have been a fix (pinned by a query-count test)."""
     now = datetime.now(timezone.utc)
     upcoming = Occurrence.starts_at >= now
     # One row per gathering: upcoming rows outrank past ones, the earliest
@@ -523,6 +550,18 @@ async def list_gatherings(
         )
         .subquery("lead_occurrence")
     )
+    kept_by_caller = exists(
+        select(KeptGathering.id).where(
+            KeptGathering.account_id == ctx.person.account_id,
+            KeptGathering.gathering_id == Gathering.id,
+        )
+    )
+    invited_person = exists(
+        select(GatheringInvitation.id).where(
+            GatheringInvitation.person_id == ctx.person.id,
+            GatheringInvitation.gathering_id == Gathering.id,
+        )
+    )
     rows = (
         await db.execute(
             select(
@@ -531,12 +570,11 @@ async def list_gatherings(
                 lead.c.starts_at,
                 lead.c.occurrence_count,
             )
-            .join(KeptGathering, KeptGathering.gathering_id == Gathering.id)
             # Outer join is defensive only: creation requires an occurrence and
             # the last one is undeletable, so a NULL next_occurrence should not
             # occur — but the list must not silently drop a row if it ever does.
             .outerjoin(lead, lead.c.gathering_id == Gathering.id)
-            .where(KeptGathering.account_id == ctx.person.account_id)
+            .where(or_(kept_by_caller, invited_person))
             .order_by(Gathering.created_at.desc(), Gathering.id)
         )
     ).all()

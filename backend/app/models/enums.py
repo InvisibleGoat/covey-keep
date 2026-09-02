@@ -31,6 +31,20 @@ class GatheringType(str, Enum):
     CHURCH_GATHERING = "church_gathering"
 
 
+class InvitationChannel(str, Enum):
+    """How a pending invitation reaches its destination (CK-25). Channel-
+    agnostic from the first row (launch-shape decision 2026-08-31: the primary
+    invitation channel is a text message, not email — people have their
+    friends' numbers, not their addresses). EMAIL is the only deliverable
+    channel today; SMS is accepted by this enum and refused at the API
+    boundary (blocked upstream by A2P registration, therefore by the name
+    gate), so enabling it is a validator-and-delivery change, never a
+    migration against live invitation rows."""
+
+    EMAIL = "EMAIL"
+    SMS = "SMS"
+
+
 class RSVPResponse(str, Enum):
     YES = "yes"
     NO = "no"
@@ -53,6 +67,7 @@ class PublicationState(str, Enum):
 ACCOUNT_KIND = db_enum(AccountKind, "account_kind")
 GROUP_TYPE = db_enum(GroupType, "group_type")
 GATHERING_TYPE = db_enum(GatheringType, "gathering_type")
+INVITATION_CHANNEL = db_enum(InvitationChannel, "invitation_channel")
 RSVP_RESPONSE = db_enum(RSVPResponse, "rsvp_response")
 MEDIA_STATUS = db_enum(MediaStatus, "media_status")
 PUBLICATION_STATE = db_enum(PublicationState, "publication_state")

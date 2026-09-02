@@ -17,7 +17,14 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, created_at_col, uuid_pk
-from app.models.enums import GATHERING_TYPE, PUBLICATION_STATE, GatheringType, PublicationState
+from app.models.enums import (
+    GATHERING_TYPE,
+    INVITATION_CHANNEL,
+    PUBLICATION_STATE,
+    GatheringType,
+    InvitationChannel,
+    PublicationState,
+)
 
 
 class Gathering(Base):
@@ -196,5 +203,75 @@ class GatheringInvitation(Base):
     person_id: Mapped[Optional[UUID]] = mapped_column(ForeignKey("people.id"), nullable=True)
     invited_by_person_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("people.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = created_at_col()
+
+
+class GatheringInvitationPending(Base):
+    """An invitation to a DESTINATION rather than to a person (CK-25): an
+    email address today, a phone number when SMS ships. Held here until
+    someone who controls that destination signs in and accepts — the
+    GatheringInvitation row is created ONLY at acceptance, when a real person
+    exists. The rejected alternative — pre-creating a people row at invite
+    time — would leave permanent person rows holding an address a THIRD PARTY
+    supplied, for invitees who never accept: the exact defect class CK-24
+    purged from email_change_requests.
+
+    So the row is ephemeral, on the magic_link_tokens conventions: only the
+    token's SHA-256 hash is stored, the row expires (INVITATION_TTL), and
+    services/retention.py::purge_stale reaps it — its fourth customer.
+
+    Channel-agnostic from the first row, deliberately (launch-shape decision
+    2026-08-31): `channel` + `destination`, never an `email` column, so
+    enabling SMS is a validator-and-delivery change, never a migration
+    against live invitation rows. `destination` is stored normalized
+    (lowercased/trimmed for EMAIL; E.164 when SMS ships).
+
+    `revoked_at` covers both an admin's withdrawal and supersession by a
+    fresh invite to the same destination. A revoked row is STAMPED, never
+    deleted: the rate limit tallies rows by created_at (the CK-24 lesson —
+    deleting rows the caller can trigger deletion of silently disables the
+    limit), so revocation stamps revoked_at, forces expires_at to now, and
+    leaves removal to the reaper an hour later. The CHECK pins the state
+    machine: a row is consumed or revoked, never both."""
+
+    __tablename__ = "gathering_invitations_pending"
+    __table_args__ = (
+        CheckConstraint(
+            "num_nonnulls(consumed_at, revoked_at) <= 1",
+            name="consumed_or_revoked",
+        ),
+        # At most one LIVE invitation per (gathering, channel, destination) —
+        # a fresh invite supersedes (revokes) the old one rather than piling
+        # a second live token onto the same inbox.
+        Index(
+            "uq_gathering_invitations_pending_live_destination",
+            "gathering_id",
+            "channel",
+            "destination",
+            unique=True,
+            postgresql_where=text("consumed_at IS NULL AND revoked_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[UUID] = uuid_pk()
+    gathering_id: Mapped[UUID] = mapped_column(
+        ForeignKey("gatherings.id"), nullable=False, index=True
+    )
+    channel: Mapped[InvitationChannel] = mapped_column(INVITATION_CHANNEL, nullable=False)
+    destination: Mapped[str] = mapped_column(Text, nullable=False)
+    # SHA-256 only — the raw token exists solely in the sent (or console-
+    # logged) invitation link.
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Provenance — carried onto the GatheringInvitation row at acceptance.
+    invited_by_person_id: Mapped[UUID] = mapped_column(
+        ForeignKey("people.id"), nullable=False
     )
     created_at: Mapped[datetime] = created_at_col()

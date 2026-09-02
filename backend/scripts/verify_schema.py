@@ -60,7 +60,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0010"
+EXPECTED_REVISION = "0011"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -290,6 +290,33 @@ async def verify(conn, ck: Checks) -> None:
     # people.updated_at precedent — nullable, stamped on patch.
     assert_columns(ck, columns, "gatherings", present=("updated_at",), nullable=("updated_at",))
 
+    print("\n-- pending invitations (0011) --")
+    # The CK-25 pending table: channel-agnostic (channel + destination, never
+    # an email column), hashed-token-only, with the consumed/revoked state
+    # stamps both nullable. Its rows are reaped opportunistically (CK-24), so
+    # nothing here COUNTS them — shape and normalization only.
+    ck.check(
+        "gathering_invitations_pending" in tables,
+        "table gathering_invitations_pending exists",
+        "missing",
+    )
+    assert_columns(
+        ck,
+        columns,
+        "gathering_invitations_pending",
+        not_null=(
+            "channel",
+            "destination",
+            "token_hash",
+            "expires_at",
+            "invited_by_person_id",
+        ),
+        nullable=("consumed_at", "revoked_at"),
+        # The destination lives HERE, ephemerally — never as an email column
+        # on gathering_invitations, and never as a pre-created people row.
+        absent=("email", "person_id"),
+    )
+
     print("\n-- groups steward -> admin rename (0009) --")
     assert_columns(
         ck,
@@ -303,6 +330,7 @@ async def verify(conn, ck: Checks) -> None:
     for name in (
         "ck_gatherings_memorial_decedent_name",
         "ck_gathering_invitations_exactly_one_target",
+        "ck_gathering_invitations_pending_consumed_or_revoked",
     ):
         ck.check(name in check_constraints, f"CHECK {name} exists", "constraint missing")
 
@@ -407,6 +435,29 @@ async def verify(conn, ck: Checks) -> None:
         )
     else:
         ck.check(False, "occurrence text integrity", "occurrences table missing")
+
+    print("\n-- pending invitation integrity (CK-25) --")
+    if "gathering_invitations_pending" in tables:
+        # An EMAIL destination is stored normalized (trimmed + lowercased) by
+        # the API validator — a row that isn't means something wrote around
+        # it. Not a row COUNT (this table is reaped opportunistically and a
+        # count would flap on an idle DB — the CK-24 rule); a property of
+        # whatever rows exist. Detail prints the count only: a destination is
+        # a third party's address and is never printed.
+        unnormalized = await scalar(
+            conn,
+            "SELECT count(*) FROM gathering_invitations_pending "
+            "WHERE channel = 'EMAIL' AND destination <> lower(btrim(destination))",
+        )
+        ck.check(
+            unnormalized == 0,
+            "every EMAIL pending-invitation destination is stored normalized",
+            f"{unnormalized} pending row(s) with an unnormalized destination",
+        )
+    else:
+        ck.check(
+            False, "pending invitation integrity", "gathering_invitations_pending missing"
+        )
 
     # --- Informational -----------------------------------------------------
     print("\n-- row counts (informational, not assertions) --")

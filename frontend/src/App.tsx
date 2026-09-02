@@ -9,6 +9,7 @@ import { GatheringDetail } from './routes/GatheringDetail'
 import { GatheringNew } from './routes/GatheringNew'
 import { Gatherings } from './routes/Gatherings'
 import { Home } from './routes/Home'
+import { InvitationAccept } from './routes/InvitationAccept'
 import { Settings } from './routes/Settings'
 import { SignIn } from './routes/SignIn'
 import { Tos } from './routes/Tos'
@@ -60,6 +61,9 @@ function App() {
             </RequireAuth>
           }
         />
+        {/* Deliberately NOT behind RequireAuth (CK-25): a signed-out invitee
+            must see what they were invited to and where to sign in. */}
+        <Route path="/invitations/accept" element={<InvitationAccept />} />
         <Route path="/tos" element={<Tos />} />
         <Route path="/email-change" element={<EmailChangeResult />} />
         <Route path="/account-deleted" element={<AccountDeleted />} />
