@@ -58,6 +58,7 @@ from app.models import (
     KeptGathering,
     Occurrence,
     PublicationState,
+    RSVPListVisibility,
 )
 from app.services.keeping import keep
 
@@ -233,23 +234,26 @@ class GatheringCreate(BaseModel):
 
 
 class GatheringPatch(BaseModel):
-    # The patchable surface is title + memorial_decedent_name ONLY, mirroring
-    # /me/profile: unknown fields are a 422, never a silent no-op. Everything
-    # else on the row is either immutable history (created_by_account_id),
-    # lifecycle owned by services/keeping.py, or a later phase's surface.
+    # The patchable surface is title + memorial_decedent_name +
+    # rsvp_list_visibility ONLY, mirroring /me/profile: unknown fields are a
+    # 422, never a silent no-op. Everything else on the row is either
+    # immutable history (created_by_account_id), lifecycle owned by
+    # services/keeping.py, or a later phase's surface.
     model_config = ConfigDict(extra="forbid")
 
     title: Optional[str] = None
     memorial_decedent_name: Optional[str] = None
+    rsvp_list_visibility: Optional[RSVPListVisibility] = None
 
     # Field validators run only when the field is PRESENT in the body
     # (validate_default is off), so a None inside one is an explicit null —
-    # the merge-patch "clear" request (CK-22) — and neither field here is
-    # clearable: title is NOT NULL, and the memorial CHECK requires the
-    # decedent's name present iff the type is memorial, so clearing it on a
-    # memorial would violate the constraint (and it is already NULL on
-    # everything else). Both refusals are field-level 422s, never the
-    # constraint firing as a 500.
+    # the merge-patch "clear" request (CK-22) — and no field here is
+    # clearable: title is NOT NULL, the memorial CHECK requires the
+    # decedent's name present iff the type is memorial (so clearing it on a
+    # memorial would violate the constraint, and it is already NULL on
+    # everything else), and rsvp_list_visibility is NOT NULL — the list
+    # always has SOME visibility. Every refusal is a field-level 422, never
+    # a constraint firing as a 500.
 
     @field_validator("title")
     @classmethod
@@ -267,15 +271,27 @@ class GatheringPatch(BaseModel):
             raise ValueError("the decedent's name can be corrected, never removed")
         return _clean_decedent_name(value)
 
+    @field_validator("rsvp_list_visibility")
+    @classmethod
+    def _visibility(cls, value: Optional[RSVPListVisibility]) -> RSVPListVisibility:
+        # NOT NULL: the RSVP list always has some visibility — the setting
+        # can be changed, never cleared.
+        if value is None:
+            raise ValueError(
+                "rsvp_list_visibility cannot be cleared — choose a visibility"
+            )
+        return value
+
     @model_validator(mode="after")
     def _something_to_patch(self) -> "GatheringPatch":
         # A patch is empty when no field was PROVIDED — not when every value
         # is None: under merge-patch semantics an explicit null is a real
-        # request (refused above for these two fields, but the emptiness test
+        # request (refused above for all three fields, but the emptiness test
         # must still be about presence, the same rule as OccurrencePatch).
         if not self.model_fields_set:
             raise ValueError(
-                "nothing to update — provide title and/or memorial_decedent_name"
+                "nothing to update — provide title, memorial_decedent_name, "
+                "and/or rsvp_list_visibility"
             )
         return self
 
@@ -345,6 +361,7 @@ def _gathering_body(
         "title": gathering.title,
         "memorial_decedent_name": gathering.memorial_decedent_name,
         "requires_approval": gathering.requires_approval,
+        "rsvp_list_visibility": gathering.rsvp_list_visibility.value,
         "publication_state": gathering.publication_state.value,
         "created_by_account_id": str(gathering.created_by_account_id),
         "admin_account_id": (
@@ -480,6 +497,12 @@ async def create_gathering(
         # gathering is moderated until the invitation phase brings an
         # inviting context to default from.
         requires_approval=True,
+        # Explicit for the same reason requires_approval is (CK-27): the
+        # column's server default exists for 0012's backfill and is never
+        # relied on. INVITEES suits a private family gathering — the counts
+        # on an RSVP disclose household composition, so the default is not
+        # broader; type-derived defaults belong to the presets work.
+        rsvp_list_visibility=RSVPListVisibility.INVITEES,
         # The gathering itself is live; requires_approval governs
         # contributions WITHIN it, not its own visibility.
         publication_state=PublicationState.LIVE,
@@ -626,6 +649,10 @@ async def patch_gathering(
         gathering.memorial_decedent_name = body.memorial_decedent_name
     if "title" in provided:
         gathering.title = body.title
+    if "rsvp_list_visibility" in provided:
+        # The host's list-visibility choice (CK-27). Admin-gated like every
+        # other field here; the model already refused an explicit null.
+        gathering.rsvp_list_visibility = body.rsvp_list_visibility
     gathering.updated_at = datetime.now(timezone.utc)
     await db.commit()
     return _gathering_body(gathering)

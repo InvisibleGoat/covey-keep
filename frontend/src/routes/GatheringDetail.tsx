@@ -23,6 +23,15 @@ import {
   type GatheringWithOccurrences,
   type Occurrence,
 } from '../lib/gatherings'
+import {
+  RSVP_LIST_VISIBILITIES,
+  RSVP_RESPONSES,
+  formatArrivalTime,
+  rsvpResponseLabel,
+  timeForInput,
+  type OwnRsvp,
+  type RsvpLists,
+} from '../lib/rsvps'
 import { safeHttpUrl } from '../lib/url'
 
 type DetailState =
@@ -34,6 +43,7 @@ type DetailState =
 interface GatheringForm {
   title: string
   decedentName: string
+  rsvpListVisibility: string
 }
 
 interface OccurrenceForm {
@@ -82,6 +92,9 @@ function gatheringPatch(
       patch.memorial_decedent_name = name
     }
   }
+  if (form.rsvpListVisibility !== gathering.rsvp_list_visibility) {
+    patch.rsvp_list_visibility = form.rsvpListVisibility
+  }
   return patch
 }
 
@@ -118,14 +131,298 @@ function occurrencePatch(
   return patch
 }
 
-const GATHERING_FIELDS = ['title', 'memorial_decedent_name']
+const GATHERING_FIELDS = ['title', 'memorial_decedent_name', 'rsvp_list_visibility']
 const OCCURRENCE_FIELDS = ['starts_at', 'ends_at', 'location', 'map_url']
 const INVITE_FIELDS = ['destination', 'channel']
+const RSVP_FIELDS = ['response', 'stay_included', 'adult_count', 'child_count', 'arrival_time']
+
+interface RsvpFormState {
+  response: string // '' = unanswered — never a defaulted "no"
+  stayIncluded: boolean
+  adults: string
+  children: string
+  // A bare wall clock ("15:30") at the gathering — sent to the API exactly as
+  // typed. The CK-17 profile-zone conversion must NEVER touch it: it has no
+  // date and no zone, and wallClockToInstant would silently shift it by the
+  // offset for anyone whose profile zone differs from the venue's.
+  arrival: string
+}
+
+function rsvpFormFromOwn(own: OwnRsvp | null): RsvpFormState {
+  if (own === null) {
+    return { response: '', stayIncluded: false, adults: '1', children: '0', arrival: '' }
+  }
+  return {
+    response: own.response,
+    stayIncluded: own.stay_included,
+    adults: String(own.adult_count),
+    children: String(own.child_count),
+    arrival: timeForInput(own.arrival_time),
+  }
+}
+
+// Dirty-tracking (the CK-18 convention): save is disabled until something
+// differs from the saved answer, and an unanswered occurrence stays
+// unanswered until a response is actually chosen.
+function rsvpDirty(form: RsvpFormState, own: OwnRsvp | null): boolean {
+  if (form.response === '') return false
+  const saved = rsvpFormFromOwn(own)
+  return (
+    form.response !== saved.response ||
+    (form.response === 'no' && form.stayIncluded !== saved.stayIncluded) ||
+    form.adults !== saved.adults ||
+    form.children !== saved.children ||
+    form.arrival !== saved.arrival
+  )
+}
+
+// The per-occurrence RSVP block (CK-27): collapsed by default and loaded only
+// when opened — the CK-25 invitations pattern, which keeps the detail page one
+// request and keeps a many-date season from fanning out per-row fetches on
+// load (the CK-17 N+1 shape). Renders for everyone in the read audience; the
+// roster is filtered server-side by the host's visibility setting, and the
+// mirror check here only chooses the explanatory hint.
+function OccurrenceRsvp({
+  occurrenceId,
+  zone,
+  isAdmin,
+}: {
+  occurrenceId: string
+  zone: string
+  isAdmin: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState<RsvpLists | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [form, setForm] = useState<RsvpFormState>(rsvpFormFromOwn(null))
+  const [errors, setErrors] = useState<FormErrors>(noErrors())
+  const [submitting, setSubmitting] = useState(false)
+
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    async function load() {
+      try {
+        const response = await authFetch(`/occurrences/${occurrenceId}/rsvps`)
+        if (cancelled) return
+        if (response.ok) {
+          const body = (await response.json()) as RsvpLists
+          setData(body)
+          setForm(rsvpFormFromOwn(body.own))
+          setFailed(false)
+        } else {
+          setFailed(true)
+        }
+      } catch {
+        if (!cancelled) setFailed(true)
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [occurrenceId, open, reloadKey])
+
+  async function save(event: FormEvent) {
+    event.preventDefault()
+    const body: Record<string, unknown> = {
+      response: form.response,
+      // The flag accompanies a "no" only — with any other answer it is
+      // meaningless and the API refuses it, so it goes out false.
+      stay_included: form.response === 'no' && form.stayIncluded,
+      adult_count: Number(form.adults || '0'),
+      child_count: Number(form.children || '0'),
+      // Sent exactly as typed — a bare wall clock, no conversion (see above).
+      ...(form.arrival !== '' ? { arrival_time: form.arrival } : {}),
+    }
+    setSubmitting(true)
+    setErrors(noErrors())
+    try {
+      const response = await authFetch(`/occurrences/${occurrenceId}/rsvp`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!alive.current) return
+      if (response.ok) {
+        setReloadKey((key) => key + 1)
+      } else {
+        setErrors(await errorsFromResponse(response, RSVP_FIELDS))
+      }
+    } catch {
+      if (alive.current) setErrors(networkErrors())
+    }
+    if (alive.current) setSubmitting(false)
+  }
+
+  if (!open) {
+    return (
+      <button type="button" className="link-button" onClick={() => setOpen(true)}>
+        RSVP and who's coming
+      </button>
+    )
+  }
+
+  // The server enforces visibility; this mirror only picks the hint text.
+  // The admin sees the list in every mode, and the caller always has `own`.
+  const maySeeList =
+    data !== null &&
+    (isAdmin ||
+      data.visibility === 'INVITEES' ||
+      (data.visibility === 'ATTENDEES' && data.own?.response === 'yes'))
+
+  return (
+    <div className="rsvp-block">
+      {failed && (
+        <p className="form-error" role="alert">
+          <span aria-hidden="true">⚠ </span>
+          RSVPs couldn't be loaded just now.
+        </p>
+      )}
+      {data && (
+        <>
+          <form onSubmit={(event) => void save(event)}>
+            <fieldset className="occurrence-fields">
+              <legend>Are you coming?</legend>
+              {data.own === null && <p className="field-hint">You haven't answered yet.</p>}
+              {RSVP_RESPONSES.map(({ value, label }) => (
+                <label key={value}>
+                  <input
+                    type="radio"
+                    name={`rsvp-response-${occurrenceId}`}
+                    value={value}
+                    checked={form.response === value}
+                    onChange={() => setForm((f) => ({ ...f, response: value }))}
+                  />{' '}
+                  {label}
+                </label>
+              ))}
+              <FieldError errors={errors} field="response" scope={occurrenceId} />
+
+              {form.response === 'no' && (
+                <>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={form.stayIncluded}
+                      onChange={(event) =>
+                        setForm((f) => ({ ...f, stayIncluded: event.target.checked }))
+                      }
+                    />{' '}
+                    Keep me included
+                  </label>
+                  <p className="field-hint">
+                    Can't make it, but want to stay in the loop. This changes what you
+                    hear about — never what you can see.
+                  </p>
+                  <FieldError errors={errors} field="stay_included" scope={occurrenceId} />
+                </>
+              )}
+
+              {(form.response === 'yes' || form.response === 'maybe') && (
+                <>
+                  <label htmlFor={`rsvp-adults-${occurrenceId}`}>Adults</label>
+                  <input
+                    id={`rsvp-adults-${occurrenceId}`}
+                    type="number"
+                    min={0}
+                    max={99}
+                    value={form.adults}
+                    aria-describedby={describedBy(errors, 'adult_count', occurrenceId)}
+                    onChange={(event) =>
+                      setForm((f) => ({ ...f, adults: event.target.value }))
+                    }
+                  />
+                  <FieldError errors={errors} field="adult_count" scope={occurrenceId} />
+
+                  <label htmlFor={`rsvp-children-${occurrenceId}`}>Children</label>
+                  <input
+                    id={`rsvp-children-${occurrenceId}`}
+                    type="number"
+                    min={0}
+                    max={99}
+                    value={form.children}
+                    aria-describedby={describedBy(errors, 'child_count', occurrenceId)}
+                    onChange={(event) =>
+                      setForm((f) => ({ ...f, children: event.target.value }))
+                    }
+                  />
+                  <FieldError errors={errors} field="child_count" scope={occurrenceId} />
+
+                  <label htmlFor={`rsvp-arrival-${occurrenceId}`}>
+                    Arriving around (optional)
+                  </label>
+                  <input
+                    id={`rsvp-arrival-${occurrenceId}`}
+                    type="time"
+                    value={form.arrival}
+                    aria-describedby={describedBy(errors, 'arrival_time', occurrenceId)}
+                    onChange={(event) =>
+                      setForm((f) => ({ ...f, arrival: event.target.value }))
+                    }
+                  />
+                  {/* The occurrence's stated zone, beside the time it applies
+                      to — this is a clock time at the gathering, not an
+                      instant in the viewer's zone. */}
+                  <p className="field-hint">Clock time at the gathering — times in {zone}.</p>
+                  <FieldError errors={errors} field="arrival_time" scope={occurrenceId} />
+                </>
+              )}
+
+              <button type="submit" disabled={!rsvpDirty(form, data.own) || submitting}>
+                {submitting ? 'Saving…' : data.own === null ? 'Send RSVP' : 'Update RSVP'}
+              </button>
+              <FormLevelErrors errors={errors} />
+            </fieldset>
+          </form>
+
+          {maySeeList ? (
+            <>
+              <h3>Who's coming</h3>
+              {data.rsvps.length === 0 ? (
+                <p className="field-hint">No one has answered yet.</p>
+              ) : (
+                <ul className="occurrence-list">
+                  {data.rsvps.map((row) => (
+                    <li key={row.id}>
+                      {row.display_name} — {rsvpResponseLabel(row.response)}
+                      {row.stay_included ? ' (staying in the loop)' : ''}
+                      {(row.response === 'yes' || row.response === 'maybe') &&
+                        ` — ${row.adult_count} ${row.adult_count === 1 ? 'adult' : 'adults'}, ${row.child_count} ${row.child_count === 1 ? 'child' : 'children'}`}
+                      {row.arrival_time
+                        ? `, arriving ${formatArrivalTime(row.arrival_time)}`
+                        : ''}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          ) : (
+            <p className="field-hint">
+              {data.visibility === 'HOST_ONLY'
+                ? 'Only the host sees the full list of answers.'
+                : 'The list of answers is shown to people who are going.'}
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
 
 // The view-and-edit detail (CK-17 read-only; editing CK-18). Nothing here
 // surfaces requires_approval, keeper counts, or gathering removal: those are
 // later phases' surfaces. The gathering type is not editable — the backend's
-// patchable surface is title + decedent name only.
+// patchable surface is title + decedent name + RSVP-list visibility only.
 export function GatheringDetail() {
   const { id } = useParams()
   const { person } = useAuth()
@@ -140,6 +437,7 @@ export function GatheringDetail() {
   const [gatheringForm, setGatheringForm] = useState<GatheringForm>({
     title: '',
     decedentName: '',
+    rsvpListVisibility: 'INVITEES',
   })
   const [gatheringErrors, setGatheringErrors] = useState<FormErrors>(noErrors())
   const [gatheringSubmitting, setGatheringSubmitting] = useState(false)
@@ -293,6 +591,7 @@ export function GatheringDetail() {
     setGatheringForm({
       title: gathering.title,
       decedentName: gathering.memorial_decedent_name ?? '',
+      rsvpListVisibility: gathering.rsvp_list_visibility,
     })
     setGatheringErrors(noErrors())
     setEditingGathering(true)
@@ -508,6 +807,32 @@ export function GatheringDetail() {
             </>
           )}
 
+          <label htmlFor="edit-rsvp-visibility">Who can see the RSVP list</label>
+          <select
+            id="edit-rsvp-visibility"
+            value={gatheringForm.rsvpListVisibility}
+            aria-describedby={describedBy(gatheringErrors, 'rsvp_list_visibility')}
+            onChange={(event) =>
+              setGatheringForm((form) => ({
+                ...form,
+                rsvpListVisibility: event.target.value,
+              }))
+            }
+          >
+            {RSVP_LIST_VISIBILITIES.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          {/* Adult and child counts disclose household composition — this
+              setting is who gets to see them. Everyone always sees their own
+              answer, whatever it says. */}
+          <p className="field-hint">
+            Everyone can always see their own answer; you always see the full list.
+          </p>
+          <FieldError errors={gatheringErrors} field="rsvp_list_visibility" />
+
           <button type="submit" disabled={!gatheringDirty || gatheringSubmitting}>
             {gatheringSubmitting ? 'Saving…' : 'Save'}
           </button>
@@ -658,6 +983,11 @@ export function GatheringDetail() {
                       )}
                     </>
                   )}
+                  <OccurrenceRsvp
+                    occurrenceId={occurrence.id}
+                    zone={zone}
+                    isAdmin={canEdit}
+                  />
                 </>
               )}
             </li>

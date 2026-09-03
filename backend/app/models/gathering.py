@@ -21,9 +21,11 @@ from app.models.enums import (
     GATHERING_TYPE,
     INVITATION_CHANNEL,
     PUBLICATION_STATE,
+    RSVP_LIST_VISIBILITY,
     GatheringType,
     InvitationChannel,
     PublicationState,
+    RSVPListVisibility,
 )
 
 
@@ -77,6 +79,13 @@ class Gathering(Base):
     # defaulted at creation from the inviting context.
     requires_approval: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
+    )
+    # Who may read the occurrence RSVP lists (CK-27) — the host's setting, a
+    # value on the gathering exactly like requires_approval. Set explicitly in
+    # application code on every create; the server default exists so 0012
+    # could backfill pre-existing rows, and is never relied on.
+    rsvp_list_visibility: Mapped[RSVPListVisibility] = mapped_column(
+        RSVP_LIST_VISIBILITY, nullable=False, server_default=text("'INVITEES'")
     )
     # Grace is ONE timestamp: stamped when the last keeper leaves, cleared
     # when anyone keeps again. Archive (30d) and delete (90d) are DERIVED from

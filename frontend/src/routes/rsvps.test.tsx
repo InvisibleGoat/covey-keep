@@ -1,0 +1,339 @@
+// CK-27 RSVP-surface pins: the block is collapsed until opened (the CK-25
+// pattern — the detail page stays one request); an unanswered occurrence is
+// unanswered, never a defaulted "no"; keep-me-included surfaces only with
+// "can't make it" and goes out false otherwise; the arrival time is sent
+// EXACTLY as typed under a profile zone forced to differ from the runner's
+// (the STEP-5 trap, pinned at the component boundary); the roster renders per
+// the visibility setting with display names and counts only; and the admin's
+// edit form carries the visibility selector whose change rides the PATCH.
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { afterEach, expect, test, vi } from 'vitest'
+import { AuthContext, type AuthState, type Person } from '../auth/context'
+import { GatheringDetail } from './GatheringDetail'
+
+// A profile zone guaranteed to differ from the runner's — a conversion bug
+// shifts the arrival clock only when the zones differ, so only a mismatch
+// can prove the conversion is absent.
+const runnerZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+const profileZone =
+  runnerZone === 'Pacific/Kiritimati' ? 'Pacific/Honolulu' : 'Pacific/Kiritimati'
+
+const person: Person = {
+  id: 'person-1',
+  display_name: 'Steven',
+  email: 'steven@example.com',
+  timezone: profileZone,
+  account_id: 'acct-1',
+}
+
+const auth: AuthState = {
+  status: 'signedIn',
+  person,
+  signIn: () => {},
+  signOut: async () => {},
+  updatePerson: () => {},
+}
+
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status })
+}
+
+function detailBody(over: Record<string, unknown> = {}) {
+  return {
+    id: 'g-1',
+    gathering_type: 'potluck',
+    title: 'Test Potluck',
+    memorial_decedent_name: null,
+    requires_approval: true,
+    rsvp_list_visibility: 'INVITEES',
+    publication_state: 'live',
+    created_by_account_id: 'acct-1',
+    admin_account_id: 'acct-1',
+    created_at: '2026-08-25T12:00:00+00:00',
+    updated_at: null,
+    occurrences: [
+      {
+        id: 'occ-1',
+        gathering_id: 'g-1',
+        starts_at: '2026-09-01T18:00:00+00:00',
+        ends_at: null,
+        location: null,
+        map_url: null,
+      },
+    ],
+    ...over,
+  }
+}
+
+const ownYes = {
+  id: 'r-1',
+  occurrence_id: 'occ-1',
+  response: 'yes',
+  stay_included: false,
+  adult_count: 1,
+  child_count: 0,
+  arrival_time: '15:30:00',
+  created_at: '2026-09-01T12:00:00+00:00',
+}
+
+interface StubRoute {
+  method: string
+  path: string
+  response: () => Response
+}
+
+function stubRoutes(routes: StubRoute[]) {
+  const mock = vi.fn((url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET'
+    const route = routes.find((r) => r.method === method && String(url).endsWith(r.path))
+    if (!route) throw new Error(`no stub for ${method} ${String(url)}`)
+    return Promise.resolve(route.response())
+  })
+  vi.stubGlobal('fetch', mock)
+  return mock
+}
+
+function renderDetail() {
+  return render(
+    <MemoryRouter initialEntries={['/gatherings/g-1']}>
+      <AuthContext.Provider value={auth}>
+        <Routes>
+          <Route path="/gatherings/:id" element={<GatheringDetail />} />
+        </Routes>
+      </AuthContext.Provider>
+    </MemoryRouter>,
+  )
+}
+
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
+
+test('the RSVP block is collapsed until opened, and an unanswered occurrence is unanswered — never a defaulted "no"', async () => {
+  const mock = stubRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
+    {
+      method: 'GET',
+      path: '/occurrences/occ-1/rsvps',
+      response: () => json(200, { visibility: 'INVITEES', own: null, rsvps: [] }),
+    },
+  ])
+
+  renderDetail()
+  await screen.findByText('Test Potluck')
+  // Collapsed: the detail page stays one request.
+  expect(mock.mock.calls.filter(([url]) => String(url).endsWith('/rsvps'))).toHaveLength(0)
+
+  fireEvent.click(screen.getByRole('button', { name: /rsvp and who's coming/i }))
+  expect(await screen.findByText("You haven't answered yet.")).toBeTruthy()
+  for (const label of ['Going', 'Maybe', "Can't make it"]) {
+    expect((screen.getByLabelText(label) as HTMLInputElement).checked).toBe(false)
+  }
+  // No answer chosen yet: nothing to send.
+  expect((screen.getByRole('button', { name: /send rsvp/i }) as HTMLButtonElement).disabled).toBe(
+    true,
+  )
+})
+
+test('keep-me-included surfaces only with "can\'t make it", and rides the body only then', async () => {
+  const mock = stubRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
+    {
+      method: 'GET',
+      path: '/occurrences/occ-1/rsvps',
+      response: () => json(200, { visibility: 'INVITEES', own: null, rsvps: [] }),
+    },
+    {
+      method: 'PUT',
+      path: '/occurrences/occ-1/rsvp',
+      response: () =>
+        json(200, { ...ownYes, response: 'no', stay_included: true, arrival_time: null }),
+    },
+  ])
+
+  renderDetail()
+  await screen.findByText('Test Potluck')
+  fireEvent.click(screen.getByRole('button', { name: /rsvp and who's coming/i }))
+  await screen.findByText("You haven't answered yet.")
+
+  // Meaningless with "going": the option does not exist there.
+  fireEvent.click(screen.getByLabelText('Going'))
+  expect(screen.queryByLabelText(/keep me included/i)).toBeNull()
+
+  fireEvent.click(screen.getByLabelText("Can't make it"))
+  fireEvent.click(screen.getByLabelText(/keep me included/i))
+  fireEvent.click(screen.getByRole('button', { name: /send rsvp/i }))
+
+  await waitFor(() => {
+    const puts = mock.mock.calls.filter(
+      ([, init]) => (init as RequestInit | undefined)?.method === 'PUT',
+    )
+    expect(puts).toHaveLength(1)
+    const [, init] = puts[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({
+      response: 'no',
+      stay_included: true,
+      adult_count: 1,
+      child_count: 0,
+    })
+  })
+})
+
+test('the arrival time goes out exactly as typed under a differing profile zone, and reads back identically', async () => {
+  // The STEP-5 pin at the component boundary: person.timezone differs from
+  // the runner's zone, and the arrival clock must pass through untouched in
+  // BOTH directions — a wallClockToInstant detour would shift it by the
+  // offset and this body assertion is what would fail.
+  const mock = stubRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
+    {
+      method: 'GET',
+      path: '/occurrences/occ-1/rsvps',
+      response: () => json(200, { visibility: 'INVITEES', own: ownYes, rsvps: [] }),
+    },
+    {
+      method: 'PUT',
+      path: '/occurrences/occ-1/rsvp',
+      response: () => json(200, { ...ownYes, arrival_time: '16:45:00' }),
+    },
+  ])
+
+  renderDetail()
+  await screen.findByText('Test Potluck')
+  fireEvent.click(screen.getByRole('button', { name: /rsvp and who's coming/i }))
+
+  // The stored "15:30:00" reads back as the same wall clock, zone untouched.
+  const arrival = (await screen.findByLabelText(/arriving around/i)) as HTMLInputElement
+  expect(arrival.value).toBe('15:30')
+  // The zone it applies to is stated beside it.
+  expect(
+    screen.getByText(`Clock time at the gathering — times in ${profileZone}.`),
+  ).toBeTruthy()
+
+  fireEvent.change(arrival, { target: { value: '16:45' } })
+  fireEvent.click(screen.getByRole('button', { name: /update rsvp/i }))
+
+  await waitFor(() => {
+    const puts = mock.mock.calls.filter(
+      ([, init]) => (init as RequestInit | undefined)?.method === 'PUT',
+    )
+    expect(puts).toHaveLength(1)
+    const [, init] = puts[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({
+      response: 'yes',
+      stay_included: false,
+      adult_count: 1,
+      child_count: 0,
+      arrival_time: '16:45',
+    })
+  })
+})
+
+test('HOST_ONLY as a non-admin: the caller still sees their own answer, no roster, and the hint says why', async () => {
+  stubRoutes([
+    {
+      method: 'GET',
+      path: '/gatherings/g-1',
+      response: () =>
+        json(200, detailBody({ admin_account_id: 'acct-2', rsvp_list_visibility: 'HOST_ONLY' })),
+    },
+    {
+      method: 'GET',
+      path: '/occurrences/occ-1/rsvps',
+      response: () =>
+        json(200, {
+          visibility: 'HOST_ONLY',
+          own: { ...ownYes, response: 'no', arrival_time: null },
+          rsvps: [],
+        }),
+    },
+  ])
+
+  renderDetail()
+  await screen.findByText('Test Potluck')
+  fireEvent.click(screen.getByRole('button', { name: /rsvp and who's coming/i }))
+
+  // Their own answer is theirs whatever the setting says.
+  expect(((await screen.findByLabelText("Can't make it")) as HTMLInputElement).checked).toBe(true)
+  expect(screen.queryByText("Who's coming")).toBeNull()
+  expect(screen.getByText('Only the host sees the full list of answers.')).toBeTruthy()
+})
+
+test('the INVITEES roster renders display names, answers, counts, and arrival — nothing more', async () => {
+  stubRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
+    {
+      method: 'GET',
+      path: '/occurrences/occ-1/rsvps',
+      response: () =>
+        json(200, {
+          visibility: 'INVITEES',
+          own: null,
+          rsvps: [
+            {
+              id: 'r-1',
+              display_name: 'grandma',
+              response: 'yes',
+              stay_included: false,
+              adult_count: 2,
+              child_count: 1,
+              arrival_time: '15:30:00',
+            },
+            {
+              id: 'r-2',
+              display_name: 'alaska-cousin',
+              response: 'no',
+              stay_included: true,
+              adult_count: 1,
+              child_count: 0,
+              arrival_time: null,
+            },
+          ],
+        }),
+    },
+  ])
+
+  renderDetail()
+  await screen.findByText('Test Potluck')
+  fireEvent.click(screen.getByRole('button', { name: /rsvp and who's coming/i }))
+
+  expect(await screen.findByText("Who's coming")).toBeTruthy()
+  expect(screen.getByText(/grandma — Going — 2 adults, 1 child, arriving/)).toBeTruthy()
+  expect(
+    screen.getByText(/alaska-cousin — Can't make it \(staying in the loop\)/),
+  ).toBeTruthy()
+})
+
+test("the admin's edit form carries the visibility selector, and its change rides the PATCH", async () => {
+  const mock = stubRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
+    {
+      method: 'PATCH',
+      path: '/gatherings/g-1',
+      response: () => json(200, detailBody({ rsvp_list_visibility: 'HOST_ONLY' })),
+    },
+  ])
+
+  renderDetail()
+  await screen.findByText('Test Potluck')
+  fireEvent.click(screen.getByRole('button', { name: /edit gathering/i }))
+
+  const select = screen.getByLabelText(/who can see the rsvp list/i) as HTMLSelectElement
+  expect(select.value).toBe('INVITEES')
+  const save = screen.getByRole('button', { name: /^save$/i }) as HTMLButtonElement
+  expect(save.disabled).toBe(true)
+  fireEvent.change(select, { target: { value: 'HOST_ONLY' } })
+  expect(save.disabled).toBe(false)
+  fireEvent.click(save)
+
+  await waitFor(() => {
+    const patches = mock.mock.calls.filter(
+      ([, init]) => (init as RequestInit | undefined)?.method === 'PATCH',
+    )
+    expect(patches).toHaveLength(1)
+    const [, init] = patches[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({ rsvp_list_visibility: 'HOST_ONLY' })
+  })
+})

@@ -60,7 +60,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0011"
+EXPECTED_REVISION = "0012"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -317,6 +317,20 @@ async def verify(conn, ck: Checks) -> None:
         absent=("email", "person_id"),
     )
 
+    print("\n-- rsvp surface (0012) --")
+    # is_observer -> stay_included: a column named for a retired word is how
+    # the confusion returns (participation-terminology record, 2026-09-02).
+    # The visibility setting is a NOT NULL value on the gathering, the
+    # requires_approval shape.
+    assert_columns(
+        ck,
+        columns,
+        "rsvps",
+        absent=("is_observer",),
+        not_null=("stay_included",),
+    )
+    assert_columns(ck, columns, "gatherings", not_null=("rsvp_list_visibility",))
+
     print("\n-- groups steward -> admin rename (0009) --")
     assert_columns(
         ck,
@@ -435,6 +449,38 @@ async def verify(conn, ck: Checks) -> None:
         )
     else:
         ck.check(False, "occurrence text integrity", "occurrences table missing")
+
+    print("\n-- rsvp integrity (CK-27) --")
+    if "rsvps" in tables:
+        # Guest identity is a later phase: an account-holder RSVP (person_id
+        # set) must never also carry guest_name/guest_email — a row that does
+        # means something wrote around the router. Same class as the blank-
+        # location check: vacuous until it isn't.
+        ghost_guests = await scalar(
+            conn,
+            "SELECT count(*) FROM rsvps WHERE person_id IS NOT NULL "
+            "AND (guest_name IS NOT NULL OR guest_email IS NOT NULL)",
+        )
+        ck.check(
+            ghost_guests == 0,
+            "no account-holder RSVP carries guest identity",
+            f"{ghost_guests} rsvp row(s) with both a person and guest fields",
+        )
+        # stay_included modifies a "no" ("can't make it — keep me included");
+        # the API refuses it with any other response, so a row like this means
+        # something wrote around the validator. Interest data only — nothing
+        # here (or anywhere) reads it for authorization.
+        stray_flags = await scalar(
+            conn,
+            "SELECT count(*) FROM rsvps WHERE stay_included AND response <> 'no'",
+        )
+        ck.check(
+            stray_flags == 0,
+            "stay_included accompanies a 'no' response only",
+            f"{stray_flags} rsvp row(s) with stay_included on a non-'no' response",
+        )
+    else:
+        ck.check(False, "rsvp integrity", "rsvps table missing")
 
     print("\n-- pending invitation integrity (CK-25) --")
     if "gathering_invitations_pending" in tables:

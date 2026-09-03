@@ -17,6 +17,9 @@ export interface Gathering {
   title: string
   memorial_decedent_name: string | null
   requires_approval: boolean
+  // Who may read the occurrence RSVP lists (CK-27) — the host's setting:
+  // HOST_ONLY | INVITEES | ATTENDEES. Labels live in lib/rsvps.ts.
+  rsvp_list_visibility: string
   publication_state: string
   created_by_account_id: string
   admin_account_id: string | null

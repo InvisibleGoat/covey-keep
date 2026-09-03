@@ -38,5 +38,12 @@ class RSVP(Base):
     adult_count: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default=text("1"))
     child_count: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default=text("0"))
     arrival_time: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
-    is_observer: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    # "I can't make it, but keep me included" (CK-27; the 2026-09-02
+    # participation-terminology record §3): the third RSVP answer, stored as a
+    # modifier on a "no" — the API refuses it with any other response. It
+    # changes INTEREST (active lists, notifications, the people list) and
+    # NEVER access: no authorization check anywhere may consult it. Renamed
+    # from is_observer (0001–0011), a column named for a word the product
+    # retired — its meaning had been an empty notes cell since migration 0001.
+    stay_included: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     created_at: Mapped[datetime] = created_at_col()

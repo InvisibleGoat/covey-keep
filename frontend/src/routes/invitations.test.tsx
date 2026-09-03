@@ -153,6 +153,7 @@ const detailBody = {
   title: 'Test Potluck',
   memorial_decedent_name: null,
   requires_approval: true,
+  rsvp_list_visibility: 'INVITEES',
   publication_state: 'live',
   created_by_account_id: 'acct-1',
   admin_account_id: 'acct-1',

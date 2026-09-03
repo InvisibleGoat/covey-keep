@@ -51,6 +51,21 @@ class RSVPResponse(str, Enum):
     MAYBE = "maybe"
 
 
+class RSVPListVisibility(str, Enum):
+    """Who may read an occurrence's RSVP list (CK-27) — the host's first real
+    per-gathering option, a value on the gathering in requires_approval's
+    shape (never a capability-profile lookup at read time). HOST_ONLY: the
+    admin alone. INVITEES: the CK-25 read audience (keeper, admin, or accepted
+    invitee). ATTENDEES: those whose own response is yes. Two rules hold in
+    every mode: the admin always sees the full list (a narrower setting must
+    never show the host less than HOST_ONLY does), and the caller always sees
+    their own RSVP (no one is locked out of their own answer)."""
+
+    HOST_ONLY = "HOST_ONLY"
+    INVITEES = "INVITEES"
+    ATTENDEES = "ATTENDEES"
+
+
 class MediaStatus(str, Enum):
     PROCESSING = "processing"
     READY = "ready"
@@ -69,5 +84,6 @@ GROUP_TYPE = db_enum(GroupType, "group_type")
 GATHERING_TYPE = db_enum(GatheringType, "gathering_type")
 INVITATION_CHANNEL = db_enum(InvitationChannel, "invitation_channel")
 RSVP_RESPONSE = db_enum(RSVPResponse, "rsvp_response")
+RSVP_LIST_VISIBILITY = db_enum(RSVPListVisibility, "rsvp_list_visibility")
 MEDIA_STATUS = db_enum(MediaStatus, "media_status")
 PUBLICATION_STATE = db_enum(PublicationState, "publication_state")

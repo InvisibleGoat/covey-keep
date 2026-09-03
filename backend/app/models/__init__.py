@@ -21,6 +21,7 @@ from app.models.enums import (
     InvitationChannel,
     MediaStatus,
     PublicationState,
+    RSVPListVisibility,
     RSVPResponse,
 )
 from app.models.gathering import (
@@ -72,6 +73,7 @@ __all__ = [
     "Post",
     "PublicationState",
     "RSVP",
+    "RSVPListVisibility",
     "RSVPResponse",
     "Role",
     "RoleLadder",
