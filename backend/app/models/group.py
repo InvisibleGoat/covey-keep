@@ -23,7 +23,9 @@ class Group(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     # Renamed from steward_person_id at CK-13, per the CK-11 narrowing of
     # stewardship to admin. Nullable is the "needs an admin" state — the same
-    # encoding gatherings.admin_account_id uses for the claimable condition.
+    # encoding gatherings.host_account_id uses for the claimable condition.
+    # Deliberately NOT renamed at CK-28: a group has an admin, a gathering
+    # has a host — different concepts, and the words differing is the point.
     admin_person_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("people.id"), nullable=True
     )

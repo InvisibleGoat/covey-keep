@@ -233,10 +233,10 @@ async def test_deletion_lapses_kept_statuses(client, capsys, db_session_factory)
         other = Account(kind=AccountKind.PERSON)
         db.add(other)
         await db.flush()
-        # Solo-kept, and admin'd, by the person being deleted.
+        # Solo-kept, and hosted, by the person being deleted.
         solo = Gathering(
             created_by_account_id=account.id,
-            admin_account_id=account.id,
+            host_account_id=account.id,
             gathering_type=GatheringType.POTLUCK,
             title="solo-kept",
             publication_state=PublicationState.LIVE,
@@ -282,10 +282,10 @@ async def test_deletion_lapses_kept_statuses(client, capsys, db_session_factory)
             await db.execute(select(Gathering).where(Gathering.id == shared_id))
         ).scalars().one()
         # The solo-kept gathering lost its last keeper: stamped into grace,
-        # admin relinquished (claimable, not held by a dead account).
+        # host relinquished (claimable, not held by a dead account).
         assert solo_row.last_keeper_left_at is not None
         assert solo_row.last_keeper_left_at >= now
-        assert solo_row.admin_account_id is None
+        assert solo_row.host_account_id is None
         # The shared gathering lives on, unstamped, with its other keeper.
         assert shared_row.last_keeper_left_at is None
         # The accounts row itself survives (no PII; the gatherings still

@@ -2,16 +2,17 @@
 
 The load-bearing rule is the creation transaction: a gathering, its
 occurrences, and the creator's kept_gatherings row are born TOGETHER
-(keeper record §9.2 — creator is first keeper and admin). A gathering must
+(keeper record §9.2 — creator is first keeper and host). A gathering must
 never exist with zero keepers, not even transiently within the request, so
 creation routes through services/keeping.py::keep and commits once.
 
 Authorization, applied uniformly: mutations require the caller's account to
-hold admin (`admin_account_id`); reads require the caller's account to keep
-the gathering, OR the caller's person to hold an accepted invitation
+be the host (`host_account_id` — the admin column renamed at CK-28, ahead
+of co-hosts); reads require the caller's account to keep the
+gathering, OR the caller's person to hold an accepted invitation
 (a person-targeted gathering_invitations row — CK-25, the first widening of
-the read audience), OR admin. The checks are written against the
-keeper/admin/invitation facts, never "is creator" — a creator-shaped check
+the read audience), OR host. The checks are written against the
+keeper/host/invitation facts, never "is creator" — a creator-shaped check
 would already be wrong now that invitees read. Non-permitted access is a
 404, never a 403: the existence of a gathering is not public information.
 
@@ -364,8 +365,8 @@ def _gathering_body(
         "rsvp_list_visibility": gathering.rsvp_list_visibility.value,
         "publication_state": gathering.publication_state.value,
         "created_by_account_id": str(gathering.created_by_account_id),
-        "admin_account_id": (
-            str(gathering.admin_account_id) if gathering.admin_account_id else None
+        "host_account_id": (
+            str(gathering.host_account_id) if gathering.host_account_id else None
         ),
         "created_at": gathering.created_at.isoformat(),
         "updated_at": gathering.updated_at.isoformat() if gathering.updated_at else None,
@@ -400,13 +401,13 @@ async def _gathering_for_read(
 ) -> Gathering:
     """Reads require the caller's account to keep the gathering, the caller's
     person to hold an accepted invitation (CK-25 — an invitation grants
-    visibility, nothing more), or admin. Checked against the
-    keeper/admin/invitation facts, never creatorship."""
+    visibility, nothing more), or host. Checked against the
+    keeper/host/invitation facts, never creatorship."""
     gathering = await db.get(Gathering, gathering_id)
     if gathering is None:
         raise _not_found()
     account_id = ctx.person.account_id
-    if gathering.admin_account_id == account_id:
+    if gathering.host_account_id == account_id:
         return gathering
     kept = await db.scalar(
         select(KeptGathering.id).where(
@@ -433,9 +434,9 @@ async def _gathering_for_read(
 async def _gathering_for_admin(
     db: AsyncSession, ctx: AuthContext, gathering_id: UUID
 ) -> Gathering:
-    """Mutations require the caller's account to hold admin."""
+    """Mutations require the caller's account to be the host."""
     gathering = await db.get(Gathering, gathering_id)
-    if gathering is None or gathering.admin_account_id != ctx.person.account_id:
+    if gathering is None or gathering.host_account_id != ctx.person.account_id:
         raise _not_found()
     return gathering
 
@@ -447,7 +448,7 @@ async def _occurrence_for_admin(
     if occurrence is None:
         raise _not_found()
     gathering = await db.get(Gathering, occurrence.gathering_id)
-    if gathering is None or gathering.admin_account_id != ctx.person.account_id:
+    if gathering is None or gathering.host_account_id != ctx.person.account_id:
         raise _not_found()
     return occurrence, gathering
 
@@ -488,7 +489,7 @@ async def create_gathering(
 
     gathering = Gathering(
         created_by_account_id=account.id,
-        admin_account_id=account.id,
+        host_account_id=account.id,
         gathering_type=body.gathering_type,
         title=body.title,
         memorial_decedent_name=body.memorial_decedent_name,
@@ -522,7 +523,7 @@ async def create_gathering(
     ]
     db.add_all(occurrences)
 
-    # Creator = first keeper + admin together (keeper record §9.2). keep()
+    # Creator = first keeper + host together (keeper record §9.2). keep()
     # flushes; the single commit below is what makes the whole birth atomic.
     await keep(db, account, gathering, now=now)
     await db.commit()
@@ -650,7 +651,7 @@ async def patch_gathering(
     if "title" in provided:
         gathering.title = body.title
     if "rsvp_list_visibility" in provided:
-        # The host's list-visibility choice (CK-27). Admin-gated like every
+        # The host's list-visibility choice (CK-27). Host-gated like every
         # other field here; the model already refused an explicit null.
         gathering.rsvp_list_visibility = body.rsvp_list_visibility
     gathering.updated_at = datetime.now(timezone.utc)

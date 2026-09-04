@@ -86,7 +86,7 @@ async def unkeep(
     now: Optional[datetime] = None,
 ) -> None:
     """Account reverts from keeper to observer. In one transaction with the
-    kept-row delete: admin is relinquished if this account held it (the
+    kept-row delete: host is relinquished if this account held it (the
     gathering becomes claimable — keeper record §9.2), and if this was the
     last keeper the grace stamp is set. A memorial never gets the stamp: it
     never enters grace, whatever its keeper count."""
@@ -99,8 +99,8 @@ async def unkeep(
     )
     if result.rowcount == 0:
         raise LookupError("account does not keep this gathering")
-    if gathering.admin_account_id == account.id:
-        gathering.admin_account_id = None
+    if gathering.host_account_id == account.id:
+        gathering.host_account_id = None
     remaining = await db.scalar(
         select(func.count())
         .select_from(KeptGathering)
@@ -144,12 +144,12 @@ async def lapse_kept_statuses(
             )
         )
     ).all()
-    # Admin is relinquished everywhere this account held it, kept or not — a
-    # deleted account left as admin would block the claimable state forever.
+    # Host is relinquished everywhere this account held it, kept or not — a
+    # deleted account left as host would block the claimable state forever.
     await db.execute(
         update(Gathering)
-        .where(Gathering.admin_account_id == account_id)
-        .values(admin_account_id=None)
+        .where(Gathering.host_account_id == account_id)
+        .values(host_account_id=None)
     )
     if not kept_gathering_ids:
         return

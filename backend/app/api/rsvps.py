@@ -9,7 +9,7 @@ answered; a withdrawn row would lose information the host needs and create a
 second representation of "not coming" (the defect class CK-13 banned for the
 refcount and CK-20 for occurrence text).
 
-Authorization is CK-25's read audience, inherited exactly: keeper OR admin OR
+Authorization is CK-25's read audience, inherited exactly: keeper OR host OR
 accepted invitee of the parent gathering may RSVP and may read; anyone else
 gets the uniform 404 — a signed-in stranger must not learn an occurrence
 exists by RSVPing to it.
@@ -24,7 +24,7 @@ waiting to disagree.
 
 The list is filtered by the gathering's rsvp_list_visibility — the host's
 setting (CK-27, requires_approval's shape). Two rules hold in every mode:
-the ADMIN always sees the full list (every mode includes the host; a
+the HOST always sees the full list (every mode includes the host; a
 narrower setting must never show the host less than HOST_ONLY does), and
 the CALLER always sees their own RSVP via `own` (no one is locked out of
 their own answer). List rows carry display names and counts only — an email
@@ -235,12 +235,12 @@ async def list_rsvps(
         )
     ).all()
     own_row = next((row for row, _ in rows if row.person_id == ctx.person.id), None)
-    is_admin = gathering.admin_account_id == ctx.person.account_id
+    is_host = gathering.host_account_id == ctx.person.account_id
     visibility = gathering.rsvp_list_visibility
-    # The admin sees the list in EVERY mode: HOST_ONLY is the floor, and a
+    # The host sees the list in EVERY mode: HOST_ONLY is the floor, and a
     # narrower setting must never show the host less than it does.
     may_see_list = (
-        is_admin
+        is_host
         or visibility == RSVPListVisibility.INVITEES
         or (
             visibility == RSVPListVisibility.ATTENDEES

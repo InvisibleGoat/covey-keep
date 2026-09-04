@@ -60,7 +60,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0012"
+EXPECTED_REVISION = "0013"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -275,7 +275,9 @@ async def verify(conn, ck: Checks) -> None:
         "gatherings",
         present=(
             "created_by_account_id",
-            "admin_account_id",
+            # host_account_id: the admin column renamed at 0013 (CK-28) —
+            # the same assertion, its subject renamed with the column.
+            "host_account_id",
             "last_keeper_left_at",
             "memorial_decedent_name",
             "total_bytes",

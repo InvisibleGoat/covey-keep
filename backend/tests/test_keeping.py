@@ -33,12 +33,12 @@ async def _mk_gathering(
     gathering_type: GatheringType = GatheringType.POTLUCK,
     total_bytes: int = 0,
     memorial_decedent_name: str | None = None,
-    admin_account_id=None,
+    host_account_id=None,
 ) -> Gathering:
     creator = await _mk_account(db)
     gathering = Gathering(
         created_by_account_id=creator.id,
-        admin_account_id=admin_account_id,
+        host_account_id=host_account_id,
         gathering_type=gathering_type,
         title="keeping test gathering",
         memorial_decedent_name=memorial_decedent_name,
@@ -213,18 +213,18 @@ async def test_unkeep_relinquishes_admin_only_when_the_departing_account_held_it
 ):
     async with db_session_factory() as db:
         admin, other = await _mk_account(db), await _mk_account(db)
-        gathering = await _mk_gathering(db, admin_account_id=admin.id)
+        gathering = await _mk_gathering(db, host_account_id=admin.id)
         await keep(db, admin, gathering)
         await keep(db, other, gathering)
         # A non-admin keeper leaving changes nothing about admin.
         await unkeep(db, other, gathering, now=NOW)
-        assert gathering.admin_account_id == admin.id
+        assert gathering.host_account_id == admin.id
         await keep(db, other, gathering)
         # The admin reverting to observer relinquishes admin in the same
         # transaction — NULL is the claimable state, and `other` (still a
         # keeper) is who the later claim flow will offer it to.
         await unkeep(db, admin, gathering, now=NOW)
-        assert gathering.admin_account_id is None
+        assert gathering.host_account_id is None
         assert gathering.last_keeper_left_at is None  # other still keeps it
         await db.commit()
 
@@ -242,7 +242,7 @@ async def test_0009_constraint_names_and_no_steward_orphans(db_session_factory):
                     "('uq_kept_gatherings_account_id_gathering_id', "
                     " 'fk_kept_gatherings_account_id', 'fk_kept_gatherings_gathering_id', "
                     " 'ck_gatherings_memorial_decedent_name', "
-                    " 'fk_gatherings_admin_account_id', 'fk_gatherings_created_by_account_id', "
+                    " 'fk_gatherings_host_account_id', 'fk_gatherings_created_by_account_id', "
                     " 'fk_groups_admin_person_id', 'fk_groups_backup_admin_person_id')"
                 )
             )
@@ -252,7 +252,7 @@ async def test_0009_constraint_names_and_no_steward_orphans(db_session_factory):
             "fk_kept_gatherings_account_id",
             "fk_kept_gatherings_gathering_id",
             "ck_gatherings_memorial_decedent_name",
-            "fk_gatherings_admin_account_id",
+            "fk_gatherings_host_account_id",
             "fk_gatherings_created_by_account_id",
             "fk_groups_admin_person_id",
             "fk_groups_backup_admin_person_id",

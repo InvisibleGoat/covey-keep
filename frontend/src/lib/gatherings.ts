@@ -22,7 +22,10 @@ export interface Gathering {
   rsvp_list_visibility: string
   publication_state: string
   created_by_account_id: string
-  admin_account_id: string | null
+  // The host's account (CK-28: the admin column renamed — the product says
+  // host; a group has an admin, a gathering has a host). Null is the
+  // claimable state.
+  host_account_id: string | null
   created_at: string
   updated_at: string | null
 }

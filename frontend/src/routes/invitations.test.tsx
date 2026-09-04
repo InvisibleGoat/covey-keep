@@ -156,7 +156,7 @@ const detailBody = {
   rsvp_list_visibility: 'INVITEES',
   publication_state: 'live',
   created_by_account_id: 'acct-1',
-  admin_account_id: 'acct-1',
+  host_account_id: 'acct-1',
   created_at: '2026-08-25T12:00:00+00:00',
   updated_at: null,
   occurrences: [
@@ -336,7 +336,7 @@ test('a non-admin viewer has no invitation affordance at all', async () => {
     {
       method: 'GET',
       path: '/gatherings/g-1',
-      response: () => json(200, { ...detailBody, admin_account_id: 'acct-2' }),
+      response: () => json(200, { ...detailBody, host_account_id: 'acct-2' }),
     },
   ])
   renderDetail()

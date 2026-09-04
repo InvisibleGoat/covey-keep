@@ -347,8 +347,8 @@ async def me(ctx: AuthContext = Depends(get_auth_context)) -> dict:
         # The auth context is what the frontend holds; timezone rides along so
         # the client can tell "never captured" (null) from a set value (CK-7).
         "timezone": ctx.person.timezone,
-        # The caller's OWN account id (CK-20) — keeping and admin are account
-        # facts (gatherings.admin_account_id), so the client needs this to
+        # The caller's OWN account id (CK-20) — keeping and hosting are account
+        # facts (gatherings.host_account_id), so the client needs this to
         # compare against them; it discloses nothing about anyone else.
         "account_id": str(ctx.person.account_id),
     }

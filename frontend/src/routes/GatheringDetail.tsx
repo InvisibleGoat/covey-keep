@@ -185,11 +185,11 @@ function rsvpDirty(form: RsvpFormState, own: OwnRsvp | null): boolean {
 function OccurrenceRsvp({
   occurrenceId,
   zone,
-  isAdmin,
+  isHost,
 }: {
   occurrenceId: string
   zone: string
-  isAdmin: boolean
+  isHost: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState<RsvpLists | null>(null)
@@ -273,10 +273,10 @@ function OccurrenceRsvp({
   }
 
   // The server enforces visibility; this mirror only picks the hint text.
-  // The admin sees the list in every mode, and the caller always has `own`.
+  // The host sees the list in every mode, and the caller always has `own`.
   const maySeeList =
     data !== null &&
-    (isAdmin ||
+    (isHost ||
       data.visibility === 'INVITEES' ||
       (data.visibility === 'ATTENDEES' && data.own?.response === 'yes'))
 
@@ -566,16 +566,16 @@ export function GatheringDetail() {
   const { gathering } = state
   const isMemorial = gathering.gathering_type === 'memorial'
 
-  // Edit affordances render only for the admin — a non-admin sees the
+  // Edit affordances render only for the host — a non-host sees the
   // read-only page with no edit controls at all, so no one can probe an edit
   // control to distinguish "not yours" from "does not exist" (the 404-not-403
   // posture). The real comparison since CK-20: /auth/me carries the caller's
-  // account_id, so the gate is the admin fact itself — it holds however wide
+  // account_id, so the gate is the host fact itself — it holds however wide
   // later phases (invitations, keep/unkeep, claim) open the read audience,
-  // where CK-18's interim `admin_account_id !== null` would have shown a
-  // keeper-non-admin edit controls that 404. A profile that failed to load
-  // (person null) gates closed, not open.
-  const canEdit = person !== null && gathering.admin_account_id === person.account_id
+  // where CK-18's interim not-null gate would have shown a keeper-non-host
+  // edit controls that 404. A profile that failed to load (person null)
+  // gates closed, not open.
+  const canEdit = person !== null && gathering.host_account_id === person.account_id
 
   const gatheringDirty = Object.keys(gatheringPatch(gatheringForm, gathering)).length > 0
   const editedOccurrence =
@@ -986,7 +986,7 @@ export function GatheringDetail() {
                   <OccurrenceRsvp
                     occurrenceId={occurrence.id}
                     zone={zone}
-                    isAdmin={canEdit}
+                    isHost={canEdit}
                   />
                 </>
               )}

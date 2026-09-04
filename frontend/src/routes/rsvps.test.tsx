@@ -49,7 +49,7 @@ function detailBody(over: Record<string, unknown> = {}) {
     rsvp_list_visibility: 'INVITEES',
     publication_state: 'live',
     created_by_account_id: 'acct-1',
-    admin_account_id: 'acct-1',
+    host_account_id: 'acct-1',
     created_at: '2026-08-25T12:00:00+00:00',
     updated_at: null,
     occurrences: [
@@ -237,7 +237,7 @@ test('HOST_ONLY as a non-admin: the caller still sees their own answer, no roste
       method: 'GET',
       path: '/gatherings/g-1',
       response: () =>
-        json(200, detailBody({ admin_account_id: 'acct-2', rsvp_list_visibility: 'HOST_ONLY' })),
+        json(200, detailBody({ host_account_id: 'acct-2', rsvp_list_visibility: 'HOST_ONLY' })),
     },
     {
       method: 'GET',

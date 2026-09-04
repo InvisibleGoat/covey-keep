@@ -59,15 +59,18 @@ class Gathering(Base):
     id: Mapped[UUID] = uuid_pk()
     # The creating account — immutable and historical, which is why the name
     # is not "owner": ownership is not a concept in the keeper model. The
-    # creator is just the first keeper; keeping and admin are separate facts.
+    # creator is just the first keeper; keeping and hosting are separate facts.
     created_by_account_id: Mapped[UUID] = mapped_column(
         ForeignKey("accounts.id"), nullable=False, index=True
     )
-    # Transferable admin. NULLABLE IS THE CLAIMABLE STATE — the "needs an
-    # admin" condition, mirroring how the nullable admin fields on groups
-    # encode "needs an admin". Reverting from keeper to observer relinquishes
-    # this (services/keeping.py); the claim flow itself is a later phase.
-    admin_account_id: Mapped[Optional[UUID]] = mapped_column(
+    # Transferable host (the admin column, renamed at CK-28: the product
+    # says host, and the moment co-hosts exist an unqualified "admin" means
+    # two things — a GROUP has an admin, a gathering has a host, and the
+    # words differing is the point). NULLABLE IS THE CLAIMABLE STATE — the
+    # "needs a host" condition, mirroring how the nullable admin fields on
+    # groups encode "needs an admin". Reverting from keeper to observer
+    # relinquishes this (services/keeping.py); the claim flow is a later phase.
+    host_account_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("accounts.id"), nullable=True
     )
     gathering_type: Mapped[GatheringType] = mapped_column(GATHERING_TYPE, nullable=False)

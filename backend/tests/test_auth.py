@@ -96,7 +96,7 @@ async def test_happy_path_end_to_end(client, capsys, db_session_factory):
 
 
 async def test_me_carries_the_callers_account_id(client, capsys, db_session_factory):
-    # CK-20: keeping and admin are ACCOUNT facts (gatherings.admin_account_id),
+    # CK-20: keeping and hosting are ACCOUNT facts (gatherings.host_account_id),
     # so the client needs its own account id to compare against them — the
     # comparison the gathering detail's edit gate makes. It is the caller's own
     # id and discloses nothing about anyone else.

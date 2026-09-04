@@ -327,7 +327,7 @@ async def revoke_invitation(
     if row is None or row.consumed_at is not None:
         raise _not_found()
     gathering = await db.get(Gathering, row.gathering_id)
-    if gathering is None or gathering.admin_account_id != ctx.person.account_id:
+    if gathering is None or gathering.host_account_id != ctx.person.account_id:
         raise _not_found()
     if row.revoked_at is None:
         row.revoked_at = now

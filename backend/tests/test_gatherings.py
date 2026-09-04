@@ -89,12 +89,12 @@ async def test_create_births_gathering_keeper_and_admin_together(
         account = await _account_for(db, address)
         gathering = (await db.execute(select(Gathering))).scalars().one()
         # The three facts of the creation transaction (keeper record §9.2):
-        # exactly one kept row, admin held by the creator, and no grace stamp
+        # exactly one kept row, host held by the creator, and no grace stamp
         # — the gathering was never keeperless, even transiently.
         kept = (await db.execute(select(KeptGathering))).scalars().one()
         assert kept.account_id == account.id
         assert kept.gathering_id == gathering.id
-        assert gathering.admin_account_id == account.id
+        assert gathering.host_account_id == account.id
         assert gathering.created_by_account_id == account.id
         assert gathering.last_keeper_left_at is None
         # The gathering itself is live — requires_approval moderates
@@ -369,7 +369,7 @@ async def test_patch_gathering_stamps_updated_at_and_limits_the_surface(
     for bad in (
         {"requires_approval": False},
         {"publication_state": "removed"},
-        {"admin_account_id": None},
+        {"host_account_id": None},
         {"gathering_type": "memorial"},
         {},
         {"title": ""},
@@ -973,7 +973,7 @@ async def test_account_deletion_lapses_an_api_created_gathering(
         ) == 0
         gathering = (await db.execute(select(Gathering))).scalars().one()
         assert str(gathering.id) == created["id"]
-        assert gathering.admin_account_id is None
+        assert gathering.host_account_id is None
         assert gathering.last_keeper_left_at is not None
         assert gathering.last_keeper_left_at >= now
         # The gathering and its occurrence outlive their creator's account.

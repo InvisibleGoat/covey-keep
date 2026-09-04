@@ -180,7 +180,7 @@ test('the list renders each date from the list response alone — one request, n
               rsvp_list_visibility: 'INVITEES',
               publication_state: 'live',
               created_by_account_id: 'acct-1',
-              admin_account_id: 'acct-1',
+              host_account_id: 'acct-1',
               created_at: '2026-08-25T12:00:00+00:00',
               updated_at: null,
               next_occurrence: { id: 'occ-1', starts_at: startsAt },
@@ -219,7 +219,7 @@ function detailBody(over: Record<string, unknown> = {}) {
     rsvp_list_visibility: 'INVITEES',
     publication_state: 'live',
     created_by_account_id: 'acct-1',
-    admin_account_id: 'acct-1',
+    host_account_id: 'acct-1',
     created_at: '2026-08-25T12:00:00+00:00',
     updated_at: null,
     occurrences: [
@@ -274,11 +274,11 @@ const seasonCap422 = () =>
   })
 
 test('a non-admin viewer sees the read-only page with no edit controls at all', async () => {
-  // admin_account_id null is the claimable state — no one's account matches,
+  // host_account_id null is the claimable state — no one's account matches,
   // so the gate (the caller's account_id against the admin fact, CK-20)
   // renders no edit affordance.
   stubFetchRoutes([
-    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody({ admin_account_id: null })) },
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody({ host_account_id: null })) },
   ])
   renderDetail()
   await screen.findByText('Test Potluck')
@@ -289,13 +289,13 @@ test('a non-admin viewer sees the read-only page with no edit controls at all', 
 })
 
 test("a gathering administered by someone ELSE renders no edit controls — the caller's account is compared, not just non-null", async () => {
-  // The case CK-18's interim gate (`admin_account_id !== null`) could not
+  // The case CK-18's interim gate (`host_account_id !== null`) could not
   // express: an admin exists and it is not the caller. Exact today only
   // because every reader of an admin-held gathering is its admin; the moment
   // invitations/keep/claim widen the audience, this comparison is what keeps
   // a keeper-non-admin from probing edit controls that 404.
   stubFetchRoutes([
-    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody({ admin_account_id: 'acct-2' })) },
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody({ host_account_id: 'acct-2' })) },
   ])
   renderDetail()
   await screen.findByText('Test Potluck')
