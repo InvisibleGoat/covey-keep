@@ -39,7 +39,7 @@ from app.models.membership import Membership
 from app.models.next_step import NextStepAcceptance, NextStepDismissal, NextStepTrigger
 from app.models.organization import Organization
 from app.models.post import Post
-from app.models.rsvp import RSVP
+from app.models.rsvp import RSVP, RSVPCompanion
 
 __all__ = [
     "Account",
@@ -73,6 +73,7 @@ __all__ = [
     "Post",
     "PublicationState",
     "RSVP",
+    "RSVPCompanion",
     "RSVPListVisibility",
     "RSVPResponse",
     "Role",

@@ -1,26 +1,32 @@
-"""CK-27 — account-holder RSVPs: the "are you coming" half.
+"""CK-27 — account-holder RSVPs: the "are you coming" half. CK-29 — you
+RSVP for YOURSELF, with named companions instead of head counts.
 
 The load-bearing pins: the audience is CK-25's exactly (keeper/admin/invitee
 may RSVP and read; a stranger's 404 is byte-identical to a missing id); the
 write is an UPSERT — a second submission updates the one row, never a 500,
-never a duplicate; stay_included appears in NO authorization path — an
-invitee who sets it and one who does not hold identical read access, asserted
-directly; all three visibility settings behave, the caller always sees their
-own answer, and the admin is never shown less than HOST_ONLY would show; no
-email address appears in any RSVP response body; arrival_time is a bare time
-that round-trips untouched; and the guest columns stay NULL after every
-operation.
+never a duplicate — and since CK-29 the update path stamps updated_at while
+the first write leaves it NULL (a stamp that merely mirrored created_at
+would look like an answer and not be one); stay_included and companions
+appear in NO authorization path — asserted directly; companions are NAMES,
+not people — a write creates no person, no invitation, nothing — replaced
+wholesale on every write (never appended), bounded, trimmed, blank-rejected,
+and refused on a "no"; the roster's totals are computed from the names,
+never stored or accepted; all three visibility settings behave, the caller
+always sees their own answer, and the admin is never shown less than
+HOST_ONLY would show; no email address appears in any RSVP response body;
+arrival_time is a bare time that round-trips untouched; and the guest
+columns stay NULL after every operation.
 """
 
 from sqlalchemy import func, select
 
-from app.models import RSVP, Gathering, RSVPListVisibility
+from app.models import RSVP, Gathering, GatheringInvitation, Person, RSVPCompanion, RSVPListVisibility
 from tests.test_gatherings import _create, _field_errors, _signed_in_headers
 from tests.test_invitations import _accept, _invite_token
 
 MISSING_ID = "00000000-0000-0000-0000-000000000000"
 
-RSVP_YES = {"response": "yes", "adult_count": 2, "child_count": 1}
+RSVP_YES = {"response": "yes", "companions": ["Nana Pearl", "Milo"]}
 RSVP_NO = {"response": "no"}
 
 
@@ -102,7 +108,8 @@ async def test_audience_matrix_and_the_404_posture(client, capsys):
 
 async def test_upsert_updates_the_one_row(client, capsys, db_session_factory):
     """Changing your mind is the normal case: the second submission updates —
-    exactly one row per (occurrence, person), never a 500, never a duplicate.
+    exactly one row per (occurrence, person), never a 500, never a duplicate —
+    and the companions reflect the LATEST write, never both writes appended.
     (There is deliberately no delete endpoint: "no" IS the change of mind, and
     it keeps the record that they answered.)"""
     headers = await _signed_in_headers(client, capsys, "flipflop@example.com")
@@ -113,21 +120,71 @@ async def test_upsert_updates_the_one_row(client, capsys, db_session_factory):
     assert first.status_code == 200
     body = first.json()
     assert body["response"] == "yes"
-    assert body["adult_count"] == 2
-    assert body["child_count"] == 1
+    assert body["companions"] == ["Nana Pearl", "Milo"]
 
     second = await _put_rsvp(client, headers, occurrence_id, RSVP_NO)
     assert second.status_code == 200
     assert second.json()["response"] == "no"
+    assert second.json()["companions"] == []
     assert second.json()["id"] == body["id"]
 
     async with db_session_factory() as db:
         assert (await db.scalar(select(func.count()).select_from(RSVP))) == 1
         row = (await db.execute(select(RSVP))).scalars().one()
         assert row.response.value == "no"
-        # PUT replaces the whole answer: the omitted counts land as defaults.
-        assert row.adult_count == 1
-        assert row.child_count == 0
+        # Wholesale replacement: the "no" carried no companions, so none
+        # remain — no orphans for the withdrawn names either.
+        assert (
+            await db.scalar(select(func.count()).select_from(RSVPCompanion))
+        ) == 0
+
+
+async def test_companions_replace_wholesale_never_append(
+    client, capsys, db_session_factory
+):
+    """Each write's list IS the value: rewriting ["Nana Pearl", "Milo"] as
+    ["Auntie Jo"] leaves exactly one companion row, at position 0 — and no
+    orphan row for a name no longer listed."""
+    headers = await _signed_in_headers(client, capsys, "reviser@example.com")
+    created = await _create(client, headers)
+    occurrence_id = created["occurrences"][0]["id"]
+
+    await _put_rsvp(client, headers, occurrence_id, RSVP_YES)
+    revised = await _put_rsvp(
+        client, headers, occurrence_id, {"response": "yes", "companions": ["Auntie Jo"]}
+    )
+    assert revised.status_code == 200
+    assert revised.json()["companions"] == ["Auntie Jo"]
+
+    async with db_session_factory() as db:
+        rows = (await db.execute(select(RSVPCompanion))).scalars().all()
+        assert [(row.position, row.name) for row in rows] == [(0, "Auntie Jo")]
+
+
+async def test_updated_at_moves_on_change_and_only_on_change(
+    client, capsys, db_session_factory
+):
+    """The first answer leaves updated_at NULL; a changed answer stamps it and
+    leaves created_at alone. A column that always equalled created_at would be
+    the failure mode — it looks like an answer and isn't."""
+    headers = await _signed_in_headers(client, capsys, "minded@example.com")
+    created = await _create(client, headers)
+    occurrence_id = created["occurrences"][0]["id"]
+
+    first = await _put_rsvp(client, headers, occurrence_id, RSVP_YES)
+    assert first.json()["updated_at"] is None
+    async with db_session_factory() as db:
+        row = (await db.execute(select(RSVP))).scalars().one()
+        created_at_before = row.created_at
+        assert row.updated_at is None
+
+    second = await _put_rsvp(client, headers, occurrence_id, RSVP_NO)
+    assert second.json()["updated_at"] is not None
+    async with db_session_factory() as db:
+        row = (await db.execute(select(RSVP))).scalars().one()
+        assert row.updated_at is not None
+        assert row.updated_at >= created_at_before
+        assert row.created_at == created_at_before
 
 
 async def test_stay_included_never_affects_access(client, capsys):
@@ -228,7 +285,7 @@ async def test_visibility_host_only(client, capsys):
     assert invitee_view["own"]["response"] == "no"
 
 
-async def test_visibility_invitees_shows_display_names_and_counts_only(client, capsys):
+async def test_visibility_invitees_shows_names_and_computed_totals_only(client, capsys):
     headers_admin, headers_invitee, created = await _gathering_with_invitee(
         client, capsys, "open-host@example.com", "aunt@example.com"
     )
@@ -240,14 +297,21 @@ async def test_visibility_invitees_shows_display_names_and_counts_only(client, c
     body = view.json()
     assert body["visibility"] == "INVITEES"
     assert len(body["rsvps"]) == 2
-    # Display names and the answer's substance — never an email, never a
-    # person or account id (display names are the CK-25 roster rule, with
-    # more force here because more people read this list).
+    # Display names, companion names, and the answer's substance — never an
+    # email, never a person or account id (display names are the CK-25 roster
+    # rule, with more force here because more people read this list).
     assert set(body["rsvps"][0]) == {
         "id", "display_name", "response", "stay_included",
-        "adult_count", "child_count", "arrival_time",
+        "companions", "total", "arrival_time",
     }
     assert {row["display_name"] for row in body["rsvps"]} == {"open-host", "aunt"}
+    # The total is COMPUTED from the named people — the row's person plus
+    # their companions — never stored, never typed by anyone.
+    by_name = {row["display_name"]: row for row in body["rsvps"]}
+    assert by_name["open-host"]["companions"] == ["Nana Pearl", "Milo"]
+    assert by_name["open-host"]["total"] == 3
+    assert by_name["aunt"]["companions"] == []
+    assert by_name["aunt"]["total"] == 1
     # No email address in ANY RSVP response body (display names are bare
     # localparts, so "@" appearing at all would mean an address leaked).
     assert "@" not in view.text
@@ -324,22 +388,122 @@ async def test_arrival_time_is_a_bare_time_and_round_trips_untouched(client, cap
     assert cleared.json()["arrival_time"] is None
 
 
-async def test_counts_default_to_one_and_zero_and_are_bounded(client, capsys):
+async def test_companions_default_empty_trimmed_bounded_and_blank_rejected(
+    client, capsys
+):
+    """You RSVP for yourself: no companions is the normal case and costs
+    nothing. Names are trimmed and blank-rejected (the CK-20 discipline, with
+    the 422 landing on the entry that provoked it), the list is bounded, and
+    the dropped counts are no longer accepted anywhere in the body."""
     headers = await _signed_in_headers(client, capsys, "solo@example.com")
     created = await _create(client, headers)
     occurrence_id = created["occurrences"][0]["id"]
 
     body = (await _put_rsvp(client, headers, occurrence_id, {"response": "yes"})).json()
-    assert body["adult_count"] == 1
-    assert body["child_count"] == 0
+    assert body["companions"] == []
+    assert "adult_count" not in body
+    assert "child_count" not in body
 
-    for bad in ({"adult_count": -1}, {"child_count": -2}, {"adult_count": 100}):
+    trimmed = await _put_rsvp(
+        client, headers, occurrence_id,
+        {"response": "yes", "companions": ["  Auntie Jo  "]},
+    )
+    assert trimmed.status_code == 200
+    assert trimmed.json()["companions"] == ["Auntie Jo"]
+
+    for blank in ("", "   "):
         refused = await _put_rsvp(
-            client, headers, occurrence_id, {"response": "yes", **bad}
+            client, headers, occurrence_id,
+            {"response": "yes", "companions": ["Auntie Jo", blank]},
         )
-        # Bounded at the model: an unbounded count is a SmallInteger overflow
-        # surfacing as a 500.
         assert refused.status_code == 422
+        # Item-level loc: ("body", "companions", 1) — the entry that provoked it.
+        assert any(
+            err["loc"][1] == "companions" and err["loc"][-1] == 1
+            for err in refused.json()["detail"]
+        )
+
+    over_bound = await _put_rsvp(
+        client, headers, occurrence_id,
+        {"response": "yes", "companions": [f"Cousin {n}" for n in range(11)]},
+    )
+    assert over_bound.status_code == 422
+    assert "companions" in _field_errors(over_bound)
+
+    # The dropped counts draw the model's extra="forbid" refusal, never a
+    # silent ignore — a client still sending them must hear about it.
+    stale_client = await _put_rsvp(
+        client, headers, occurrence_id, {"response": "yes", "adult_count": 2}
+    )
+    assert stale_client.status_code == 422
+
+
+async def test_companions_go_with_yes_or_maybe_never_a_no(client, capsys):
+    """"Two people are not coming with me" is not information — the noise the
+    dropped head counts manufactured on declined rows (the deployed evidence
+    that started CK-29). Refused at the model, stay_included's shape; an empty
+    list rides a "no" fine (it is the wholesale-replace clearing path)."""
+    headers = await _signed_in_headers(client, capsys, "decliner@example.com")
+    created = await _create(client, headers)
+    occurrence_id = created["occurrences"][0]["id"]
+
+    refused = await _put_rsvp(
+        client, headers, occurrence_id,
+        {"response": "no", "companions": ["Nana Pearl"]},
+    )
+    assert refused.status_code == 422
+    assert "companions" in _field_errors(refused)
+
+    for ok_body in (
+        {"response": "no", "companions": []},
+        {"response": "maybe", "companions": ["Nana Pearl"]},
+    ):
+        accepted = await _put_rsvp(client, headers, occurrence_id, ok_body)
+        assert accepted.status_code == 200
+
+
+async def test_companions_are_names_never_people_and_never_permission(
+    client, capsys, db_session_factory
+):
+    """A companion is something an attendee DECLARED, not somebody the system
+    knows: writing one creates no person and no invitation, notifies nobody,
+    and buys the writer nothing — the stay_included discipline, asserted the
+    same way."""
+    headers_admin, headers_invitee, created = await _gathering_with_invitee(
+        client, capsys, "thorough-host@example.com", "bringer@example.com"
+    )
+    gathering_id = created["id"]
+    occurrence_id = created["occurrences"][0]["id"]
+
+    async with db_session_factory() as db:
+        people_before = await db.scalar(select(func.count()).select_from(Person))
+        invitations_before = await db.scalar(
+            select(func.count()).select_from(GatheringInvitation)
+        )
+
+    assert (
+        await _put_rsvp(
+            client, headers_invitee, occurrence_id,
+            {"response": "yes", "companions": ["Cousin Ada", "Little Sam"]},
+        )
+    ).status_code == 200
+
+    async with db_session_factory() as db:
+        assert (
+            await db.scalar(select(func.count()).select_from(Person))
+        ) == people_before
+        assert (
+            await db.scalar(select(func.count()).select_from(GatheringInvitation))
+        ) == invitations_before
+
+    # And no mutation rights came with the declaration: still an invitee,
+    # still the uniform 404.
+    assert (
+        await client.patch(
+            f"/gatherings/{gathering_id}", json={"title": "mine now"},
+            headers=headers_invitee,
+        )
+    ).status_code == 404
 
 
 async def test_guest_columns_stay_null_after_every_operation(

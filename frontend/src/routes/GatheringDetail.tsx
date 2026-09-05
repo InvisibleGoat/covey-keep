@@ -29,6 +29,7 @@ import {
   formatArrivalTime,
   rsvpResponseLabel,
   timeForInput,
+  totalGoing,
   type OwnRsvp,
   type RsvpLists,
 } from '../lib/rsvps'
@@ -134,13 +135,14 @@ function occurrencePatch(
 const GATHERING_FIELDS = ['title', 'memorial_decedent_name', 'rsvp_list_visibility']
 const OCCURRENCE_FIELDS = ['starts_at', 'ends_at', 'location', 'map_url']
 const INVITE_FIELDS = ['destination', 'channel']
-const RSVP_FIELDS = ['response', 'stay_included', 'adult_count', 'child_count', 'arrival_time']
+const RSVP_FIELDS = ['response', 'stay_included', 'companions', 'arrival_time']
 
 interface RsvpFormState {
   response: string // '' = unanswered — never a defaulted "no"
   stayIncluded: boolean
-  adults: string
-  children: string
+  // "Bringing anyone?" (CK-29) — the names of the people you're bringing.
+  // Empty by default: you RSVP for yourself, and adding nobody costs nothing.
+  companions: string[]
   // A bare wall clock ("15:30") at the gathering — sent to the API exactly as
   // typed. The CK-17 profile-zone conversion must NEVER touch it: it has no
   // date and no zone, and wallClockToInstant would silently shift it by the
@@ -150,28 +152,40 @@ interface RsvpFormState {
 
 function rsvpFormFromOwn(own: OwnRsvp | null): RsvpFormState {
   if (own === null) {
-    return { response: '', stayIncluded: false, adults: '1', children: '0', arrival: '' }
+    return { response: '', stayIncluded: false, companions: [], arrival: '' }
   }
   return {
     response: own.response,
     stayIncluded: own.stay_included,
-    adults: String(own.adult_count),
-    children: String(own.child_count),
+    companions: [...own.companions],
     arrival: timeForInput(own.arrival_time),
   }
 }
 
+// The companion list that actually goes out. A wholly-empty row is "no entry"
+// and is omitted (the CK-22 shape: an unfilled control is not a value); a
+// whitespace-only row goes out as typed so the server's blank-rejection 422
+// renders on it. With a "no" the list is empty — companions are meaningless
+// there (the API refuses them), and the wholesale replace clears any saved
+// names: "two people are not coming with me" is not information.
+function companionsToSend(form: RsvpFormState): string[] {
+  if (form.response === 'no') return []
+  return form.companions.filter((name) => name !== '')
+}
+
 // Dirty-tracking (the CK-18 convention): save is disabled until something
 // differs from the saved answer, and an unanswered occurrence stays
-// unanswered until a response is actually chosen.
+// unanswered until a response is actually chosen. Companions compare as
+// SENT — an added-but-empty row is not a change.
 function rsvpDirty(form: RsvpFormState, own: OwnRsvp | null): boolean {
   if (form.response === '') return false
   const saved = rsvpFormFromOwn(own)
+  const sent = companionsToSend(form)
   return (
     form.response !== saved.response ||
     (form.response === 'no' && form.stayIncluded !== saved.stayIncluded) ||
-    form.adults !== saved.adults ||
-    form.children !== saved.children ||
+    sent.length !== saved.companions.length ||
+    sent.some((name, index) => name !== saved.companions[index]) ||
     form.arrival !== saved.arrival
   )
 }
@@ -234,13 +248,14 @@ function OccurrenceRsvp({
 
   async function save(event: FormEvent) {
     event.preventDefault()
+    const sentCompanions = companionsToSend(form)
     const body: Record<string, unknown> = {
       response: form.response,
       // The flag accompanies a "no" only — with any other answer it is
       // meaningless and the API refuses it, so it goes out false.
       stay_included: form.response === 'no' && form.stayIncluded,
-      adult_count: Number(form.adults || '0'),
-      child_count: Number(form.children || '0'),
+      // The whole list, every save — the server replaces wholesale.
+      companions: sentCompanions,
       // Sent exactly as typed — a bare wall clock, no conversion (see above).
       ...(form.arrival !== '' ? { arrival_time: form.arrival } : {}),
     }
@@ -256,7 +271,13 @@ function OccurrenceRsvp({
       if (response.ok) {
         setReloadKey((key) => key + 1)
       } else {
-        setErrors(await errorsFromResponse(response, RSVP_FIELDS))
+        // Item-level errors index the SENT list ("companions.0", …).
+        setErrors(
+          await errorsFromResponse(response, [
+            ...RSVP_FIELDS,
+            ...sentCompanions.map((_, index) => `companions.${index}`),
+          ]),
+        )
       }
     } catch {
       if (alive.current) setErrors(networkErrors())
@@ -330,33 +351,66 @@ function OccurrenceRsvp({
 
               {(form.response === 'yes' || form.response === 'maybe') && (
                 <>
-                  <label htmlFor={`rsvp-adults-${occurrenceId}`}>Adults</label>
-                  <input
-                    id={`rsvp-adults-${occurrenceId}`}
-                    type="number"
-                    min={0}
-                    max={99}
-                    value={form.adults}
-                    aria-describedby={describedBy(errors, 'adult_count', occurrenceId)}
-                    onChange={(event) =>
-                      setForm((f) => ({ ...f, adults: event.target.value }))
+                  {/* "Store who, compute how many" (CK-29): you RSVP for
+                      yourself; if you're bringing someone, you say WHO. No
+                      rows is the normal case and costs no clicks. */}
+                  <p className="field-hint">Bringing anyone?</p>
+                  {form.companions.map((name, index) => {
+                    // The 422's loc indexes the SENT list (empty rows are
+                    // omitted from it), so map this row to its sent index.
+                    const sentIndex = form.companions
+                      .slice(0, index)
+                      .filter((entry) => entry !== '').length
+                    const field = `companions.${sentIndex}`
+                    return (
+                      <div key={index} className="companion-row">
+                        <label htmlFor={`rsvp-companion-${occurrenceId}-${index}`}>
+                          Their name
+                        </label>
+                        <input
+                          id={`rsvp-companion-${occurrenceId}-${index}`}
+                          type="text"
+                          value={name}
+                          aria-describedby={
+                            name === ''
+                              ? undefined
+                              : describedBy(errors, field, occurrenceId)
+                          }
+                          onChange={(event) =>
+                            setForm((f) => ({
+                              ...f,
+                              companions: f.companions.map((entry, i) =>
+                                i === index ? event.target.value : entry,
+                              ),
+                            }))
+                          }
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setForm((f) => ({
+                              ...f,
+                              companions: f.companions.filter((_, i) => i !== index),
+                            }))
+                          }
+                        >
+                          Remove
+                        </button>
+                        {name !== '' && (
+                          <FieldError errors={errors} field={field} scope={occurrenceId} />
+                        )}
+                      </div>
+                    )
+                  })}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((f) => ({ ...f, companions: [...f.companions, ''] }))
                     }
-                  />
-                  <FieldError errors={errors} field="adult_count" scope={occurrenceId} />
-
-                  <label htmlFor={`rsvp-children-${occurrenceId}`}>Children</label>
-                  <input
-                    id={`rsvp-children-${occurrenceId}`}
-                    type="number"
-                    min={0}
-                    max={99}
-                    value={form.children}
-                    aria-describedby={describedBy(errors, 'child_count', occurrenceId)}
-                    onChange={(event) =>
-                      setForm((f) => ({ ...f, children: event.target.value }))
-                    }
-                  />
-                  <FieldError errors={errors} field="child_count" scope={occurrenceId} />
+                  >
+                    Add someone
+                  </button>
+                  <FieldError errors={errors} field="companions" scope={occurrenceId} />
 
                   <label htmlFor={`rsvp-arrival-${occurrenceId}`}>
                     Arriving around (optional)
@@ -391,19 +445,38 @@ function OccurrenceRsvp({
               {data.rsvps.length === 0 ? (
                 <p className="field-hint">No one has answered yet.</p>
               ) : (
-                <ul className="occurrence-list">
-                  {data.rsvps.map((row) => (
-                    <li key={row.id}>
-                      {row.display_name} — {rsvpResponseLabel(row.response)}
-                      {row.stay_included ? ' (staying in the loop)' : ''}
-                      {(row.response === 'yes' || row.response === 'maybe') &&
-                        ` — ${row.adult_count} ${row.adult_count === 1 ? 'adult' : 'adults'}, ${row.child_count} ${row.child_count === 1 ? 'child' : 'children'}`}
-                      {row.arrival_time
-                        ? `, arriving ${formatArrivalTime(row.arrival_time)}`
-                        : ''}
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  {/* The computed total (CK-29): derived from the named
+                      people on the "Going" rows, never typed by anyone. */}
+                  {isHost && (
+                    <p className="field-hint">
+                      Total going: {totalGoing(data.rsvps)}{' '}
+                      {totalGoing(data.rsvps) === 1 ? 'person' : 'people'} — counted
+                      from the names.
+                    </p>
+                  )}
+                  <ul className="occurrence-list">
+                    {data.rsvps.map((row) => (
+                      <li key={row.id}>
+                        {row.display_name} — {rsvpResponseLabel(row.response)}
+                        {row.stay_included ? ' (staying in the loop)' : ''}
+                        {row.arrival_time
+                          ? `, arriving ${formatArrivalTime(row.arrival_time)}`
+                          : ''}
+                        {row.companions.length > 0 && (
+                          <ul
+                            className="companion-list"
+                            aria-label={`Coming with ${row.display_name}`}
+                          >
+                            {row.companions.map((companionName, index) => (
+                              <li key={index}>{companionName}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </>
               )}
             </>
           ) : (

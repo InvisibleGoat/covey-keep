@@ -1,4 +1,5 @@
-"""Account-holder RSVPs (CK-27) — the "are you coming" half.
+"""Account-holder RSVPs (CK-27; companions since CK-29) — the "are you
+coming" half, answered for YOURSELF.
 
 You RSVP to a DATE (an occurrence), never to the gathering (CK-12), and the
 partial unique index uq_rsvps_occurrence_person makes the write an UPSERT:
@@ -7,7 +8,9 @@ normal case, not an error. There is deliberately NO delete endpoint —
 changing your mind is response "no", which keeps the record that they
 answered; a withdrawn row would lose information the host needs and create a
 second representation of "not coming" (the defect class CK-13 banned for the
-refcount and CK-20 for occurrence text).
+refcount and CK-20 for occurrence text). Since CK-29 the update path stamps
+rsvps.updated_at (a mutable row with only a created_at can be read but not
+accounted for — the gap that cost CK-28 a verification).
 
 Authorization is CK-25's read audience, inherited exactly: keeper OR host OR
 accepted invitee of the parent gathering may RSVP and may read; anyone else
@@ -22,14 +25,32 @@ without it. It accompanies a "no" only — with any other response it is
 meaningless, and a stored meaningless value is a second representation
 waiting to disagree.
 
+companions (CK-29) — "store who, compute how many". You RSVP for yourself;
+if you are bringing someone, you say WHO: an ordered list of NAMES, replaced
+wholesale on every write, bounded (MAX_COMPANIONS), trimmed and
+blank-rejected (the CK-20 discipline). The totals a host reads are computed
+at read time from these names and are never stored or accepted from a
+client — a typed count can disagree with the list beside it; a computed one
+cannot (adult_count/child_count, dropped at 0014, were that disagreement).
+A companion is something an attendee DECLARED, not somebody the system
+knows: no person_id, no invitation, no notification, and no authorization
+decision anywhere may consult companions — the stay_included discipline
+again. Companions accompany a "yes" or "maybe" only: "two people are not
+coming with me" is not information, it is noise the row would preserve (the
+deployed evidence that started this phase), so a "no" with companions is
+refused just as stay_included is refused off a "no". Answering for your
+FAMILY — picking which of your children come — is the family-accounts
+feature, deliberately not this: a typed name here creates nothing and
+notifies nobody.
+
 The list is filtered by the gathering's rsvp_list_visibility — the host's
 setting (CK-27, requires_approval's shape). Two rules hold in every mode:
 the HOST always sees the full list (every mode includes the host; a
 narrower setting must never show the host less than HOST_ONLY does), and
 the CALLER always sees their own RSVP via `own` (no one is locked out of
-their own answer). List rows carry display names and counts only — an email
-address appears in no response body (the CK-25 roster rule, with more force
-here because more people read this list).
+their own answer). List rows carry display names, companion names, and the
+computed total — an email address appears in no response body (the CK-25
+roster rule, with more force here because more people read this list).
 
 arrival_time is a BARE time of day on the occurrence's own day, already
 relative to the zone that occurrence displays in — no date, no zone. The
@@ -37,22 +58,28 @@ CK-17 wall-clock conversion must never touch it (lib/datetime.ts carries the
 matching warning on the frontend); an offset-carrying value is refused at
 the model, never silently normalized.
 
-DATA-HANDLING: this is the first surface that shows one person's plans to
-others, and adult_count/child_count disclose household composition — how
-many children someone brings — to whoever the visibility setting admits.
-That is why the setting exists and why its default is INVITEES rather than
-anything broader. Guest identity is never written: guest_name and
+DATA-HANDLING: companion names RAISE what this surface discloses — CK-27's
+counts disclosed household composition; a list of names (children's first
+names among them) discloses considerably more, to everyone the host's
+visibility setting admits. That makes rsvp_list_visibility MORE load-bearing
+than before, not less, and is why its default stays INVITEES and why this
+list remains logistics (terminology record §4): post-event sharing must
+never carry it. Companion names are declared by an attendee ABOUT OTHER
+PEOPLE — the third-party-data class the pending-invitations design was
+shaped to avoid retaining — so they are bounded, replaced wholesale, deleted
+with their RSVP, never notified, never resolved to a person, and reach no
+authorization decision. Guest identity is never written: guest_name and
 guest_email stay NULL on every row this router touches (guest RSVPs are
 their own later phase).
 """
 
-from datetime import time
-from typing import Optional
+from datetime import datetime, time, timezone
+from typing import Annotated, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -63,25 +90,47 @@ from app.models import (
     Occurrence,
     Person,
     RSVP,
+    RSVPCompanion,
     RSVPListVisibility,
     RSVPResponse,
 )
 
 router = APIRouter(prefix="", tags=["rsvps"])
 
-# SmallInteger-safe and family-plausible: a count past this is a typo, and an
-# unbounded one is an asyncpg overflow surfacing as a 500.
-MAX_PARTY_COUNT = 99
+# Past ten names the form is the wrong tool — and an unbounded list of
+# third-party names is unbounded third-party data.
+MAX_COMPANIONS = 10
+# The location cap (CK-20): plenty for a name, bounded for a column.
+MAX_COMPANION_NAME_LENGTH = 200
+
+
+def _clean_companion_name(value: str) -> str:
+    # Trimmed and blank-rejected (CK-20): NULL-shaped absence is "not in the
+    # list" — a blank entry is not a person and not a value. Item-level, so
+    # the 422 lands on the row that provoked it.
+    value = value.strip()
+    if not value:
+        raise ValueError("a companion needs a name — remove the empty entry instead")
+    if len(value) > MAX_COMPANION_NAME_LENGTH:
+        raise ValueError(
+            f"a companion's name is limited to {MAX_COMPANION_NAME_LENGTH} characters"
+        )
+    return value
+
+
+CompanionName = Annotated[str, AfterValidator(_clean_companion_name)]
 
 
 class RSVPIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    # response first: the stay_included validator reads it from info.data.
+    # response first: the stay_included and companions validators read it
+    # from info.data.
     response: RSVPResponse
     stay_included: bool = False
-    adult_count: int = Field(default=1, ge=0, le=MAX_PARTY_COUNT)
-    child_count: int = Field(default=0, ge=0, le=MAX_PARTY_COUNT)
+    # Ordered names, replacing the RSVP's companions wholesale on each write.
+    # Empty is the normal case: you RSVP for yourself.
+    companions: list[CompanionName] = Field(default_factory=list)
     arrival_time: Optional[time] = None
 
     @field_validator("stay_included")
@@ -94,6 +143,26 @@ class RSVPIn(BaseModel):
             raise ValueError(
                 '"keep me included" goes with "no" — it says you can\'t make '
                 "it but want to stay in the loop"
+            )
+        return value
+
+    @field_validator("companions")
+    @classmethod
+    def _bounded_and_not_on_a_no(cls, value: list[str], info) -> list[str]:
+        if len(value) > MAX_COMPANIONS:
+            raise ValueError(
+                f"you can bring up to {MAX_COMPANIONS} people — for more, ask "
+                "the host to invite them"
+            )
+        response = info.data.get("response")
+        if response is None:
+            return value  # response itself failed; report only that
+        if value and response == RSVPResponse.NO:
+            # "Two people are not coming with me" is not information — the
+            # noise the dropped head counts manufactured on declined rows.
+            raise ValueError(
+                'companions go with "yes" or "maybe" — nobody comes along '
+                "to a gathering you can't make"
             )
         return value
 
@@ -111,7 +180,7 @@ class RSVPIn(BaseModel):
         return value
 
 
-def _rsvp_body(row: RSVP) -> dict:
+def _rsvp_body(row: RSVP, companions: list[str]) -> dict:
     """The caller's OWN row — the one shape that carries ids. arrival_time
     checks `is not None`, not truthiness: time(0, 0) — a midnight arrival —
     is falsy."""
@@ -120,23 +189,25 @@ def _rsvp_body(row: RSVP) -> dict:
         "occurrence_id": str(row.occurrence_id),
         "response": row.response.value,
         "stay_included": row.stay_included,
-        "adult_count": row.adult_count,
-        "child_count": row.child_count,
+        "companions": companions,
         "arrival_time": row.arrival_time.isoformat() if row.arrival_time is not None else None,
         "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat() if row.updated_at is not None else None,
     }
 
 
-def _list_row(row: RSVP, display_name: str) -> dict:
-    """A roster entry: display name and the answer's substance, nothing
-    identifying beyond that — never an email, never a person or account id."""
+def _list_row(row: RSVP, display_name: str, companions: list[str]) -> dict:
+    """A roster entry: display name, the answer's substance, and the party it
+    declares — never an email, never a person or account id. `total` is
+    COMPUTED here, at read time, from the named people (the row's person plus
+    their companions); it is never stored and never accepted from a client."""
     return {
         "id": str(row.id),
         "display_name": display_name,
         "response": row.response.value,
         "stay_included": row.stay_included,
-        "adult_count": row.adult_count,
-        "child_count": row.child_count,
+        "companions": companions,
+        "total": 1 + len(companions),
         "arrival_time": row.arrival_time.isoformat() if row.arrival_time is not None else None,
     }
 
@@ -160,9 +231,16 @@ def _apply(row: RSVP, body: RSVPIn) -> None:
     # columns are never touched: they stay NULL on every row this writes.
     row.response = body.response
     row.stay_included = body.stay_included
-    row.adult_count = body.adult_count
-    row.child_count = body.child_count
     row.arrival_time = body.arrival_time
+
+
+async def _replace_companions(db: AsyncSession, rsvp_id: UUID, names: list[str]) -> None:
+    # Wholesale replacement, every write: the list IS the value. The Core
+    # delete executes immediately (before the inserts flush), so the
+    # (rsvp_id, position) unique never sees old and new rows together.
+    await db.execute(delete(RSVPCompanion).where(RSVPCompanion.rsvp_id == rsvp_id))
+    for position, name in enumerate(names):
+        db.add(RSVPCompanion(rsvp_id=rsvp_id, position=position, name=name))
 
 
 @router.put("/occurrences/{occurrence_id}/rsvp")
@@ -174,7 +252,9 @@ async def put_rsvp(
 ) -> dict:
     """Upsert the caller's own RSVP — theirs alone, keyed by the session;
     nobody RSVPs for anyone else here. A second submission updates the one
-    row (the partial unique index is the backstop, never the error path)."""
+    row (the partial unique index is the backstop, never the error path) and
+    stamps updated_at; the first leaves it NULL, so the stamp means "changed
+    since first answered" and never merely mirrors created_at."""
     occurrence, _ = await _occurrence_for_read(db, ctx, occurrence_id)
     row = (
         await db.execute(
@@ -184,13 +264,19 @@ async def put_rsvp(
             )
         )
     ).scalar_one_or_none()
-    if row is None:
-        row = RSVP(occurrence_id=occurrence.id, person_id=ctx.person.id)
-        _apply(row, body)
-        db.add(row)
-    else:
-        _apply(row, body)
     try:
+        if row is None:
+            row = RSVP(occurrence_id=occurrence.id, person_id=ctx.person.id)
+            _apply(row, body)
+            db.add(row)
+            # Flush so the server-generated id exists for the companion rows
+            # — which is also where a racing first submission's unique
+            # violation surfaces, hence the try around the whole write.
+            await db.flush()
+        else:
+            _apply(row, body)
+            row.updated_at = datetime.now(timezone.utc)
+        await _replace_companions(db, row.id, body.companions)
         await db.commit()
     except IntegrityError:
         # Two first-time submissions racing: the partial unique index held, so
@@ -206,8 +292,11 @@ async def put_rsvp(
             )
         ).scalar_one()
         _apply(row, body)
+        row.updated_at = datetime.now(timezone.utc)
+        await _replace_companions(db, row.id, body.companions)
         await db.commit()
-    return _rsvp_body(row)
+    return _rsvp_body(row, body.companions)
+
 
 
 @router.get("/occurrences/{occurrence_id}/rsvps")
@@ -220,8 +309,8 @@ async def list_rsvps(
     setting. `own` always carries the caller's row (or null — an unanswered
     occurrence is unanswered, never a defaulted "no"); `rsvps` carries the
     roster when the setting admits the caller, and is empty otherwise.
-    stay_included changes what a row SAYS, never who may read it — it is
-    deliberately absent from every check in this function."""
+    stay_included and companions change what a row SAYS, never who may read
+    it — both are deliberately absent from every check in this function."""
     occurrence, gathering = await _occurrence_for_read(db, ctx, occurrence_id)
     rows = (
         await db.execute(
@@ -234,6 +323,20 @@ async def list_rsvps(
             .order_by(RSVP.created_at, RSVP.id)
         )
     ).all()
+    # One query for every row's companions — the CK-20 shape discipline: the
+    # roster must not fan out per-RSVP reads.
+    companion_rows = (
+        await db.execute(
+            select(RSVPCompanion)
+            .join(RSVP, RSVP.id == RSVPCompanion.rsvp_id)
+            .where(RSVP.occurrence_id == occurrence.id)
+            .order_by(RSVPCompanion.rsvp_id, RSVPCompanion.position)
+        )
+    ).scalars().all()
+    companions_by_rsvp: dict[UUID, list[str]] = {}
+    for companion in companion_rows:
+        companions_by_rsvp.setdefault(companion.rsvp_id, []).append(companion.name)
+
     own_row = next((row for row, _ in rows if row.person_id == ctx.person.id), None)
     is_host = gathering.host_account_id == ctx.person.account_id
     visibility = gathering.rsvp_list_visibility
@@ -250,6 +353,17 @@ async def list_rsvps(
     )
     return {
         "visibility": visibility.value,
-        "own": _rsvp_body(own_row) if own_row is not None else None,
-        "rsvps": [_list_row(row, name) for row, name in rows] if may_see_list else [],
+        "own": (
+            _rsvp_body(own_row, companions_by_rsvp.get(own_row.id, []))
+            if own_row is not None
+            else None
+        ),
+        "rsvps": (
+            [
+                _list_row(row, name, companions_by_rsvp.get(row.id, []))
+                for row, name in rows
+            ]
+            if may_see_list
+            else []
+        ),
     }

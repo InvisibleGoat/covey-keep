@@ -60,7 +60,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0013"
+EXPECTED_REVISION = "0014"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -333,6 +333,52 @@ async def verify(conn, ck: Checks) -> None:
     )
     assert_columns(ck, columns, "gatherings", not_null=("rsvp_list_visibility",))
 
+    print("\n-- rsvp companions replace the head counts (0014) --")
+    # CK-29: store WHO, compute how many. The typed counts are gone — a typed
+    # count can disagree with the list of names beside it, a computed one
+    # cannot — and the row that CK-27 made mutable finally carries an
+    # updated_at (nullable, NULL until first changed: the 0004/0010 shape).
+    assert_columns(
+        ck,
+        columns,
+        "rsvps",
+        absent=("adult_count", "child_count"),
+        present=("updated_at",),
+        nullable=("updated_at",),
+    )
+    ck.check("rsvp_companions" in tables, "table rsvp_companions exists", "missing")
+    assert_columns(
+        ck,
+        columns,
+        "rsvp_companions",
+        not_null=("rsvp_id", "position", "name"),
+        # A companion is a NAME, never somebody the system knows — no person,
+        # no account, no destination may ever appear here.
+        absent=("person_id", "account_id", "email", "destination"),
+    )
+    # The FK is the deletion story: companion rows are third-party names an
+    # attendee declared, and they die with their RSVP (ON DELETE CASCADE).
+    companion_fk = (
+        await conn.execute(
+            text(
+                # confdeltype is a "char" — cast to text so the driver hands
+                # back a string ('c' = CASCADE), not bytes.
+                "SELECT confrelid::regclass::text, confdeltype::text FROM pg_constraint "
+                "WHERE conname = 'fk_rsvp_companions_rsvp_id' AND contype = 'f'"
+            )
+        )
+    ).first()
+    ck.check(
+        companion_fk is not None and companion_fk[0] == "rsvps",
+        "rsvp_companions.rsvp_id references rsvps",
+        "FK missing or pointing elsewhere",
+    )
+    ck.check(
+        companion_fk is not None and companion_fk[1] == "c",
+        "companion rows are deleted with their RSVP (ON DELETE CASCADE)",
+        f"delete rule is {companion_fk[1]!r}" if companion_fk else "FK missing",
+    )
+
     print("\n-- groups steward -> admin rename (0009) --")
     assert_columns(
         ck,
@@ -483,6 +529,49 @@ async def verify(conn, ck: Checks) -> None:
         )
     else:
         ck.check(False, "rsvp integrity", "rsvps table missing")
+
+    print("\n-- companion integrity (CK-29) --")
+    if "rsvp_companions" in tables:
+        # NULL-shaped absence is "not in the list": the API trims and rejects
+        # blanks (the CK-20 discipline), so a blank name here means something
+        # wrote around it. Names are third-party personal data — the detail
+        # prints the count only, never a value.
+        blank_names = await scalar(
+            conn,
+            "SELECT count(*) FROM rsvp_companions WHERE btrim(name) = ''",
+        )
+        ck.check(
+            blank_names == 0,
+            "no companion row stores a blank name",
+            f"{blank_names} companion row(s) with a blank name",
+        )
+        # The API caps the list at 10 per RSVP; more means something wrote
+        # around the bound.
+        over_bound = await scalar(
+            conn,
+            "SELECT count(*) FROM (SELECT rsvp_id FROM rsvp_companions "
+            "GROUP BY rsvp_id HAVING count(*) > 10) o",
+        )
+        ck.check(
+            over_bound == 0,
+            "no RSVP holds more than 10 companions",
+            f"{over_bound} RSVP(s) over the companion bound",
+        )
+        # Companions accompany a "yes" or "maybe" only — on a "no" they are
+        # the noise the dropped head counts used to manufacture ("two people
+        # are not coming with me"), refused at the API. stay_included's shape.
+        on_a_no = await scalar(
+            conn,
+            "SELECT count(*) FROM rsvp_companions c JOIN rsvps r ON r.id = c.rsvp_id "
+            "WHERE r.response = 'no'",
+        )
+        ck.check(
+            on_a_no == 0,
+            "no declined RSVP carries companions",
+            f"{on_a_no} companion row(s) hanging off a 'no'",
+        )
+    else:
+        ck.check(False, "companion integrity", "rsvp_companions table missing")
 
     print("\n-- pending invitation integrity (CK-25) --")
     if "gathering_invitations_pending" in tables:

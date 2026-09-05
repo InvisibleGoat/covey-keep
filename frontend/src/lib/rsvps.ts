@@ -14,10 +14,12 @@ export interface OwnRsvp {
   occurrence_id: string
   response: string
   stay_included: boolean
-  adult_count: number
-  child_count: number
+  // Named companions (CK-29): the people you declared you're bringing —
+  // names, nothing more. Replaced wholesale on every write.
+  companions: string[]
   arrival_time: string | null
   created_at: string
+  updated_at: string | null
 }
 
 export interface RsvpListRow {
@@ -25,8 +27,10 @@ export interface RsvpListRow {
   display_name: string
   response: string
   stay_included: boolean
-  adult_count: number
-  child_count: number
+  companions: string[]
+  // Computed server-side at read time — the row's person plus their
+  // companions. Never stored, never typed by anyone.
+  total: number
   arrival_time: string | null
 }
 
@@ -59,6 +63,16 @@ export const RSVP_LIST_VISIBILITIES: { value: string; label: string }[] = [
 
 export function rsvpListVisibilityLabel(value: string): string {
   return RSVP_LIST_VISIBILITIES.find((v) => v.value === value)?.label ?? value
+}
+
+// "Store who, compute how many" (CK-29): the headline number the host reads
+// is derived from the named people on the "Going" rows — each row's `total`
+// is computed server-side from its names, and this sums them. A count nobody
+// typed cannot disagree with the list of names beside it.
+export function totalGoing(rows: RsvpListRow[]): number {
+  return rows
+    .filter((row) => row.response === 'yes')
+    .reduce((sum, row) => sum + row.total, 0)
 }
 
 // "15:30:00" (the API's bare-time serialization) → "15:30" for a type="time"

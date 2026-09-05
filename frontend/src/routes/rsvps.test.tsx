@@ -1,11 +1,15 @@
-// CK-27 RSVP-surface pins: the block is collapsed until opened (the CK-25
-// pattern — the detail page stays one request); an unanswered occurrence is
-// unanswered, never a defaulted "no"; keep-me-included surfaces only with
-// "can't make it" and goes out false otherwise; the arrival time is sent
-// EXACTLY as typed under a profile zone forced to differ from the runner's
-// (the STEP-5 trap, pinned at the component boundary); the roster renders per
-// the visibility setting with display names and counts only; and the admin's
-// edit form carries the visibility selector whose change rides the PATCH.
+// CK-27 RSVP-surface pins (companions since CK-29): the block is collapsed
+// until opened (the CK-25 pattern — the detail page stays one request); an
+// unanswered occurrence is unanswered, never a defaulted "no"; keep-me-
+// included surfaces only with "can't make it" and goes out false otherwise;
+// the arrival time is sent EXACTLY as typed under a profile zone forced to
+// differ from the runner's (the STEP-5 trap, pinned at the component
+// boundary); companions are an add/remove list of NAMES — empty by default
+// (adding nobody costs no clicks), riding every save wholesale, with an
+// added-but-empty row omitted and counting as no change; the roster renders
+// per the visibility setting with each person's companions beneath and the
+// host's total computed from the names; and the admin's edit form carries
+// the visibility selector whose change rides the PATCH.
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
@@ -71,10 +75,10 @@ const ownYes = {
   occurrence_id: 'occ-1',
   response: 'yes',
   stay_included: false,
-  adult_count: 1,
-  child_count: 0,
+  companions: [],
   arrival_time: '15:30:00',
   created_at: '2026-09-01T12:00:00+00:00',
+  updated_at: null,
 }
 
 interface StubRoute {
@@ -175,8 +179,7 @@ test('keep-me-included surfaces only with "can\'t make it", and rides the body o
     expect(JSON.parse(init.body as string)).toEqual({
       response: 'no',
       stay_included: true,
-      adult_count: 1,
-      child_count: 0,
+      companions: [],
     })
   })
 })
@@ -224,8 +227,7 @@ test('the arrival time goes out exactly as typed under a differing profile zone,
     expect(JSON.parse(init.body as string)).toEqual({
       response: 'yes',
       stay_included: false,
-      adult_count: 1,
-      child_count: 0,
+      companions: [],
       arrival_time: '16:45',
     })
   })
@@ -261,7 +263,10 @@ test('HOST_ONLY as a non-admin: the caller still sees their own answer, no roste
   expect(screen.getByText('Only the host sees the full list of answers.')).toBeTruthy()
 })
 
-test('the INVITEES roster renders display names, answers, counts, and arrival — nothing more', async () => {
+test("the roster renders each person's companions beneath them, and the host sees the total computed from the names", async () => {
+  // detailBody's host is acct-1 — the signed-in person — so the total line
+  // (host-only) must render, derived from the "Going" rows: grandma plus her
+  // two named companions is 3; the declined row adds nothing.
   stubRoutes([
     { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
     {
@@ -277,8 +282,8 @@ test('the INVITEES roster renders display names, answers, counts, and arrival �
               display_name: 'grandma',
               response: 'yes',
               stay_included: false,
-              adult_count: 2,
-              child_count: 1,
+              companions: ['Nana Pearl', 'Milo'],
+              total: 3,
               arrival_time: '15:30:00',
             },
             {
@@ -286,8 +291,8 @@ test('the INVITEES roster renders display names, answers, counts, and arrival �
               display_name: 'alaska-cousin',
               response: 'no',
               stay_included: true,
-              adult_count: 1,
-              child_count: 0,
+              companions: [],
+              total: 1,
               arrival_time: null,
             },
           ],
@@ -300,10 +305,113 @@ test('the INVITEES roster renders display names, answers, counts, and arrival �
   fireEvent.click(screen.getByRole('button', { name: /rsvp and who's coming/i }))
 
   expect(await screen.findByText("Who's coming")).toBeTruthy()
-  expect(screen.getByText(/grandma — Going — 2 adults, 1 child, arriving/)).toBeTruthy()
+  expect(screen.getByText(/grandma — Going, arriving/)).toBeTruthy()
+  const companionList = screen.getByRole('list', { name: 'Coming with grandma' })
+  expect(companionList.textContent).toContain('Nana Pearl')
+  expect(companionList.textContent).toContain('Milo')
   expect(
     screen.getByText(/alaska-cousin — Can't make it \(staying in the loop\)/),
   ).toBeTruthy()
+  expect(screen.getByText(/Total going: 3 people — counted from the names\./)).toBeTruthy()
+})
+
+test('"Bringing anyone?" builds the body: added names ride the save, and a removed name leaves the next write', async () => {
+  // The GET reflects the last save (the block re-fetches after every
+  // successful mutation — optimistic-free), so the second edit starts from
+  // the saved names.
+  let saved: unknown = null
+  const mock = stubRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
+    {
+      method: 'GET',
+      path: '/occurrences/occ-1/rsvps',
+      response: () => json(200, { visibility: 'INVITEES', own: saved, rsvps: [] }),
+    },
+    {
+      method: 'PUT',
+      path: '/occurrences/occ-1/rsvp',
+      response: () => {
+        saved = { ...ownYes, arrival_time: null, companions: ['Nana Pearl', 'Milo'] }
+        return json(200, saved)
+      },
+    },
+  ])
+
+  renderDetail()
+  await screen.findByText('Test Potluck')
+  fireEvent.click(screen.getByRole('button', { name: /rsvp and who's coming/i }))
+  await screen.findByText("You haven't answered yet.")
+
+  fireEvent.click(screen.getByLabelText('Going'))
+  fireEvent.click(screen.getByRole('button', { name: /add someone/i }))
+  fireEvent.click(screen.getByRole('button', { name: /add someone/i }))
+  const nameInputs = screen.getAllByLabelText('Their name') as HTMLInputElement[]
+  fireEvent.change(nameInputs[0], { target: { value: 'Nana Pearl' } })
+  fireEvent.change(nameInputs[1], { target: { value: 'Milo' } })
+  fireEvent.click(screen.getByRole('button', { name: /send rsvp/i }))
+
+  await waitFor(() => {
+    const puts = mock.mock.calls.filter(
+      ([, init]) => (init as RequestInit | undefined)?.method === 'PUT',
+    )
+    expect(puts).toHaveLength(1)
+    const [, init] = puts[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({
+      response: 'yes',
+      stay_included: false,
+      companions: ['Nana Pearl', 'Milo'],
+    })
+  })
+
+  // The block re-fetched the saved answer; edit from there. Remove one: the
+  // next save carries the survivor only — the whole list, every save,
+  // wholesale.
+  const update = await screen.findByRole('button', { name: /update rsvp/i })
+  await waitFor(() => {
+    expect(screen.getAllByLabelText('Their name')).toHaveLength(2)
+  })
+  fireEvent.click(screen.getAllByRole('button', { name: /^remove$/i })[0])
+  fireEvent.click(update)
+  await waitFor(() => {
+    const puts = mock.mock.calls.filter(
+      ([, init]) => (init as RequestInit | undefined)?.method === 'PUT',
+    )
+    expect(puts).toHaveLength(2)
+    const [, init] = puts[1] as unknown as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({
+      response: 'yes',
+      stay_included: false,
+      companions: ['Milo'],
+    })
+  })
+})
+
+test('an added-but-empty companion row is not a change: it is omitted from the send and leaves save disabled', async () => {
+  stubRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
+    {
+      method: 'GET',
+      path: '/occurrences/occ-1/rsvps',
+      response: () => json(200, { visibility: 'INVITEES', own: ownYes, rsvps: [] }),
+    },
+  ])
+
+  renderDetail()
+  await screen.findByText('Test Potluck')
+  fireEvent.click(screen.getByRole('button', { name: /rsvp and who's coming/i }))
+  await screen.findByLabelText(/arriving around/i)
+
+  // Saved answer loaded, nothing changed yet: no send to make.
+  const update = screen.getByRole('button', { name: /update rsvp/i }) as HTMLButtonElement
+  expect(update.disabled).toBe(true)
+
+  // An empty row is "no entry", not a value — still nothing to send.
+  fireEvent.click(screen.getByRole('button', { name: /add someone/i }))
+  expect(update.disabled).toBe(true)
+
+  // Typing a name is a change.
+  fireEvent.change(screen.getByLabelText('Their name'), { target: { value: 'Milo' } })
+  expect(update.disabled).toBe(false)
 })
 
 test("the admin's edit form carries the visibility selector, and its change rides the PATCH", async () => {

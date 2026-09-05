@@ -6,7 +6,7 @@
 // the clock silently for anyone whose profile zone differs from the venue's.
 import { expect, test } from 'vitest'
 import { wallClockToInstant } from './datetime'
-import { formatArrivalTime, timeForInput } from './rsvps'
+import { formatArrivalTime, timeForInput, totalGoing, type RsvpListRow } from './rsvps'
 
 const runnerZone = Intl.DateTimeFormat().resolvedOptions().timeZone
 // Fixed-offset zones (no DST): whichever the runner is in, the other is used.
@@ -31,6 +31,30 @@ test('formatArrivalTime renders the wall clock itself, whatever zone the runner 
   expect(formatArrivalTime('15:30')).toMatch(/3:30|15:30/)
   expect(formatArrivalTime('15:30:00')).toMatch(/3:30|15:30/)
   expect(formatArrivalTime('00:05')).toMatch(/12:05|0:05|00:05/)
+})
+
+test('totalGoing sums the "Going" rows\' server-computed totals — names, never typed counts (CK-29)', () => {
+  const row = (over: Partial<RsvpListRow>): RsvpListRow => ({
+    id: 'r',
+    display_name: 'someone',
+    response: 'yes',
+    stay_included: false,
+    companions: [],
+    total: 1,
+    arrival_time: null,
+    ...over,
+  })
+  expect(totalGoing([])).toBe(0)
+  expect(
+    totalGoing([
+      row({ companions: ['Nana Pearl', 'Milo'], total: 3 }),
+      row({ id: 'r2' }),
+      // Neither a "maybe" nor a declined row counts toward the number the
+      // host caters for.
+      row({ id: 'r3', response: 'maybe', companions: ['Ada'], total: 2 }),
+      row({ id: 'r4', response: 'no', total: 1 }),
+    ]),
+  ).toBe(4)
 })
 
 test('the CK-17 conversion is exactly what arrival_time must never get: it shifts the clock', () => {
