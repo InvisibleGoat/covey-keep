@@ -27,7 +27,11 @@ export interface RsvpListRow {
   display_name: string
   response: string
   stay_included: boolean
-  companions: string[]
+  // Under ATTENDEES a non-host caller gets null (CK-30): the names are
+  // withheld — a second-order disclosure nobody opted into — while `total`
+  // still counts the real party. Null, never [], so "not shown" can never
+  // read as "brought nobody". The caller's own names always ride `own`.
+  companions: string[] | null
   // Computed server-side at read time — the row's person plus their
   // companions. Never stored, never typed by anyone.
   total: number

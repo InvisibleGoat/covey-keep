@@ -51,6 +51,12 @@ the CALLER always sees their own RSVP via `own` (no one is locked out of
 their own answer). List rows carry display names, companion names, and the
 computed total — an email address appears in no response body (the CK-25
 roster rule, with more force here because more people read this list).
+Under ATTENDEES, companion names are withheld from non-host callers
+(CK-30, decided 2026-09-06): the gate was written when the roster held
+integers, and after CK-29 it held names — the roster and the computed
+totals stay ("three going" is what the mode exists to give), the names of
+other attendees' companions do not; roster rows carry companions: null
+there, and `own` stays complete in every mode.
 
 arrival_time is a BARE time of day on the occurrence's own day, already
 relative to the zone that occurrence displays in — no date, no zone. The
@@ -196,17 +202,29 @@ def _rsvp_body(row: RSVP, companions: list[str]) -> dict:
     }
 
 
-def _list_row(row: RSVP, display_name: str, companions: list[str]) -> dict:
+def _list_row(
+    row: RSVP,
+    display_name: str,
+    companions: list[str],
+    *,
+    include_companions: bool = True,
+) -> dict:
     """A roster entry: display name, the answer's substance, and the party it
     declares — never an email, never a person or account id. `total` is
     COMPUTED here, at read time, from the named people (the row's person plus
-    their companions); it is never stored and never accepted from a client."""
+    their companions); it is never stored and never accepted from a client.
+
+    Under ATTENDEES a non-host caller gets `companions: null` (CK-30): the
+    total still counts the real party — "three going" is the information the
+    mode exists to give — but the NAMES are withheld. Null, never an empty
+    list: an empty list would claim "brought nobody" about a row whose names
+    are merely not being shown."""
     return {
         "id": str(row.id),
         "display_name": display_name,
         "response": row.response.value,
         "stay_included": row.stay_included,
-        "companions": companions,
+        "companions": companions if include_companions else None,
         "total": 1 + len(companions),
         "arrival_time": row.arrival_time.isoformat() if row.arrival_time is not None else None,
     }
@@ -351,6 +369,15 @@ async def list_rsvps(
             and own_row.response == RSVPResponse.YES
         )
     )
+    # ATTENDEES admits every attendee to the roster, and since CK-29 the
+    # roster's companions are NAMES — children's first names among them — a
+    # second-order disclosure nobody opted into under a setting written when
+    # the field held integers. Decided 2026-09-06 (CK-30): under ATTENDEES
+    # the roster keeps who answered and the computed totals, and companion
+    # NAMES are withheld from non-host callers. The host's floor is
+    # untouched (full list in every mode), and `own` below is deliberately
+    # ungated — the caller typed those names.
+    include_companions = is_host or visibility != RSVPListVisibility.ATTENDEES
     return {
         "visibility": visibility.value,
         "own": (
@@ -360,7 +387,12 @@ async def list_rsvps(
         ),
         "rsvps": (
             [
-                _list_row(row, name, companions_by_rsvp.get(row.id, []))
+                _list_row(
+                    row,
+                    name,
+                    companions_by_rsvp.get(row.id, []),
+                    include_companions=include_companions,
+                )
                 for row, name in rows
             ]
             if may_see_list

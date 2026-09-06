@@ -435,6 +435,96 @@ test('the last-occurrence refusal renders beside the remove control, with the er
   expect(remove.getAttribute('aria-describedby')).toBe('error-occ-1-occurrence_id')
   expect(error.getAttribute('role')).toBe('alert')
   expect(error.className).toContain('form-error')
+  // The OTHER refusal's affordance never appears here: a last-occurrence 422
+  // is not confirmable, and no flag can make it so (CK-30).
+  expect(screen.queryByRole('button', { name: /remove it anyway/i })).toBeNull()
+})
+
+test('a date with answers refuses once with the count, and "Remove it anyway" carries the confirmation', async () => {
+  // The two refusals are machine-distinguished (CK-30): this one is a 409
+  // with the confirmation_required marker and the count, and the retry —
+  // a second, deliberate click — carries ?confirm=true.
+  const mock = stubFetchRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
+    {
+      method: 'DELETE',
+      path: '/occurrences/occ-1?confirm=true',
+      response: () => new Response(null, { status: 204 }),
+    },
+    {
+      method: 'DELETE',
+      path: '/occurrences/occ-1',
+      response: () =>
+        json(409, {
+          detail: {
+            code: 'confirmation_required',
+            rsvp_count: 3,
+            message:
+              '3 people have answered for this date; removing it discards their answers — repeat the request with confirm=true to proceed',
+          },
+        }),
+    },
+  ])
+  renderDetail()
+  fireEvent.click(await screen.findByRole('button', { name: /remove this date/i }))
+
+  // The warning states the human consequence — people, not rows.
+  const warning = await screen.findByText(
+    '3 people have answered for this date. Removing it discards their answers.',
+  )
+  expect(warning.getAttribute('role')).toBe('alert')
+
+  // Backing out clears the warning and sends nothing.
+  fireEvent.click(screen.getByRole('button', { name: /don't remove it/i }))
+  expect(screen.queryByText(/answered for this date/)).toBeNull()
+  expect(
+    mock.mock.calls.filter(
+      ([, init]) => (init as RequestInit | undefined)?.method === 'DELETE',
+    ),
+  ).toHaveLength(1)
+
+  // Asking again re-arms the warning; confirming carries ?confirm=true and
+  // the page re-fetches from the server.
+  fireEvent.click(screen.getByRole('button', { name: /remove this date/i }))
+  await screen.findByText(/3 people have answered for this date/)
+  fireEvent.click(screen.getByRole('button', { name: /remove it anyway/i }))
+  await waitFor(() => {
+    const deletes = mock.mock.calls.filter(
+      ([, init]) => (init as RequestInit | undefined)?.method === 'DELETE',
+    )
+    expect(deletes).toHaveLength(3)
+    expect(String(deletes[2]![0])).toContain('/occurrences/occ-1?confirm=true')
+  })
+  await waitFor(() => expect(screen.queryByText(/answered for this date/)).toBeNull())
+})
+
+test('a date with no answers is removed without a confirmation step', async () => {
+  // The warning appears only when there is something to warn about — the
+  // server deletes an unanswered date outright, and the control stays the
+  // single click it has been since CK-18.
+  const mock = stubFetchRoutes([
+    { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody()) },
+    {
+      method: 'DELETE',
+      path: '/occurrences/occ-1',
+      response: () => new Response(null, { status: 204 }),
+    },
+  ])
+  renderDetail()
+  fireEvent.click(await screen.findByRole('button', { name: /remove this date/i }))
+  // One unconfirmed DELETE, a re-fetch, and never a warning.
+  await waitFor(() => {
+    const gets = mock.mock.calls.filter(
+      ([, init]) => ((init as RequestInit | undefined)?.method ?? 'GET') === 'GET',
+    )
+    expect(gets).toHaveLength(2)
+  })
+  const deletes = mock.mock.calls.filter(
+    ([, init]) => (init as RequestInit | undefined)?.method === 'DELETE',
+  )
+  expect(deletes).toHaveLength(1)
+  expect(String(deletes[0]![0])).not.toContain('confirm')
+  expect(screen.queryByText(/answered for this date/)).toBeNull()
 })
 
 test('a successful save re-renders from the server, not from local form state', async () => {

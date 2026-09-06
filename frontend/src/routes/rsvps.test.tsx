@@ -445,3 +445,59 @@ test("the admin's edit form carries the visibility selector, and its change ride
     expect(JSON.parse(init.body as string)).toEqual({ rsvp_list_visibility: 'HOST_ONLY' })
   })
 })
+
+test('ATTENDEES withholds companion names but keeps the counts — and your own names stay yours', async () => {
+  // CK-30: under ATTENDEES the server sends companions: null on roster rows
+  // for a non-host — the roster and totals stay ("bringing 2" tells the
+  // mode's story), the names of other people's companions do not, and the
+  // caller's own names still populate their form via `own`.
+  stubRoutes([
+    {
+      method: 'GET',
+      path: '/gatherings/g-1',
+      response: () =>
+        json(200, detailBody({ host_account_id: 'acct-2', rsvp_list_visibility: 'ATTENDEES' })),
+    },
+    {
+      method: 'GET',
+      path: '/occurrences/occ-1/rsvps',
+      response: () =>
+        json(200, {
+          visibility: 'ATTENDEES',
+          own: { ...ownYes, companions: ['Junie'], arrival_time: null },
+          rsvps: [
+            {
+              id: 'r-2',
+              display_name: 'grandma',
+              response: 'yes',
+              stay_included: false,
+              companions: null,
+              total: 3,
+              arrival_time: null,
+            },
+            {
+              id: 'r-1',
+              display_name: 'Steven',
+              response: 'yes',
+              stay_included: false,
+              companions: null,
+              total: 2,
+              arrival_time: null,
+            },
+          ],
+        }),
+    },
+  ])
+
+  renderDetail()
+  await screen.findByText('Test Potluck')
+  fireEvent.click(screen.getByRole('button', { name: /rsvp and who's coming/i }))
+
+  // The roster renders, with the party size and without the names.
+  expect(await screen.findByText("Who's coming")).toBeTruthy()
+  expect(screen.getByText(/grandma — Going, bringing 2/)).toBeTruthy()
+  expect(screen.queryByRole('list', { name: /coming with/i })).toBeNull()
+  expect(screen.queryByText('Junie')).toBeNull()
+  // The caller's own companion still fills their form — `own` is never gated.
+  expect(screen.getByDisplayValue('Junie')).toBeTruthy()
+})

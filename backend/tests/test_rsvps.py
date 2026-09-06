@@ -16,11 +16,29 @@ always sees their own answer, and the admin is never shown less than
 HOST_ONLY would show; no email address appears in any RSVP response body;
 arrival_time is a bare time that round-trips untouched; and the guest
 columns stay NULL after every operation.
+
+CK-30's pins: under ATTENDEES the roster keeps attendee names and computed
+totals but carries companions: null for non-host callers (the names are a
+second-order disclosure nobody opted into) — INVITEES and HOST_ONLY are
+unchanged, the host's floor is unchanged, and `own` carries the caller's
+companions in every mode; and removing a date that has RSVPs refuses ONCE
+(409, the confirmation_required marker, the count) then obeys a
+?confirm=true — the RSVPs and their companions genuinely gone via the 0015
+cascade — while the last-occurrence refusal (a 422) ignores the flag
+entirely and stays machine-distinguishable from it.
 """
 
 from sqlalchemy import func, select
 
-from app.models import RSVP, Gathering, GatheringInvitation, Person, RSVPCompanion, RSVPListVisibility
+from app.models import (
+    RSVP,
+    Gathering,
+    GatheringInvitation,
+    Occurrence,
+    Person,
+    RSVPCompanion,
+    RSVPListVisibility,
+)
 from tests.test_gatherings import _create, _field_errors, _signed_in_headers
 from tests.test_invitations import _accept, _invite_token
 
@@ -586,3 +604,176 @@ async def test_unanswered_is_unanswered_never_a_defaulted_no(client, capsys):
     # the roster shows only people who actually answered.
     assert view["own"] is None
     assert [row["display_name"] for row in view["rsvps"]] == ["asker"]
+
+
+# --- CK-30: companions out of ATTENDEES; a date that can be removed ----------
+
+
+async def test_attendees_suppresses_companion_names_but_keeps_totals(client, capsys):
+    """Under ATTENDEES every attendee reads the roster — and since CK-29 its
+    companions are NAMES, children's first names among them: a second-order
+    disclosure nobody opted into under a setting written when the field held
+    integers (decided 2026-09-06). The roster stays (who answered), the
+    totals stay ("three going" is the information the mode exists to give),
+    the names go: companions is null — never [], which would claim "brought
+    nobody" about a row whose names are merely withheld. The host still sees
+    everything (the HOST_ONLY floor), INVITEES and HOST_ONLY are unchanged,
+    and the caller's own names ride `own` in EVERY mode — they typed them."""
+    headers_admin, headers_invitee, created = await _gathering_with_invitee(
+        client, capsys, "narrow-host@example.com", "attendee@example.com"
+    )
+    occurrence_id = created["occurrences"][0]["id"]
+    await _put_rsvp(
+        client, headers_admin, occurrence_id,
+        {"response": "yes", "companions": ["Nana Pearl", "Milo"]},
+    )
+    await _put_rsvp(
+        client, headers_invitee, occurrence_id,
+        {"response": "yes", "companions": ["Junie"]},
+    )
+    await _set_visibility(client, headers_admin, created["id"], "ATTENDEES")
+
+    view = await _get_rsvps(client, headers_invitee, occurrence_id)
+    body = view.json()
+    by_name = {row["display_name"]: row for row in body["rsvps"]}
+    # The roster and its computed totals survive the narrowing…
+    assert set(by_name) == {"narrow-host", "attendee"}
+    assert by_name["narrow-host"]["total"] == 3
+    assert by_name["attendee"]["total"] == 2
+    # …the names do not: null on every row (the caller's own included — their
+    # names ride `own`), and the OTHER attendee's companion names appear
+    # nowhere in the response text.
+    assert by_name["narrow-host"]["companions"] is None
+    assert by_name["attendee"]["companions"] is None
+    assert "Nana Pearl" not in view.text and "Milo" not in view.text
+    # `own` is deliberately ungated — the caller typed these.
+    assert body["own"]["companions"] == ["Junie"]
+
+    # The host's floor: full list, names included, in this mode as in every
+    # other — a narrower setting must never show the host less.
+    host_view = (await _get_rsvps(client, headers_admin, occurrence_id)).json()
+    host_by_name = {row["display_name"]: row for row in host_view["rsvps"]}
+    assert host_by_name["narrow-host"]["companions"] == ["Nana Pearl", "Milo"]
+    assert host_by_name["attendee"]["companions"] == ["Junie"]
+
+    # HOST_ONLY unchanged: no roster for the invitee, own still complete.
+    await _set_visibility(client, headers_admin, created["id"], "HOST_ONLY")
+    hidden = (await _get_rsvps(client, headers_invitee, occurrence_id)).json()
+    assert hidden["rsvps"] == []
+    assert hidden["own"]["companions"] == ["Junie"]
+
+    # INVITEES unchanged: the suppression is ATTENDEES-only, so the names
+    # come back — a suppression leaking into this mode fails here.
+    await _set_visibility(client, headers_admin, created["id"], "INVITEES")
+    wide = (await _get_rsvps(client, headers_invitee, occurrence_id)).json()
+    wide_by_name = {row["display_name"]: row for row in wide["rsvps"]}
+    assert wide_by_name["narrow-host"]["companions"] == ["Nana Pearl", "Milo"]
+    assert wide["own"]["companions"] == ["Junie"]
+
+
+async def test_delete_occurrence_with_rsvps_refuses_once_then_obeys(
+    client, capsys, db_session_factory
+):
+    """Removing a date somebody answered used to 500 (a bare db.delete against
+    an FK with no ondelete — live since CK-27). Now it refuses ONCE — a 409
+    carrying the confirmation_required marker and how many answers would be
+    discarded — and a repeat with ?confirm=true proceeds: the occurrence,
+    its RSVPs, and (transitively) their companions genuinely gone, with the
+    other dates' answers untouched. A date with NO answers deletes without
+    any confirmation step — the warning appears only when there is something
+    to warn about."""
+    headers_admin = await _signed_in_headers(client, capsys, "remover@example.com")
+    created = await _create(
+        client,
+        headers_admin,
+        occurrences=[
+            {"starts_at": "2026-09-01T18:00:00+00:00"},
+            {"starts_at": "2026-09-08T18:00:00+00:00"},
+            {"starts_at": "2026-09-15T18:00:00+00:00"},
+        ],
+    )
+    token = await _invite_token(
+        client, capsys, headers_admin, created["id"], "answered@example.com"
+    )
+    headers_invitee = await _signed_in_headers(client, capsys, "answered@example.com")
+    await _accept(client, headers_invitee, token)
+    first_id, second_id, third_id = (o["id"] for o in created["occurrences"])
+
+    # Two answers on the first date, one on the second, none on the third.
+    await _put_rsvp(
+        client, headers_admin, first_id,
+        {"response": "yes", "companions": ["Nana Pearl", "Milo"]},
+    )
+    await _put_rsvp(
+        client, headers_invitee, first_id, {"response": "yes", "companions": ["Junie"]}
+    )
+    await _put_rsvp(
+        client, headers_admin, second_id, {"response": "yes", "companions": ["Milo"]}
+    )
+
+    # No answers: no confirmation step — deletes as it always has.
+    assert (
+        await client.delete(f"/occurrences/{third_id}", headers=headers_admin)
+    ).status_code == 204
+
+    # Answers: refused once, with the marker and the count — and nothing
+    # deleted by the refusal.
+    refused = await client.delete(f"/occurrences/{first_id}", headers=headers_admin)
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "confirmation_required"
+    assert refused.json()["detail"]["rsvp_count"] == 2
+    async with db_session_factory() as db:
+        surviving = (await db.execute(select(Occurrence))).scalars().all()
+        assert first_id in {str(o.id) for o in surviving}
+        assert (await db.scalar(select(func.count()).select_from(RSVP))) == 3
+        assert (
+            await db.scalar(select(func.count()).select_from(RSVPCompanion))
+        ) == 4
+
+    # Confirmed: the date goes, its answers and their companions with it —
+    # and ONLY its: the second date's answer and companion survive.
+    assert (
+        await client.delete(
+            f"/occurrences/{first_id}?confirm=true", headers=headers_admin
+        )
+    ).status_code == 204
+    async with db_session_factory() as db:
+        surviving = (await db.execute(select(Occurrence))).scalars().all()
+        assert first_id not in {str(o.id) for o in surviving}
+        remaining_rsvps = (await db.execute(select(RSVP))).scalars().all()
+        assert [str(r.occurrence_id) for r in remaining_rsvps] == [second_id]
+        remaining_companions = (
+            (await db.execute(select(RSVPCompanion))).scalars().all()
+        )
+        assert [c.name for c in remaining_companions] == ["Milo"]
+
+
+async def test_last_occurrence_refusal_ignores_confirmation_and_stays_distinct(
+    client, capsys
+):
+    """The endpoint's OTHER refusal is not confirmable: a gathering with no
+    dates is not a state this product has. The last-occurrence check runs
+    before anything reads the flag, so on a date that is both the last one
+    AND has answers, the 422 fires — never the 409 — and ?confirm=true
+    changes nothing. The two refusals stay machine-distinguishable: 422
+    field error vs 409 marker, never wording."""
+    headers = await _signed_in_headers(client, capsys, "lone-date@example.com")
+    created = await _create(client, headers)
+    occurrence_id = created["occurrences"][0]["id"]
+    await _put_rsvp(client, headers, occurrence_id, RSVP_YES)
+
+    # Both refusals' preconditions hold; the last-occurrence one wins.
+    unconfirmed = await client.delete(f"/occurrences/{occurrence_id}", headers=headers)
+    assert unconfirmed.status_code == 422
+    assert "occurrence_id" in _field_errors(unconfirmed)
+
+    # The flag never reaches it.
+    confirmed = await client.delete(
+        f"/occurrences/{occurrence_id}?confirm=true", headers=headers
+    )
+    assert confirmed.status_code == 422
+    assert "occurrence_id" in _field_errors(confirmed)
+
+    # And nothing was deleted by either attempt.
+    own = (await _get_rsvps(client, headers, occurrence_id)).json()["own"]
+    assert own is not None and own["response"] == "yes"

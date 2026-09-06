@@ -460,10 +460,17 @@ function OccurrenceRsvp({
                       <li key={row.id}>
                         {row.display_name} — {rsvpResponseLabel(row.response)}
                         {row.stay_included ? ' (staying in the loop)' : ''}
+                        {/* Companions withheld (null — ATTENDEES, CK-30): the
+                            count still tells the mode's story, the names
+                            don't. Distinct from [] — "brought nobody" shows
+                            nothing at all. */}
+                        {row.companions === null && row.total > 1
+                          ? `, bringing ${row.total - 1}`
+                          : ''}
                         {row.arrival_time
                           ? `, arriving ${formatArrivalTime(row.arrival_time)}`
                           : ''}
-                        {row.companions.length > 0 && (
+                        {row.companions !== null && row.companions.length > 0 && (
                           <ul
                             className="companion-list"
                             aria-label={`Coming with ${row.display_name}`}
@@ -530,6 +537,14 @@ export function GatheringDetail() {
   const [removeErrors, setRemoveErrors] = useState<{
     occurrenceId: string
     errors: FormErrors
+  } | null>(null)
+  // The CK-30 confirmation step: a date somebody answered refuses once (a 409
+  // with the confirmation_required marker and the count), and the warning
+  // renders beside the control with an explicit "remove anyway". A date with
+  // no answers never reaches this state — the server deletes it outright.
+  const [confirmRemove, setConfirmRemove] = useState<{
+    occurrenceId: string
+    rsvpCount: number
   } | null>(null)
 
   // The invitations section (CK-25, admin only) is COLLAPSED by default and
@@ -807,19 +822,40 @@ export function GatheringDetail() {
   // Deliberately not disabled when one date remains: the server owns the
   // last-occurrence rule, refuses with a 422, and its reason renders beside
   // this control — which is why the refusal surface waited for this phase.
-  async function removeOccurrence(occurrenceId: string) {
+  // Since CK-30 the endpoint carries a SECOND refusal, machine-distinguished
+  // by its status and marker, never by wording: a date somebody answered
+  // draws a 409 with `confirmation_required` and the count, and the retry
+  // carries ?confirm=true. The last-occurrence 422 stays on the formErrors
+  // path and must never gain a confirmation affordance.
+  async function removeOccurrence(occurrenceId: string, confirmed = false) {
     setRemoveErrors(null)
+    setConfirmRemove(null)
     try {
-      const response = await authFetch(`/occurrences/${occurrenceId}`, { method: 'DELETE' })
+      const response = await authFetch(
+        `/occurrences/${occurrenceId}${confirmed ? '?confirm=true' : ''}`,
+        { method: 'DELETE' },
+      )
       if (!alive.current) return
       if (response.status === 204) {
         setReloadKey((key) => key + 1)
-      } else {
-        setRemoveErrors({
-          occurrenceId,
-          errors: await errorsFromResponse(response, ['occurrence_id']),
-        })
+        return
       }
+      if (response.status === 409) {
+        const body = (await response.json().catch(() => null)) as {
+          detail?: { code?: string; rsvp_count?: number }
+        } | null
+        if (
+          body?.detail?.code === 'confirmation_required' &&
+          typeof body.detail.rsvp_count === 'number'
+        ) {
+          setConfirmRemove({ occurrenceId, rsvpCount: body.detail.rsvp_count })
+          return
+        }
+      }
+      setRemoveErrors({
+        occurrenceId,
+        errors: await errorsFromResponse(response, ['occurrence_id']),
+      })
     } catch {
       if (alive.current) setRemoveErrors({ occurrenceId, errors: networkErrors() })
     }
@@ -1052,6 +1088,32 @@ export function GatheringDetail() {
                             scope={occurrence.id}
                           />
                           <FormLevelErrors errors={removeErrors.errors} />
+                        </>
+                      )}
+                      {confirmRemove?.occurrenceId === occurrence.id && (
+                        <>
+                          {/* The human consequence, in people, not rows —
+                              and removing it is a deliberate second click,
+                              never a default (CK-30). */}
+                          <p className="form-error" role="alert">
+                            <span aria-hidden="true">⚠ </span>
+                            {confirmRemove.rsvpCount === 1
+                              ? '1 person has answered for this date. Removing it discards their answer.'
+                              : `${confirmRemove.rsvpCount} people have answered for this date. Removing it discards their answers.`}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void removeOccurrence(occurrence.id, true)}
+                          >
+                            Remove it anyway
+                          </button>{' '}
+                          <button
+                            type="button"
+                            className="link-button"
+                            onClick={() => setConfirmRemove(null)}
+                          >
+                            Don't remove it
+                          </button>
                         </>
                       )}
                     </>

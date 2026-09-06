@@ -59,6 +59,7 @@ from app.models import (
     KeptGathering,
     Occurrence,
     PublicationState,
+    RSVP,
     RSVPListVisibility,
 )
 from app.services.keeping import keep
@@ -76,6 +77,14 @@ MAX_MAP_URL_LENGTH = 2000
 # (keeper record §9.2: beyond that is a new season). App-layer by design — the
 # schema deliberately treats no gathering type specially, and must not start.
 SEASON_MAX_SPAN = timedelta(days=365)
+
+# The stable marker on the confirmable refusal (CK-30): DELETE /occurrences
+# refuses a date that has RSVPs with a 409 carrying this code and the count,
+# and proceeds when the request repeats with ?confirm=true. The frontend
+# switches on this marker, never on the message's wording — the OTHER refusal
+# on that endpoint (the last-occurrence rule, a 422) is not confirmable, and
+# the two must stay machine-distinguishable.
+CONFIRMATION_REQUIRED = "confirmation_required"
 
 
 def _not_found() -> HTTPException:
@@ -715,15 +724,59 @@ async def patch_occurrence(
 @router.delete("/occurrences/{occurrence_id}", status_code=204)
 async def delete_occurrence(
     occurrence_id: UUID,
+    confirm: bool = False,
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    """Remove a date. Two refusals live here, and they are deliberately
+    machine-distinguishable (CK-30) — the frontend must know which one it is
+    holding without parsing prose:
+
+    - The last-occurrence rule: a 422 field error (the shape it has had since
+      CK-16), and NEVER confirmable. It runs first, before anything reads
+      `confirm`, so no flag can reach past it — a host confirming their way
+      through the RSVP warning must never accidentally delete the only date.
+    - The RSVP warning: a date somebody has answered refuses ONCE with a 409
+      carrying the stable marker `confirmation_required` and the count of
+      answers that would be discarded; repeating the request with
+      `?confirm=true` proceeds. Refusing outright would leave a host no way
+      to remove a date short of deleting the whole gathering; cascading
+      silently would destroy answers CK-27 deliberately preserved by shipping
+      no RSVP delete endpoint. So the host is told what they are about to
+      destroy, and then allowed to destroy it — the RSVPs (and, transitively,
+      their companions) go with the date via the 0015 FK. A date with no
+      answers needs no confirmation and deletes as it always has.
+    """
     occurrence, gathering = await _occurrence_for_admin(db, ctx, occurrence_id)
     remaining = await _sibling_starts(db, gathering.id, excluding=occurrence.id)
     if not remaining:
         # A gathering with no dates is not a state this product has.
         raise _field_422(
             "occurrence_id", "a gathering keeps at least one occurrence", where="path"
+        )
+    rsvp_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(RSVP)
+            .where(RSVP.occurrence_id == occurrence.id)
+        )
+    ).scalar_one()
+    if rsvp_count and not confirm:
+        # The count is people, not rows, to the reader: one row per answerer.
+        # Disclosed to the host only (the auth gate above), who always sees
+        # the full RSVP list in every visibility mode anyway.
+        noun = "person has" if rsvp_count == 1 else "people have"
+        raise HTTPException(
+            409,
+            detail={
+                "code": CONFIRMATION_REQUIRED,
+                "rsvp_count": rsvp_count,
+                "message": (
+                    f"{rsvp_count} {noun} answered for this date; removing it "
+                    "discards their answers — repeat the request with "
+                    "confirm=true to proceed"
+                ),
+            },
         )
     await db.delete(occurrence)
     await db.commit()

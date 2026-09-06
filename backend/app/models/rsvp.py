@@ -38,9 +38,14 @@ class RSVP(Base):
     )
 
     id: Mapped[UUID] = uuid_pk()
-    # You RSVP to a DATE, not to the gathering (CK-12).
+    # You RSVP to a DATE, not to the gathering (CK-12) — and an RSVP cannot
+    # outlive its date (0015/CK-30): a removed occurrence takes its RSVPs,
+    # whose companions then cascade transitively. Whether the delete is
+    # allowed to destroy answers is the endpoint's decision (it refuses once
+    # with a count, then obeys); the cascade only keeps the confirmed path
+    # from leaving rows that point at nothing.
     occurrence_id: Mapped[UUID] = mapped_column(
-        ForeignKey("occurrences.id"), nullable=False, index=True
+        ForeignKey("occurrences.id", ondelete="CASCADE"), nullable=False, index=True
     )
     person_id: Mapped[Optional[UUID]] = mapped_column(ForeignKey("people.id"), nullable=True)
     guest_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

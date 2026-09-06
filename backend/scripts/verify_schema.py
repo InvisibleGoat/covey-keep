@@ -60,7 +60,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0014"
+EXPECTED_REVISION = "0015"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -377,6 +377,31 @@ async def verify(conn, ck: Checks) -> None:
         companion_fk is not None and companion_fk[1] == "c",
         "companion rows are deleted with their RSVP (ON DELETE CASCADE)",
         f"delete rule is {companion_fk[1]!r}" if companion_fk else "FK missing",
+    )
+
+    print("\n-- rsvps follow their occurrence (0015) --")
+    # CK-30: an RSVP to a date cannot outlive the date. The FK carries the
+    # deletion story the handler used to be trusted to remember (a bare
+    # delete against the old no-ondelete FK was an IntegrityError-turned-500,
+    # live since CK-27); a deleted occurrence takes its RSVPs, whose
+    # companions then cascade transitively through the 0014 FK above.
+    rsvp_fk = (
+        await conn.execute(
+            text(
+                "SELECT confrelid::regclass::text, confdeltype::text FROM pg_constraint "
+                "WHERE conname = 'fk_rsvps_occurrence_id' AND contype = 'f'"
+            )
+        )
+    ).first()
+    ck.check(
+        rsvp_fk is not None and rsvp_fk[0] == "occurrences",
+        "rsvps.occurrence_id references occurrences",
+        "FK missing or pointing elsewhere",
+    )
+    ck.check(
+        rsvp_fk is not None and rsvp_fk[1] == "c",
+        "rsvps are deleted with their occurrence (ON DELETE CASCADE)",
+        f"delete rule is {rsvp_fk[1]!r}" if rsvp_fk else "FK missing",
     )
 
     print("\n-- groups steward -> admin rename (0009) --")
