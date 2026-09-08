@@ -10,7 +10,6 @@ from sqlalchemy import (
     Integer,
     Text,
     UniqueConstraint,
-    func,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -89,21 +88,25 @@ class Media(Base):
         ForeignKey("people.id"), nullable=True
     )
     guest_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    # Unchanged at 0016 and recorded as a finding for the intent phase: the
-    # row is now born at intent, before any upload, so a now() default here
-    # stamps intent time under a name that says otherwise. The phase that
-    # creates the row decides whether this is stamped at intent or at the
-    # `uploaded` transition (CK-33; WORKING-ON-NOW carries the item).
-    uploaded_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+    # Decided at CK-34 (0017): NULL while the row waits in `pending_upload`,
+    # stamped by the confirm step in the same transaction that moves status
+    # to `uploaded`, never touched again — claimed_at's shape. The row is
+    # born at intent, and that instant is already `created_at`; 0016's
+    # now() default stamped intent time under this name, and an `intent_at`
+    # rename would have been a second column carrying created_at's value.
+    uploaded_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     # Facts about the upload, fixed at intent (see the class docstring).
     upload_content_type: Mapped[str] = mapped_column(Text, nullable=False)
     upload_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     # The machine's gate. No server default, deliberately.
     status: Mapped[MediaStatus] = mapped_column(MEDIA_STATUS, nullable=False)
-    # Job bookkeeping (record §6.2). attempts counts from zero; the other
-    # three are NULL until the worker first touches the row.
+    # Job bookkeeping (record §6.2). attempts counts from zero; available_at
+    # is stamped by the confirm step (the claim predicate is
+    # `available_at <= now()`, so a confirmed row must carry one — CK-34);
+    # claimed_at and last_error are NULL until the worker first touches
+    # the row.
     attempts: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
     )

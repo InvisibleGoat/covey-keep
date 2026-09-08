@@ -140,6 +140,25 @@ async def test_job_columns_start_empty_and_attempts_starts_at_zero(db_session_fa
         assert media.last_error is None
 
 
+async def test_uploaded_at_is_nullable_with_no_default_and_null_at_intent(
+    db_session_factory,
+):
+    """0017 (CK-34): the row is born at intent, and that instant is already
+    created_at; uploaded_at is NULL until the confirm step verifies the
+    object and moves the rung — claimed_at's shape. 0001's NOT NULL DEFAULT
+    now() would have stamped intent time under a name that says otherwise."""
+    async with db_session_factory() as db:
+        media = await _columns(db, "media")
+        assert media["uploaded_at"] == ("YES", None)
+        gathering, _ = await _mk_gathering(db)
+        row = _media(gathering.id, status=MediaStatus.PENDING_UPLOAD)
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+        assert row.uploaded_at is None
+        assert row.created_at is not None
+
+
 # --- the shape: objects on the derivative rows, state on the photograph -------
 
 

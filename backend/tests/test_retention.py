@@ -13,12 +13,20 @@ that each endpoint actually calls it.
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+import pytest
 from sqlalchemy import func, select
 
 from app.api.auth import MAX_REQUESTS_PER_EMAIL, RATE_WINDOW
 from app.api.profile import EMAIL_CHANGE_TOKEN_TTL
-from app.models import EmailChangeRequest, MagicLinkToken, Person, Session, WebauthnChallenge
-from app.services.retention import PURGE_GRACE, purge_stale
+from app.models import (
+    EmailChangeRequest,
+    MagicLinkToken,
+    Media,
+    Person,
+    Session,
+    WebauthnChallenge,
+)
+from app.services.retention import EPHEMERAL_TABLES, PURGE_GRACE, purge_stale
 from tests.test_auth import _request_link, _sign_in
 from tests.test_email_change import _capture_change_link, _request_change, _signed_in_headers
 
@@ -131,6 +139,59 @@ async def test_a_grace_inside_the_rate_window_would_erase_the_tally(
         )
         await db.rollback()  # demonstrate the failure; never keep it
         assert removed == MAX_REQUESTS_PER_EMAIL - 1
+
+
+# --- The second invariant (CK-34): a content table is never purged whole -----
+
+
+async def test_purge_stale_refuses_a_content_table_without_a_criterion(db_session_factory):
+    # `media` holds published photographs beside abandoned intents, and age
+    # alone cannot tell them apart: a criterion-free purge would delete
+    # READY rows. The mechanism refuses BEFORE executing anything. The
+    # allowlist is exactly the four tables whose every row is ephemeral.
+    assert EPHEMERAL_TABLES == {
+        "magic_link_tokens",
+        "email_change_requests",
+        "webauthn_challenges",
+        "gathering_invitations_pending",
+    }
+    async with db_session_factory() as db:
+        with pytest.raises(ValueError, match="not an ephemeral table"):
+            await purge_stale(db, Media, Media.created_at, _now())
+
+
+async def test_a_where_criterion_narrows_the_purge(db_session_factory):
+    # The criterion is ANDed with the age test: only rows matching BOTH go.
+    # (Shown on an ephemeral table so no media fixture is needed here; the
+    # media-specific pin — a stale ready photograph survives the intent
+    # endpoint's reap — is in test_media_intents.py.)
+    now = _now()
+    stale = now - PURGE_GRACE - timedelta(minutes=1)
+    async with db_session_factory() as db:
+        db.add_all(
+            [
+                _magic_link_row(expires_at=stale, email="reap-me@example.com"),
+                _magic_link_row(expires_at=stale, email="keep-me@example.com"),
+                _magic_link_row(expires_at=now + timedelta(minutes=10), email="reap-me@example.com"),
+            ]
+        )
+        await db.commit()
+        removed = await purge_stale(
+            db,
+            MagicLinkToken,
+            MagicLinkToken.expires_at,
+            now,
+            where=[MagicLinkToken.email == "reap-me@example.com"],
+        )
+        await db.commit()
+        assert removed == 1
+        remaining = sorted(
+            (email, expires_at < now)
+            for email, expires_at in (
+                await db.execute(select(MagicLinkToken.email, MagicLinkToken.expires_at))
+            ).all()
+        )
+        assert remaining == [("keep-me@example.com", True), ("reap-me@example.com", False)]
 
 
 # --- Email-change rows -------------------------------------------------------

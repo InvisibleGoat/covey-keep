@@ -63,7 +63,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0016"
+EXPECTED_REVISION = "0017"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -318,10 +318,12 @@ async def verify(conn, ck: Checks) -> None:
             not_null=("gathering_id",),
             nullable=("occurrence_id",),
         )
-    # --- The media schema (0016, CK-32) — extends this block rather than
-    # opening a new one: the table has been here since 0001 and the media arc
-    # AMENDS it (pipeline record §10). Nothing counts rows: none exist until
-    # the intent endpoint (CK-33) writes the first one. --------------------
+    # --- The media schema (0016, CK-32; 0017, CK-34) — extends this block
+    # rather than opening a new one: the table has been here since 0001 and
+    # the media arc AMENDS it (pipeline record §10). Rows exist since CK-34's
+    # intent endpoint; the row count is informational below, and the
+    # data-integrity checks further down are properties of whatever rows
+    # exist, never counts (pending rows are reaped opportunistically). -----
     print("\n-- media: the status ladder (0016) --")
     # The media row IS the job (record §6.1): five rungs, in ladder order.
     media_status = await enum_labels(conn, "media_status")
@@ -352,6 +354,27 @@ async def verify(conn, ck: Checks) -> None:
         "media",
         not_null=("attempts",),
         nullable=("available_at", "claimed_at", "last_error"),
+    )
+
+    print("\n-- media: uploaded_at is stamped at confirm, never at intent (0017) --")
+    # The row is born at intent (that instant is created_at); uploaded_at is
+    # NULL until the confirm step verifies the object and moves the row to
+    # `uploaded` — claimed_at's shape. 0001's NOT NULL DEFAULT now() would
+    # stamp intent time under a name that says otherwise (CK-34).
+    assert_columns(ck, columns, "media", nullable=("uploaded_at",))
+    uploaded_at_default = (
+        await conn.execute(
+            text(
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'media' "
+                "AND column_name = 'uploaded_at'"
+            )
+        )
+    ).scalar()
+    ck.check(
+        uploaded_at_default is None,
+        "media.uploaded_at has no server default (the confirm step stamps it)",
+        f"default is {uploaded_at_default!r}",
     )
 
     print("\n-- media: the object columns live on the derivative rows (0016) --")
@@ -766,7 +789,7 @@ async def verify(conn, ck: Checks) -> None:
         # moves the media row to `ready`, so no derivative row ever hangs
         # off a photograph in any other rung. A row here means a worker
         # wrote around that — a half-published photograph. Vacuous until
-        # the worker exists (CK-34); written now because it is what will
+        # the worker exists (CK-35); written now because it is what will
         # matter. Detail prints the count only.
         premature = await scalar(
             conn,
@@ -780,6 +803,56 @@ async def verify(conn, ck: Checks) -> None:
         )
     else:
         ck.check(False, "media derivative integrity", "media/media_derivatives missing")
+
+    print("\n-- media upload integrity (CK-34) --")
+    if "media" in tables:
+        # Properties of whatever rows exist — never a count (pending rows
+        # are reaped opportunistically, the CK-24 rule). Detail prints the
+        # count only; a media row names a person and a gathering, and no
+        # column of it is ever printed.
+        # (1) uploaded_at is set when and only when the row has left
+        # pending_upload: the confirm step stamps it in the transaction that
+        # moves the rung, and nothing else writes it (0017).
+        stamp_mismatch = await scalar(
+            conn,
+            "SELECT count(*) FROM media "
+            "WHERE (status = 'pending_upload') <> (uploaded_at IS NULL)",
+        )
+        ck.check(
+            stamp_mismatch == 0,
+            "uploaded_at is set when and only when the row has left pending_upload",
+            f"{stamp_mismatch} media row(s) whose uploaded_at disagrees with status",
+        )
+        # (2) Every upload declares a size the intent endpoint would have
+        # accepted: positive and at most 25 MB (decimal — record §6.6). The
+        # presigned PUT signs the same number, so a row outside the bound
+        # was written around the endpoint.
+        out_of_bounds = await scalar(
+            conn,
+            "SELECT count(*) FROM media "
+            "WHERE upload_size_bytes <= 0 OR upload_size_bytes > 25000000",
+        )
+        ck.check(
+            out_of_bounds == 0,
+            "every media row declares a size within (0, 25 MB]",
+            f"{out_of_bounds} media row(s) outside the upload size bound",
+        )
+        # (3) Every upload declares an image type — video is refused at the
+        # intent endpoint (record §6.4), explicitly, never accepted-then-
+        # failed. A prefix match rather than the endpoint's exact allowlist:
+        # widening the allowlist within images must not fail a deployed
+        # verifier, but a video type must.
+        non_image = await scalar(
+            conn,
+            "SELECT count(*) FROM media WHERE upload_content_type NOT LIKE 'image/%'",
+        )
+        ck.check(
+            non_image == 0,
+            "every media row declares an image content type (video is refused at intent)",
+            f"{non_image} media row(s) with a non-image content type",
+        )
+    else:
+        ck.check(False, "media upload integrity", "media table missing")
 
     print("\n-- pending invitation integrity (CK-25) --")
     if "gathering_invitations_pending" in tables:
@@ -806,7 +879,10 @@ async def verify(conn, ck: Checks) -> None:
 
     # --- Informational -----------------------------------------------------
     print("\n-- row counts (informational, not assertions) --")
-    for table in ("people", "accounts", "gatherings", "kept_gatherings"):
+    # `media` joins the list at CK-34, the phase that first writes it: a
+    # count above zero is a fact to record against the baseline, never a
+    # failure — and pending rows come and go with the reap.
+    for table in ("people", "accounts", "gatherings", "kept_gatherings", "media"):
         if table in tables:
             ck.info(f"{table} rows", await scalar(conn, f"SELECT count(*) FROM {table}"))
         else:

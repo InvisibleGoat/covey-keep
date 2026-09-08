@@ -44,8 +44,16 @@ because this is where it is minted):
     redact the URL from their repr for the same reason: a repr lands in
     tracebacks, and a traceback lands in a log.
 
-No endpoint, no router, no FastAPI import: the callers are CK-34 (the
-intent endpoint and the confirm step) and the verifier script. botocore is
+The quarantine key layout lives here too (CK-34): `quarantine_key` is the
+one pure function of a media row's id that the intent endpoint signs a PUT
+for, the confirm step HEADs, and the worker (CK-35) reads and deletes —
+one home, imported by both services, so the two can never compute
+different keys. The object functions below still take a key rather than a
+row, because the verifier script writes its own test object under its own
+key and must not look like a photograph.
+
+No router, no FastAPI import: the callers are api/media.py (the intent
+endpoint and the confirm step, CK-34) and the verifier script. botocore is
 synchronous — presigning is pure computation (no network) and safe to call
 from async code; the object operations below block on the network, and an
 async caller runs them via asyncio.to_thread. Client construction loads the
@@ -59,6 +67,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Optional
+from uuid import UUID
 
 from botocore.config import Config
 from botocore.exceptions import ClientError
@@ -76,6 +85,23 @@ PRESIGN_TTL = timedelta(minutes=15)
 # botocore treats these HTTP statuses / codes as "the object is not there"
 # on a HEAD (no body, so the code is the bare status) and on a GET.
 _ABSENT_CODES = {"404", "NoSuchKey", "NotFound"}
+
+# The quarantine key prefix. The media row stores no key (schema-shape
+# record §5): the original's key is DERIVED from the row id, so nothing can
+# drift, and the bucket's lifecycle rule is bucket-wide so the layout is
+# free. The prefix keeps a photograph's object visibly apart from the
+# verifier's `verify-r2-credentials/` test objects in a bucket listing.
+QUARANTINE_PREFIX = "uploads/"
+
+
+def quarantine_key(media_id: UUID) -> str:
+    """The quarantine object key for one media row — a pure function of the
+    row's id and nothing else (no extension, no content type: the declared
+    type is advisory until the worker reads the bytes, and a key that
+    encoded it would be a second representation of a fact the row already
+    holds). The intent endpoint, the confirm step, and the worker all
+    derive the same key from the same id through this one function."""
+    return f"{QUARANTINE_PREFIX}{media_id}"
 
 
 def _client(access_key_id: str, secret_access_key: str, endpoint_url: str):
