@@ -48,6 +48,31 @@ class Settings(BaseSettings):
     email_api_key: str = ""
     email_from: str = ""
 
+    # Cloudflare R2 (CK-33): the endpoint, the two buckets, and the two
+    # web-service credentials (media pipeline record §11). ALL SEVEN REQUIRED,
+    # no defaults — decided, not accidental. email_api_key may default to ""
+    # because email_mode gives the empty value a meaning (console mode);
+    # nothing gates media, so an empty R2 value can only mean "misconfigured",
+    # and the only choice is WHERE that surfaces: at boot, in front of whoever
+    # deployed, or at the first upload intent, in front of a relative holding
+    # a phone. The session_secret precedent — fail at boot — wins, and it buys
+    # a check for free: a green deploy with these required proves the
+    # dashboard values are actually present (render.yaml declares the slots;
+    # it never populates them). The bucket names get no default either: a
+    # default naming the dev buckets is exactly the value a prod service
+    # would silently inherit. Local dev copies the seven from .env.example —
+    # real values only when exercising presigning (reuse the dashboard's two
+    # tokens; never mint a third); placeholders boot fine for everything else.
+    # The worker credential (both buckets) is NOT here and must never be:
+    # it belongs to the worker service's own environment (CK-35).
+    r2_endpoint_url: str
+    r2_bucket_quarantine: str
+    r2_bucket_published: str
+    r2_upload_access_key_id: str
+    r2_upload_secret_access_key: str
+    r2_serve_access_key_id: str
+    r2_serve_secret_access_key: str
+
     @field_validator("database_url")
     @classmethod
     def _force_asyncpg_scheme(cls, value: str) -> str:

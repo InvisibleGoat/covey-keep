@@ -26,6 +26,16 @@ os.environ["SESSION_SECRET"] = "test-session-secret-never-deployed"
 os.environ["APP_BASE_URL"] = "http://localhost:5173"
 os.environ["API_BASE_URL"] = "http://testserver"
 os.environ["EMAIL_MODE"] = "console"
+# R2 (CK-33): required settings, so the suite supplies them — placeholders on
+# a reserved TLD, so nothing here can ever reach a real endpoint. Presigning
+# needs no network; no test performs an object operation against these.
+os.environ["R2_ENDPOINT_URL"] = "https://r2.invalid"
+os.environ["R2_BUCKET_QUARANTINE"] = "test-quarantine"
+os.environ["R2_BUCKET_PUBLISHED"] = "test-published"
+os.environ["R2_UPLOAD_ACCESS_KEY_ID"] = "test-upload-key-id"
+os.environ["R2_UPLOAD_SECRET_ACCESS_KEY"] = "test-upload-secret-never-deployed"
+os.environ["R2_SERVE_ACCESS_KEY_ID"] = "test-serve-key-id"
+os.environ["R2_SERVE_SECRET_ACCESS_KEY"] = "test-serve-secret-never-deployed"
 
 import asyncpg  # noqa: E402
 import pytest  # noqa: E402

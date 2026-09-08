@@ -54,6 +54,36 @@ services:
       # service exists; the value is hand-set in the dashboard (CK-5 OOB step).
       - key: SESSION_SECRET
         sync: false
+      # Cloudflare R2 (CK-33; media pipeline record §11). These declarations
+      # CREATE NO VALUES and must not be expected to: all seven were hand-set
+      # in the dashboard on 2026-09-07, BEFORE these lines existed — the
+      # ordering the SESSION_SECRET note above makes mandatory. The dashboard
+      # is the running service's source of truth; the lines exist for the
+      # blueprint's completeness and for the prod service, which will be
+      # created from this file and will need its own values set the same way.
+      # Two bucket names are plain values (they are configuration, and they
+      # match the dashboard exactly). The endpoint URL is a slot: it carries
+      # the Cloudflare account id, which no file in either repo records, and a
+      # placeholder `value:` here would OVERWRITE the live value on the next
+      # blueprint sync. The two credentials are scoped differently on
+      # purpose — upload: quarantine only, read+write; serve: published only,
+      # read only — and scripts/verify_r2_credentials.py proves that split
+      # against the live buckets. The worker credential (both buckets) never
+      # enters this service: it belongs to the worker service, CK-35.
+      - key: R2_ENDPOINT_URL
+        sync: false
+      - key: R2_BUCKET_QUARANTINE
+        value: coveykeep-dev-quarantine
+      - key: R2_BUCKET_PUBLISHED
+        value: coveykeep-dev
+      - key: R2_UPLOAD_ACCESS_KEY_ID
+        sync: false
+      - key: R2_UPLOAD_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_SERVE_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SERVE_SECRET_ACCESS_KEY
+        sync: false
 
 databases:
   - name: covey-keep-db-dev

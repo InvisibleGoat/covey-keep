@@ -18,7 +18,9 @@ Usage (from the repo root or backend/):
 Target selection:
     VERIFY_DATABASE_URL   if set, the database to verify (Render's EXTERNAL
                           connection string when checking a deploy)
-    otherwise             the app's own DATABASE_URL from backend/.env
+    otherwise             the app's own DATABASE_URL — from the process
+                          environment (the Render Web Shell route, where no
+                          .env exists), else backend/.env
 
 **The credential is supplied by environment variable and never persisted.**
 Do not put a deployed connection string in .env, .env.example, render.yaml, a
@@ -49,20 +51,31 @@ from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 try:
     # Imported to REUSE the app's postgresql:// -> postgresql+asyncpg://
     # normalisation rather than reimplement it. Importing app.config also
-    # constructs the settings singleton, so backend/.env must be present —
-    # the same precondition uvicorn and alembic already have.
+    # constructs the settings singleton, so the required env surface must be
+    # present - in the process environment or backend/.env - the same
+    # precondition uvicorn and alembic already have.
     from app.config import Settings, settings as app_settings
 except Exception as exc:  # pragma: no cover - operator-facing guidance
     raise SystemExit(
         f"Could not load app.config ({exc.__class__.__name__}). "
-        "backend/.env must exist with the required env surface - see "
-        "backend/.env.example."
+        "The required env surface must be present in the process environment "
+        "or backend/.env - see backend/.env.example."
     )
 
 # The migration revision this verifier is written against.
 EXPECTED_REVISION = "0016"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
+
+
+def _database_url_source() -> str:
+    """Where Settings found DATABASE_URL: the process environment (Render's
+    Web Shell, or an exported shell) outranks backend/.env, so check it first."""
+    if any(name.upper() == "DATABASE_URL" for name in os.environ):
+        return "process environment"
+    if (BACKEND_DIR / ".env").exists():
+        return "backend/.env"
+    return "unknown"
 
 
 class Checks:
@@ -93,10 +106,11 @@ def resolve_target() -> tuple[str, dict, list[str]]:
     and any query parameters dropped (names only).
 
     The TLS handling is the confusing part of verifying a deploy. Render's
-    INTERNAL URL - the one config.py already normalises for the running app -
-    runs unencrypted inside Render's network and connects fine. The EXTERNAL
-    URL requires TLS and is handed out in libpq form, often with
-    `?sslmode=require`. asyncpg has no `sslmode` parameter (it takes `ssl`),
+    INTERNAL URL - the one config.py already normalises for the running app,
+    and the one the Web Shell route sees in the process environment - carries
+    no sslmode and connects fine (this script still asks for TLS on it, as
+    on any remote host - see the branch below). The EXTERNAL URL requires
+    TLS and is handed out in libpq form, often with `?sslmode=require`. asyncpg has no `sslmode` parameter (it takes `ssl`),
     and SQLAlchemy forwards leftover query parameters to the driver as keyword
     arguments - so passing the external URL through unchanged fails with an
     unexpected-keyword TypeError rather than anything that mentions SSL. Every
@@ -107,7 +121,10 @@ def resolve_target() -> tuple[str, dict, list[str]]:
     source = "VERIFY_DATABASE_URL"
     if not raw:
         raw = app_settings.database_url
-        source = "DATABASE_URL (backend/.env)"
+        # Report where the fallback actually came from (CK-33): on Render's
+        # Web Shell there is no .env — the value is in the process
+        # environment, which pydantic-settings reads ahead of the file.
+        source = f"DATABASE_URL ({_database_url_source()})"
 
     url = Settings._force_asyncpg_scheme(raw.strip())
 
@@ -131,8 +148,12 @@ def resolve_target() -> tuple[str, dict, list[str]]:
             connect_args["ssl"] = sslmode.lower()
         tls = sslmode.lower()
     elif (parts.hostname or "") not in LOCAL_HOSTS:
-        # A remote host with no sslmode given: Render's external endpoint
-        # refuses plaintext, so default to encrypted.
+        # A remote host with no sslmode given — Render's EXTERNAL endpoint
+        # (which refuses plaintext) and equally its INTERNAL host, the one
+        # the Web Shell route reaches through DATABASE_URL: this branch asks
+        # asyncpg for TLS on both, so the Web Shell connection is encrypted
+        # too, not merely "inside Render's network". Only a local host
+        # connects in the clear.
         connect_args["ssl"] = "require"
         tls = "require (defaulted for a remote host)"
     else:

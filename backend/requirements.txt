@@ -15,3 +15,18 @@ tzdata
 # decision available in the passkey phase. Do not read this pin as license to
 # add dependencies for problems that are actually simple.
 webauthn==3.0.0
+# botocore (CK-33). The second deliberate exception, for the first one's
+# reason: presigning an R2 upload is SigV4 — a canonical request, a scoped
+# credential string, an HMAC chain — and a signature scheme hand-rolled
+# "simply" is one that works today and fails on an edge case in production
+# (a header the canonical form must sort, a key the encoding must escape).
+# That is the WebAuthn mistake in a smaller coat. botocore ALONE, not boto3,
+# chosen deliberately: boto3 is a convenience layer over this exact client
+# (`boto3.client("s3")` IS a botocore client, and the presigner is
+# botocore's), and what it adds — the resource API and s3transfer's managed
+# multipart uploads — this arc does not use (video, the one multipart case,
+# is out: pipeline record §6.4). One pin instead of two that must move
+# together; three transitive packages instead of five. Pinned exactly, as
+# webauthn is: a signing library moves on our decision, never pip's. Still
+# not license to add dependencies for problems that are actually simple.
+botocore==1.43.89
