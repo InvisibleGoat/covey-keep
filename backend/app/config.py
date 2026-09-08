@@ -1,4 +1,35 @@
+"""Settings — two classes, two services, and they diverge on purpose (CK-35).
+
+`Settings` is the WEB service's: what uvicorn, every router, alembic's
+env.py and the two scripts read. `WorkerSettings` is the INGEST WORKER's:
+DATABASE_URL, the R2 endpoint, the two bucket names, and the worker
+credential — six values, and exactly six (media pipeline record §8, §11.1).
+Neither class has a field for the other's credential. That is the structural
+half of "neither service holds the other's powers": the worker cannot reach
+R2_UPLOAD_* or R2_SERVE_* even if they sit in its environment, because
+nothing in its process reads them; the web service cannot reach R2_WORKER_*
+for the same reason. A credential with read-write on both buckets can read
+quarantine AND serve published — the exact combination the two-bucket split
+exists to prevent — and the verifier script would not catch it landing in
+the wrong service, because it tests the credentials it is given, not which
+service holds them. Pinned by test on the field lists themselves.
+
+The web settings singleton is constructed LAZILY (a module-level
+__getattr__, PEP 562), and that is the one thing CK-35 changed in the web
+path. The worker imports this module for WorkerSettings; an eager
+`settings = Settings()` at module level would have required the worker to
+carry SESSION_SECRET and both web credentials just to import the class it
+actually uses — the split would have been decorative. Nothing about WHEN the
+web service fails has changed: every web consumer does
+`from app.config import settings` at its own import, so the construction
+still happens at boot, and a missing required value still crashes uvicorn
+and alembic before anything serves (the session_secret precedent; CK-33's
+RE_ENDPOINT_URL catch ran through exactly this path). Only the worker no
+longer fails with it.
+"""
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -89,4 +120,58 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
 
 
-settings = Settings()
+class WorkerSettings(BaseSettings):
+    """The ingest worker's environment (CK-35) — six values, and exactly six.
+
+    Required with no default, the web Settings' own rule: nothing gates the
+    worker, so an empty value can only mean misconfigured, and it should fail
+    at boot in front of whoever deployed rather than at the first claim.
+    Render populates DATABASE_URL from the database and holds the rest in the
+    worker service's own dashboard (render.yaml declares the slots; the
+    SESSION_SECRET ordering applies — a `sync: false` slot is never populated
+    after the fact, so a new service's first boot is expected to fail until
+    the values are set, which breaks nothing: no request depends on a
+    background worker).
+
+    NO field here may ever name the upload or serve credential, and Settings
+    must never grow a worker field. A test asserts both lists, so the worker
+    cannot reach the web credentials even by mistake — the same spirit as the
+    IAM guarantee the credential-split verifier proves against the buckets.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=BACKEND_DIR / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    database_url: str
+    r2_endpoint_url: str
+    r2_bucket_quarantine: str
+    r2_bucket_published: str
+    # Object Read & Write on BOTH buckets (record §11.1): reads quarantine,
+    # writes published, deletes originals. Held by this process and no other.
+    r2_worker_access_key_id: str
+    r2_worker_secret_access_key: str
+
+    @field_validator("database_url")
+    @classmethod
+    def _force_asyncpg_scheme(cls, value: str) -> str:
+        # The one normalisation, reused rather than copied.
+        return Settings._force_asyncpg_scheme(value)
+
+
+if TYPE_CHECKING:
+    settings: Settings
+
+
+def __getattr__(name: str):
+    # The lazy web singleton (see the module docstring). Constructed on the
+    # first `from app.config import settings` and cached in the module
+    # namespace, so every later access — and every monkeypatch in the test
+    # suite — sees the one instance.
+    if name == "settings":
+        instance = Settings()
+        globals()["settings"] = instance
+        return instance
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

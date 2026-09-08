@@ -16,17 +16,25 @@ never interchangeable (media pipeline record §3, §8, §11):
   credential rather than a rule every handler must remember. The verifier
   script proves that against live R2; until CK-33 nothing ever had.
 
-The worker credential (`R2_WORKER_*`, both buckets) never enters this
-process: the worker is its own service with its own environment (CK-35),
-and neither service holds the other's keys (§11.1).
+The WORKER credential (`R2_WORKER_*`, Object Read & Write on BOTH buckets)
+is the third type, `WorkerClient` (CK-35): it reads quarantine, and — from
+CK-36 — writes published and deletes originals. It is built only from
+`WorkerSettings`, which the web service never constructs, and the worker
+never constructs the other two: the config split in config.py is what makes
+"neither service holds the other's keys" (§11.1) structural rather than a
+dashboard discipline. The quarantine object functions below accept the
+UploadClient OR the WorkerClient (both credentials are scoped to that
+bucket); the two presign functions accept only their own web type — the
+worker has no caller to authorise and never mints a URL.
 
-Structure, not discipline. UploadClient and ServeClient are distinct types,
-each knowing exactly one bucket; every function here takes one specific type
-and raises TypeError for the other; and there is no module-level default
-client that could be either. Application code never names a bucket — the
-client it holds already knows the only one it may touch. The raw botocore
-client is reachable as `.raw` for the verifier's DELIBERATE wrong-bucket
-probes and for nothing in application code.
+Structure, not discipline. The three client types are distinct, each
+knowing exactly the bucket(s) its credential is scoped to; every function
+here takes specific types and raises TypeError for any other; and there is
+no module-level default client that could be any of them. Application code
+never names a bucket — the client it holds already knows the only one(s) it
+may touch. The raw botocore client is reachable as `.raw` for the
+verifier's DELIBERATE wrong-bucket probes and for nothing in application
+code.
 
 A presigned URL is a bearer credential (record §9 — binding, restated here
 because this is where it is minted):
@@ -46,14 +54,15 @@ because this is where it is minted):
 
 The quarantine key layout lives here too (CK-34): `quarantine_key` is the
 one pure function of a media row's id that the intent endpoint signs a PUT
-for, the confirm step HEADs, and the worker (CK-35) reads and deletes —
-one home, imported by both services, so the two can never compute
-different keys. The object functions below still take a key rather than a
-row, because the verifier script writes its own test object under its own
-key and must not look like a photograph.
+for, the confirm step HEADs, and the worker HEADs (CK-35) and will read and
+delete (CK-36) — one home, imported by both services, so the two can never
+compute different keys. The object functions below still take a key rather
+than a row, because the verifier script writes its own test object under
+its own key and must not look like a photograph.
 
 No router, no FastAPI import: the callers are api/media.py (the intent
-endpoint and the confirm step, CK-34) and the verifier script. botocore is
+endpoint and the confirm step, CK-34), services/ingest.py (the worker's
+claim service, CK-35), and the verifier script. botocore is
 synchronous — presigning is pure computation (no network) and safe to call
 from async code; the object operations below block on the network, and an
 async caller runs them via asyncio.to_thread. Client construction loads the
@@ -66,14 +75,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from uuid import UUID
 
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from botocore.session import get_session
 
-from app.config import Settings, settings as app_settings
+# The two CLASSES only. The web settings singleton is imported lazily inside
+# the two web factories below (CK-35): the worker imports this module for
+# quarantine_key and its own client, and an import-time `settings` here would
+# construct the web Settings — and demand the web credentials — in the one
+# process that must never hold them.
+from app.config import Settings, WorkerSettings
 
 # How long a presigned URL stays valid — one constant for both methods (§9:
 # short-lived). Fifteen minutes clears a 25MB photograph over a slow cellular
@@ -153,8 +167,36 @@ class ServeClient:
         return f"ServeClient(bucket={self.bucket!r})"
 
 
-def upload_client(settings: Settings = app_settings) -> UploadClient:
-    """Build the upload-credential client from settings. Nothing caches it."""
+@dataclass(frozen=True, repr=False)
+class WorkerClient:
+    """The worker credential (CK-35), scoped to BOTH buckets — the one
+    credential that may move a photograph from quarantine to published, and
+    the one that may delete a quarantined original (CK-36). Knows both
+    buckets by name because its credential does; it is never accepted by
+    either presign function."""
+
+    raw: Any
+    quarantine_bucket: str
+    published_bucket: str
+
+    def __repr__(self) -> str:
+        return (
+            f"WorkerClient(quarantine_bucket={self.quarantine_bucket!r}, "
+            f"published_bucket={self.published_bucket!r})"
+        )
+
+
+def _web_settings() -> Settings:
+    # Resolved on call, never at import (see the import comment above).
+    from app.config import settings
+
+    return settings
+
+
+def upload_client(settings: Optional[Settings] = None) -> UploadClient:
+    """Build the upload-credential client from the web settings. Nothing
+    caches it."""
+    settings = settings or _web_settings()
     return UploadClient(
         raw=_client(
             settings.r2_upload_access_key_id,
@@ -165,8 +207,10 @@ def upload_client(settings: Settings = app_settings) -> UploadClient:
     )
 
 
-def serve_client(settings: Settings = app_settings) -> ServeClient:
-    """Build the serve-credential client from settings. Nothing caches it."""
+def serve_client(settings: Optional[Settings] = None) -> ServeClient:
+    """Build the serve-credential client from the web settings. Nothing
+    caches it."""
+    settings = settings or _web_settings()
     return ServeClient(
         raw=_client(
             settings.r2_serve_access_key_id,
@@ -174,6 +218,27 @@ def serve_client(settings: Settings = app_settings) -> ServeClient:
             settings.r2_endpoint_url,
         ),
         bucket=settings.r2_bucket_published,
+    )
+
+
+def worker_client(settings: WorkerSettings) -> WorkerClient:
+    """Build the worker-credential client from the WORKER settings — the
+    argument is required and typed, because there is no worker singleton to
+    default to and the web Settings could never supply it (they have no
+    field for the worker credential, by construction). Nothing caches it."""
+    if not isinstance(settings, WorkerSettings):
+        raise TypeError(
+            "worker_client takes WorkerSettings: the worker credential lives in "
+            f"the worker's own environment and nowhere else (got {settings.__class__.__name__})"
+        )
+    return WorkerClient(
+        raw=_client(
+            settings.r2_worker_access_key_id,
+            settings.r2_worker_secret_access_key,
+            settings.r2_endpoint_url,
+        ),
+        quarantine_bucket=settings.r2_bucket_quarantine,
+        published_bucket=settings.r2_bucket_published,
     )
 
 
@@ -225,6 +290,22 @@ def _require_serve(client: object, what: str) -> ServeClient:
             f"credential and nothing else (got {client.__class__.__name__})"
         )
     return client
+
+
+def _require_quarantine(client: object, what: str) -> tuple[Any, str]:
+    """(raw client, quarantine bucket) for a credential scoped to quarantine:
+    the UploadClient (the web service confirming an upload landed) or the
+    WorkerClient (the worker reading what it will process). The ServeClient
+    is refused here as it always was — its credential cannot read that
+    bucket, and this function must not let application code try."""
+    if isinstance(client, UploadClient):
+        return client.raw, client.bucket
+    if isinstance(client, WorkerClient):
+        return client.raw, client.quarantine_bucket
+    raise TypeError(
+        f"{what} takes the UploadClient or the WorkerClient: quarantine is touched "
+        f"by a credential scoped to it and nothing else (got {client.__class__.__name__})"
+    )
 
 
 def presign_upload(
@@ -288,13 +369,17 @@ def presign_read(serve: ServeClient, *, key: str) -> PresignedRead:
     return PresignedRead(url=url, method="GET", expires_in=expires_in)
 
 
-def head_quarantine_object(upload: UploadClient, *, key: str) -> Optional[tuple[int, str]]:
+QuarantineClient = Union[UploadClient, WorkerClient]
+
+
+def head_quarantine_object(client: QuarantineClient, *, key: str) -> Optional[tuple[int, str]]:
     """(size in bytes, content type) of a quarantine object, or None when no
     such object exists. The confirm step's question (CK-34): did the bytes
-    the intent signed for actually land? Blocks on the network."""
-    upload = _require_upload(upload, "head_quarantine_object")
+    the intent signed for actually land? And the worker's first question
+    (CK-35): are they still there? Blocks on the network."""
+    raw, bucket = _require_quarantine(client, "head_quarantine_object")
     try:
-        response = upload.raw.head_object(Bucket=upload.bucket, Key=key)
+        response = raw.head_object(Bucket=bucket, Key=key)
     except ClientError as exc:
         if exc.response.get("Error", {}).get("Code") in _ABSENT_CODES:
             return None
@@ -302,17 +387,21 @@ def head_quarantine_object(upload: UploadClient, *, key: str) -> Optional[tuple[
     return int(response["ContentLength"]), str(response.get("ContentType", ""))
 
 
-def read_quarantine_object(upload: UploadClient, *, key: str) -> bytes:
+def read_quarantine_object(client: QuarantineClient, *, key: str) -> bytes:
     """The bytes of a quarantine object. The upload credential can read what
     it wrote (§3's honest bound); the verifier reads its own test object back
-    through this. Blocks on the network."""
-    upload = _require_upload(upload, "read_quarantine_object")
-    response = upload.raw.get_object(Bucket=upload.bucket, Key=key)
+    through this; the worker reads what it decodes (CK-36). Blocks on the
+    network."""
+    raw, bucket = _require_quarantine(client, "read_quarantine_object")
+    response = raw.get_object(Bucket=bucket, Key=key)
     return response["Body"].read()
 
 
-def delete_quarantine_object(upload: UploadClient, *, key: str) -> None:
+def delete_quarantine_object(client: QuarantineClient, *, key: str) -> None:
     """Delete one quarantine object. Idempotent at R2 (deleting an absent key
-    succeeds). Blocks on the network."""
-    upload = _require_upload(upload, "delete_quarantine_object")
-    upload.raw.delete_object(Bucket=upload.bucket, Key=key)
+    succeeds). Blocks on the network. The worker (CK-35) calls this NOWHERE
+    — the deletion of a live original belongs to CK-36's publish transaction
+    and the dead-letter path that lands with it; pinned by test on the
+    ingest module's imports."""
+    raw, bucket = _require_quarantine(client, "delete_quarantine_object")
+    raw.delete_object(Bucket=bucket, Key=key)

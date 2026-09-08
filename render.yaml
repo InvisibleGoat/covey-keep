@@ -84,6 +84,67 @@ services:
         sync: false
       - key: R2_SERVE_SECRET_ACCESS_KEY
         sync: false
+      # R2_WORKER_* MUST NEVER BE ADDED HERE, in the blueprint or in this
+      # service's dashboard. That credential is read-write on BOTH buckets —
+      # it can read quarantine AND serve published, the exact combination the
+      # two-bucket split exists to prevent — and verify_r2_credentials.py
+      # would not catch it landing here, because it tests the credentials it
+      # is given, not which service holds them. One dashboard entry in the
+      # wrong column silently undoes what CK-33 proved. The web Settings
+      # class has no field for it, by construction (config.py).
+
+  # The ingest worker (CK-35; media pipeline record §8) — the second service
+  # off the same repo, branch and database. Background workers have no free
+  # instance type, hence starter.
+  - type: worker
+    name: covey-keep-worker
+    runtime: python
+    region: ohio
+    plan: starter
+    branch: develop
+    rootDir: backend
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    # NO preDeployCommand HERE, AND NONE MAY EVER BE ADDED. Only the web
+    # service runs `alembic upgrade head` (record §8): a push to develop
+    # deploys BOTH services, and two `alembic upgrade` processes racing one
+    # database fail on the first deploy after the worker exists. This is the
+    # single line most likely to be "helpfully" added later — do not. The
+    # worker tolerates starting against a schema the web service has not
+    # finished migrating: it fails its first poll and retries; it never
+    # crash-loops on it (app/worker.py, pinned by test).
+    startCommand: python -m app.worker
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.1
+      # SIX application variables, and exactly six (WorkerSettings in
+      # config.py): the database, the endpoint, the two bucket names, and
+      # the WORKER credential (Object Read & Write on both buckets, record
+      # §11.1). Not SESSION_SECRET, not R2_UPLOAD_*, not R2_SERVE_* — the
+      # worker has no field for any of them and boots without them; adding
+      # one here would give one process the powers the split keeps apart.
+      # The two `sync: false` credential halves and the endpoint URL follow
+      # the SESSION_SECRET / R2_ENDPOINT_URL rules above: the blueprint
+      # declares the slots and creates no values. For a NEW service Render
+      # does not populate them at creation either, so the expected sequence
+      # (CK-35 out-of-band step 2) is: blueprint sync creates the service,
+      # its first boot fails on the missing values — which breaks nothing,
+      # no request depends on a background worker — the values are set in
+      # THIS service's dashboard, and it is redeployed.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: covey-keep-db-dev
+          property: connectionString
+      - key: R2_ENDPOINT_URL
+        sync: false
+      - key: R2_BUCKET_QUARANTINE
+        value: coveykeep-dev-quarantine
+      - key: R2_BUCKET_PUBLISHED
+        value: coveykeep-dev
+      - key: R2_WORKER_ACCESS_KEY_ID
+        sync: false
+      - key: R2_WORKER_SECRET_ACCESS_KEY
+        sync: false
 
 databases:
   - name: covey-keep-db-dev

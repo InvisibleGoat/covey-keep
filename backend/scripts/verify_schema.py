@@ -50,10 +50,11 @@ from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
 try:
     # Imported to REUSE the app's postgresql:// -> postgresql+asyncpg://
-    # normalisation rather than reimplement it. Importing app.config also
-    # constructs the settings singleton, so the required env surface must be
-    # present - in the process environment or backend/.env - the same
-    # precondition uvicorn and alembic already have.
+    # normalisation rather than reimplement it. Importing `settings` from
+    # app.config constructs the web settings singleton (lazily on that
+    # import since CK-35), so the required env surface must be present - in
+    # the process environment or backend/.env - the same precondition
+    # uvicorn and alembic already have.
     from app.config import Settings, settings as app_settings
 except Exception as exc:  # pragma: no cover - operator-facing guidance
     raise SystemExit(
@@ -789,8 +790,9 @@ async def verify(conn, ck: Checks) -> None:
         # moves the media row to `ready`, so no derivative row ever hangs
         # off a photograph in any other rung. A row here means a worker
         # wrote around that — a half-published photograph. Vacuous until
-        # the worker exists (CK-35); written now because it is what will
-        # matter. Detail prints the count only.
+        # the worker publishes (CK-36 — CK-35's worker writes no derivative
+        # row); written now because it is what will matter. Detail prints
+        # the count only.
         premature = await scalar(
             conn,
             "SELECT count(*) FROM media_derivatives d JOIN media m ON m.id = d.media_id "
@@ -853,6 +855,43 @@ async def verify(conn, ck: Checks) -> None:
         )
     else:
         ck.check(False, "media upload integrity", "media table missing")
+
+    print("\n-- media job integrity (CK-35) --")
+    if "media" in tables:
+        # The worker's two invariants over the job columns, properties of
+        # whatever rows exist. Detail prints the count only.
+        # (1) claimed_at is the reclaim clock and means "a worker holds this
+        # row": set when and only when the row is `processing`. The claim
+        # service stamps it at claim and clears it with every outcome
+        # (release, retry, dead-letter), so a disagreement means something
+        # wrote around it — a stranded row the reclaim timeout would rescue
+        # every fifteen minutes forever, or a processing row nothing can
+        # reclaim.
+        claim_mismatch = await scalar(
+            conn,
+            "SELECT count(*) FROM media "
+            "WHERE (status = 'processing') <> (claimed_at IS NOT NULL)",
+        )
+        ck.check(
+            claim_mismatch == 0,
+            "claimed_at is set when and only when the row is processing",
+            f"{claim_mismatch} media row(s) whose claimed_at disagrees with status",
+        )
+        # (2) A dead-lettered row says why: `failed` always carries a
+        # last_error (operator terms — the outcome, never the file), because
+        # a failure with no reason is one nobody can act on. Never printed.
+        silent_failures = await scalar(
+            conn,
+            "SELECT count(*) FROM media WHERE status = 'failed' "
+            "AND (last_error IS NULL OR btrim(last_error) = '')",
+        )
+        ck.check(
+            silent_failures == 0,
+            "every failed media row carries a last_error",
+            f"{silent_failures} failed media row(s) with no last_error",
+        )
+    else:
+        ck.check(False, "media job integrity", "media table missing")
 
     print("\n-- pending invitation integrity (CK-25) --")
     if "gathering_invitations_pending" in tables:
