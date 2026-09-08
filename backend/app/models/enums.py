@@ -67,8 +67,41 @@ class RSVPListVisibility(str, Enum):
 
 
 class MediaStatus(str, Enum):
+    """The ingest job's ladder — the media row IS the job (media pipeline
+    record §6.1; 0016 grew it from 0001's `processing | ready`). This is the
+    MACHINE's answer and only that: publication_state is the host's, a
+    separate column that never collapses into this one (record §5).
+
+    pending_upload  a presigned PUT was issued; nothing confirmed yet.
+    uploaded        the bytes are confirmed in quarantine; claimable.
+    processing      claimed by the worker (claimed_at stamped; reclaimable
+                    after the timeout — a re-claim, never a re-create).
+    ready           the derivative rows exist and the quarantine original is
+                    deleted — "processed", which is not "published".
+    failed          the retry ladder is spent; last_error says why, and the
+                    quarantine object was deleted at that moment.
+
+    Member order mirrors the DB's enumsortorder (0016 placed the new labels
+    around the 0001 pair with BEFORE clauses), so the ladder reads top to
+    bottom in both places."""
+
+    PENDING_UPLOAD = "pending_upload"
+    UPLOADED = "uploaded"
     PROCESSING = "processing"
     READY = "ready"
+    FAILED = "failed"
+
+
+class MediaLayer(str, Enum):
+    """The three stored representations of one photograph
+    (decisions/2026-08-25-media-derivative-layers.md §1), as the discriminator
+    on media_derivatives (CK-32). Design-fixed, so a native enum (database-
+    schema decision 2): a fourth layer is a decision record plus one
+    ADD VALUE, never a value that grows as data."""
+
+    ARCHIVAL = "archival"
+    WEB = "web"
+    THUMBNAIL = "thumbnail"
 
 
 class PublicationState(str, Enum):
@@ -86,4 +119,5 @@ INVITATION_CHANNEL = db_enum(InvitationChannel, "invitation_channel")
 RSVP_RESPONSE = db_enum(RSVPResponse, "rsvp_response")
 RSVP_LIST_VISIBILITY = db_enum(RSVPListVisibility, "rsvp_list_visibility")
 MEDIA_STATUS = db_enum(MediaStatus, "media_status")
+MEDIA_LAYER = db_enum(MediaLayer, "media_layer")
 PUBLICATION_STATE = db_enum(PublicationState, "publication_state")

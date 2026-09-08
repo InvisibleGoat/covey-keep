@@ -19,6 +19,7 @@ from app.models.enums import (
     GatheringType,
     GroupType,
     InvitationChannel,
+    MediaLayer,
     MediaStatus,
     PublicationState,
     RSVPListVisibility,
@@ -34,7 +35,7 @@ from app.models.gathering import (
 from app.models.group import Group, SubGroup
 from app.models.household import Household, Person
 from app.models.items import ItemClaim, ItemSlot
-from app.models.media import Media
+from app.models.media import Media, MediaDerivative
 from app.models.membership import Membership
 from app.models.next_step import NextStepAcceptance, NextStepDismissal, NextStepTrigger
 from app.models.organization import Organization
@@ -62,6 +63,8 @@ __all__ = [
     "KeptGathering",
     "MagicLinkToken",
     "Media",
+    "MediaDerivative",
+    "MediaLayer",
     "MediaStatus",
     "Membership",
     "NextStepAcceptance",

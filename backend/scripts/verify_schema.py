@@ -60,7 +60,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0015"
+EXPECTED_REVISION = "0016"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -192,6 +192,39 @@ async def scalar(conn, sql: str) -> int:
     return (await conn.execute(text(sql))).scalar_one()
 
 
+async def enum_labels(conn, typname: str) -> list[str]:
+    """A Postgres enum's labels in sort order. Read from pg_enum because
+    Alembic's autogenerate never diffs enum labels — a label missing on a
+    deployed database is invisible to `alembic check`."""
+    return [
+        row[0]
+        for row in (
+            await conn.execute(
+                text(
+                    "SELECT e.enumlabel FROM pg_enum e JOIN pg_type t ON e.enumtypid = t.oid "
+                    "WHERE t.typname = :t ORDER BY e.enumsortorder"
+                ),
+                {"t": typname},
+            )
+        ).all()
+    ]
+
+
+async def fk_rule(conn, conname: str):
+    """(referenced table, delete rule) for a named FK, or None. confdeltype
+    is a "char" — cast to text so the driver hands back a string ('a' = NO
+    ACTION, 'c' = CASCADE, 'n' = SET NULL), not bytes."""
+    return (
+        await conn.execute(
+            text(
+                "SELECT confrelid::regclass::text, confdeltype::text FROM pg_constraint "
+                "WHERE conname = :c AND contype = 'f'"
+            ),
+            {"c": conname},
+        )
+    ).first()
+
+
 def assert_columns(
     ck: Checks,
     columns: dict[str, dict[str, bool]],
@@ -264,8 +297,115 @@ async def verify(conn, ck: Checks) -> None:
             not_null=("gathering_id",),
             nullable=("occurrence_id",),
         )
-    # The quota computation's per-object source (0001).
-    assert_columns(ck, columns, "media", present=("size_bytes",))
+    # --- The media schema (0016, CK-32) — extends this block rather than
+    # opening a new one: the table has been here since 0001 and the media arc
+    # AMENDS it (pipeline record §10). Nothing counts rows: none exist until
+    # the intent endpoint (CK-33) writes the first one. --------------------
+    print("\n-- media: the status ladder (0016) --")
+    # The media row IS the job (record §6.1): five rungs, in ladder order.
+    media_status = await enum_labels(conn, "media_status")
+    for label in ("pending_upload", "uploaded", "processing", "ready", "failed"):
+        ck.check(label in media_status, f"media_status carries {label!r}", "label missing")
+    status_default = (
+        await conn.execute(
+            text(
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'media' "
+                "AND column_name = 'status'"
+            )
+        )
+    ).scalar()
+    # 0001 defaulted status to 'processing'; under the ladder that default
+    # would let an INSERT that omitted the rung be reclaimed by the worker
+    # against an object never uploaded. A writer must state the rung.
+    ck.check(
+        status_default is None,
+        "media.status has no server default (a writer states the rung)",
+        f"default is {status_default!r}",
+    )
+
+    print("\n-- media: the job columns (0016) --")
+    assert_columns(
+        ck,
+        columns,
+        "media",
+        not_null=("attempts",),
+        nullable=("available_at", "claimed_at", "last_error"),
+    )
+
+    print("\n-- media: the object columns live on the derivative rows (0016) --")
+    # The photograph stores no object: key, class, and access time belong
+    # to a stored object (a media_derivatives row), and the quarantine
+    # original's key is derived from the row id, never stored. The two
+    # upload facts are named for what they are — the 0001 names would carry
+    # two readings beside media_derivatives.size_bytes.
+    assert_columns(
+        ck,
+        columns,
+        "media",
+        absent=("storage_key", "storage_class", "last_accessed", "size_bytes", "content_type"),
+        not_null=("upload_content_type", "upload_size_bytes"),
+    )
+    ck.check("media_derivatives" in tables, "table media_derivatives exists", "missing")
+    assert_columns(
+        ck,
+        columns,
+        "media_derivatives",
+        not_null=("media_id", "layer", "storage_key", "content_type", "size_bytes", "storage_class"),
+        nullable=("last_accessed",),
+        # THE BINDING (media-layers record §8, consent record §1): no
+        # per-layer lifecycle, ever. The three layers share the ONE
+        # publication_state on media and die as a unit; a phase that adds
+        # any of these here is adding the two-places-that-can-disagree
+        # defect CK-13 spent a phase removing. Assert the absence so it
+        # cannot be added quietly.
+        absent=("publication_state", "removed_at", "status", "deleted_at"),
+    )
+    media_layer = await enum_labels(conn, "media_layer")
+    for label in ("archival", "web", "thumbnail"):
+        ck.check(label in media_layer, f"media_layer carries {label!r}", "label missing")
+    derivative_fk = await fk_rule(conn, "fk_media_derivatives_media_id")
+    ck.check(
+        derivative_fk is not None and derivative_fk[0] == "media",
+        "media_derivatives.media_id references media",
+        "FK missing or pointing elsewhere",
+    )
+    ck.check(
+        derivative_fk is not None and derivative_fk[1] == "c",
+        "derivative rows are deleted with their photograph (ON DELETE CASCADE)",
+        f"delete rule is {derivative_fk[1]!r}" if derivative_fk else "FK missing",
+    )
+    unique_constraints = {
+        row[0]
+        for row in (
+            await conn.execute(
+                text(
+                    "SELECT c.conname FROM pg_constraint c "
+                    "JOIN pg_namespace n ON n.oid = c.connamespace "
+                    "WHERE c.contype = 'u' AND n.nspname = 'public'"
+                )
+            )
+        ).all()
+    }
+    # One row per layer per photograph; one object per row.
+    for name in ("uq_media_derivatives_media_id_layer", "uq_media_derivatives_storage_key"):
+        ck.check(name in unique_constraints, f"UNIQUE {name} exists", "constraint missing")
+
+    print("\n-- media: the occurrence label no longer blocks a delete (0016) --")
+    # The CK-30 dormant 500, closed for media by the phase that gives it a
+    # surface: a label, never an owner — a removed date clears the label
+    # and keeps the photograph. SET NULL, not CASCADE.
+    label_fk = await fk_rule(conn, "fk_media_occurrence_id")
+    ck.check(
+        label_fk is not None and label_fk[0] == "occurrences",
+        "media.occurrence_id references occurrences",
+        "FK missing or pointing elsewhere",
+    )
+    ck.check(
+        label_fk is not None and label_fk[1] == "n",
+        "a removed date clears the photograph's label (ON DELETE SET NULL)",
+        f"delete rule is {label_fk[1]!r}" if label_fk else "FK missing",
+    )
 
     # --- Keeper lifecycle (0009) -------------------------------------------
     print("\n-- gatherings lifecycle columns (0009) --")
@@ -597,6 +737,28 @@ async def verify(conn, ck: Checks) -> None:
         )
     else:
         ck.check(False, "companion integrity", "rsvp_companions table missing")
+
+    print("\n-- media derivative integrity (CK-32) --")
+    if {"media", "media_derivatives"} <= tables:
+        # Publish is the last step and is atomic (pipeline record §8): the
+        # worker writes the derivative rows in the same transaction that
+        # moves the media row to `ready`, so no derivative row ever hangs
+        # off a photograph in any other rung. A row here means a worker
+        # wrote around that — a half-published photograph. Vacuous until
+        # the worker exists (CK-34); written now because it is what will
+        # matter. Detail prints the count only.
+        premature = await scalar(
+            conn,
+            "SELECT count(*) FROM media_derivatives d JOIN media m ON m.id = d.media_id "
+            "WHERE m.status <> 'ready'",
+        )
+        ck.check(
+            premature == 0,
+            "no derivative row hangs off a photograph that is not ready",
+            f"{premature} derivative row(s) under a non-ready media row",
+        )
+    else:
+        ck.check(False, "media derivative integrity", "media/media_derivatives missing")
 
     print("\n-- pending invitation integrity (CK-25) --")
     if "gathering_invitations_pending" in tables:

@@ -24,6 +24,7 @@ from app.models import (
     ItemClaim,
     ItemSlot,
     Media,
+    MediaStatus,
     Occurrence,
     Organization,
     Person,
@@ -172,8 +173,9 @@ async def test_season_is_structurally_identical_to_a_one_off(db_session_factory)
                 Media(
                     gathering_id=gathering.id,
                     guest_name="guest",
-                    storage_key=f"test/{gathering.id}",
-                    content_type="image/jpeg",
+                    upload_content_type="image/jpeg",
+                    upload_size_bytes=1,
+                    status=MediaStatus.READY,
                     publication_state=PublicationState.LIVE,
                 )
             )
@@ -280,8 +282,9 @@ async def test_media_and_post_may_carry_an_occurrence_label(db_session_factory):
                 gathering_id=gathering.id,
                 occurrence_id=occ.id,
                 guest_name="guest",
-                storage_key=f"test/labeled/{gathering.id}",
-                content_type="image/jpeg",
+                upload_content_type="image/jpeg",
+                upload_size_bytes=1,
+                status=MediaStatus.READY,
                 publication_state=PublicationState.LIVE,
             )
         )
@@ -305,8 +308,9 @@ async def test_guest_identity_checks_survived_the_restructure(db_session_factory
         db.add(
             Media(
                 gathering_id=gathering.id,
-                storage_key="test/anonymous",
-                content_type="image/jpeg",
+                upload_content_type="image/jpeg",
+                upload_size_bytes=1,
+                status=MediaStatus.READY,
                 publication_state=PublicationState.LIVE,
             )
         )
