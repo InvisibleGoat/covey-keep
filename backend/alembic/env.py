@@ -23,9 +23,19 @@ config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)
 
 # Interpret the config file for Python logging.
-# This line sets up loggers basically.
+# This line sets up loggers basically. disable_existing_loggers=False (CK-36):
+# fileConfig's default silently DISABLES every logger that already exists
+# when it runs — and in the test suite the migration runs from a session
+# fixture after the application modules (and their loggers) are imported,
+# so `covey-keep.worker` and every other app logger emitted nothing for the
+# whole session and a caplog-based "this line was logged" / "this value
+# was never logged" assertion could not see either. Found pinning the
+# worker's post-commit delete log line; it also makes CK-34's never-log
+# pins on the intent endpoint genuinely able to catch a leak through an
+# app logger. On Render the pre-deploy `alembic upgrade head` is its own
+# process, so nothing there changes.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

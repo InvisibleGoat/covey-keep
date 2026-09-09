@@ -17,13 +17,24 @@ What is pinned:
   type with a TypeError (structure, not discipline);
 - nothing that could land in a log shows a URL or a key id;
 - the client is configured the way R2 needs (Cloudflare's checksum guidance).
+
+CK-36 adds the published side: `published_key` is a pure function of (row
+id, layer) with no extension; `put_published_object` takes the WorkerClient
+alone, sends the storage class and content type per object, and refuses the
+two web types; and `delete_quarantine_object` treats an absent object as a
+success — the two-live-workers rule — while every other error still raises.
+The raw client is a recording stub for those three: no network.
 """
 
+import logging
 import urllib.parse
+from uuid import UUID, uuid4
 
 import pytest
+from botocore.exceptions import ClientError
 
 from app.config import settings
+from app.models import MediaLayer
 from app.services import storage
 from app.services.storage import (
     PRESIGN_TTL,
@@ -31,8 +42,13 @@ from app.services.storage import (
     PresignedUpload,
     ServeClient,
     UploadClient,
+    WorkerClient,
+    delete_quarantine_object,
     presign_read,
     presign_upload,
+    published_key,
+    put_published_object,
+    quarantine_key,
 )
 
 
@@ -213,3 +229,138 @@ def test_client_configuration_matches_r2(upload, serve):
         assert config.response_checksum_validation == "when_required"
         assert client.meta.endpoint_url == settings.r2_endpoint_url
         assert client.meta.region_name == "auto"
+
+
+# --- The published side (CK-36) ------------------------------------------------
+
+
+class _RecordingRaw:
+    """A stand-in for the botocore client: records the call, raises what it
+    is told to."""
+
+    def __init__(self, raises: Exception | None = None):
+        self.calls: list[tuple[str, dict]] = []
+        self.raises = raises
+
+    def put_object(self, **kwargs):
+        self.calls.append(("put_object", kwargs))
+        if self.raises:
+            raise self.raises
+
+    def delete_object(self, **kwargs):
+        self.calls.append(("delete_object", kwargs))
+        if self.raises:
+            raise self.raises
+
+
+def _worker(raw=None) -> WorkerClient:
+    return WorkerClient(raw=raw or _RecordingRaw(), quarantine_bucket="test-quarantine", published_bucket="test-published")
+
+
+def _client_error(code: str, status: int) -> ClientError:
+    return ClientError(
+        {"Error": {"Code": code, "Message": "stub"}, "ResponseMetadata": {"HTTPStatusCode": status}},
+        "DeleteObject",
+    )
+
+
+def test_published_key_is_a_pure_function_of_the_row_id_and_the_layer():
+    media_id = UUID("11111111-2222-3333-4444-555555555555")
+    assert published_key(media_id, MediaLayer.ARCHIVAL) == "media/11111111-2222-3333-4444-555555555555/archival"
+    assert published_key(media_id, MediaLayer.WEB) == "media/11111111-2222-3333-4444-555555555555/web"
+    assert published_key(media_id, MediaLayer.THUMBNAIL) == "media/11111111-2222-3333-4444-555555555555/thumbnail"
+    # Deterministic (a retry overwrites its own keys), distinct per layer,
+    # no extension (the row records the format), and never in the
+    # quarantine keyspace.
+    assert published_key(media_id, MediaLayer.WEB) == published_key(media_id, MediaLayer.WEB)
+    assert len({published_key(media_id, layer) for layer in MediaLayer}) == 3
+    assert "." not in published_key(media_id, MediaLayer.WEB).rsplit("/", 1)[1]
+    assert not published_key(media_id, MediaLayer.WEB).startswith(storage.QUARANTINE_PREFIX)
+    assert not quarantine_key(media_id).startswith(storage.PUBLISHED_PREFIX)
+
+
+def test_put_published_object_writes_to_published_with_the_class_and_type_per_object():
+    raw = _RecordingRaw()
+    put_published_object(
+        _worker(raw), key="media/x/archival", body=b"jpeg-bytes", content_type="image/jpeg", storage_class="STANDARD_IA"
+    )
+    assert raw.calls == [
+        (
+            "put_object",
+            {
+                "Bucket": "test-published",
+                "Key": "media/x/archival",
+                "Body": b"jpeg-bytes",
+                "ContentType": "image/jpeg",
+                "ContentLength": 10,
+                "StorageClass": "STANDARD_IA",
+            },
+        )
+    ]
+
+
+def test_put_published_object_refuses_both_web_clients(upload, serve):
+    for client in (upload, serve):
+        with pytest.raises(TypeError, match="WorkerClient"):
+            put_published_object(client, key="k", body=b"x", content_type="image/jpeg", storage_class="STANDARD")
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(key="", body=b"x", content_type="image/jpeg", storage_class="STANDARD"),
+        dict(key="k", body=b"", content_type="image/jpeg", storage_class="STANDARD"),
+        dict(key="k", body=b"x", content_type="", storage_class="STANDARD"),
+        dict(key="k", body=b"x", content_type="image/jpeg", storage_class=""),
+    ],
+)
+def test_put_published_object_refuses_an_incomplete_write(kwargs):
+    raw = _RecordingRaw()
+    with pytest.raises(ValueError):
+        put_published_object(_worker(raw), **kwargs)
+    assert raw.calls == []
+
+
+def test_deleting_an_absent_quarantine_object_is_a_success():
+    # Two live workers for ~61 seconds on every deploy (CK-35's (cw)): the
+    # predecessor's delete may land first. R2 answers 204 regardless; a
+    # store that answers 404 is swallowed here.
+    for code, status in (("NoSuchKey", 404), ("404", 404), ("NotFound", 404)):
+        raw = _RecordingRaw(raises=_client_error(code, status))
+        assert delete_quarantine_object(_worker(raw), key="uploads/x") is None
+        assert raw.calls == [("delete_object", {"Bucket": "test-quarantine", "Key": "uploads/x"})]
+
+
+def test_every_other_delete_failure_still_raises():
+    raw = _RecordingRaw(raises=_client_error("AccessDenied", 403))
+    with pytest.raises(ClientError):
+        delete_quarantine_object(_worker(raw), key="uploads/x")
+    raw = _RecordingRaw(raises=_client_error("InternalError", 500))
+    with pytest.raises(ClientError):
+        delete_quarantine_object(_worker(raw), key="uploads/x")
+
+
+def test_the_serve_client_is_still_refused_on_the_published_write(serve):
+    # Read-only by credential (the verifier proves the bucket refuses it);
+    # refused here by type before any request is made.
+    with pytest.raises(TypeError, match="WorkerClient"):
+        put_published_object(serve, key=published_key(uuid4(), MediaLayer.WEB), body=b"x", content_type="image/webp", storage_class="STANDARD")
+
+
+def test_the_signing_librarys_debug_logging_never_prints_a_signature(upload, serve, caplog):
+    """botocore.auth logs the canonical request, the string to sign and the
+    signature itself at DEBUG. storage.py pins that logger above DEBUG at
+    import, so even a root logger at DEBUG — someone chasing a deploy — sees
+    no signature and no key id. Found at CK-36 when the suite's loggers were
+    re-enabled; before that CK-34's never-log pins could not have seen it."""
+    with caplog.at_level(logging.DEBUG):
+        put = presign_upload(upload, key="uploads/x", content_length=10, content_type="image/jpeg")
+        get = presign_read(serve, key="media/x/web")
+    for presigned in (put, get):
+        signature = _query(presigned.url)["X-Amz-Signature"]
+        assert signature not in caplog.text
+        assert presigned.url not in caplog.text
+    assert settings.r2_upload_access_key_id not in caplog.text
+    assert settings.r2_serve_access_key_id not in caplog.text
+    assert "Signature:" not in caplog.text
+    assert logging.getLogger("botocore.auth").level >= logging.INFO

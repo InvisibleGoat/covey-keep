@@ -44,6 +44,15 @@ class Settings(BaseSettings):
         env_file=BACKEND_DIR / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # A missing required field fails at boot naming the field — and
+        # WITHOUT echoing the input. Pydantic's default ValidationError
+        # renders `input_value=<the raw dict>`, i.e. every variable that WAS
+        # set, and a deploy log is where that error lands: CK-33's first
+        # deploy printed 22 hex characters of a live credential's tail that
+        # way (WORKING-ON-NOW 1.56.0; CK-36 rider). SecretStr would not
+        # help — it masks a field's repr after validation, while input_value
+        # is the dict before it. Pinned by test on both classes.
+        hide_input_in_errors=True,
     )
 
     database_url: str
@@ -143,6 +152,9 @@ class WorkerSettings(BaseSettings):
         env_file=BACKEND_DIR / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # Same rule as the web Settings: a missing field is named, the
+        # values that were present are never echoed into the deploy log.
+        hide_input_in_errors=True,
     )
 
     database_url: str

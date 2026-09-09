@@ -787,12 +787,10 @@ async def verify(conn, ck: Checks) -> None:
     if {"media", "media_derivatives"} <= tables:
         # Publish is the last step and is atomic (pipeline record §8): the
         # worker writes the derivative rows in the same transaction that
-        # moves the media row to `ready`, so no derivative row ever hangs
-        # off a photograph in any other rung. A row here means a worker
-        # wrote around that — a half-published photograph. Vacuous until
-        # the worker publishes (CK-36 — CK-35's worker writes no derivative
-        # row); written now because it is what will matter. Detail prints
-        # the count only.
+        # moves the media row to `ready` (CK-36), so no derivative row ever
+        # hangs off a photograph in any other rung. A row here means a
+        # worker wrote around that — a half-published photograph. Detail
+        # prints the count only.
         premature = await scalar(
             conn,
             "SELECT count(*) FROM media_derivatives d JOIN media m ON m.id = d.media_id "
@@ -805,6 +803,63 @@ async def verify(conn, ck: Checks) -> None:
         )
     else:
         ck.check(False, "media derivative integrity", "media/media_derivatives missing")
+
+    print("\n-- media publish integrity (CK-36) --")
+    if {"media", "media_derivatives", "gatherings"} <= tables:
+        # The publish transaction's three consequences on data, each a
+        # property of whatever rows exist (never a count). Detail prints
+        # counts only — a key is a function of a row id and is never
+        # printed.
+        # (1) A ready photograph has all three layers, one row each: the
+        # transaction writes the three rows together or not at all, and a
+        # ready row with fewer is a half-published photograph (or one
+        # whose layers were deleted around the row).
+        incomplete = await scalar(
+            conn,
+            "SELECT count(*) FROM media m WHERE m.status = 'ready' AND "
+            "(SELECT count(DISTINCT d.layer) FROM media_derivatives d WHERE d.media_id = m.id) <> 3",
+        )
+        ck.check(
+            incomplete == 0,
+            "every ready photograph has exactly its three layers",
+            f"{incomplete} ready media row(s) without all three derivative rows",
+        )
+        # (2) The storage class per layer (media-layers record §4):
+        # archival on Infrequent Access, web and thumbnail on Standard,
+        # spelled as R2 spells them. A row on the wrong class is a
+        # photograph paying the wrong price — or being served from cold.
+        misclassed = await scalar(
+            conn,
+            "SELECT count(*) FROM media_derivatives WHERE "
+            "(layer = 'archival' AND storage_class <> 'STANDARD_IA') OR "
+            "(layer <> 'archival' AND storage_class <> 'STANDARD')",
+        )
+        ck.check(
+            misclassed == 0,
+            "archival layers are on Infrequent Access; web and thumbnail on Standard",
+            f"{misclassed} derivative row(s) on the wrong storage class",
+        )
+        # (3) gatherings.total_bytes is a maintained fact — the sum over
+        # the derivative rows of the gathering's ready photographs, moved
+        # in the transaction that writes those rows. A gathering whose
+        # total disagrees with its rows had a publish land half-done, or
+        # something moved total_bytes around the worker — either way the
+        # quota is counting bytes that are not there, or missing bytes
+        # that are.
+        drifted = await scalar(
+            conn,
+            "SELECT count(*) FROM gatherings g WHERE g.total_bytes <> "
+            "(SELECT coalesce(sum(d.size_bytes), 0) FROM media_derivatives d "
+            " JOIN media m ON m.id = d.media_id "
+            " WHERE m.gathering_id = g.id AND m.status = 'ready')",
+        )
+        ck.check(
+            drifted == 0,
+            "every gathering's total_bytes equals the sum over its ready photographs' layers",
+            f"{drifted} gathering(s) whose total_bytes disagrees with its derivative rows",
+        )
+    else:
+        ck.check(False, "media publish integrity", "media/media_derivatives/gatherings missing")
 
     print("\n-- media upload integrity (CK-34) --")
     if "media" in tables:

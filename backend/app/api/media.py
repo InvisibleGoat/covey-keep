@@ -25,8 +25,9 @@ Everything here is part of the accept/refuse decision:
   a surface; an interim not written down as interim becomes the rule by
   default, which is why this paragraph and the api-reference both say it.
 - THE DECLARED CONTENT TYPE — advisory here, enforced later. A `.mov`
-  renamed `.jpg` passes any intent-time allowlist; CK-35's worker verifies
-  the real type from the bytes. The allowlist is still worth having: it
+  renamed `.jpg` passes any intent-time allowlist; the worker verifies the
+  real type from the bytes (CK-36 — processing.DECODABLE_FORMATS is this
+  list's real-bytes counterpart, and the two may never disagree). The allowlist is still worth having: it
   stops the honest mistake at the cheapest point and gives the file picker
   something to mirror (`accept`). Video is refused EXPLICITLY (record
   §6.4) — never accepted-then-failed — and the case that makes this the
@@ -37,7 +38,8 @@ Everything here is part of the accept/refuse decision:
 - THE SIZE — 25 MB per file, images only. The ~50 megapixel guard record
   §6.6 lists beside it is NOT this router's: at intent time there is a
   declared type and a signed byte count, and pixel dimensions are
-  unknowable without the bytes. It is the worker's check (CK-35).
+  unknowable without the bytes. It is the worker's check (CK-36 —
+  processing.MAX_PIXELS, refused from the header before any pixel).
 - THE BATCH — at most 50 items per request, refused WHOLE if any item is
   invalid: partial acceptance would need a per-item error shape the
   frontend does not have and would leave the caller reconciling which
@@ -76,9 +78,9 @@ Nothing else moves. Confirm flips `pending_upload → uploaded` and stamps
 `available_at` (the claim predicate). `publication_state` stays `pending`
 on every row this router creates — processing is not publishing, and
 neither is uploading (record §5); `gatherings.total_bytes` moves at publish
-and is untouched here; no derivative row is written. Until CK-35, an
-uploaded photograph is processed by nothing, stripped by nothing, and
-deleted from quarantine at the 24-hour ceiling.
+and is untouched here; no derivative row is written here. Since CK-36 the
+worker processes what confirm accepts within a poll (services/ingest.py —
+decode, strip, three layers, `ready`, then the original deleted).
 
 Non-enumeration, the gatherings posture: a gathering the caller may not
 read draws the 404 byte-identical to a missing id; a media row that is not
@@ -93,10 +95,11 @@ and a valid signature, and is NEVER LOGGED — not on success, not on the
 error paths, which is where it would actually happen. Nothing in this
 module logs at all; the response body is the only place a URL appears
 (pinned by test), and storage.py's result types redact it from their repr.
-The quarantine window opens here: an original with EXIF GPS intact now
-genuinely lands in R2, bounded by the lifecycle rule CK-33 verified and by
-nothing else until the worker exists. No copy may describe stripping as
-happening yet. Uploads in this phase are Steven's own test images only.
+The quarantine window opens here: an original with EXIF GPS intact
+genuinely lands in R2, bounded by the lifecycle rule CK-33 verified — and,
+since CK-36, closed within a poll by the worker that strips it and deletes
+the original after the ready commit. Uploads on the dev deploy are Steven's
+own test images only (private-alpha scope).
 """
 
 import asyncio
@@ -151,8 +154,8 @@ MAX_INTENTS_PER_REQUEST = 50
 # picker. HEIC/HEIF are here because a phone's library offers them as a
 # matter of course (launch shape: phone-first); GIF, TIFF and BMP are not —
 # none is a photograph a family takes, and every type admitted is a decoder
-# path the worker must carry. Widening it is one line here plus decoder
-# support in CK-35. Video is REFUSED — `video/quicktime` is the MOV half of
+# path the worker must carry. Widening it is one line here plus one in
+# processing.DECODABLE_FORMATS (the two may never disagree — pinned). Video is REFUSED — `video/quicktime` is the MOV half of
 # a Live Photo, and it draws the 422 below rather than a dead-lettered job.
 IMAGE_CONTENT_TYPES = frozenset(
     {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
@@ -437,8 +440,8 @@ async def confirm_upload(
     missing object, a size mismatch, or a row not in pending_upload is a
     refusal that changes nothing — a 409 with a stable code (the CK-30
     marker precedent), so a second confirm is refused rather than absorbed.
-    Nothing else moves: `uploaded` means claimable by a worker that does not
-    exist yet, and publication_state stays pending (record §5)."""
+    Nothing else moves: `uploaded` means claimable by the worker, and
+    publication_state stays pending (record §5)."""
     row = await db.get(Media, media_id)
     if row is None or row.uploader_person_id != ctx.person.id:
         raise _media_not_found()

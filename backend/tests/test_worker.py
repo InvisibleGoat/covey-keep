@@ -1,13 +1,19 @@
 """CK-35 — the ingest worker: claim, reclaim, retry, and the permanent
 failure — and the config split that lets it boot without the web
-credentials.
+credentials. CK-36 — the publish transaction: read, decode, strip, write
+three layers, `ready` in one transaction, and the original deleted only
+after that commit.
 
-No network anywhere in this file: the worker's HEAD is stubbed at
-`app.services.ingest._head` (the CK-34 pattern), and the WorkerSettings under
-test point at a reserved TLD. Everything else is real: real rows in the
-migrated test database, a real `FOR UPDATE SKIP LOCKED` across two sessions,
-a real missing column for the schema-not-ready case, and a real subprocess
-for the boot-with-six-variables case.
+No network anywhere in this file: the worker's four blocking storage calls
+are stubbed at `app.services.ingest._head/_read/_put/_delete` (the CK-34
+pattern — `FakeStore` below is an in-memory pair of buckets), and the
+WorkerSettings under test point at a reserved TLD. Everything else is real:
+real rows in the migrated test database, a real `FOR UPDATE SKIP LOCKED`
+across two sessions, a real missing column for the schema-not-ready case, a
+real subprocess for the boot-with-six-variables case — and a REAL
+photograph carrying EXIF GPS (`tests/fixtures/media/gps-oriented.jpg`)
+through the real decoder, so the publish tests assert on layers the
+pipeline genuinely produced.
 
 The load-bearing pins (the kickoff's list, and what fell out of building it):
 - a `pending_upload` row is NEVER claimed — nor a fresh `processing` row, a
@@ -17,13 +23,28 @@ The load-bearing pins (the kickoff's list, and what fell out of building it):
 - a stalled `processing` row is re-claimed, the abandoned attempt counted,
   and a row abandoned three times is dead-lettered at reclaim;
 - a missing object dead-letters on the FIRST attempt (attempts = 1, never
-  3), and the worker deletes nothing — it does not even import a delete;
+  3), and its original is (harmlessly) deleted after that commit;
 - a transient error climbs the ladder (1m, 5m) and dead-letters on the
   third; a rejected credential is a THIRD class that touches the row not
   at all and backs the loop off;
-- a present object releases the claim unprocessed: attempts stays 0, the
-  row returns to `uploaded`, and it is not re-examined on the next poll;
+- THE PUBLISH TRANSACTION (CK-36): a present object is read, decoded,
+  stripped and rendered; three objects land in the published bucket under
+  deterministic keys with the right class and type; the row goes to
+  `ready` with three derivative rows and `gatherings.total_bytes` moved by
+  their actual sum, in ONE commit; `publication_state` stays `pending`;
+  the reservation releases at `ready` through the one quota path; and the
+  original is deleted ONLY AFTER that commit — observed from a second
+  session at the moment of the delete;
+- a re-processed row does not trip the derivative unique constraint; a
+  delete of an absent original is a success; a delete that fails after the
+  commit leaves the row `ready`; a claim lost to a reclaim writes nothing;
+- an undecodable upload and an oversized one dead-letter on the FIRST
+  attempt with the original deleted; a write failure is transient; a
+  rejected credential on the write releases the row; an object taken by
+  the lifecycle rule between the HEAD and the GET is the permanent case;
 - dead-lettering releases the quota reservation through the one quota path;
+- a missing-field ValidationError on either settings class never echoes
+  the values that were present (hide_input_in_errors — the CK-36 rider);
 - the worker retries rather than crash-loops against a schema missing a
   media column;
 - WorkerSettings has no field for the upload or serve credential, Settings
@@ -33,6 +54,8 @@ The load-bearing pins (the kickoff's list, and what fell out of building it):
 """
 
 import asyncio
+import io
+import logging
 import os
 import subprocess
 import sys
@@ -41,22 +64,36 @@ from pathlib import Path
 
 import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
+from PIL import ExifTags, Image
 from pydantic import ValidationError
 from sqlalchemy import func, select, text, update
 
 from app.config import Settings, WorkerSettings, settings
 from app.db import engine
-from app.models import Account, Gathering, Media, MediaDerivative, MediaStatus, PublicationState
+from app.models import (
+    Account,
+    Gathering,
+    Media,
+    MediaDerivative,
+    MediaLayer,
+    MediaStatus,
+    PublicationState,
+)
 from app.services import ingest, keeping, storage
 from app.services.ingest import (
     ERROR_ABANDONED,
+    ERROR_OBJECT_MISSING,
     MAX_ATTEMPTS,
-    NO_PROCESSOR_RECHECK,
     RECLAIM_AFTER,
     RETRY_BACKOFF,
     Outcome,
     claim_next,
     handle_claimed,
+)
+from app.services.processing import (
+    STORAGE_CLASS_INFREQUENT_ACCESS,
+    STORAGE_CLASS_STANDARD,
+    render_layers,
 )
 from app.services.storage import (
     ServeClient,
@@ -65,6 +102,7 @@ from app.services.storage import (
     head_quarantine_object,
     presign_read,
     presign_upload,
+    published_key,
     quarantine_key,
     worker_client,
 )
@@ -74,6 +112,10 @@ from tests.test_keeping import _mk_account, _mk_gathering
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 MB = 1_000_000
+
+# A real photograph carrying EXIF GPS and an orientation tag (see
+# tests/fixtures/media/make_fixtures.py for its provenance).
+GPS_PHOTO = (BACKEND_DIR / "tests" / "fixtures" / "media" / "gps-oriented.jpg").read_bytes()
 
 # The worker's six, and exactly six — on a reserved TLD, so nothing here
 # could ever reach a real endpoint.
@@ -132,15 +174,80 @@ def _media(
 
 
 def _stub_head(monkeypatch, result=None, *, raises: Exception | None = None):
+    """The HEAD-only stub (CK-35's tests): the object is absent, or the
+    HEAD fails. Reads and writes must not happen on those paths, so they
+    are stubbed to fail loudly; the delete after a dead-letter is recorded
+    and succeeds."""
+
     async def fake_head(client, key):
         fake_head.calls.append((client, key))
         if raises is not None:
             raise raises
         return result
 
+    async def never(*args, **kwargs):
+        raise AssertionError("no read or write may happen on this path")
+
+    async def fake_delete(client, key):
+        fake_head.deletes.append(key)
+
     fake_head.calls = []
+    fake_head.deletes = []
     monkeypatch.setattr(ingest, "_head", fake_head)
+    monkeypatch.setattr(ingest, "_read", never)
+    monkeypatch.setattr(ingest, "_put", never)
+    monkeypatch.setattr(ingest, "_delete", fake_delete)
     return fake_head
+
+
+class FakeStore:
+    """Two in-memory buckets behind the four names ingest.py runs off the
+    event loop. `raise_on[stage]` makes one stage fail; `on_delete` runs at
+    the moment of the delete (to observe the database from a second
+    session — the ordering pin)."""
+
+    def __init__(self, monkeypatch, quarantine: dict[str, bytes] | None = None):
+        self.quarantine: dict[str, bytes] = dict(quarantine or {})
+        self.published: dict[str, tuple[bytes, str, str]] = {}
+        self.calls: list[tuple[str, str]] = []
+        self.raise_on: dict[str, Exception] = {}
+        self.on_delete = None
+        monkeypatch.setattr(ingest, "_head", self._head)
+        monkeypatch.setattr(ingest, "_read", self._read)
+        monkeypatch.setattr(ingest, "_put", self._put)
+        monkeypatch.setattr(ingest, "_delete", self._delete)
+
+    def _maybe_raise(self, stage: str) -> None:
+        if stage in self.raise_on:
+            raise self.raise_on[stage]
+
+    async def _head(self, client, key):
+        self.calls.append(("head", key))
+        self._maybe_raise("head")
+        data = self.quarantine.get(key)
+        return None if data is None else (len(data), "image/jpeg")
+
+    async def _read(self, client, key):
+        self.calls.append(("read", key))
+        self._maybe_raise("read")
+        if key not in self.quarantine:
+            raise _client_error("NoSuchKey", 404)
+        return self.quarantine[key]
+
+    async def _put(self, client, key, rendition):
+        self.calls.append(("put", key))
+        self._maybe_raise("put")
+        self.published[key] = (rendition.data, rendition.content_type, rendition.storage_class)
+
+    async def _delete(self, client, key):
+        self.calls.append(("delete", key))
+        if self.on_delete is not None:
+            await self.on_delete(key)
+        self._maybe_raise("delete")
+        self.quarantine.pop(key, None)
+
+    def stages(self) -> list[str]:
+        return [stage for stage, _ in self.calls]
 
 
 def _client_error(code: str, status: int) -> ClientError:
@@ -201,6 +308,36 @@ def test_worker_settings_are_required_with_no_default(monkeypatch):
         WorkerSettings(_env_file=None)
     missing = {tuple(err["loc"])[0] for err in excinfo.value.errors() if err["type"] == "missing"}
     assert missing == SIX
+
+
+def test_a_missing_field_error_never_echoes_the_values_that_were_present(monkeypatch):
+    """The CK-36 rider. Pydantic's missing-field ValidationError renders
+    `input_value=<the raw dict>` — every variable that WAS set — and a
+    deploy log is where it lands; CK-33's first deploy printed 22 hex
+    characters of a live credential's tail that way. hide_input_in_errors
+    on both classes; the field is still named."""
+    secret = "sk-would-be-in-a-deploy-log-315f563a948a5de1c631c6"
+    for name in WORKER_ENV:
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(ValidationError) as excinfo:
+        WorkerSettings(
+            _env_file=None,
+            database_url=f"postgresql://covey:{secret}@db.internal/covey",
+            r2_worker_secret_access_key=secret,
+        )
+    rendered = str(excinfo.value) + repr(excinfo.value)
+    assert secret not in rendered
+    assert "db.internal" not in rendered
+    assert "input_value" not in rendered
+    assert "r2_worker_access_key_id" in rendered  # the missing field is still named
+
+    monkeypatch.delenv("API_BASE_URL", raising=False)
+    with pytest.raises(ValidationError) as excinfo:
+        Settings(_env_file=None, session_secret=secret)
+    rendered = str(excinfo.value) + repr(excinfo.value)
+    assert secret not in rendered
+    assert "input_value" not in rendered
+    assert "api_base_url" in rendered
 
 
 def test_worker_boots_with_only_its_six_variables():
@@ -303,18 +440,22 @@ def test_worker_client_is_a_third_type_that_presigns_nothing(worker, worker_sett
     assert "test-worker-key-id" not in shown and "r2.invalid" not in shown
 
 
-def test_the_records_numbers_and_that_the_worker_deletes_nothing():
+def test_the_records_numbers_and_that_the_release_branch_is_gone():
     assert RECLAIM_AFTER == timedelta(minutes=15)
     assert MAX_ATTEMPTS == 3
     assert RETRY_BACKOFF == (timedelta(minutes=1), timedelta(minutes=5), timedelta(minutes=15))
     assert IDLE_POLL == 5.0
-    # The release branch must not re-claim on the very next poll.
-    assert NO_PROCESSOR_RECHECK > timedelta(seconds=IDLE_POLL + IDLE_JITTER)
-    # THIS WORKER DELETES NOTHING (CK-35): the claim service does not even
-    # import a delete — or a read. The first component able to destroy an
-    # uploaded photograph destroys none until CK-36's publish transaction.
-    assert "delete_quarantine_object" not in vars(ingest)
-    assert "read_quarantine_object" not in vars(ingest)
+    # CK-35's scaffolding — "object present, no processor, release for an
+    # hour" — had a stated expiry, and this is it: no constant, no outcome,
+    # no branch. A present object is processed.
+    assert "NO_PROCESSOR_RECHECK" not in vars(ingest)
+    assert not hasattr(Outcome, "RELEASED")
+    assert Outcome.READY.value == "ready"
+    # And the worker now deletes — through the one storage module, after
+    # a commit (the ordering tests below), never anywhere else.
+    assert ingest.delete_quarantine_object is storage.delete_quarantine_object
+    assert ingest.read_quarantine_object is storage.read_quarantine_object
+    assert ingest.put_published_object is storage.put_published_object
 
 
 # --- claim -----------------------------------------------------------------------
@@ -520,38 +661,348 @@ async def test_a_missing_object_dead_letters_on_the_first_attempt(db_session_fac
     # Dead-lettered rows are never claimed again.
     assert await poll_once(db_session_factory, worker, _now()) is Poll.IDLE
     assert len(head.calls) == 1
+    # The dead-letter's object deletion (record §6.2, "at that moment"):
+    # issued after the commit; against an absent object it is a success.
+    assert head.deletes == [quarantine_key(row.id)]
 
 
-async def test_a_present_object_releases_the_claim_unprocessed(db_session_factory, worker, monkeypatch):
-    """§3 scaffolding (deleted at CK-36): no processor exists, so the row
-    goes back to `uploaded` with nothing counted — not left `processing`
-    (a stuck row the reclaim rescues forever), not dead-lettered (a healthy
-    photograph destroyed) — and is not re-examined on the very next poll."""
-    head = _stub_head(monkeypatch, (MB, "image/jpeg"))
+# --- the publish transaction (CK-36) ---------------------------------------------
+
+
+async def _ready_state(db_session_factory, media_id):
+    async with db_session_factory() as db:
+        row = await db.get(Media, media_id)
+        derivatives = (
+            await db.execute(
+                select(MediaDerivative).where(MediaDerivative.media_id == media_id).order_by(MediaDerivative.layer)
+            )
+        ).scalars().all()
+        gathering = await db.get(Gathering, row.gathering_id)
+        return row, derivatives, gathering
+
+
+async def test_a_present_photograph_is_processed_and_published_in_one_transaction(
+    db_session_factory, worker, monkeypatch
+):
+    """The crux (ingest.py PUBLISH; record §8): the REAL GPS-bearing fixture
+    goes through the real decoder; three objects land in the published
+    bucket under deterministic keys with the class and type per layer; the
+    row goes to `ready` with three derivative rows and total_bytes moved by
+    their ACTUAL sum in one commit; `publication_state` is untouched; and
+    none of the three stored layers carries the GPS the original did."""
     t0 = _now()
-    row = await _uploaded_row(db_session_factory, available_at=t0)
-    uploaded_at = row.uploaded_at
+    row = await _uploaded_row(db_session_factory, size=len(GPS_PHOTO), available_at=t0)
+    store = FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
+    assert dict(Image.open(io.BytesIO(GPS_PHOTO)).getexif().get_ifd(ExifTags.IFD.GPSInfo))  # the subject has GPS
 
     assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
-    async with db_session_factory() as db:
-        row = await db.get(Media, row.id)
-        assert row.status == MediaStatus.UPLOADED
-        assert row.attempts == 0  # nothing failed — nothing was attempted
-        assert row.claimed_at is None
-        assert row.last_error is None
-        assert row.available_at == t0 + NO_PROCESSOR_RECHECK
-        assert row.uploaded_at == uploaded_at
-        assert row.publication_state == PublicationState.PENDING
-        assert await db.scalar(select(func.count()).select_from(MediaDerivative)) == 0
 
-    # Not a hot loop: the next poll finds nothing claimable...
-    assert await poll_once(db_session_factory, worker, t0 + timedelta(seconds=1)) is Poll.IDLE
-    assert len(head.calls) == 1
-    # ...and the row is looked at again once the recheck interval has passed
-    # (which is how a row whose object the lifecycle rule takes meanwhile
-    # gets dead-lettered within the hour).
-    assert await poll_once(db_session_factory, worker, t0 + NO_PROCESSOR_RECHECK) is Poll.PROCESSED
-    assert len(head.calls) == 2
+    # The store: three objects in published, keyed by (id, layer); the
+    # original gone from quarantine; the order read -> put x3 -> delete.
+    keys = {layer: published_key(row.id, layer) for layer in MediaLayer}
+    assert set(store.published) == set(keys.values())
+    assert store.quarantine == {}
+    assert store.stages() == ["head", "read", "put", "put", "put", "delete"]
+    assert store.published[keys[MediaLayer.ARCHIVAL]][1:] == ("image/jpeg", STORAGE_CLASS_INFREQUENT_ACCESS)
+    assert store.published[keys[MediaLayer.WEB]][1:] == ("image/webp", STORAGE_CLASS_STANDARD)
+    assert store.published[keys[MediaLayer.THUMBNAIL]][1:] == ("image/webp", STORAGE_CLASS_STANDARD)
+    for data, _, _ in store.published.values():
+        image = Image.open(io.BytesIO(data))
+        assert dict(image.getexif()) == {}  # no GPS, no orientation, nothing
+        assert image.size == (64, 96)  # upright: the orientation was applied
+        assert b"Exif\x00\x00" not in data and b"EXIF" not in data
+
+    # The database: one transaction's worth of consequences.
+    row, derivatives, gathering = await _ready_state(db_session_factory, row.id)
+    assert row.status == MediaStatus.READY
+    assert row.claimed_at is None
+    assert row.last_error is None
+    assert row.attempts == 0
+    assert row.publication_state == PublicationState.PENDING  # processing is not publishing
+    assert [d.layer for d in derivatives] == [MediaLayer.ARCHIVAL, MediaLayer.WEB, MediaLayer.THUMBNAIL]
+    for derivative in derivatives:
+        stored, content_type, storage_class = store.published[derivative.storage_key]
+        assert derivative.storage_key == keys[derivative.layer]
+        assert derivative.size_bytes == len(stored)
+        assert derivative.content_type == content_type
+        assert derivative.storage_class == storage_class
+        assert derivative.last_accessed is None
+    assert gathering.total_bytes == sum(d.size_bytes for d in derivatives) > 0
+    # total_bytes moved by the ACTUAL stored sum, not the declared upload
+    # size — the reservation over-counts in the safe direction.
+    assert gathering.total_bytes != row.upload_size_bytes
+    # A ready row is never claimed again.
+    assert await poll_once(db_session_factory, worker, t0 + timedelta(hours=1)) is Poll.IDLE
+
+
+async def test_the_original_is_deleted_only_after_the_ready_transaction_has_committed(
+    db_session_factory, worker, monkeypatch
+):
+    """The whole of the phase's data-handling in one assertion: at the
+    moment the delete is issued, a SECOND session already sees the row
+    `ready` with its three rows and the bytes moved. A crash before the
+    delete costs a lingering original the lifecycle rule takes; the other
+    order would cost the photograph."""
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, size=len(GPS_PHOTO), available_at=t0)
+    store = FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
+    seen: list[tuple] = []
+
+    async def observe(key):
+        r, derivatives, gathering = await _ready_state(db_session_factory, row.id)
+        seen.append((key, r.status, len(derivatives), gathering.total_bytes))
+
+    store.on_delete = observe
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    assert len(seen) == 1
+    key, status, derivative_count, total_bytes = seen[0]
+    assert key == quarantine_key(row.id)
+    assert status == MediaStatus.READY
+    assert derivative_count == 3
+    assert total_bytes > 0
+
+
+async def test_a_reprocessed_row_does_not_trip_the_derivative_unique_constraint(
+    db_session_factory, worker, monkeypatch
+):
+    """Derivative rows already present under a row that is claimable again
+    (a re-queued photograph; or any future path that lands rows without
+    the rung) must not turn the ready transaction into an IntegrityError
+    dead-letter that reads as a decode bug. Step 4 replaces them."""
+    t0 = _now()
+    stale = t0 - RECLAIM_AFTER - timedelta(minutes=1)
+    async with db_session_factory() as db:
+        gathering = await _mk_gathering(db)
+        row = _media(gathering.id, status=MediaStatus.PROCESSING, size=len(GPS_PHOTO), claimed_at=stale)
+        db.add(row)
+        await db.flush()
+        for layer in MediaLayer:
+            db.add(
+                MediaDerivative(
+                    media_id=row.id,
+                    layer=layer,
+                    storage_key=published_key(row.id, layer),
+                    content_type="image/x-earlier-attempt",
+                    size_bytes=1,
+                    storage_class="STANDARD",
+                )
+            )
+        await db.commit()
+        media_id, gathering_id = row.id, gathering.id
+    store = FakeStore(monkeypatch, {quarantine_key(media_id): GPS_PHOTO})
+
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    row, derivatives, gathering = await _ready_state(db_session_factory, media_id)
+    assert row.status == MediaStatus.READY
+    assert row.attempts == 1  # the abandoned claim was counted at reclaim
+    assert len(derivatives) == 3
+    assert {d.content_type for d in derivatives} == {"image/jpeg", "image/webp"}
+    assert gathering.total_bytes == sum(d.size_bytes for d in derivatives)
+    assert set(store.published) == {published_key(media_id, layer) for layer in MediaLayer}
+
+
+async def test_deleting_an_absent_original_is_a_success(db_session_factory, worker, monkeypatch, caplog):
+    # Two live workers for ~61 seconds on every deploy: a predecessor's
+    # delete may land first. The row is ready either way.
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, size=len(GPS_PHOTO), available_at=t0)
+    store = FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
+
+    async def vanish(key):
+        store.quarantine.pop(key, None)  # gone before our delete lands
+
+    store.on_delete = vanish
+    with caplog.at_level(logging.INFO, logger="covey-keep.worker"):
+        assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    row, derivatives, _ = await _ready_state(db_session_factory, row.id)
+    assert row.status == MediaStatus.READY and len(derivatives) == 3
+    assert "quarantine original deleted" in caplog.text
+    assert "could not be deleted" not in caplog.text
+
+
+async def test_a_delete_that_fails_after_the_commit_leaves_the_row_ready(
+    db_session_factory, worker, monkeypatch, caplog
+):
+    # The photograph is published; the original lingers for the lifecycle
+    # rule. Never a failure of the row, never a retry of the publish.
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, size=len(GPS_PHOTO), available_at=t0)
+    store = FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
+    store.raise_on["delete"] = EndpointConnectionError(endpoint_url="https://r2.invalid")
+    with caplog.at_level(logging.INFO, logger="covey-keep.worker"):
+        assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    row, derivatives, gathering = await _ready_state(db_session_factory, row.id)
+    assert row.status == MediaStatus.READY
+    assert row.attempts == 0 and row.last_error is None
+    assert len(derivatives) == 3 and gathering.total_bytes > 0
+    assert "could not be deleted" in caplog.text and "24-hour lifecycle" in caplog.text
+    assert "r2.invalid" not in caplog.text
+    assert await poll_once(db_session_factory, worker, t0 + timedelta(hours=1)) is Poll.IDLE
+
+
+async def test_the_reservation_releases_at_ready_and_total_bytes_takes_over(
+    db_session_factory, worker, monkeypatch
+):
+    """The baton keeping.py already holds (`ready` is outside
+    IN_FLIGHT_STATUSES), verified and not rebuilt: before, the account's
+    usage is the DECLARED size; after, it is the derivatives' ACTUAL sum —
+    the two differ, on purpose."""
+    declared = 4 * MB
+    async with db_session_factory() as db:
+        keeper = await _mk_account(db)
+        gathering = await _mk_gathering(db, host_account_id=keeper.id)
+        await keeping.keep(db, keeper, gathering)
+        row = _media(gathering.id, status=MediaStatus.UPLOADED, size=declared, available_at=_now())
+        db.add(row)
+        await db.commit()
+        keeper_id, media_id = keeper.id, row.id
+    FakeStore(monkeypatch, {quarantine_key(media_id): GPS_PHOTO})
+
+    async with db_session_factory() as db:
+        assert await keeping.account_usage(db, await db.get(Account, keeper_id)) == declared
+    assert await poll_once(db_session_factory, worker, _now()) is Poll.PROCESSED
+    _, derivatives, gathering = await _ready_state(db_session_factory, media_id)
+    stored = sum(d.size_bytes for d in derivatives)
+    async with db_session_factory() as db:
+        assert await keeping.account_usage(db, await db.get(Account, keeper_id)) == stored
+    assert 0 < stored < declared
+    assert gathering.total_bytes == stored
+
+
+async def test_an_undecodable_upload_dead_letters_on_the_first_attempt_and_its_original_goes(
+    db_session_factory, worker, monkeypatch
+):
+    # A renamed .mov: passes the advisory allowlist, fails here, once.
+    mov = b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  " + bytes(300)
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, size=len(mov), available_at=t0)
+    store = FakeStore(monkeypatch, {quarantine_key(row.id): mov})
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r, derivatives, gathering = await _ready_state(db_session_factory, row.id)
+    assert r.status == MediaStatus.FAILED
+    assert r.attempts == 1
+    assert r.claimed_at is None
+    assert "could not process the upload as a photograph" in r.last_error
+    assert "UnidentifiedImageError" in r.last_error and "(permanent)" in r.last_error
+    for never in ("test-worker-key-id", "X-Amz", "uploads/", "ftyp"):
+        assert never not in r.last_error
+    assert derivatives == [] and gathering.total_bytes == 0
+    assert store.published == {}
+    assert store.quarantine == {}  # deleted after the dead-letter committed
+    assert store.stages() == ["head", "read", "delete"]
+    assert await poll_once(db_session_factory, worker, t0 + timedelta(hours=1)) is Poll.IDLE
+
+
+async def test_an_oversized_image_dead_letters_on_the_first_attempt(db_session_factory, worker, monkeypatch):
+    # 50.4 megapixels in a 20 KB file — the byte cap bounds nothing, the
+    # pixel guard refuses from the header, permanently (never the ladder:
+    # a row that kept killing the worker would be the crash loop by another
+    # name that reclaim only counts its way out of).
+    buffer = io.BytesIO()
+    Image.new("1", (7100, 7100), 1).save(buffer, "PNG")
+    bomb = buffer.getvalue()
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, size=len(bomb), available_at=t0)
+    store = FakeStore(monkeypatch, {quarantine_key(row.id): bomb})
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r, derivatives, _ = await _ready_state(db_session_factory, row.id)
+    assert (r.status, r.attempts) == (MediaStatus.FAILED, 1)
+    assert "50 megapixel" in r.last_error and "(permanent)" in r.last_error
+    assert derivatives == [] and store.published == {} and store.quarantine == {}
+
+
+async def test_an_object_taken_between_the_head_and_the_read_is_the_permanent_case(
+    db_session_factory, worker, monkeypatch
+):
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, size=len(GPS_PHOTO), available_at=t0)
+    store = FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
+    store.raise_on["read"] = _client_error("NoSuchKey", 404)
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r, _, _ = await _ready_state(db_session_factory, row.id)
+    assert (r.status, r.attempts, r.last_error) == (MediaStatus.FAILED, 1, ERROR_OBJECT_MISSING)
+
+
+async def test_a_write_failure_is_transient_and_the_retry_rewrites_all_three(
+    db_session_factory, worker, monkeypatch
+):
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, size=len(GPS_PHOTO), available_at=t0)
+    store = FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
+    store.raise_on["put"] = _client_error("InternalError", 500)
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r, derivatives, gathering = await _ready_state(db_session_factory, row.id)
+    assert (r.status, r.attempts, r.claimed_at) == (MediaStatus.UPLOADED, 1, None)
+    assert r.available_at == t0 + RETRY_BACKOFF[0]
+    assert "write: ClientError (InternalError)" in r.last_error
+    assert derivatives == [] and gathering.total_bytes == 0
+    assert quarantine_key(row.id) in store.quarantine  # nothing deleted on a retry
+
+    # The store recovers: the retry writes all three and publishes; the
+    # stale retry text is cleared at ready.
+    del store.raise_on["put"]
+    assert await poll_once(db_session_factory, worker, t0 + RETRY_BACKOFF[0]) is Poll.PROCESSED
+    r, derivatives, _ = await _ready_state(db_session_factory, row.id)
+    assert (r.status, r.attempts, r.last_error) == (MediaStatus.READY, 1, None)
+    assert len(derivatives) == 3 and len(store.published) == 3
+
+
+async def test_a_rejected_credential_on_the_write_releases_the_row_untouched(
+    db_session_factory, worker, monkeypatch
+):
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, size=len(GPS_PHOTO), available_at=t0)
+    store = FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
+    store.raise_on["put"] = _client_error("AccessDenied", 403)
+    assert await poll_once(db_session_factory, worker, t0) is Poll.BACKOFF
+    r, derivatives, _ = await _ready_state(db_session_factory, row.id)
+    assert (r.status, r.attempts, r.claimed_at, r.available_at, r.last_error) == (
+        MediaStatus.UPLOADED, 0, None, t0, None,
+    )
+    assert derivatives == [] and quarantine_key(row.id) in store.quarantine
+
+
+async def test_a_claim_lost_to_a_reclaim_writes_nothing_on_the_ready_transaction(
+    db_session_factory, worker, monkeypatch
+):
+    # This worker stalled past RECLAIM_AFTER with the objects already
+    # written; another reclaimed the row. The guarded update goes first,
+    # so no derivative row and no total_bytes move — the other worker's
+    # publish will overwrite the same three keys.
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, size=len(GPS_PHOTO), available_at=t0)
+    store = FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
+    async with db_session_factory() as db:
+        mine = await claim_next(db, t0)
+        await db.commit()
+    theirs = t0 + RECLAIM_AFTER + timedelta(minutes=1)
+    async with db_session_factory() as db:
+        other = await claim_next(db, theirs)
+        await db.commit()
+    assert other.id == row.id
+    async with db_session_factory() as db:
+        assert await handle_claimed(db, worker, mine, theirs + timedelta(minutes=1)) is Outcome.LOST_CLAIM
+        await db.commit()
+    r, derivatives, gathering = await _ready_state(db_session_factory, row.id)
+    assert (r.status, r.claimed_at, r.attempts) == (MediaStatus.PROCESSING, theirs, 1)
+    assert derivatives == [] and gathering.total_bytes == 0
+    assert "delete" not in store.stages()  # the original is the other worker's to delete
+
+
+async def test_a_row_dead_lettered_at_reclaim_has_its_original_deleted(db_session_factory, worker, monkeypatch):
+    t0 = _now()
+    stale = t0 - RECLAIM_AFTER - timedelta(minutes=1)
+    async with db_session_factory() as db:
+        gathering = await _mk_gathering(db)
+        row = _media(gathering.id, status=MediaStatus.PROCESSING, claimed_at=stale, attempts=MAX_ATTEMPTS - 1)
+        db.add(row)
+        await db.commit()
+        media_id = row.id
+    store = FakeStore(monkeypatch, {quarantine_key(media_id): GPS_PHOTO})
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r, _, _ = await _ready_state(db_session_factory, media_id)
+    assert (r.status, r.attempts, r.last_error) == (MediaStatus.FAILED, MAX_ATTEMPTS, ERROR_ABANDONED)
+    assert store.stages() == ["delete"] and store.quarantine == {}
 
 
 async def test_a_transient_error_climbs_the_ladder_and_dead_letters_on_the_third(
@@ -778,9 +1229,10 @@ async def test_an_unexpected_exception_in_a_poll_does_not_kill_the_loop(db_sessi
     assert len(sleeps) == 1
 
 
-async def test_no_derivative_row_and_no_total_bytes_move_on_any_path(db_session_factory, worker, monkeypatch):
-    # CK-36's half, asserted absent across every outcome this phase has.
-    outcomes = [None, (MB, "image/jpeg"), _client_error("InternalError", 500)]
+async def test_no_derivative_row_and_no_total_bytes_move_on_any_failure_path(db_session_factory, worker, monkeypatch):
+    # Only the ready transaction writes a derivative row or moves
+    # total_bytes; every failure outcome leaves both alone.
+    outcomes = [None, _client_error("InternalError", 500)]
     async with db_session_factory() as db:
         gathering = await _mk_gathering(db)
         for i in range(len(outcomes)):

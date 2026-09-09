@@ -30,3 +30,19 @@ webauthn==3.0.0
 # webauthn is: a signing library moves on our decision, never pip's. Still
 # not license to add dependencies for problems that are actually simple.
 botocore==1.43.89
+# Pillow + pillow-heif (CK-36). The third deliberate exception, and it is
+# the first one's reasoning exactly: decoding JPEG/PNG/WebP/HEIC, applying
+# an EXIF orientation, resampling with a real filter, and re-encoding to
+# JPEG and WebP is codec work — hand-rolling any of it would be the WebAuthn
+# mistake with pixels. pillow-heif is not optional: the intent allowlist
+# admits image/heic because the launch shape is phone-first and HEIC is the
+# iPhone default, and Pillow cannot open HEIC without it — with the decoder
+# absent, the first photograph anyone uploads from a phone would pass the
+# intent, land in quarantine, fail to decode and dead-letter (decision
+# record 2026-09-09, §0). Its wheels bundle libheif, so Render's build is
+# still `pip install -r requirements.txt` with no system package. Both pinned
+# exactly, as webauthn and botocore are: a decoder moves on our decision,
+# never pip's, and a new Pillow can change what an encoder writes. Still not
+# license to add dependencies for problems that are actually simple.
+Pillow==12.3.0
+pillow-heif==1.7.0

@@ -1,4 +1,5 @@
-"""The ingest worker — the second Render service (CK-35).
+"""The ingest worker — the second Render service (CK-35), processing
+photographs since CK-36.
 
     python -m app.worker            # poll forever (the Render start command)
     python -m app.worker --once     # drain what is claimable now, then exit
@@ -10,6 +11,25 @@ no SESSION_SECRET and neither web credential in its environment (pinned by
 test in a subprocess with exactly the six set). The web service, in turn,
 has no field for this credential. Neither service holds the other's keys,
 structurally.
+
+WHAT IT DOES WITH A CLAIMED ROW (CK-36; services/ingest.py has the order
+and every failure mode): reads the original from quarantine, decodes it,
+applies its EXIF orientation, strips every byte of metadata, renders the
+three derivative layers, writes them to the published bucket, moves the
+row to `ready` with the derivative rows and the gathering's `total_bytes`
+in ONE transaction — and only after that commit deletes the quarantine
+original. A row that cannot be processed (missing object, not a
+photograph, oversized) is dead-lettered on its first attempt, and its
+original is deleted after THAT commit. Both deletions happen HERE, after
+`db.commit()`, never inside the transaction: a crash between the commit
+and the delete costs a lingering original the 24-hour lifecycle rule
+collects; a crash in the other order would cost the photograph. Deleting
+an already-absent object is a success — Render runs two workers for ~61
+seconds on every deploy (CK-35's check (cw)), and `SKIP LOCKED` protects
+the row, not a delete a slow-dying predecessor issues.
+
+`publication_state` is never touched: processing is not publishing
+(record §5); the host's gate is unbuilt.
 
 TWO SERVICES, ONE DATABASE — the rules that must hold from this service's
 first deploy (record §8), each enforced here or in render.yaml:
@@ -36,15 +56,13 @@ jittered, when the queue is empty (record §6.2). A rejected credential
 draining, with a loud log line, so a mistyped dashboard value does not
 hammer the store.
 
-WHAT THIS WORKER DOES NOT DO YET — binding on every log line and doc: no
-decode, no EXIF stripping, no derivative row, no publish, no deletion of
-any object. A claimed row whose object is present is released unprocessed
-(ingest §3 scaffolding, deleted at CK-36); one whose object is gone is
-dead-lettered. Uploads on the dev deploy remain Steven's own test images.
-
-DATA-HANDLING: log lines carry media ids and outcomes — a row id is not
+DATA-HANDLING: this process is the first component able to destroy an
+uploaded photograph, and the order above is the whole of its discipline —
+derivatives committed before the original is deleted, never the reverse.
+Log lines carry media ids, outcomes and byte counts — a row id is not
 personal data and a key is a function of it. Never a URL, never a key id,
-never a person, never the contents of anything.
+never a person, never the contents of anything. Uploads on the dev deploy
+remain Steven's own test images (private-alpha scope).
 """
 
 from __future__ import annotations
@@ -95,7 +113,8 @@ async def poll_once(
     now: Optional[datetime] = None,
 ) -> Poll:
     """One claim and its outcome. Two commits: the claim (so the row lock
-    is held for the claim alone) and the outcome."""
+    is held for the claim alone) and the outcome — and after a terminal
+    outcome has committed, the deletion of the quarantine original."""
     now = now or datetime.now(timezone.utc)
     try:
         async with session_factory() as db:
@@ -104,8 +123,10 @@ async def poll_once(
             if row is None:
                 return Poll.IDLE
             if row.status == MediaStatus.FAILED:
-                # Dead-lettered at reclaim: abandoned MAX_ATTEMPTS times.
+                # Dead-lettered at reclaim: abandoned MAX_ATTEMPTS times. The
+                # terminal state is committed; now the original goes.
                 log.warning("media %s dead-lettered at reclaim: %s", row.id, row.last_error)
+                await _delete_original(client, row)
                 return Poll.PROCESSED
             outcome = await ingest.handle_claimed(db, client, row, now)
             await db.commit()
@@ -124,15 +145,14 @@ async def poll_once(
             row.id,
         )
         return Poll.BACKOFF
-    if outcome is ingest.Outcome.RELEASED:
-        log.info(
-            "media %s: object present; no processor exists yet (CK-36) — released "
-            "unprocessed, next look after %s",
-            row.id,
-            ingest.NO_PROCESSOR_RECHECK,
-        )
+    if outcome is ingest.Outcome.READY:
+        # Committed: three derivative rows, `ready`, total_bytes moved. Only
+        # now may the original go (ingest.py, PUBLISH step 5).
+        log.info("media %s: ready — three layers written (attempt %d)", row.id, row.attempts + 1)
+        await _delete_original(client, row)
     elif outcome is ingest.Outcome.DEAD_LETTERED:
         log.warning("media %s: dead-lettered (attempt %d): %s", row.id, row.attempts, row.last_error)
+        await _delete_original(client, row)
     elif outcome is ingest.Outcome.RETRY_SCHEDULED:
         log.warning(
             "media %s: attempt %d failed transiently; next attempt at %s",
@@ -143,6 +163,20 @@ async def poll_once(
     else:
         log.warning("media %s: claim lost to a reclaim; outcome discarded", row.id)
     return Poll.PROCESSED
+
+
+async def _delete_original(client: WorkerClient, row) -> None:
+    """After a terminal outcome has COMMITTED: delete the quarantine
+    original. A failure is logged and is not a failure of the row — the
+    lifecycle rule collects what lingers."""
+    if await ingest.delete_original(client, row.id):
+        log.info("media %s: quarantine original deleted", row.id)
+    else:
+        log.warning(
+            "media %s: quarantine original could not be deleted; the 24-hour lifecycle "
+            "rule will remove it",
+            row.id,
+        )
 
 
 def _idle_delay() -> float:
@@ -202,7 +236,7 @@ async def _serve(settings: WorkerSettings, *, once: bool) -> int:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="CoveyKeep ingest worker (CK-35)")
+    parser = argparse.ArgumentParser(description="CoveyKeep ingest worker")
     parser.add_argument(
         "--once",
         action="store_true",

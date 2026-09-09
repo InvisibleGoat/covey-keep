@@ -17,8 +17,9 @@ never interchangeable (media pipeline record §3, §8, §11):
   script proves that against live R2; until CK-33 nothing ever had.
 
 The WORKER credential (`R2_WORKER_*`, Object Read & Write on BOTH buckets)
-is the third type, `WorkerClient` (CK-35): it reads quarantine, and — from
-CK-36 — writes published and deletes originals. It is built only from
+is the third type, `WorkerClient` (CK-35): it reads quarantine, and since
+CK-36 writes published (`put_published_object` — the one write into the
+bucket readers are served from) and deletes originals. It is built only from
 `WorkerSettings`, which the web service never constructs, and the worker
 never constructs the other two: the config split in config.py is what makes
 "neither service holds the other's keys" (§11.1) structural rather than a
@@ -52,17 +53,22 @@ because this is where it is minted):
     redact the URL from their repr for the same reason: a repr lands in
     tracebacks, and a traceback lands in a log.
 
-The quarantine key layout lives here too (CK-34): `quarantine_key` is the
-one pure function of a media row's id that the intent endpoint signs a PUT
-for, the confirm step HEADs, and the worker HEADs (CK-35) and will read and
-delete (CK-36) — one home, imported by both services, so the two can never
-compute different keys. The object functions below still take a key rather
-than a row, because the verifier script writes its own test object under
-its own key and must not look like a photograph.
+The two key layouts live here too. `quarantine_key` (CK-34) is the one
+pure function of a media row's id that the intent endpoint signs a PUT for,
+the confirm step HEADs, and the worker HEADs, reads and deletes — one home,
+imported by both services, so the two can never compute different keys.
+`published_key` (CK-36) is the same idea for the three derivative objects:
+a pure function of the row id and the layer, so a re-processed photograph
+overwrites its own keys and never leaves a second set behind (the publish
+transaction's idempotency rests on it — ingest.py). The object functions
+below still take a key rather than a row, because the verifier script
+writes its own test object under its own key and must not look like a
+photograph.
 
 No router, no FastAPI import: the callers are api/media.py (the intent
 endpoint and the confirm step, CK-34), services/ingest.py (the worker's
-claim service, CK-35), and the verifier script. botocore is
+claim service, CK-35; the publish transaction, CK-36), and the verifier
+script. botocore is
 synchronous — presigning is pure computation (no network) and safe to call
 from async code; the object operations below block on the network, and an
 async caller runs them via asyncio.to_thread. Client construction loads the
@@ -73,10 +79,28 @@ plain functions of their settings.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Optional, Union
 from uuid import UUID
+
+from app.models import MediaLayer
+
+# THE SIGNING LIBRARY'S OWN DEBUG LOGGING PRINTS THE SIGNATURE (CK-36). At
+# DEBUG, `botocore.auth` logs the canonical request (which carries the
+# Access Key ID), the string to sign, and the hex signature itself, under
+# a "Signature:" heading, for every request it signs — a presigned URL's
+# bearer signature included. The application never runs at DEBUG, but
+# "never logged on any path" cannot rest on nobody ever turning DEBUG on to
+# chase a deploy, which is exactly when someone would. So the logger is
+# pinned above DEBUG here, at import of the one home for R2 access: a
+# `basicConfig(level=DEBUG)` sets the ROOT level and leaves this one alone.
+# Found when the test suite's loggers were re-enabled (alembic's fileConfig
+# had silenced this logger along with every other — CLAUDE.md Gotchas),
+# which is why CK-34's never-log pins had never seen it; pinned by test in
+# test_storage.py.
+logging.getLogger("botocore.auth").setLevel(logging.INFO)
 
 from botocore.config import Config
 from botocore.exceptions import ClientError
@@ -116,6 +140,23 @@ def quarantine_key(media_id: UUID) -> str:
     holds). The intent endpoint, the confirm step, and the worker all
     derive the same key from the same id through this one function."""
     return f"{QUARANTINE_PREFIX}{media_id}"
+
+
+# The published key prefix (CK-36). One prefix for every derivative of every
+# photograph; the row id and the layer name complete it.
+PUBLISHED_PREFIX = "media/"
+
+
+def published_key(media_id: UUID, layer: MediaLayer) -> str:
+    """The published object key for one layer of one photograph — a pure
+    function of (row id, layer), with no extension and no content type,
+    for the same reason quarantine_key carries none: the format is a fact
+    the derivative row records (`content_type`), and a key that encoded it
+    would change under a format change while the row would not. Being a
+    pure function is what makes the worker's writes IDEMPOTENT: a retry
+    after a crash writes the same three keys again and overwrites its own
+    earlier attempt, never leaving a second set of objects to orphan."""
+    return f"{PUBLISHED_PREFIX}{media_id}/{layer.value}"
 
 
 def _client(access_key_id: str, secret_access_key: str, endpoint_url: str):
@@ -170,10 +211,10 @@ class ServeClient:
 @dataclass(frozen=True, repr=False)
 class WorkerClient:
     """The worker credential (CK-35), scoped to BOTH buckets — the one
-    credential that may move a photograph from quarantine to published, and
-    the one that may delete a quarantined original (CK-36). Knows both
-    buckets by name because its credential does; it is never accepted by
-    either presign function."""
+    credential that may move a photograph from quarantine to published
+    (`put_published_object`, CK-36), and the one that may delete a
+    quarantined original. Knows both buckets by name because its credential
+    does; it is never accepted by either presign function."""
 
     raw: Any
     quarantine_bucket: str
@@ -292,6 +333,20 @@ def _require_serve(client: object, what: str) -> ServeClient:
     return client
 
 
+def _require_worker(client: object, what: str) -> WorkerClient:
+    """The WorkerClient alone: the one write into the published bucket
+    belongs to the one credential scoped to write there. The UploadClient
+    cannot (quarantine only) and the ServeClient must not (read only, and
+    the verifier proves the bucket refuses it) — both are refused here
+    before any request is made."""
+    if not isinstance(client, WorkerClient):
+        raise TypeError(
+            f"{what} takes the WorkerClient: the published bucket is written by the "
+            f"worker credential and nothing else (got {client.__class__.__name__})"
+        )
+    return client
+
+
 def _require_quarantine(client: object, what: str) -> tuple[Any, str]:
     """(raw client, quarantine bucket) for a credential scoped to quarantine:
     the UploadClient (the web service confirming an upload landed) or the
@@ -390,18 +445,61 @@ def head_quarantine_object(client: QuarantineClient, *, key: str) -> Optional[tu
 def read_quarantine_object(client: QuarantineClient, *, key: str) -> bytes:
     """The bytes of a quarantine object. The upload credential can read what
     it wrote (§3's honest bound); the verifier reads its own test object back
-    through this; the worker reads what it decodes (CK-36). Blocks on the
-    network."""
+    through this; the worker reads what it decodes (CK-36). A missing object
+    raises the ClientError botocore raises for it (NoSuchKey) — the worker
+    classifies it, because between its HEAD and this GET the lifecycle rule
+    may have taken the object. Blocks on the network."""
     raw, bucket = _require_quarantine(client, "read_quarantine_object")
     response = raw.get_object(Bucket=bucket, Key=key)
     return response["Body"].read()
 
 
 def delete_quarantine_object(client: QuarantineClient, *, key: str) -> None:
-    """Delete one quarantine object. Idempotent at R2 (deleting an absent key
-    succeeds). Blocks on the network. The worker (CK-35) calls this NOWHERE
-    — the deletion of a live original belongs to CK-36's publish transaction
-    and the dead-letter path that lands with it; pinned by test on the
-    ingest module's imports."""
+    """Delete one quarantine object — and DELETING AN ABSENT OBJECT IS A
+    SUCCESS, never an error (CK-36). R2 answers a delete of a missing key
+    with 204, and this function makes the rule explicit rather than
+    inherited: should any S3-compatible store answer 404 instead, that is
+    swallowed here too. The reason is a measured fact, not a nicety — Render
+    brings a replacement worker up ~61 seconds before signalling the old one
+    (CK-35's check (cw)), and `FOR UPDATE SKIP LOCKED` protects the row, not
+    a delete a slow-dying predecessor issues against the bucket. Called by
+    the worker after the publish transaction has committed, and after a
+    dead-letter has committed — never before either. Blocks on the network."""
     raw, bucket = _require_quarantine(client, "delete_quarantine_object")
-    raw.delete_object(Bucket=bucket, Key=key)
+    try:
+        raw.delete_object(Bucket=bucket, Key=key)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") in _ABSENT_CODES:
+            return
+        raise
+
+
+def put_published_object(
+    worker: WorkerClient, *, key: str, body: bytes, content_type: str, storage_class: str
+) -> None:
+    """Write one derivative object into the PUBLISHED bucket (CK-36) — the
+    only write that bucket ever receives, and only the WorkerClient may make
+    it. The storage class is set per object at write time (media-layers
+    record §4: archival on Infrequent Access, web and thumbnail on Standard)
+    and is the string the derivative row records verbatim. Overwrites an
+    existing object under the same key without complaint — the key is a
+    pure function of the row and the layer (published_key), which is what
+    makes a re-processed photograph overwrite itself rather than orphan its
+    earlier attempt. Blocks on the network."""
+    worker = _require_worker(worker, "put_published_object")
+    if not key:
+        raise ValueError("key must not be empty")
+    if not body:
+        raise ValueError("body must not be empty")
+    if not content_type:
+        raise ValueError("content_type must not be empty")
+    if not storage_class:
+        raise ValueError("storage_class must not be empty")
+    worker.raw.put_object(
+        Bucket=worker.published_bucket,
+        Key=key,
+        Body=body,
+        ContentType=content_type,
+        ContentLength=len(body),
+        StorageClass=storage_class,
+    )
