@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { FieldError, FormLevelErrors } from '../components/FieldError'
+import { GatheringMedia } from '../components/GatheringMedia'
 import { authFetch } from '../lib/api'
 import {
   effectiveZone,
@@ -1211,6 +1212,22 @@ export function GatheringDetail() {
             </fieldset>
           </form>
         )}
+      </section>
+
+      {/* Photos (CK-38): renders for everyone in the read audience — the
+          list is filtered server-side by the per-state audience rule, so a
+          keeper or invitee who uploaded nothing sees an empty list, never a
+          photograph nobody has approved. Collapsed by default: no media
+          request until opened. isHost only chooses the wording of who can
+          see a pending photograph; the server decides who sees anything. */}
+      <section className="auth-card" aria-labelledby="photos-heading">
+        <h2 id="photos-heading">Photos</h2>
+        <GatheringMedia
+          gatheringId={gathering.id}
+          isHost={canEdit}
+          occurrences={gathering.occurrences}
+          zone={zone}
+        />
       </section>
 
       {canEdit && (
