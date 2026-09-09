@@ -1,6 +1,9 @@
-"""Upload intents and the confirm step (CK-34) — the first surface that
-writes a `media` row, and the one conceptual decision it makes: MAY THIS
-UPLOAD BE ACCEPTED, and if so, issue the credential for it.
+"""The media router. Upload intents and the confirm step (CK-34) — the
+first surface that writes a `media` row, and the one conceptual decision it
+makes: MAY THIS UPLOAD BE ACCEPTED, and if so, issue the credential for it.
+And, since CK-37, reading a photograph back — which turns on a second,
+consent-shaped question: WHO MAY SEE ONE THAT NO HOST HAS APPROVED (see
+READING BACK, below the accept/refuse list).
 
 The shape (media pipeline record §1, §6.6, §9): the API never sees the
 bytes. A caller declares what they intend to upload — a content type, a
@@ -88,6 +91,51 @@ the caller's own intent draws the media 404, identical to a missing id —
 only the uploader ever received the id, so nobody else has a reason to
 hold it.
 
+READING BACK (CK-37; decisions/2026-09-09-who-may-see-an-unapproved-
+photograph.md). Two endpoints: the list for a gathering
+(`GET /gatherings/{id}/media`) and a presigned GET for one layer of one
+photograph (`GET /media/{id}/url?layer=`). Both apply ONE rule — in SQL,
+`_visible_media`, never in the response layer — and it has three cases, of
+which only one is the gathering's ordinary read audience:
+
+  live     the read audience (_gathering_for_read: host OR keeper OR
+           accepted invitee). Nothing is `live` today; the branch exists
+           so the publication phase never has to come back and widen an
+           audience it should have found already correct.
+  pending  THE UPLOADER AND THE HOST, AND NOBODY ELSE. Every row in the
+           database is in this state. The machine finished (`ready`); the
+           person did not approve. A keeper is not an approver, and an
+           invitation grants visibility of the gathering, never of
+           unreviewed media (record §5; the-book-model §10: publication is
+           reserved to the host). Letting the read audience see pending
+           rows "because the gate isn't built yet" would show unapproved
+           photographs of children to an entire gathering — the precise
+           failure the consent architecture exists to prevent, arriving as
+           an omission rather than a decision.
+  removed  the contributor-visible bin (keeper record §2.8): the uploader,
+           for REMOVED_BIN after `removed_at`; nobody else, ever.
+
+404-not-403 throughout. A photograph the caller may not see draws the
+media 404 byte-identical to a missing id, on every per-object path and
+BEFORE any other refusal (the archival refusal, the not-ready refusal),
+so neither can confirm a row exists. The list requires the gathering's
+read audience first (a stranger draws the gathering 404) and then filters
+rows by the rule: a keeper who uploaded nothing sees an empty list, not an
+error — the gathering is theirs to read; the photographs are not.
+
+A URL is minted for `web` and `thumbnail` only — `archival` is the print
+master on Infrequent Access, billed per retrieval, reached only by the book
+pipeline and the export, neither of which exists — and only for a `ready`
+row: every other rung appears in the list with its state and no link
+(record §2: pending is a real state, not a spinner, and the list is where
+it becomes visible). Each URL is one presigned GET through the SERVE
+credential (storage.presign_read — the credential CK-33 proved cannot read
+quarantine), PRESIGN_TTL long, issued only to a caller the rule has already
+admitted, and NEVER LOGGED — this is the first endpoint that mints URLs at
+volume, and record §9 bites hardest here; pinned with the root logger at
+DEBUG on the success path and every refusal path. Nothing here moves
+`publication_state`: publication is the host's, and it is not built.
+
 DATA-HANDLING: the first bytes into the bucket that will hold photographs
 of children move through URLs this router mints. A PRESIGNED URL IS A
 BEARER CREDENTIAL (record §9, binding): it carries the upload Access Key ID
@@ -110,7 +158,7 @@ from uuid import UUID
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, get_auth_context, get_db
@@ -119,10 +167,15 @@ from app.config import settings
 from app.models import (
     Account,
     Gathering,
+    GatheringInvitation,
     GatheringType,
+    KeptGathering,
     Media,
+    MediaDerivative,
+    MediaLayer,
     MediaStatus,
     Occurrence,
+    Person,
     PublicationState,
 )
 # The module, not its names: the limits are read at call time, so a test
@@ -130,10 +183,13 @@ from app.models import (
 from app.services import keeping
 from app.services.retention import purge_stale
 from app.services.storage import (
+    ServeClient,
     UploadClient,
     head_quarantine_object,
+    presign_read,
     presign_upload,
     quarantine_key,
+    serve_client,
     upload_client,
 )
 
@@ -174,8 +230,28 @@ NOT_PENDING = "not_pending"
 OBJECT_MISSING = "object_missing"
 SIZE_MISMATCH = "size_mismatch"
 STORAGE_UNAVAILABLE = "storage_unavailable"
+# The read side's one 409 (CK-37): the caller may see the row, but it is not
+# `ready`, so there is no object to issue a URL for. Carries the rung.
+NOT_READY = "not_ready"
+
+# The contributor-visible bin (keeper record §2.8; consent doc, Revocation):
+# a removed photograph stays visible to its UPLOADER for this long after
+# `removed_at`, and to nobody else at any point; at the end of the window
+# the three layers are deleted as a unit. Nothing removes anything yet —
+# removal is the publication phase's — so this constant defines the READ
+# window now, so the read rule is complete before the write that needs it
+# exists. The deletion sweep, when built, reads the same constant.
+REMOVED_BIN = timedelta(days=30)
+
+# The layers a read may be issued for (CK-37). The archival layer is the
+# print master on Infrequent Access (media-layers record §4): every
+# retrieval is billed, and it is reached only by the book pipeline and the
+# export, neither of which exists. Never a default; never widened to make a
+# gallery "sharper".
+SERVABLE_LAYERS = frozenset({MediaLayer.WEB, MediaLayer.THUMBNAIL})
 
 _upload: Optional[UploadClient] = None
+_serve: Optional[ServeClient] = None
 
 
 def _upload_client() -> UploadClient:
@@ -187,6 +263,18 @@ def _upload_client() -> UploadClient:
     if _upload is None:
         _upload = upload_client(settings)
     return _upload
+
+
+def _serve_client() -> ServeClient:
+    """One ServeClient per process, built on first use (the same holding
+    rule as the upload client). The serve credential signs reads from the
+    published bucket and nothing else — CK-33's verifier proves it is
+    refused on quarantine, which is what lets "nothing is ever served from
+    quarantine" rest on the credential rather than on this module."""
+    global _serve
+    if _serve is None:
+        _serve = serve_client(settings)
+    return _serve
 
 
 async def _head(upload: UploadClient, key: str) -> Optional[tuple[int, str]]:
@@ -497,3 +585,161 @@ async def confirm_upload(
     row.available_at = now
     await db.commit()
     return _media_body(row)
+
+
+# --- reading back (CK-37) ----------------------------------------------------
+
+
+def _visible_media(ctx: AuthContext, now: datetime):
+    """WHO MAY SEE THIS PHOTOGRAPH — the decision record's rule as ONE SQL
+    criterion over `Media` joined to its `Gathering` (the join is the
+    caller's; `Gathering.host_account_id` is read here). Used by both read
+    endpoints, so the list and the per-object read can never disagree, and
+    evaluated in the database rather than in the response layer, so a row
+    the caller may not see is never even fetched.
+
+    Three cases, and only `live` is the gathering's read audience:
+      - `live`    → host, keeper, or accepted invitee (the CK-25 audience,
+                    as EXISTS subqueries — list_gatherings' shape).
+      - `pending` → the UPLOADER or the HOST, and nobody else. A keeper is
+                    not an approver; an invitation is visibility of the
+                    gathering, not of unreviewed media.
+      - `removed` → the uploader alone, within REMOVED_BIN of `removed_at`.
+                    A removed row with no `removed_at` is malformed and is
+                    visible to nobody (the strict direction).
+    Nothing here consults `status`: a `pending_upload` row is as visible to
+    its uploader as a `ready` one — the list shows the rung; the URL
+    endpoint refuses to mint for anything but `ready` separately."""
+    account_id = ctx.person.account_id
+    person_id = ctx.person.id
+    is_host = Gathering.host_account_id == account_id
+    is_uploader = Media.uploader_person_id == person_id
+    keeps = exists(
+        select(KeptGathering.id).where(
+            KeptGathering.account_id == account_id,
+            KeptGathering.gathering_id == Media.gathering_id,
+        )
+    )
+    invited = exists(
+        select(GatheringInvitation.id).where(
+            GatheringInvitation.person_id == person_id,
+            GatheringInvitation.gathering_id == Media.gathering_id,
+        )
+    )
+    return or_(
+        and_(Media.publication_state == PublicationState.LIVE, or_(is_host, keeps, invited)),
+        and_(Media.publication_state == PublicationState.PENDING, or_(is_uploader, is_host)),
+        and_(
+            Media.publication_state == PublicationState.REMOVED,
+            is_uploader,
+            Media.removed_at.is_not(None),
+            Media.removed_at > now - REMOVED_BIN,
+        ),
+    )
+
+
+def _list_item(row: Media, display_name: Optional[str], ctx: AuthContext) -> dict:
+    # The media body plus who uploaded it (a display name, never an email,
+    # never a person id — the RSVP roster's rule), whether it is the
+    # caller's own, and the bin clock when it is in the bin. `last_error`
+    # is deliberately absent: it is operator terms (record §6.5 — copy names
+    # the outcome, never the file), and `status: "failed"` is the fact.
+    body = _media_body(row)
+    body["uploader_display_name"] = display_name if display_name is not None else row.guest_name
+    body["is_own"] = row.uploader_person_id == ctx.person.id
+    body["removed_at"] = row.removed_at.isoformat() if row.removed_at is not None else None
+    return body
+
+
+@router.get("/gatherings/{gathering_id}/media")
+async def list_media(
+    gathering_id: UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """The photographs of this gathering THE CALLER MAY SEE — filtered by
+    `_visible_media` in the query, newest first. The gathering itself must
+    be readable (a stranger draws the gathering 404); within it, a caller
+    who is neither the host nor an uploader sees exactly the `live` rows,
+    which today is none. Every rung appears (`pending_upload` through
+    `failed`) with its state; no URL is in this body — one is minted per
+    object, per layer, on request."""
+    gathering = await _gathering_for_read(db, ctx, gathering_id)
+    now = datetime.now(timezone.utc)
+    rows = (
+        await db.execute(
+            select(Media, Person.display_name)
+            .join(Gathering, Gathering.id == Media.gathering_id)
+            # Outer: a guest upload (a later phase) has no person row.
+            .outerjoin(Person, Person.id == Media.uploader_person_id)
+            .where(Media.gathering_id == gathering.id, _visible_media(ctx, now))
+            .order_by(Media.created_at.desc(), Media.id)
+        )
+    ).all()
+    return {"media": [_list_item(row, display_name, ctx) for row, display_name in rows]}
+
+
+@router.get("/media/{media_id}/url")
+async def read_url(
+    media_id: UUID,
+    layer: MediaLayer,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """A presigned GET for ONE layer of ONE photograph, issued only to a
+    caller `_visible_media` admits. The order of refusals is the point:
+    visibility first (404, byte-identical to a missing id — a photograph's
+    existence is not public information), then the layer (422: `archival`
+    is never served), then the rung (409 `not_ready`: the caller may see
+    the row, and there is no object yet — or ever, for `failed`)."""
+    now = datetime.now(timezone.utc)
+    row = (
+        await db.execute(
+            select(Media)
+            .join(Gathering, Gathering.id == Media.gathering_id)
+            .where(Media.id == media_id, _visible_media(ctx, now))
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise _media_not_found()
+    if layer not in SERVABLE_LAYERS:
+        raise _field_422(
+            "layer",
+            "only the web and thumbnail layers can be viewed — the archival layer "
+            "is the print master and isn't served",
+            where="query",
+        )
+    if row.status != MediaStatus.READY:
+        raise HTTPException(
+            409,
+            detail={
+                "code": NOT_READY,
+                "status": row.status.value,
+                "message": "this photo isn't ready to view yet"
+                if row.status != MediaStatus.FAILED
+                else "this photo couldn't be processed, so there is nothing to view",
+            },
+        )
+    derivative = await db.scalar(
+        select(MediaDerivative).where(
+            MediaDerivative.media_id == row.id, MediaDerivative.layer == layer
+        )
+    )
+    if derivative is None:
+        # The publish transaction writes all three rows with `ready` in one
+        # commit and the verifier asserts it; a ready row without its layer
+        # is an integrity failure, not a client error.
+        raise RuntimeError(f"media {row.id} is ready with no {layer.value} derivative row")
+    presigned = presign_read(_serve_client(), key=derivative.storage_key)
+    # DO NOT LOG `presigned.url` — a bearer credential for one read of one
+    # published object, carrying the serve Access Key ID and a valid
+    # signature (record §9). The response body is the only place it goes.
+    return {
+        "media_id": str(row.id),
+        "layer": layer.value,
+        "content_type": derivative.content_type,
+        "size_bytes": derivative.size_bytes,
+        "url": presigned.url,
+        "method": presigned.method,
+        "expires_in": presigned.expires_in,
+    }

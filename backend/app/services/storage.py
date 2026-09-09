@@ -101,6 +101,15 @@ from app.models import MediaLayer
 # which is why CK-34's never-log pins had never seen it; pinned by test in
 # test_storage.py.
 logging.getLogger("botocore.auth").setLevel(logging.INFO)
+# AND ITS ROUTING LOGGER PRINTS THE BUCKET, THE OBJECT KEY AND THE ENDPOINT
+# (CK-37). At DEBUG, `botocore.regions` logs the endpoint-provider input of
+# every request it resolves — `{'Bucket': …, 'Key': 'media/<id>/web',
+# 'Endpoint': …}` — presigns included. No credential in it, but on a read
+# endpoint that mints a URL per photograph it is a per-request trail of
+# which object was fetched, and an object key is something `last_error`
+# and the worker's log lines are already forbidden to carry. Same clamp,
+# same reason; found by the CK-37 read pin with the root logger at DEBUG.
+logging.getLogger("botocore.regions").setLevel(logging.INFO)
 
 from botocore.config import Config
 from botocore.exceptions import ClientError

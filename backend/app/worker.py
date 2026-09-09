@@ -73,6 +73,7 @@ import logging
 import random
 import signal
 import sys
+import time
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Awaitable, Callable, Optional
@@ -114,8 +115,17 @@ async def poll_once(
 ) -> Poll:
     """One claim and its outcome. Two commits: the claim (so the row lock
     is held for the claim alone) and the outcome — and after a terminal
-    outcome has committed, the deletion of the quarantine original."""
+    outcome has committed, the deletion of the quarantine original.
+
+    The `ready` line carries the claim-to-ready time in milliseconds (CK-37):
+    record §6.3 states its p95 target on claim-to-ready, and until CK-37
+    nothing the worker emitted could measure it — `claimed_at` is cleared at
+    the outcome, and the first live figure (4.712 s, CK-36) came from
+    sampling the row at 50 ms. Measured on a monotonic clock from the start
+    of the claim to the ready COMMIT; the original's deletion comes after
+    and is not part of it."""
     now = now or datetime.now(timezone.utc)
+    started = time.monotonic()
     try:
         async with session_factory() as db:
             row = await ingest.claim_next(db, now)
@@ -130,6 +140,7 @@ async def poll_once(
                 return Poll.PROCESSED
             outcome = await ingest.handle_claimed(db, client, row, now)
             await db.commit()
+            elapsed_ms = round((time.monotonic() - started) * 1000)
     except _NOT_READY_ERRORS as exc:
         log.warning(
             "poll failed (%s): the database is unreachable or the schema is not "
@@ -147,8 +158,15 @@ async def poll_once(
         return Poll.BACKOFF
     if outcome is ingest.Outcome.READY:
         # Committed: three derivative rows, `ready`, total_bytes moved. Only
-        # now may the original go (ingest.py, PUBLISH step 5).
-        log.info("media %s: ready — three layers written (attempt %d)", row.id, row.attempts + 1)
+        # now may the original go (ingest.py, PUBLISH step 5). The attempt
+        # number is the row's own, persisted by the ready transaction — the
+        # log and the row say the same thing (CK-37).
+        log.info(
+            "media %s: ready — three layers written (attempt %d, %d ms claim-to-ready)",
+            row.id,
+            row.attempts,
+            elapsed_ms,
+        )
         await _delete_original(client, row)
     elif outcome is ingest.Outcome.DEAD_LETTERED:
         log.warning("media %s: dead-lettered (attempt %d): %s", row.id, row.attempts, row.last_error)

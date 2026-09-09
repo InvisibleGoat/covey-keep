@@ -58,6 +58,18 @@ that moment") — after the terminal state has committed, never before it,
 by the worker through `delete_original` (see PUBLISH for the ordering rule
 both paths share).
 
+TERMINAL ROWS CARRY NO JOB STATE (CK-37). `ready` and `failed` are the two
+rungs nothing ever claims again, so both clear `claimed_at` (CK-35) AND
+`available_at`: the deferral CK-36's two dead-letters kept from the CK-35
+release was harmless only because the claim predicate happens to read
+`uploaded`/`processing`, and stale state nobody nulls is how a later
+predicate change acquires a surprise. And `attempts` counts EVERY attempt,
+the one that ended the row included — a `ready` row reads `attempts = 1`
+after a clean run, `2` after one abandoned claim — which is exactly the
+number the worker's log line prints. Until CK-37 the success path left the
+count where it was while the log said one more: two surfaces disagreeing
+silently, which is worse than either number.
+
 A THIRD CLASS the record did not name: a REJECTED CREDENTIAL. A request that
 fails with AccessDenied / InvalidAccessKeyId / SignatureDoesNotMatch is a
 fact about the worker's configuration, not about the photograph. Treating
@@ -85,7 +97,8 @@ and each step's failure mode, deliberately:
      transient (the retry rewrites all three); a rejected credential
      releases the row.
   4. ONE TRANSACTION: the guarded update that moves the row to `ready`
-     (claimed_at NULL, last_error NULL) — FIRST, so a claim lost to a
+     (claimed_at NULL, available_at NULL, last_error NULL, attempts counting
+     this one) — FIRST, so a claim lost to a
      reclaim writes nothing at all; then any derivative rows the media id
      already has are deleted and the three fresh rows inserted, so a
      retry never trips `uq_media_derivatives_media_id_layer` (a row that
@@ -291,6 +304,7 @@ async def claim_next(db: AsyncSession, now: datetime) -> Optional[Media]:
         if row.attempts >= MAX_ATTEMPTS:
             row.status = MediaStatus.FAILED
             row.claimed_at = None
+            row.available_at = None  # terminal: no deferral survives (CK-37)
             row.last_error = ERROR_ABANDONED
             await db.flush()
             return row
@@ -375,8 +389,17 @@ async def handle_claimed(
 
     # 4. One transaction: the row to `ready`, the derivative rows, the
     # gathering's bytes. The guarded update goes first so a lost claim
-    # writes nothing at all.
-    applied = await _settle(db, row, status=MediaStatus.READY, claimed_at=None, last_error=None)
+    # writes nothing at all. The attempt that succeeded is counted and the
+    # deferral cleared — a terminal row carries no job state (CK-37).
+    applied = await _settle(
+        db,
+        row,
+        status=MediaStatus.READY,
+        claimed_at=None,
+        available_at=None,
+        attempts=row.attempts + 1,
+        last_error=None,
+    )
     if not applied:
         return Outcome.LOST_CLAIM
     await db.execute(
@@ -427,6 +450,7 @@ async def _permanent_failure(db: AsyncSession, row: Media, last_error: str) -> O
         row,
         status=MediaStatus.FAILED,
         claimed_at=None,
+        available_at=None,
         attempts=row.attempts + 1,
         last_error=last_error,
     )
@@ -447,6 +471,7 @@ async def _transient_failure(db: AsyncSession, row: Media, now: datetime, cause:
             row,
             status=MediaStatus.FAILED,
             claimed_at=None,
+            available_at=None,
             attempts=attempts,
             last_error=f"storage did not answer after {attempts} attempts (last: {cause})",
         )

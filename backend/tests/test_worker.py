@@ -57,6 +57,7 @@ import asyncio
 import io
 import logging
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -717,7 +718,10 @@ async def test_a_present_photograph_is_processed_and_published_in_one_transactio
     assert row.status == MediaStatus.READY
     assert row.claimed_at is None
     assert row.last_error is None
-    assert row.attempts == 0
+    # The attempt that succeeded is counted, and a terminal row carries no
+    # deferral (CK-37): the row says what the log line says.
+    assert row.attempts == 1
+    assert row.available_at is None
     assert row.publication_state == PublicationState.PENDING  # processing is not publishing
     assert [d.layer for d in derivatives] == [MediaLayer.ARCHIVAL, MediaLayer.WEB, MediaLayer.THUMBNAIL]
     for derivative in derivatives:
@@ -794,7 +798,9 @@ async def test_a_reprocessed_row_does_not_trip_the_derivative_unique_constraint(
     assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
     row, derivatives, gathering = await _ready_state(db_session_factory, media_id)
     assert row.status == MediaStatus.READY
-    assert row.attempts == 1  # the abandoned claim was counted at reclaim
+    # The abandoned claim counted at reclaim, plus the attempt that
+    # succeeded (CK-37): "attempt 2" in the log, 2 on the row.
+    assert row.attempts == 2
     assert len(derivatives) == 3
     assert {d.content_type for d in derivatives} == {"image/jpeg", "image/webp"}
     assert gathering.total_bytes == sum(d.size_bytes for d in derivatives)
@@ -833,7 +839,7 @@ async def test_a_delete_that_fails_after_the_commit_leaves_the_row_ready(
         assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
     row, derivatives, gathering = await _ready_state(db_session_factory, row.id)
     assert row.status == MediaStatus.READY
-    assert row.attempts == 0 and row.last_error is None
+    assert row.attempts == 1 and row.last_error is None
     assert len(derivatives) == 3 and gathering.total_bytes > 0
     assert "could not be deleted" in caplog.text and "24-hour lifecycle" in caplog.text
     assert "r2.invalid" not in caplog.text
@@ -943,7 +949,10 @@ async def test_a_write_failure_is_transient_and_the_retry_rewrites_all_three(
     del store.raise_on["put"]
     assert await poll_once(db_session_factory, worker, t0 + RETRY_BACKOFF[0]) is Poll.PROCESSED
     r, derivatives, _ = await _ready_state(db_session_factory, row.id)
-    assert (r.status, r.attempts, r.last_error) == (MediaStatus.READY, 1, None)
+    # One failed attempt plus the one that succeeded (CK-37): attempt 2 in
+    # the log, 2 on the row; the retry's deferral does not outlive `ready`.
+    assert (r.status, r.attempts, r.last_error) == (MediaStatus.READY, 2, None)
+    assert r.available_at is None
     assert len(derivatives) == 3 and len(store.published) == 3
 
 
@@ -1252,3 +1261,110 @@ async def test_no_derivative_row_and_no_total_bytes_move_on_any_failure_path(db_
         assert states == {PublicationState.PENDING}
         # And every row left `processing` behind: claimed_at is NULL on all.
         assert (await db.execute(select(func.count()).select_from(Media).where(Media.claimed_at.is_not(None)))).scalar_one() == 0
+
+
+# --- CK-37 riders: the ready line, the attempt count, terminal rows ------------
+
+
+async def test_the_ready_line_carries_the_rows_attempt_count_and_the_claim_to_ready_time(
+    db_session_factory, worker, monkeypatch, caplog
+):
+    """Record §6.3's p95 target is stated on claim-to-ready, and until CK-37
+    nothing the worker emitted could measure it (claimed_at is cleared at
+    the outcome; CK-36's 4.712 s came from sampling the row). The `ready`
+    line now carries the elapsed milliseconds — and the attempt number it
+    prints is the row's own, persisted by the ready transaction, so the two
+    surfaces can no longer disagree."""
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, size=len(GPS_PHOTO), available_at=t0)
+    FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
+    with caplog.at_level(logging.INFO, logger="covey-keep.worker"):
+        assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    match = re.search(
+        rf"media {row.id}: ready — three layers written \(attempt (\d+), (\d+) ms claim-to-ready\)",
+        caplog.text,
+    )
+    assert match, caplog.text
+    attempt, elapsed_ms = int(match.group(1)), int(match.group(2))
+    assert attempt == (await _row(db_session_factory, row.id)).attempts == 1
+    # A real decode of a real photograph took a real, bounded time.
+    assert 0 <= elapsed_ms < 60_000
+
+    # After one abandoned claim the row says 2 — and so does the line.
+    caplog.clear()
+    stale = t0 - RECLAIM_AFTER - timedelta(minutes=1)
+    async with db_session_factory() as db:
+        gathering = await _mk_gathering(db)
+        again = _media(gathering.id, status=MediaStatus.PROCESSING, size=len(GPS_PHOTO), claimed_at=stale)
+        db.add(again)
+        await db.commit()
+        again_id = again.id
+    FakeStore(monkeypatch, {quarantine_key(again_id): GPS_PHOTO})
+    with caplog.at_level(logging.INFO, logger="covey-keep.worker"):
+        assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    assert f"media {again_id}: ready — three layers written (attempt 2, " in caplog.text
+    assert (await _row(db_session_factory, again_id)).attempts == 2
+
+
+async def test_terminal_rows_carry_no_deferral(db_session_factory, worker, monkeypatch):
+    """`ready` and `failed` are never claimed again, so neither keeps an
+    `available_at` (CK-37). CK-36's two deployed dead-letters kept the hour
+    the CK-35 release had set — harmless while the claim predicate reads
+    only `uploaded`/`processing`, and exactly the stale state a later
+    predicate change would trip over. All four terminal paths: ready, the
+    permanent failure, the third transient failure, the third abandonment."""
+    t0 = _now()
+
+    # ready — the deferral confirm stamped is cleared with the claim stamp.
+    ready = await _uploaded_row(db_session_factory, size=len(GPS_PHOTO), available_at=t0)
+    FakeStore(monkeypatch, {quarantine_key(ready.id): GPS_PHOTO})
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r = await _row(db_session_factory, ready.id)
+    assert (r.status, r.available_at, r.claimed_at) == (MediaStatus.READY, None, None)
+
+    # permanent — the object is missing.
+    missing = await _uploaded_row(db_session_factory, available_at=t0)
+    _stub_head(monkeypatch, None)
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r = await _row(db_session_factory, missing.id)
+    assert (r.status, r.available_at, r.claimed_at) == (MediaStatus.FAILED, None, None)
+
+    # transient, three times — the ladder sets a deferral twice, and the
+    # dead-letter on the third clears it.
+    flaky = await _uploaded_row(db_session_factory, available_at=t0)
+    _stub_head(monkeypatch, raises=_client_error("InternalError", 500))
+    t = t0
+    for _ in range(MAX_ATTEMPTS):
+        assert await poll_once(db_session_factory, worker, t) is Poll.PROCESSED
+        r = await _row(db_session_factory, flaky.id)
+        t = r.available_at or t
+    assert (r.status, r.attempts, r.available_at, r.claimed_at) == (
+        MediaStatus.FAILED,
+        MAX_ATTEMPTS,
+        None,
+        None,
+    )
+
+    # abandoned three times — dead-lettered at reclaim.
+    stale = t0 - RECLAIM_AFTER - timedelta(minutes=1)
+    async with db_session_factory() as db:
+        gathering = await _mk_gathering(db)
+        abandoned = _media(
+            gathering.id,
+            status=MediaStatus.PROCESSING,
+            claimed_at=stale,
+            attempts=MAX_ATTEMPTS - 1,
+            available_at=t0,
+        )
+        db.add(abandoned)
+        await db.commit()
+        abandoned_id = abandoned.id
+    FakeStore(monkeypatch)
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r = await _row(db_session_factory, abandoned_id)
+    assert (r.status, r.available_at, r.claimed_at, r.last_error) == (
+        MediaStatus.FAILED,
+        None,
+        None,
+        ERROR_ABANDONED,
+    )
