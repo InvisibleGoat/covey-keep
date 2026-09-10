@@ -136,6 +136,61 @@ volume, and record §9 bites hardest here; pinned with the root logger at
 DEBUG on the success path and every refusal path. Nothing here moves
 `publication_state`: publication is the host's, and it is not built.
 
+WORDS ON A PHOTOGRAPH (CK-39; decisions/2026-09-10-captions-tags-and-
+finding-a-photograph.md). Three things a photograph can be known by, and
+a way to find it by any of them — backend only; the editor and the search
+box are CK-40.
+
+  filename  the uploader's original file name, an optional per-item field
+            on the intent, stored on the row and never changed. It closes
+            CK-38's finding: after a reload a row read "Photo — added by
+            You" because the table had nowhere to put the name, and on a
+            `failed` row that meant "Try again" was re-uploading blind. A
+            DISPLAY STRING AND NOTHING ELSE — attacker-controlled text that
+            never reaches a storage key (quarantine_key and published_key
+            are pure functions of the row id), a path, or a header; nothing
+            relies on its extension (the declared type is advisory and the
+            worker's decode decides). Trimmed, capped, a blank refused: NULL
+            is the one representation of "no name", and the five rows that
+            predate 0018 read NULL forever — nothing is backfilled.
+  caption   the person's own words over the file name — `PATCH /media/{id}`
+            under the Patch-semantics convention (CK-22): absent leaves it
+            alone, explicit null clears it (NULL, never ""), a blank draws
+            the field-level 422 `_clean_location` draws.
+  tags      rows in `media_tags`, the uploader's words about their own
+            photograph. THE LIST REPLACES THE SET, never appends (a caller
+            expecting append and getting replace is a data-loss bug that
+            reads as a UI bug — the api-reference says so). Trimmed, capped
+            in length and in count; the same tag twice is refused, and two
+            tags differing only in case are ONE tag (case preserved as
+            typed, equality case-insensitive — the search is too). No
+            `person_id` on the table, not even nullable: a person tag is a
+            claim about someone else and gets its own record when decided.
+  who       THE UPLOADER, AND NOT THE HOST. A host may remove a photograph
+            (the removal rule, keeper record §2.8 — the publication phase's
+            write); re-captioning someone else's photograph is putting
+            words in their mouth, a different power from moderation. The
+            edit follows the read rule exactly and then narrows: the caller
+            must be admitted by `_visible_media` AND be the uploader, and
+            anyone else — the host included — draws the media 404 identical
+            to a missing id (404-not-403, the gatherings posture).
+  q         `GET /gatherings/{id}/media?q=` — a case-insensitive substring
+            match over caption, tag text and filename, the NAIVE query with
+            no index, said out loud: a `%term%` cannot use an ordinary
+            index, and choosing between a trigram index and full-text
+            search (which stems words — right for prose, questionable for
+            names) needs data this product does not have. Revisit trigger:
+            the first gathering holding a few hundred photographs. THE
+            SEARCH RUNS INSIDE THE AUDIENCE FILTER, NEVER BESIDE IT —
+            `_visible_media` decides what the caller may see and `q`
+            narrows that set; a term matching a photograph the caller may
+            not see returns nothing (pinned), because a search that reached
+            such rows would leak a photograph's existence through a result
+            count or a near-miss — the failure 404-not-403 exists to
+            prevent, arriving through a different door. Per gathering, and
+            it stays so; cross-gathering search is a later decision with
+            its own audience question.
+
 DATA-HANDLING: the first bytes into the bucket that will hold photographs
 of children move through URLs this router mints. A PRESIGNED URL IS A
 BEARER CREDENTIAL (record §9, binding): it carries the upload Access Key ID
@@ -147,18 +202,30 @@ The quarantine window opens here: an original with EXIF GPS intact
 genuinely lands in R2, bounded by the lifecycle rule CK-33 verified — and,
 since CK-36, closed within a poll by the worker that strips it and deletes
 the original after the ready commit. Uploads on the dev deploy are Steven's
-own test images only (private-alpha scope).
+own test images only (private-alpha scope). Since CK-39 a caption is FREE
+TEXT ON A PHOTOGRAPH OF A CHILD, written by someone else and made
+searchable — smaller than a person tag and not a nothing (the decision
+record's honest note: captions plus search already build a soft version of
+what person tagging would formalise). This module logs no caption, tag,
+filename or search term — it still has no logger (pinned with the root at
+DEBUG); the one place a search term appears is the request line, because
+`q` rides the query string and an access log records it the way it
+records every path (the media id in `/media/{id}/url` included) — the
+transport's, stated in the api-reference. None of the words reaches a
+reader the audience rule excludes (the search leak test is the
+enforcement).
 """
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Annotated, Optional
 from uuid import UUID
 
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import and_, exists, or_, select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy import and_, delete, exists, func, literal_column, or_, select
+from sqlalchemy.dialects.postgresql import aggregate_order_by, array_agg
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, get_auth_context, get_db
@@ -174,6 +241,7 @@ from app.models import (
     MediaDerivative,
     MediaLayer,
     MediaStatus,
+    MediaTag,
     Occurrence,
     Person,
     PublicationState,
@@ -250,6 +318,19 @@ REMOVED_BIN = timedelta(days=30)
 # gallery "sharper".
 SERVABLE_LAYERS = frozenset({MediaLayer.WEB, MediaLayer.THUMBNAIL})
 
+# Words on a photograph (CK-39). The caps are bounds for a column, never
+# arithmetic anything depends on: a file name at the conventional
+# filesystem bound; a caption at a sentence or two (the person's own words
+# over the file name — a paragraph belongs in a post); a tag at a name or
+# a short phrase; a bounded list, because an unbounded list of free text is
+# unbounded free text about a photograph of a child. The search term is
+# capped so a pathological request cannot grow the ILIKE pattern.
+MAX_FILENAME_LENGTH = 255
+MAX_CAPTION_LENGTH = 500
+MAX_TAG_LENGTH = 50
+MAX_TAGS_PER_MEDIA = 20
+MAX_SEARCH_LENGTH = 200
+
 _upload: Optional[UploadClient] = None
 _serve: Optional[ServeClient] = None
 
@@ -324,6 +405,47 @@ def _clean_content_type(value: str) -> str:
     return value
 
 
+# The three text cleaners — gatherings.py's `_clean_location` discipline,
+# reused rather than reinvented: trim, refuse a blank (NULL is the ONE
+# representation of "no value"; a blank is not a value and not a clear — a
+# clear is an explicit null on the PATCH, CK-22), cap the length. Each has
+# its own message because each lands on a different field. None of the
+# three inspects, parses, or splits its value: a file name is never a path
+# here, and a caption is never anything but words.
+
+
+def _clean_filename(value: str) -> str:
+    value = value.strip()
+    if not value:
+        raise ValueError("a file name cannot be blank — leave it out instead")
+    if len(value) > MAX_FILENAME_LENGTH:
+        raise ValueError(f"a file name is limited to {MAX_FILENAME_LENGTH} characters")
+    return value
+
+
+def _clean_caption(value: str) -> str:
+    value = value.strip()
+    if not value:
+        raise ValueError("a caption cannot be blank — send null to remove it")
+    if len(value) > MAX_CAPTION_LENGTH:
+        raise ValueError(f"a caption is limited to {MAX_CAPTION_LENGTH} characters")
+    return value
+
+
+def _clean_tag(value: str) -> str:
+    value = value.strip()
+    if not value:
+        raise ValueError("a tag cannot be blank — remove the empty entry instead")
+    if len(value) > MAX_TAG_LENGTH:
+        raise ValueError(f"a tag is limited to {MAX_TAG_LENGTH} characters")
+    return value
+
+
+# Item-level, so a bad tag's 422 lands on the entry that provoked it
+# (["body", "tags", N]) — the companions shape.
+TagText = Annotated[str, AfterValidator(_clean_tag)]
+
+
 class MediaIntentIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -335,11 +457,24 @@ class MediaIntentIn(BaseModel):
     # The optional date label (a label, never an owner — SET NULL at 0016).
     # Validated against the gathering in the endpoint: it needs the row.
     occurrence_id: Optional[UUID] = None
+    # The uploader's original file name (CK-39) — a display string, stored
+    # as given (trimmed) and never touched again. Not a path, not a key,
+    # not a header; see the module docstring. Optional: a client that has
+    # no name to give sends none, and the row reads NULL.
+    filename: Optional[str] = None
 
     @field_validator("content_type")
     @classmethod
     def _content_type(cls, value: str) -> str:
         return _clean_content_type(value)
+
+    @field_validator("filename")
+    @classmethod
+    def _filename(cls, value: Optional[str]) -> Optional[str]:
+        # An explicit null on a CREATE is the same as absent — no name. A
+        # blank is neither: refused, so "" never becomes a second spelling
+        # of "no name" through the front door.
+        return None if value is None else _clean_filename(value)
 
     @field_validator("size_bytes")
     @classmethod
@@ -363,7 +498,11 @@ class MediaIntentsIn(BaseModel):
 
 def _media_body(row: Media) -> dict:
     # Never the uploader's email, never a URL. `uploaded_at` is null until
-    # confirm (0017).
+    # confirm (0017). `filename` and `caption` (0018) are columns on the row
+    # and ride every body; tags are rows of their own and ride the list
+    # items and the PATCH response, which load them — never a body that has
+    # not (an intent has none by construction; a confirm may be preceded by
+    # a tag write, and a body claiming `[]` there would be a lie).
     return {
         "id": str(row.id),
         "gathering_id": str(row.gathering_id),
@@ -374,6 +513,8 @@ def _media_body(row: Media) -> dict:
         "upload_size_bytes": row.upload_size_bytes,
         "uploaded_at": row.uploaded_at.isoformat() if row.uploaded_at is not None else None,
         "created_at": row.created_at.isoformat(),
+        "filename": row.filename,
+        "caption": row.caption,
     }
 
 
@@ -474,6 +615,9 @@ async def create_intents(
             uploader_person_id=ctx.person.id,
             upload_content_type=item.content_type,
             upload_size_bytes=item.size_bytes,
+            # The display name of the upload (0018) — stored, never used
+            # for the key below, which is a function of the row id alone.
+            filename=item.filename,
             # The rung, stated (0016: no default). uploaded_at stays NULL
             # until confirm (0017).
             status=MediaStatus.PENDING_UPLOAD,
@@ -638,22 +782,67 @@ def _visible_media(ctx: AuthContext, now: datetime):
     )
 
 
-def _list_item(row: Media, display_name: Optional[str], ctx: AuthContext) -> dict:
+def _tags_of_row():
+    """A photograph's tags as ONE correlated scalar subquery — an array,
+    ordered case-insensitively then exactly (tags are a set; the response
+    order is deterministic and not the order they were typed), empty when
+    there are none. In the list's select list so the list stays ONE
+    statement however many photographs or tags it carries (the CK-20
+    statement-count discipline; pinned)."""
+    return (
+        select(
+            func.coalesce(
+                array_agg(aggregate_order_by(MediaTag.tag, func.lower(MediaTag.tag), MediaTag.tag)),
+                literal_column("ARRAY[]::text[]"),
+            )
+        )
+        .where(MediaTag.media_id == Media.id)
+        .correlate(Media)
+        .scalar_subquery()
+    )
+
+
+def _contains(column, term: str):
+    # Case-insensitive substring, the term taken LITERALLY: `%`, `_` and
+    # the escape character are escaped so "100%" matches "100%" and not
+    # "100 anything". Never a regex — a person's search box is not a query
+    # language.
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return column.ilike(f"%{escaped}%", escape="\\")
+
+
+def _matches(term: str):
+    """The search criterion (CK-39): caption, file name, or any tag. ANDed
+    with `_visible_media` by the caller — it narrows the visible set and
+    can never widen it (the module docstring; pinned)."""
+    return or_(
+        _contains(Media.caption, term),
+        _contains(Media.filename, term),
+        exists(
+            select(MediaTag.id).where(MediaTag.media_id == Media.id, _contains(MediaTag.tag, term))
+        ),
+    )
+
+
+def _list_item(row: Media, display_name: Optional[str], tags: list[str], ctx: AuthContext) -> dict:
     # The media body plus who uploaded it (a display name, never an email,
     # never a person id — the RSVP roster's rule), whether it is the
-    # caller's own, and the bin clock when it is in the bin. `last_error`
-    # is deliberately absent: it is operator terms (record §6.5 — copy names
-    # the outcome, never the file), and `status: "failed"` is the fact.
+    # caller's own, the bin clock when it is in the bin, and the tags
+    # (CK-39). `last_error` is deliberately absent: it is operator terms
+    # (record §6.5 — copy names the outcome, never the file), and
+    # `status: "failed"` is the fact.
     body = _media_body(row)
     body["uploader_display_name"] = display_name if display_name is not None else row.guest_name
     body["is_own"] = row.uploader_person_id == ctx.person.id
     body["removed_at"] = row.removed_at.isoformat() if row.removed_at is not None else None
+    body["tags"] = list(tags)
     return body
 
 
 @router.get("/gatherings/{gathering_id}/media")
 async def list_media(
     gathering_id: UUID,
+    q: Optional[str] = Query(default=None, max_length=MAX_SEARCH_LENGTH),
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -663,20 +852,30 @@ async def list_media(
     who is neither the host nor an uploader sees exactly the `live` rows,
     which today is none. Every rung appears (`pending_upload` through
     `failed`) with its state; no URL is in this body — one is minted per
-    object, per layer, on request."""
+    object, per layer, on request.
+
+    `q` (CK-39) narrows that set — and only narrows it: the search
+    criterion is ANDed with the audience rule in the same WHERE, so a term
+    that matches a photograph the caller may not see returns nothing, the
+    same nothing a term matching no photograph returns. A blank or absent
+    `q` is not a search."""
     gathering = await _gathering_for_read(db, ctx, gathering_id)
     now = datetime.now(timezone.utc)
+    criteria = [Media.gathering_id == gathering.id, _visible_media(ctx, now)]
+    term = q.strip() if q else ""
+    if term:
+        criteria.append(_matches(term))
     rows = (
         await db.execute(
-            select(Media, Person.display_name)
+            select(Media, Person.display_name, _tags_of_row())
             .join(Gathering, Gathering.id == Media.gathering_id)
             # Outer: a guest upload (a later phase) has no person row.
             .outerjoin(Person, Person.id == Media.uploader_person_id)
-            .where(Media.gathering_id == gathering.id, _visible_media(ctx, now))
+            .where(*criteria)
             .order_by(Media.created_at.desc(), Media.id)
         )
     ).all()
-    return {"media": [_list_item(row, display_name, ctx) for row, display_name in rows]}
+    return {"media": [_list_item(row, display_name, tags, ctx) for row, display_name, tags in rows]}
 
 
 @router.get("/media/{media_id}/url")
@@ -743,3 +942,125 @@ async def read_url(
         "method": presigned.method,
         "expires_in": presigned.expires_in,
     }
+
+
+# --- words on a photograph (CK-39) ------------------------------------------
+
+
+class MediaPatch(BaseModel):
+    """Merge patch (CK-22) over the two things an uploader may say about
+    their own photograph. `caption`: absent leaves it alone, explicit null
+    clears it, a blank is refused. `tags`: a list that REPLACES the set —
+    never appends — and is never null (the empty list is how every tag is
+    removed; a null on a list would be a second spelling of that). The
+    patchable surface is these two ONLY: `filename` is a fact about the
+    upload, fixed at intent, and everything else on the row belongs to the
+    machine or to the host."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    caption: Optional[str] = None
+    tags: Optional[list[TagText]] = None
+
+    @field_validator("caption")
+    @classmethod
+    def _caption(cls, value: Optional[str]) -> Optional[str]:
+        # Runs only when the field is present, so this None is an explicit
+        # null — the clear request, passed through. A blank stays rejected
+        # inside _clean_caption.
+        return None if value is None else _clean_caption(value)
+
+    @field_validator("tags")
+    @classmethod
+    def _tags(cls, value: Optional[list[str]]) -> list[str]:
+        if value is None:
+            raise ValueError("tags cannot be null — send an empty list to remove every tag")
+        if len(value) > MAX_TAGS_PER_MEDIA:
+            raise ValueError(f"a photo can carry up to {MAX_TAGS_PER_MEDIA} tags")
+        return value
+
+    @model_validator(mode="after")
+    def _something_to_patch(self) -> "MediaPatch":
+        # Presence, not value: {"caption": null} has an all-None value set
+        # and is a real patch (it clears the caption).
+        if not self.model_fields_set:
+            raise ValueError("nothing to update — provide caption and/or tags")
+        return self
+
+
+def _distinct_tags(tags: list[str]) -> list[str]:
+    """The same tag twice on one photograph is refused — and `Tommy` and
+    `tommy` are the same tag (case is preserved as typed; equality is
+    case-insensitive, the way the search is). App-layer so the 422 lands
+    on the entry that repeats, not on the list; the UNIQUE on
+    (media_id, tag) is the exact-match backstop beneath it."""
+    seen: set[str] = set()
+    for index, tag in enumerate(tags):
+        key = tag.lower()
+        if key in seen:
+            raise HTTPException(
+                422,
+                detail=[
+                    {
+                        "loc": ["body", "tags", index],
+                        "msg": "that tag is already on this photo",
+                        "type": "value_error",
+                    }
+                ],
+            )
+        seen.add(key)
+    return tags
+
+
+async def _tags_for(db: AsyncSession, media_id: UUID) -> list[str]:
+    return list(
+        await db.scalars(
+            select(MediaTag.tag)
+            .where(MediaTag.media_id == media_id)
+            .order_by(func.lower(MediaTag.tag), MediaTag.tag)
+        )
+    )
+
+
+@router.patch("/media/{media_id}")
+async def patch_media(
+    media_id: UUID,
+    body: MediaPatch,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Caption and tags — THE UPLOADER'S, AND NOT THE HOST'S (the module
+    docstring: moderation is removal, and re-captioning someone else's
+    photograph is a different power). The row must be visible to the
+    caller under the read rule AND theirs: anyone else, the host included,
+    draws the media 404 identical to a missing id. Nothing else on the row
+    moves — not `status`, not `publication_state`, not `filename`."""
+    now = datetime.now(timezone.utc)
+    row = (
+        await db.execute(
+            select(Media)
+            .join(Gathering, Gathering.id == Media.gathering_id)
+            .where(
+                Media.id == media_id,
+                _visible_media(ctx, now),
+                Media.uploader_person_id == ctx.person.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise _media_not_found()
+    # Merge patch (CK-22): a field applies iff it was PRESENT in the body.
+    provided = body.model_fields_set
+    if "caption" in provided:
+        # An explicit null lands here as None and writes NULL — never "".
+        row.caption = body.caption
+    if "tags" in provided:
+        tags = _distinct_tags(body.tags)
+        # Wholesale replacement: the list IS the value (the companions
+        # shape). The Core delete executes immediately, before the inserts
+        # flush, so the unique never sees old and new rows together.
+        await db.execute(delete(MediaTag).where(MediaTag.media_id == row.id))
+        for tag in tags:
+            db.add(MediaTag(media_id=row.id, tag=tag, added_by_person_id=ctx.person.id))
+    await db.commit()
+    return {**_media_body(row), "tags": await _tags_for(db, row.id)}

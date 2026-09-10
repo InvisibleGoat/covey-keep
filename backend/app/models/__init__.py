@@ -35,7 +35,7 @@ from app.models.gathering import (
 from app.models.group import Group, SubGroup
 from app.models.household import Household, Person
 from app.models.items import ItemClaim, ItemSlot
-from app.models.media import Media, MediaDerivative
+from app.models.media import Media, MediaDerivative, MediaTag
 from app.models.membership import Membership
 from app.models.next_step import NextStepAcceptance, NextStepDismissal, NextStepTrigger
 from app.models.organization import Organization
@@ -66,6 +66,7 @@ __all__ = [
     "MediaDerivative",
     "MediaLayer",
     "MediaStatus",
+    "MediaTag",
     "Membership",
     "NextStepAcceptance",
     "NextStepDismissal",

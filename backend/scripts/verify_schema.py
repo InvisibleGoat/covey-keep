@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0017"
+EXPECTED_REVISION = "0018"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -947,6 +947,101 @@ async def verify(conn, ck: Checks) -> None:
         )
     else:
         ck.check(False, "media job integrity", "media table missing")
+
+    print("\n-- media: words on a photograph (0018, CK-39) --")
+    # The uploader's file name and the person's caption are nullable text on
+    # the photograph — NULL is the one representation of "no name" / "no
+    # caption", and the rows written before 0018 read NULL forever (nothing
+    # is backfilled). Tags are ROWS, in a table with two columns it must
+    # never grow (asserted absent below).
+    assert_columns(ck, columns, "media", nullable=("filename", "caption"))
+    ck.check("media_tags" in tables, "table media_tags exists", "missing")
+    assert_columns(
+        ck,
+        columns,
+        "media_tags",
+        not_null=("media_id", "tag", "added_by_person_id"),
+        # NO `gathering_id`: a tag hangs off a media row, which hangs off a
+        # gathering — a column here is a second representation of a fact
+        # the join already answers (the CK-13 refcount defect). And NO
+        # person id for a TAGGED person, nullable or otherwise: a free-text
+        # tag is the uploader's claim about their own photograph; a person
+        # tag is a claim about someone else, and it gets its own record and
+        # its own table when decided — a nullable column here would smuggle
+        # the feature in as a schema detail (added_by_person_id is
+        # provenance — who wrote the words — and is asserted present above).
+        absent=("gathering_id", "person_id", "tagged_person_id", "subject_person_id"),
+    )
+    tag_fk = await fk_rule(conn, "fk_media_tags_media_id")
+    ck.check(
+        tag_fk is not None and tag_fk[0] == "media",
+        "media_tags.media_id references media",
+        "FK missing or pointing elsewhere",
+    )
+    # A tag on a deleted photograph is an assertion with nothing behind it;
+    # a takedown removes the words with the picture.
+    ck.check(
+        tag_fk is not None and tag_fk[1] == "c",
+        "tag rows are deleted with their photograph (ON DELETE CASCADE)",
+        f"delete rule is {tag_fk[1]!r}" if tag_fk else "FK missing",
+    )
+    ck.check(
+        "uq_media_tags_media_id_tag" in unique_constraints,
+        "UNIQUE uq_media_tags_media_id_tag exists (one photograph, one tag, once)",
+        "constraint missing",
+    )
+
+    print("\n-- media words integrity (CK-39) --")
+    if {"media", "media_tags"} <= tables:
+        # Properties of whatever rows exist. Detail prints counts only — a
+        # caption is free text on a photograph of a child, a file name is
+        # the uploader's, and a tag is a word about a photograph; none is
+        # ever printed.
+        # (1) The API trims and refuses blanks (the CK-20 discipline), so a
+        # blank here means something wrote around it — and "" would be a
+        # second representation of "no name" / "no caption" beside NULL.
+        blank_words = await scalar(
+            conn,
+            "SELECT count(*) FROM media WHERE btrim(filename) = '' OR btrim(caption) = ''",
+        )
+        ck.check(
+            blank_words == 0,
+            "no media row stores a blank filename or caption",
+            f"{blank_words} media row(s) with a blank filename or caption",
+        )
+        blank_tags = await scalar(conn, "SELECT count(*) FROM media_tags WHERE btrim(tag) = ''")
+        ck.check(
+            blank_tags == 0,
+            "no tag row stores a blank tag",
+            f"{blank_tags} tag row(s) with a blank tag",
+        )
+        # (2) Two tags differing only in case are ONE tag — the API refuses
+        # the pair; the UNIQUE beneath it is exact-match only, so a
+        # case-variant pair here means something wrote around the API.
+        case_twins = await scalar(
+            conn,
+            "SELECT count(*) FROM (SELECT media_id, lower(tag) FROM media_tags "
+            "GROUP BY media_id, lower(tag) HAVING count(*) > 1) t",
+        )
+        ck.check(
+            case_twins == 0,
+            "no photograph carries two tags that differ only in case",
+            f"{case_twins} (photograph, tag) pair(s) duplicated under lower()",
+        )
+        # (3) The API caps the list at 20 per photograph; more means
+        # something wrote around the bound.
+        over_bound = await scalar(
+            conn,
+            "SELECT count(*) FROM (SELECT media_id FROM media_tags "
+            "GROUP BY media_id HAVING count(*) > 20) o",
+        )
+        ck.check(
+            over_bound == 0,
+            "no photograph holds more than 20 tags",
+            f"{over_bound} photograph(s) over the tag bound",
+        )
+    else:
+        ck.check(False, "media words integrity", "media/media_tags missing")
 
     print("\n-- pending invitation integrity (CK-25) --")
     if "gathering_invitations_pending" in tables:

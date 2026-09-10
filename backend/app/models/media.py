@@ -126,6 +126,77 @@ class Media(Base):
     removed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Words on the photograph (0018, CK-39;
+    # decisions/2026-09-10-captions-tags-and-finding-a-photograph.md).
+    # `filename` is the uploader's original file name, taken at intent and
+    # never changed — A DISPLAY STRING AND NOTHING ELSE: it never reaches a
+    # storage key (quarantine_key / published_key are pure functions of the
+    # row id), a path, or a header, and nothing relies on its extension (the
+    # declared content type is advisory; the worker's decode decides).
+    # Nullable with no backfill: every row written before 0018 reads NULL,
+    # and NULL is the one representation of "no name" — a blank is refused
+    # at the intent (the CK-13/CK-20 discipline). `caption` is the person's
+    # own words over the file name, set by the uploader alone through
+    # PATCH /media/{id} under merge-patch semantics (CK-22): explicit null
+    # clears it, a blank is refused, absent leaves it alone. Tags are rows
+    # (MediaTag, below), never an array column here.
+    filename: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    caption: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = created_at_col()
+
+
+class MediaTag(Base):
+    """CK-39 — one free-text tag on one photograph: the UPLOADER'S OWN WORDS
+    about their own photograph, and nothing more (0018;
+    decisions/2026-09-10-captions-tags-and-finding-a-photograph.md).
+
+    A table, not an array column on media: gathering-scoped tags and person
+    tags are both plausible later, and a table makes each a smaller change
+    (a decision already made before this phase; not re-opened here). One
+    row per (photograph, tag) — `UNIQUE (media_id, tag)` — so a photograph
+    cannot carry the same tag twice; the API also refuses two tags that
+    differ only in case, treating them as one (case is preserved as typed,
+    equality is case-insensitive — the search is too).
+
+    THIS TABLE STORES NO GATHERING AND NO PERSON. No `gathering_id`: a tag
+    hangs off a media row, which hangs off a gathering, and a column here
+    would be a second representation of a fact the join already answers —
+    the defect CK-13 banned for the refcount and CK-32 kept out of
+    media_derivatives. And NO `person_id` for a tagged person, not even a
+    nullable one: a free-text tag is a claim the uploader makes about their
+    own photograph; a PERSON tag is a claim about someone else — the shape
+    consent-and-compliance.md carries an open finding on (companion names,
+    CK-29: personal data about a third party who never entered it and
+    holds no account). When person tagging is decided it gets its own
+    record and its own table, with the consent questions answered rather
+    than inherited; a nullable `person_id` here would smuggle the feature
+    in as a schema detail. `added_by_person_id` is provenance — who wrote
+    the words — never a subject; it does not cascade from the person
+    (account deletion is anonymization; the row stays attributed to the
+    anonymized person, like every contribution).
+
+    Rows are replaced wholesale on every tag write (the list IS the value —
+    the companions shape) and deleted with their photograph
+    (`ON DELETE CASCADE`): a tag on a deleted photograph is an assertion
+    with nothing behind it, and a takedown removes the words with the
+    picture, so no assertion outlives its subject."""
+
+    __tablename__ = "media_tags"
+    __table_args__ = (
+        # One photograph, one tag, once. Leads with media_id, so it also
+        # indexes the FK — no separate index (the 0014/0016 pattern).
+        UniqueConstraint("media_id", "tag"),
+    )
+
+    id: Mapped[UUID] = uuid_pk()
+    media_id: Mapped[UUID] = mapped_column(
+        ForeignKey("media.id", ondelete="CASCADE"), nullable=False
+    )
+    tag: Mapped[str] = mapped_column(Text, nullable=False)
+    # Provenance, never a subject (see the class docstring).
+    added_by_person_id: Mapped[UUID] = mapped_column(
+        ForeignKey("people.id"), nullable=False
+    )
     created_at: Mapped[datetime] = created_at_col()
 
 
