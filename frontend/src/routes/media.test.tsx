@@ -79,6 +79,11 @@ function mediaRow(over: Record<string, unknown> = {}) {
     uploader_display_name: 'Steven',
     is_own: true,
     removed_at: null,
+    // The words (CK-39 response-body fields; a shape change): the rows CK-38
+    // pinned carry no name, no caption, no tags — as every pre-0018 row does.
+    filename: null,
+    caption: null,
+    tags: [],
     ...over,
   }
 }
@@ -220,8 +225,10 @@ test('a HEIC whose file.type is empty declares image/heic, the PUT sends exactly
       method: 'POST',
       match: endsWith('/media/m-new/confirm'),
       response: () => {
-        listed = [mediaRow({ id: 'm-new', status: 'uploaded' })]
-        return json(200, mediaRow({ id: 'm-new', status: 'uploaded' }))
+        // The server echoes the name it stored (CK-39); the row is called by
+        // it from the list, not from anything this device remembered.
+        listed = [mediaRow({ id: 'm-new', status: 'uploaded', filename: 'IMG_0569.HEIC' })]
+        return json(200, mediaRow({ id: 'm-new', status: 'uploaded', filename: 'IMG_0569.HEIC' }))
       },
     },
   ])
@@ -242,7 +249,7 @@ test('a HEIC whose file.type is empty declares image/heic, the PUT sends exactly
   // The intent declared the type the extension names.
   const [, intentInit] = calls(mock, 'POST', endsWith('/intents'))[0]
   expect(JSON.parse(intentInit!.body as string)).toEqual({
-    items: [{ content_type: 'image/heic', size_bytes: 3 }],
+    items: [{ content_type: 'image/heic', size_bytes: 3, filename: 'IMG_0569.HEIC' }],
   })
 
   // The PUT: the file as the body, the signed Content-Type exactly, no
@@ -372,13 +379,14 @@ test('every rung renders its own line; the ready line is read from publication_s
   })
   expect(document.body.innerHTML).not.toContain('getsig456')
   expect(document.body.innerHTML).not.toContain('SERVEKEYID')
-  // A ready row's only control is the one that opens it: no "try again" on a
-  // photograph that worked (the regression the first run of this test found).
-  const readyButtons = within(rows[4]).getAllByRole('button')
-  expect(readyButtons).toHaveLength(1)
-  expect(readyButtons[0].getAttribute('aria-label')).toBe('Open photo added by You')
+  // No "try again" on a photograph that worked, or on one still on its way
+  // (the regression the first run of this test found); the ready row's open
+  // control is there. Since CK-40 an own row also carries its edit control,
+  // so the pin names the affordance it excludes rather than counting.
+  expect(within(rows[4]).queryByRole('button', { name: 'Try again' })).toBeNull()
+  expect(within(rows[4]).getByRole('button', { name: 'Open photo added by You' })).toBeTruthy()
   for (const row of rows.slice(0, 3)) {
-    expect(within(row).queryByRole('button')).toBeNull()
+    expect(within(row).queryByRole('button', { name: 'Try again' })).toBeNull()
   }
 })
 

@@ -11,6 +11,14 @@
 // local, make the one call, and return something that is not the URL — a
 // verdict for the PUT, an object URL for the read (a `blob:` reference to
 // bytes already in this browser, which carries no credential at all).
+//
+// THE WORDS ON A PHOTOGRAPH (CK-40, the surface for CK-39's backend;
+// decisions/2026-09-10-captions-tags-and-finding-a-photograph.md): a row is
+// called by its caption, then its filename, then "Photo" (mediaName); the
+// caption follows the Patch-semantics convention (captionPatch — blank is
+// never a clear, explicit null is); and the tag list REPLACES the set on the
+// server, so tagsPatch always carries every tag the photograph should end up
+// with — sending only the new one silently deletes the rest.
 import { authFetch } from './api'
 
 export type MediaStatus = 'pending_upload' | 'uploaded' | 'processing' | 'ready' | 'failed'
@@ -35,6 +43,14 @@ export interface MediaItem {
   uploader_display_name: string | null
   is_own: boolean
   removed_at: string | null
+  // The words (CK-39): the file's name as taken at intent — a display string
+  // and nothing else, NULL on every row written before migration 0018 and
+  // never backfilled; the uploader's caption, NULL when there is none (never
+  // ""); and the tags, case-insensitively alphabetical — a set, not the
+  // order typed.
+  filename: string | null
+  caption: string | null
+  tags: string[]
 }
 
 export interface MediaList {
@@ -53,7 +69,9 @@ export interface UploadInstruction {
 }
 
 export interface UploadIntent {
-  media: { id: string; status: string }
+  // The intent body carries the filename it stored (trimmed) and never the
+  // tags — a body that did not load them must not claim [].
+  media: { id: string; status: string; filename: string | null }
   upload: UploadInstruction
 }
 
@@ -109,8 +127,11 @@ const TYPE_BY_EXTENSION: Record<string, string> = {
 // it with its own message — the client never pre-empts the allowlist.
 export function declaredContentType(file: { name: string; type: string }): string {
   if (file.type !== '') return file.type
-  const dot = file.name.lastIndexOf('.')
-  const extension = dot === -1 ? '' : file.name.slice(dot + 1).toLowerCase()
+  // The name trimmed (CK-40): a trailing space after the extension would
+  // otherwise declare the generic type for a perfectly good HEIC.
+  const name = file.name.trim()
+  const dot = name.lastIndexOf('.')
+  const extension = dot === -1 ? '' : name.slice(dot + 1).toLowerCase()
   return TYPE_BY_EXTENSION[extension] ?? 'application/octet-stream'
 }
 
@@ -124,8 +145,117 @@ export function intentErrorFields(count: number): string[] {
       `items.${index}.content_type`,
       `items.${index}.size_bytes`,
       `items.${index}.occurrence_id`,
+      `items.${index}.filename`,
     )
   }
+  return fields
+}
+
+// One intent item from one File — and from nothing else. `size_bytes` is
+// `file.size` because the presigned PUT SIGNS Content-Length, which fetch
+// forbids the client from setting: the browser derives it from the body, and
+// the upload validates only while the declared size and the blob agree
+// EXACTLY. A size captured anywhere else — a form field, a value recomputed
+// after a resize or a strip — makes R2 reject on the signature, which reads
+// as a credentials failure nowhere near the real cause (CK-39's (dp)). The
+// filename is trimmed before it goes (the server trims too); a name that is
+// blank after trimming is left out rather than sent for the server to
+// refuse the whole batch over.
+export function intentItem(file: File): {
+  content_type: string
+  size_bytes: number
+  filename?: string
+} {
+  const filename = file.name.trim()
+  return {
+    content_type: declaredContentType(file),
+    size_bytes: file.size,
+    ...(filename === '' ? {} : { filename }),
+  }
+}
+
+// What a row is called: the person's own words win, the file's name is the
+// fallback, and "Photo" is what remains when there is neither — which is
+// every row uploaded before CK-39, permanently, since nothing is backfilled.
+export function mediaName(item: Pick<MediaItem, 'caption' | 'filename'>): string {
+  if (item.caption !== null && item.caption !== '') return item.caption
+  if (item.filename !== null && item.filename !== '') return item.filename
+  return 'Photo'
+}
+
+// How long the search box waits after the last keystroke before asking the
+// server: a request per keystroke against a substring scan is the wrong
+// shape even at this size.
+export const SEARCH_DEBOUNCE_MS = 300
+
+// The list path, with `q` only when there is a term. An empty box sends no
+// `q` at all — never an empty one — and a whitespace-only entry is the same
+// as an empty box (the server treats blank as "not a search" too). Search
+// is per gathering: the endpoint is, and so is this.
+export function mediaListPath(gatheringId: string, term: string): string {
+  const trimmed = term.trim()
+  const base = `/gatherings/${gatheringId}/media`
+  return trimmed === '' ? base : `${base}?q=${encodeURIComponent(trimmed)}`
+}
+
+// The caption under the Patch-semantics convention (CK-22 — the same four
+// lines GatheringDetail's occurrence editor applies to location and map link;
+// decisions/2026-08-27-optional-field-clearing.md). `undefined` means leave
+// the field out of the patch; `null` means clear; a string is the value to
+// store. Three rules: "had a saved caption, now blank" goes out as explicit
+// null (never ""); "was empty, still empty" is omitted, never a null no-op
+// write; a whitespace-only entry goes out AS TYPED so the server's
+// blank-rejection 422 renders inline — the client never collapses whitespace
+// into a clear, because blank is never a clear.
+export function captionPatch(raw: string, saved: string | null): string | null | undefined {
+  const savedText = saved ?? ''
+  const trimmed = raw.trim()
+  if (raw === '') return savedText === '' ? undefined : null
+  if (trimmed === '') return raw
+  return trimmed === savedText ? undefined : trimmed
+}
+
+// The tag list to send: EVERY tag the photograph should end up with, or
+// nothing when the set is unchanged. The server REPLACES the set with what
+// it receives — a patch carrying only the new tag would delete the others
+// with no error and no warning, data loss that reads as a UI bug. So the
+// editor's whole list goes, on an add and on a removal alike; `[]` is how
+// the last tag is removed. Compared as sets of the exact strings (the
+// server preserves case as typed, so a case change is a real edit; a tag
+// removed and re-added is not).
+export function tagsPatch(tags: string[], saved: string[]): string[] | undefined {
+  const next = [...tags].sort()
+  const current = [...saved].sort()
+  const same = next.length === current.length && next.every((tag, index) => tag === current[index])
+  return same ? undefined : tags
+}
+
+export interface MediaWords {
+  caption: string
+  tags: string[]
+}
+
+// The PATCH /media/{id} body for the editor's state against the saved row —
+// merge-patch semantics: a field absent leaves the stored value alone. An
+// empty object means nothing changed and no request should go.
+export function mediaWordsPatch(
+  form: MediaWords,
+  saved: Pick<MediaItem, 'caption' | 'tags'>,
+): { caption?: string | null; tags?: string[] } {
+  const patch: { caption?: string | null; tags?: string[] } = {}
+  const caption = captionPatch(form.caption, saved.caption)
+  if (caption !== undefined) patch.caption = caption
+  const tags = tagsPatch(form.tags, saved.tags)
+  if (tags !== undefined) patch.tags = tags
+  return patch
+}
+
+// The 422 keys the words editor renders inline: the caption, the tag list as
+// a whole (the count refusal), and each sent tag by its index — a duplicate
+// is refused on the entry that repeats it, and lands on that entry.
+export function wordsErrorFields(tagCount: number): string[] {
+  const fields = ['caption', 'tags']
+  for (let index = 0; index < tagCount; index++) fields.push(`tags.${index}`)
   return fields
 }
 

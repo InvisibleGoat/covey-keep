@@ -45,9 +45,11 @@ test('intent error fields cover every sent index and the batch key', () => {
     'items.0.content_type',
     'items.0.size_bytes',
     'items.0.occurrence_id',
+    'items.0.filename',
     'items.1.content_type',
     'items.1.size_bytes',
     'items.1.occurrence_id',
+    'items.1.filename',
   ])
 })
 
