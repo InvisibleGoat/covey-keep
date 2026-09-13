@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0018"
+EXPECTED_REVISION = "0019"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -477,6 +477,31 @@ async def verify(conn, ck: Checks) -> None:
     # people.updated_at precedent — nullable, stamped on patch.
     assert_columns(ck, columns, "gatherings", present=("updated_at",), nullable=("updated_at",))
 
+    print("\n-- gatherings: the publication gate inherits (0019, CK-41) --")
+    # requires_approval is rung 1 of the publication ladder
+    # (services/publication.py): the host's own answer, and NULL means
+    # INHERIT — nobody decided, the lower rungs answer at publish time. So
+    # the column is nullable (it was NOT NULL from 0008 to 0018 — this
+    # assertion is the inversion), and it has NO server default: a default
+    # firing on insert would decide on the host's behalf and defeat
+    # inheritance, which is decision 22's point turned around — the server
+    # default was never the product rule, and now there is none.
+    assert_columns(ck, columns, "gatherings", nullable=("requires_approval",))
+    gate_default = (
+        await conn.execute(
+            text(
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'gatherings' "
+                "AND column_name = 'requires_approval'"
+            )
+        )
+    ).scalar()
+    ck.check(
+        gate_default is None,
+        "gatherings.requires_approval has no server default (NULL means inherit)",
+        f"default is {gate_default!r}",
+    )
+
     print("\n-- pending invitations (0011) --")
     # The CK-25 pending table: channel-agnostic (channel + destination, never
     # an email column), hashed-token-only, with the consumed/revoked state
@@ -507,8 +532,9 @@ async def verify(conn, ck: Checks) -> None:
     print("\n-- rsvp surface (0012) --")
     # is_observer -> stay_included: a column named for a retired word is how
     # the confusion returns (participation-terminology record, 2026-09-02).
-    # The visibility setting is a NOT NULL value on the gathering, the
-    # requires_approval shape.
+    # The visibility setting is a NOT NULL value on the gathering — the
+    # list always has SOME visibility (it shared requires_approval's shape
+    # until 0019 made that column nullable; this one stays NOT NULL).
     assert_columns(
         ck,
         columns,
@@ -860,6 +886,35 @@ async def verify(conn, ck: Checks) -> None:
         )
     else:
         ck.check(False, "media publish integrity", "media/media_derivatives/gatherings missing")
+
+    print("\n-- media publication integrity (CK-41) --")
+    if "media" in tables:
+        # A photograph cannot be published without derivatives: `live` is
+        # written by the worker's publish transaction in the SAME statement
+        # that moves the row to `ready` (and by migration 0019 over rows
+        # that were already `ready`), so a `live` row in any other rung
+        # means something wrote around the worker — a published photograph
+        # nothing can serve. Real subjects since 0019, not a vacuous
+        # quantification over an empty set. Detail prints the count only.
+        #
+        # DELIBERATELY NOT ASSERTED: "no ready+pending row exists in a
+        # gathering that resolves open." It is true the instant 0019 runs
+        # and CK-43 can legitimately break it — a host who turns review
+        # off later does not retroactively publish what waited, and
+        # whether they may is CK-43's decision to make. That check belongs
+        # to CK-41's deploy verification (WORKING-ON-NOW check (dy)), run
+        # once, not to a standing verifier.
+        live_unready = await scalar(
+            conn,
+            "SELECT count(*) FROM media WHERE publication_state = 'live' AND status <> 'ready'",
+        )
+        ck.check(
+            live_unready == 0,
+            "every live media row is ready (nothing is published without its layers)",
+            f"{live_unready} live media row(s) not in the ready rung",
+        )
+    else:
+        ck.check(False, "media publication integrity", "media table missing")
 
     print("\n-- media upload integrity (CK-34) --")
     if "media" in tables:

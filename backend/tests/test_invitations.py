@@ -413,10 +413,12 @@ async def test_accept_as_existing_person_widens_reads_and_nothing_else(
         await client.get(f"/gatherings/{gathering_id}", headers=headers_stranger)
     ).status_code == 404
 
-    # And the moderation default was left alone: still hard-coded True.
+    # And the publication gate is untouched by an invitation: the column
+    # stays NULL — nobody has decided (CK-41; it was CK-16's hard-coded
+    # True until 0019).
     async with db_session_factory() as db:
         gathering = (await db.execute(select(Gathering))).scalars().one()
-        assert gathering.requires_approval is True
+        assert gathering.requires_approval is None
 
 
 async def test_token_is_the_credential_not_the_address(client, capsys):

@@ -77,12 +77,19 @@ class Gathering(Base):
     title: Mapped[str] = mapped_column(Text, nullable=False)
     # Required when and only when gathering_type is memorial (CHECK above).
     memorial_decedent_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    # Moderation moved here from the group's capability profile (CK-12): a
-    # gathering belongs to no group, so the flag lives on the gathering and is
-    # defaulted at creation from the inviting context.
-    requires_approval: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("false")
-    )
+    # Does publication wait for the host? The host's OWN answer — rung 1 of
+    # the publication ladder (services/publication.py; CK-41, migration
+    # 0019). NULLABLE, AND NULL MEANS INHERIT: nobody has decided, and the
+    # ladder's lower rungs (the home group's default, the type's template,
+    # the join shape) answer at publish time — never frozen at create. No
+    # server default, deliberately: a default that fired on insert would
+    # decide on the host's behalf, which is exactly what decision 22 kept
+    # the server from doing; creation writes nothing here (the inversion of
+    # decision 22's set-it-explicitly discipline — database-schema decision
+    # 33), and CK-43's override surface is the only writer. Moderation
+    # lives on the gathering, not the group's capability profile (CK-12);
+    # the profile is rung 3's data, reachable only through a home group.
+    requires_approval: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     # Who may read the occurrence RSVP lists (CK-27) — the host's setting, a
     # value on the gathering exactly like requires_approval. Set explicitly in
     # application code on every create; the server default exists so 0012

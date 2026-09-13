@@ -82,7 +82,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import WorkerSettings
-from app.models import MediaStatus
+from app.models import MediaStatus, PublicationState
 from app.services import ingest
 from app.services.storage import WorkerClient, worker_client
 
@@ -167,6 +167,17 @@ async def poll_once(
             row.attempts,
             elapsed_ms,
         )
+        # The gate's answer, applied in that same transaction (CK-41): the
+        # gathering resolved open and the row went live, or it resolved
+        # gated and the row waits for the host. A state, not a person.
+        if row.publication_state is PublicationState.LIVE:
+            log.info("media %s: live — the gathering resolves open; nothing waits for the host", row.id)
+        else:
+            log.info(
+                "media %s: %s — the gathering resolves gated; publication is the host's",
+                row.id,
+                row.publication_state.value,
+            )
         await _delete_original(client, row)
     elif outcome is ingest.Outcome.DEAD_LETTERED:
         log.warning("media %s: dead-lettered (attempt %d): %s", row.id, row.attempts, row.last_error)

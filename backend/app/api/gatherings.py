@@ -16,16 +16,29 @@ keeper/host/invitation facts, never "is creator" — a creator-shaped check
 would already be wrong now that invitees read. Non-permitted access is a
 404, never a 403: the existence of a gathering is not public information.
 
-Moderation: `requires_approval` is set to True explicitly on every create —
-fail closed (decided 2026-08-25). CK-25 shipped PERSON-targeted invitations
-and deliberately did NOT relax this: the recorded relaxation is a GROUP-TYPE
-rule (ON for TEAM/CONGREGATION-sourced invites, OFF for HOUSEHOLD/CLUB), and
-a person-targeted invite carries no group, so there is still no inviting
-context to default from. The trigger waits for group-targeted invitations.
-The column's server_default is false (0008) and must never be relied on —
-see database-schema decision 22. `requires_approval` governs contributions
-WITHIN the gathering; the gathering itself is created `live` (its own
-visibility is publication_state, a separate fact — never conflate the two).
+The publication gate (CK-41; decisions/2026-09-09-consent-gate-defaults.md
+2.0.0): `requires_approval` is RESOLVED, never set. Creation writes nothing
+to the column — it is NULL, "nobody has decided" — and the answer comes
+from the ladder in services/publication.py at the moment it is needed (the
+worker's publish transaction; every gathering body here): the host's own
+setting, else the home group's default, else the type's template, else the
+join shape, with an ORGANIZATION host gated as a backstop beneath the two
+rungs a person sets. CK-16's hard-coded `requires_approval=True` was a
+fail-closed interim (database-schema decision 22) that stood for two weeks
+looking like a design; it is gone, and so is the discipline that set the
+column explicitly on every create — inverted on purpose (decision 33):
+that discipline existed so a server default could never become the
+product rule, and with the default dropped and NULL meaning inherit,
+writing ANYTHING at create would be the new way to defeat the rule. Do not
+"fix" the create path back to setting it. In every gathering body
+`requires_approval` is the EFFECTIVE value (a plain boolean, so no
+consumer handles a null) and `requires_approval_override` is the host's
+own setting (null = inherited) — readable and NOT writable until CK-43:
+an override that could turn review ON before CK-42 builds the review
+surface would create a gathering whose photographs can never be published.
+`requires_approval` governs contributions WITHIN the gathering; the
+gathering itself is created `live` (its own visibility is
+publication_state, a separate fact — never conflate the two).
 
 Patch semantics (CK-22 — JSON Merge Patch): a field ABSENT from a PATCH body
 leaves the stored value alone; an explicit `null` clears it, where the column
@@ -53,6 +66,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import AuthContext, get_auth_context, get_db
 from app.models import (
     Account,
+    AccountKind,
     Gathering,
     GatheringInvitation,
     GatheringType,
@@ -62,6 +76,7 @@ from app.models import (
     RSVP,
     RSVPListVisibility,
 )
+from app.services import publication
 from app.services.keeping import keep
 
 router = APIRouter(prefix="", tags=["gatherings"])
@@ -248,7 +263,12 @@ class GatheringPatch(BaseModel):
     # rsvp_list_visibility ONLY, mirroring /me/profile: unknown fields are a
     # 422, never a silent no-op. Everything else on the row is either
     # immutable history (created_by_account_id), lifecycle owned by
-    # services/keeping.py, or a later phase's surface.
+    # services/keeping.py, or a later phase's surface — `requires_approval`
+    # / `requires_approval_override` among them, deliberately (CK-41): the
+    # host's override is CK-43's, and it ships AFTER CK-42's review surface
+    # because an override that can turn review ON before anything can
+    # approve a photograph creates a gathering whose photographs can never
+    # be published. A sequencing constraint, not tidiness.
     model_config = ConfigDict(extra="forbid")
 
     title: Optional[str] = None
@@ -362,15 +382,37 @@ def _occurrence_body(occurrence: Occurrence) -> dict:
     }
 
 
+async def _host_kind(db: AsyncSession, gathering: Gathering) -> Optional[AccountKind]:
+    """The host account's kind — the publication ladder's backstop fact.
+    None for a hostless (claimable) gathering."""
+    if gathering.host_account_id is None:
+        return None
+    return await db.scalar(select(Account.kind).where(Account.id == gathering.host_account_id))
+
+
 def _gathering_body(
-    gathering: Gathering, occurrences: Optional[list[Occurrence]] = None
+    gathering: Gathering,
+    occurrences: Optional[list[Occurrence]] = None,
+    *,
+    host_kind: Optional[AccountKind],
 ) -> dict:
+    # The gate, resolved for this body (CK-41): `requires_approval` is the
+    # EFFECTIVE value — a plain boolean, the same field every consumer has
+    # read since CK-16, so nobody handles a null — and
+    # `requires_approval_override` is the host's own setting, null when
+    # inherited (CK-43 renders a tri-state switch from it). The resolver's
+    # `source` is deliberately NOT exposed yet: CK-43's endpoint work
+    # surfaces it for the accuracy statement (record §5).
+    gate = publication.resolve_gathering(
+        host_setting=gathering.requires_approval, host_kind=host_kind
+    )
     body = {
         "id": str(gathering.id),
         "gathering_type": gathering.gathering_type.value,
         "title": gathering.title,
         "memorial_decedent_name": gathering.memorial_decedent_name,
-        "requires_approval": gathering.requires_approval,
+        "requires_approval": gate.requires_approval,
+        "requires_approval_override": gathering.requires_approval,
         "rsvp_list_visibility": gathering.rsvp_list_visibility.value,
         "publication_state": gathering.publication_state.value,
         "created_by_account_id": str(gathering.created_by_account_id),
@@ -387,6 +429,7 @@ def _gathering_body(
 
 def _list_item(
     gathering: Gathering,
+    host_kind: Optional[AccountKind],
     occurrence_id: Optional[UUID],
     starts_at: Optional[datetime],
     occurrence_count: Optional[int],
@@ -394,8 +437,8 @@ def _list_item(
     """A GET /gatherings item: the gathering body plus the occurrence summary.
     The LIST's own shape, deliberately — the detail body carries full
     occurrences, and overloading one builder with both would couple the two
-    surfaces (CK-20)."""
-    item = _gathering_body(gathering)
+    surfaces (CK-20). The host's kind rides the list's one statement."""
+    item = _gathering_body(gathering, host_kind=host_kind)
     item["next_occurrence"] = (
         {"id": str(occurrence_id), "starts_at": starts_at.isoformat()}
         if occurrence_id is not None and starts_at is not None
@@ -502,15 +545,18 @@ async def create_gathering(
         gathering_type=body.gathering_type,
         title=body.title,
         memorial_decedent_name=body.memorial_decedent_name,
-        # Fail closed, explicitly — never the column's server default (which
-        # is false and stays false; database-schema decision 22). Every
-        # gathering is moderated until the invitation phase brings an
-        # inviting context to default from.
-        requires_approval=True,
-        # Explicit for the same reason requires_approval is (CK-27): the
-        # column's server default exists for 0012's backfill and is never
-        # relied on. INVITEES suits a private family gathering — the counts
-        # on an RSVP disclose household composition, so the default is not
+        # `requires_approval` is deliberately NOT set (CK-41): the column is
+        # NULL — nobody has decided — and the publication ladder answers at
+        # publish time. Writing anything here, true OR false, would freeze
+        # the answer at create and defeat inheritance; the column has no
+        # server default to fall back on either. This is the inversion of
+        # decision 22's set-it-explicitly discipline, on purpose (decision
+        # 33) — do not "fix" it back.
+        #
+        # Explicit, by contrast (CK-27): the visibility column's server
+        # default exists for 0012's backfill and is never relied on.
+        # INVITEES suits a private family gathering — the counts on an
+        # RSVP disclose household composition, so the default is not
         # broader; type-derived defaults belong to the presets work.
         rsvp_list_visibility=RSVPListVisibility.INVITEES,
         # The gathering itself is live; requires_approval governs
@@ -538,7 +584,7 @@ async def create_gathering(
     await db.commit()
 
     occurrences.sort(key=lambda o: o.starts_at)
-    return _gathering_body(gathering, occurrences)
+    return _gathering_body(gathering, occurrences, host_kind=account.kind)
 
 
 @router.get("/gatherings")
@@ -599,6 +645,7 @@ async def list_gatherings(
         await db.execute(
             select(
                 Gathering,
+                Account.kind,
                 lead.c.occurrence_id,
                 lead.c.starts_at,
                 lead.c.occurrence_count,
@@ -607,14 +654,17 @@ async def list_gatherings(
             # the last one is undeletable, so a NULL next_occurrence should not
             # occur — but the list must not silently drop a row if it ever does.
             .outerjoin(lead, lead.c.gathering_id == Gathering.id)
+            # The host's kind for the publication ladder (CK-41), in the same
+            # one statement — a hostless gathering reads NULL.
+            .outerjoin(Account, Account.id == Gathering.host_account_id)
             .where(or_(kept_by_caller, invited_person))
             .order_by(Gathering.created_at.desc(), Gathering.id)
         )
     ).all()
     return {
         "gatherings": [
-            _list_item(gathering, occurrence_id, starts_at, occurrence_count)
-            for gathering, occurrence_id, starts_at, occurrence_count in rows
+            _list_item(gathering, host_kind, occurrence_id, starts_at, occurrence_count)
+            for gathering, host_kind, occurrence_id, starts_at, occurrence_count in rows
         ]
     }
 
@@ -633,7 +683,7 @@ async def get_gathering(
             .order_by(Occurrence.starts_at, Occurrence.id)
         )
     ).all()
-    return _gathering_body(gathering, list(occurrences))
+    return _gathering_body(gathering, list(occurrences), host_kind=await _host_kind(db, gathering))
 
 
 @router.patch("/gatherings/{gathering_id}")
@@ -665,7 +715,7 @@ async def patch_gathering(
         gathering.rsvp_list_visibility = body.rsvp_list_visibility
     gathering.updated_at = datetime.now(timezone.utc)
     await db.commit()
-    return _gathering_body(gathering)
+    return _gathering_body(gathering, host_kind=await _host_kind(db, gathering))
 
 
 @router.post("/gatherings/{gathering_id}/occurrences", status_code=201)

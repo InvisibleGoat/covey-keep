@@ -2,9 +2,10 @@
 
 The load-bearing pins: creation births the gathering, its occurrences, and the
 creator's kept_gatherings row in ONE transaction (creator = first keeper +
-admin, keeper record §9.2); `requires_approval` is True because the
-APPLICATION set it (the column's server default is false, so a True here can
-only come from app code — the pin the moderation default depends on);
+admin, keeper record §9.2); `requires_approval` is NULL because the
+application set NOTHING (CK-41 — nobody has decided; the publication ladder
+resolves the effective value the body carries, and the column has no server
+default to fall back on: the pin the inherit rule depends on);
 non-permitted access is a 404 indistinguishable from a missing row; and the
 CK-13 deletion lapse now has a real, API-created subject instead of a fixture.
 """
@@ -14,8 +15,18 @@ from datetime import datetime, timezone
 from sqlalchemy import event, func, select
 
 from app.db import engine
-from app.models import Account, Gathering, KeptGathering, Occurrence, Person
-from app.services.keeping import account_usage
+from app.models import (
+    Account,
+    AccountKind,
+    Gathering,
+    GatheringType,
+    KeptGathering,
+    Occurrence,
+    Person,
+    PublicationState,
+    RSVPListVisibility,
+)
+from app.services.keeping import account_usage, keep
 from tests.test_auth import _sign_in
 
 DELETE_BODY = {"confirm": "DELETE"}
@@ -103,19 +114,90 @@ async def test_create_births_gathering_keeper_and_admin_together(
         assert gathering.updated_at is None
 
 
-async def test_created_gathering_requires_approval_explicitly(
+async def test_create_leaves_the_gate_undecided_and_the_body_reads_the_effective_value(
     client, capsys, db_session_factory
 ):
-    # The column's server default is false (0008) and stays false — so a True
-    # here can only mean the application set it. If the endpoint ever stops
-    # setting it, this reads the default and fails; that is the entire point
-    # (fail closed until the invitation phase brings a context to default from).
-    headers = await _signed_in_headers(client, capsys, "moderated@example.com")
+    """CK-41: creation writes NOTHING to `requires_approval` — the column is
+    NULL, "nobody has decided", and there is no server default to fall back
+    on (0019 dropped it), so a value here can only mean the create path
+    started deciding again — the inversion of decision 22, and exactly what
+    it must not do. The body carries the EFFECTIVE value through the
+    ladder (a person's groupless, private gathering resolves open: false)
+    beside the host's own setting (null = inherited), on create, detail,
+    list and patch alike."""
+    headers = await _signed_in_headers(client, capsys, "undecided@example.com")
     body = await _create(client, headers)
-    assert body["requires_approval"] is True
+    assert body["requires_approval"] is False
+    assert body["requires_approval_override"] is None
     async with db_session_factory() as db:
         gathering = (await db.execute(select(Gathering))).scalars().one()
-        assert gathering.requires_approval is True
+        assert gathering.requires_approval is None
+
+    detail = await client.get(f"/gatherings/{body['id']}", headers=headers)
+    assert detail.json()["requires_approval"] is False
+    assert detail.json()["requires_approval_override"] is None
+    (item,) = (await client.get("/gatherings", headers=headers)).json()["gatherings"]
+    assert item["requires_approval"] is False
+    assert item["requires_approval_override"] is None
+    patched = await client.patch(
+        f"/gatherings/{body['id']}", json={"title": "Renamed"}, headers=headers
+    )
+    assert patched.json()["requires_approval"] is False
+    assert patched.json()["requires_approval_override"] is None
+
+    # The host's own setting, once one exists, is rung 1: the body's
+    # effective value follows it and the override field carries it. Written
+    # directly — no endpoint writes it until CK-43.
+    async with db_session_factory() as db:
+        gathering = (await db.execute(select(Gathering))).scalars().one()
+        gathering.requires_approval = True
+        await db.commit()
+    detail = await client.get(f"/gatherings/{body['id']}", headers=headers)
+    assert detail.json()["requires_approval"] is True
+    assert detail.json()["requires_approval_override"] is True
+
+
+async def test_an_org_hosted_gathering_reads_gated_by_the_backstop(
+    client, capsys, db_session_factory
+):
+    """The ladder's org backstop through the router's wiring — the detail
+    body and the list's one-statement join both carry the host's kind.
+    No endpoint can create an org-hosted gathering yet (no organization
+    account can exist), so the gathering is constructed directly: the
+    branch's real subject arrives with the church layer, and this pin
+    exercises the WIRING, not a user flow (handoff §7.2 — an assertion
+    needs a subject; this is the wiring's)."""
+    address = "congregant@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        church = Account(kind=AccountKind.ORGANIZATION)
+        db.add(church)
+        await db.flush()
+        gathering = Gathering(
+            created_by_account_id=church.id,
+            host_account_id=church.id,
+            gathering_type=GatheringType.CHURCH_GATHERING,
+            title="VBS week",
+            rsvp_list_visibility=RSVPListVisibility.INVITEES,
+            publication_state=PublicationState.LIVE,
+        )
+        db.add(gathering)
+        await db.flush()
+        db.add(Occurrence(gathering_id=gathering.id, starts_at=datetime(2026, 9, 1, 18, tzinfo=timezone.utc)))
+        # The caller keeps it, so they are in the read audience.
+        await keep(db, await _account_for(db, address), gathering)
+        await db.commit()
+        gathering_id = str(gathering.id)
+        assert gathering.requires_approval is None  # nobody decided
+
+    detail = await client.get(f"/gatherings/{gathering_id}", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["requires_approval"] is True  # the backstop
+    assert detail.json()["requires_approval_override"] is None
+    (item,) = (await client.get("/gatherings", headers=headers)).json()["gatherings"]
+    assert item["id"] == gathering_id
+    assert item["requires_approval"] is True
+    assert item["requires_approval_override"] is None
 
 
 # --- the memorial gate, both directions ---------------------------------------
@@ -366,8 +448,13 @@ async def test_patch_gathering_stamps_updated_at_and_limits_the_surface(
 
     # The patchable surface is title + memorial_decedent_name ONLY — unknown
     # fields are a 422, never a silent no-op (the /me/profile convention).
+    # The gate's two body fields are readable and NOT writable (CK-41): the
+    # override is CK-43's, after CK-42's review surface exists.
     for bad in (
         {"requires_approval": False},
+        {"requires_approval": True},
+        {"requires_approval_override": True},
+        {"requires_approval_override": None},
         {"publication_state": "removed"},
         {"host_account_id": None},
         {"gathering_type": "memorial"},
@@ -380,7 +467,7 @@ async def test_patch_gathering_stamps_updated_at_and_limits_the_surface(
         assert response.status_code == 422, bad
     async with db_session_factory() as db:
         gathering = (await db.execute(select(Gathering))).scalars().one()
-        assert gathering.requires_approval is True
+        assert gathering.requires_approval is None  # still nobody's decision
         assert gathering.title == "Renamed potluck"
 
 

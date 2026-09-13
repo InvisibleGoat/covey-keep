@@ -122,8 +122,26 @@ and each step's failure mode, deliberately:
      Deleting an already-absent object is a SUCCESS (storage.py says why:
      Render runs two workers for ~61 seconds on every deploy).
 
-`publication_state` is not touched on any path. Processing is not
-publishing (record §5); the host's gate is unbuilt.
+`publication_state` — THE GATE, resolved inside step 4 (CK-41). Processing
+is not publishing (record §5): the worker does not infer the host's
+approval from its own completion. What it does is APPLY A SETTING that says
+no approval is required — the publication ladder in
+services/publication.py, resolved at publish time from the gathering's own
+setting, the home group's default, the type's template and the join shape
+(consent-gate defaults 2.0.0 §1). Where the gathering resolves open the
+guarded `ready` update also moves `pending → live`, in the SAME statement
+of the SAME transaction as the derivative rows and `total_bytes` — never
+beside it: a photograph that is `ready` but not published, or published but
+not counted, is a state nothing else in this system can produce. Where it
+resolves gated the row is `ready` and stays `pending` for the host (the
+review surface is CK-42). RESOLVED AT PUBLISH TIME, NEVER SNAPSHOTTED AT
+INTENT: a host who turns review on between the upload and its processing
+gets a photograph that waits, and a group whose default changes reaches
+every gathering under it; a snapshot on the media row would be a second
+representation of the gate (the decision-20 / media_tags.gathering_id
+defect class). `live` is written only over `pending` — a takedown is never
+undone by the worker. No dead-letter path touches `publication_state`: a
+`failed` row stays `pending`.
 
 Every function that writes leaves the commit to the caller (the worker
 commits after the claim and again after the outcome, so the row lock is
@@ -150,11 +168,12 @@ from typing import Optional
 from uuid import UUID
 
 from botocore.exceptions import BotoCoreError, ClientError
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, case, delete, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Gathering, Media, MediaDerivative, MediaStatus
-from app.services import processing
+from app.models import Account, Gathering, Media, MediaDerivative, MediaStatus, PublicationState
+from app.models.enums import PUBLICATION_STATE
+from app.services import processing, publication
 from app.services.processing import Rendition, Undecodable
 from app.services.storage import (
     WorkerClient,
@@ -387,19 +406,45 @@ async def handle_claimed(
     except BotoCoreError as exc:
         return await _transient_failure(db, row, now, f"write: {exc.__class__.__name__}")
 
-    # 4. One transaction: the row to `ready`, the derivative rows, the
-    # gathering's bytes. The guarded update goes first so a lost claim
-    # writes nothing at all. The attempt that succeeded is counted and the
-    # deferral cleared — a terminal row carries no job state (CK-37).
-    applied = await _settle(
-        db,
-        row,
+    # 4. One transaction: the row to `ready` (and, where the gathering
+    # resolves open, to `live`), the derivative rows, the gathering's
+    # bytes. The guarded update goes first so a lost claim writes nothing
+    # at all. The attempt that succeeded is counted and the deferral
+    # cleared — a terminal row carries no job state (CK-37).
+    #
+    # THE GATE, resolved here and now — at publish time, never snapshotted
+    # at intent (CK-41; see the module docstring). The read is the first
+    # statement of this transaction: the gathering's own setting and the
+    # host account's kind in one join (a hostless gathering reads NULL for
+    # the kind, and the ladder lets the join shape answer).
+    host_setting, host_kind = (
+        await db.execute(
+            select(Gathering.requires_approval, Account.kind)
+            .outerjoin(Account, Account.id == Gathering.host_account_id)
+            .where(Gathering.id == row.gathering_id)
+        )
+    ).one()
+    gate = publication.resolve_gathering(host_setting=host_setting, host_kind=host_kind)
+    values: dict = dict(
         status=MediaStatus.READY,
         claimed_at=None,
         available_at=None,
         attempts=row.attempts + 1,
         last_error=None,
     )
+    if not gate.requires_approval:
+        # Open: `pending → live` in the SAME guarded statement as `ready` —
+        # never a second statement, never beside the transaction. Only
+        # over `pending`: a takedown (`removed`) is never undone by the
+        # worker, whatever the gate says.
+        values["publication_state"] = case(
+            (
+                Media.publication_state == PublicationState.PENDING,
+                literal(PublicationState.LIVE, type_=PUBLICATION_STATE),
+            ),
+            else_=Media.publication_state,
+        )
+    applied = await _settle(db, row, **values)
     if not applied:
         return Outcome.LOST_CLAIM
     await db.execute(

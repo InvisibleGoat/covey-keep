@@ -31,7 +31,10 @@ The load-bearing pins (the kickoff's list, and what fell out of building it):
   stripped and rendered; three objects land in the published bucket under
   deterministic keys with the right class and type; the row goes to
   `ready` with three derivative rows and `gatherings.total_bytes` moved by
-  their actual sum, in ONE commit; `publication_state` stays `pending`;
+  their actual sum, in ONE commit; `publication_state` goes `live` in that
+  same commit where the gathering resolves open through the publication
+  ladder and stays `pending` where it resolves gated (CK-41 — resolved at
+  publish time, never snapshotted at intent; a failed row stays pending);
   the reservation releases at `ready` through the one quota path; and the
   original is deleted ONLY AFTER that commit — observed from a second
   session at the moment of the delete;
@@ -73,6 +76,7 @@ from app.config import Settings, WorkerSettings, settings
 from app.db import engine
 from app.models import (
     Account,
+    AccountKind,
     Gathering,
     Media,
     MediaDerivative,
@@ -722,7 +726,11 @@ async def test_a_present_photograph_is_processed_and_published_in_one_transactio
     # deferral (CK-37): the row says what the log line says.
     assert row.attempts == 1
     assert row.available_at is None
-    assert row.publication_state == PublicationState.PENDING  # processing is not publishing
+    # Processing is not publishing — but the gate is applied in this same
+    # transaction (CK-41): the fixture gathering is groupless, hostless and
+    # privately joined, so it resolves open and the row goes `live` here.
+    # (Until 0019 this read `pending`; the gated case is pinned below.)
+    assert row.publication_state == PublicationState.LIVE
     assert [d.layer for d in derivatives] == [MediaLayer.ARCHIVAL, MediaLayer.WEB, MediaLayer.THUMBNAIL]
     for derivative in derivatives:
         stored, content_type, storage_class = store.published[derivative.storage_key]
@@ -1368,3 +1376,156 @@ async def test_terminal_rows_carry_no_deferral(db_session_factory, worker, monke
         None,
         ERROR_ABANDONED,
     )
+
+
+# --- CK-41: the publication gate, applied in the publish transaction ----------
+
+
+async def _gathering_row(
+    db_session_factory, *, now: datetime, host_kind: AccountKind | None, requires_approval: bool | None = None
+):
+    """One claimable row on a gathering with a stated host (or none) and a
+    stated own setting (or none) — the facts the ladder reads."""
+    async with db_session_factory() as db:
+        host_id = None
+        if host_kind is not None:
+            host = Account(kind=host_kind)
+            db.add(host)
+            await db.flush()
+            host_id = host.id
+        gathering = await _mk_gathering(db, host_account_id=host_id)
+        gathering.requires_approval = requires_approval
+        row = _media(gathering.id, status=MediaStatus.UPLOADED, size=len(GPS_PHOTO), available_at=now)
+        db.add(row)
+        await db.commit()
+        return row, gathering.id
+
+
+async def test_the_gate_is_applied_at_publish_open_goes_live_gated_stays_pending(
+    db_session_factory, worker, monkeypatch
+):
+    """CK-36's publish suite, with the gate (CK-41): a person-hosted,
+    groupless, privately joined gathering resolves OPEN, so its photograph
+    is `ready` AND `live` after the one commit — the first time any media
+    row reaches `live`; a gathering whose host said `true` (rung 1 — written
+    directly, no endpoint writes it until CK-43) resolves GATED, so its
+    photograph is `ready` and still `pending` for the host. Both read back
+    from the database, and everything else about `ready` — three rows,
+    bytes moved, no job state — identical between them."""
+    t0 = _now()
+    open_row, _ = await _gathering_row(db_session_factory, now=t0, host_kind=AccountKind.PERSON)
+    gated_row, _ = await _gathering_row(
+        db_session_factory, now=t0, host_kind=AccountKind.PERSON, requires_approval=True
+    )
+    FakeStore(
+        monkeypatch,
+        {quarantine_key(open_row.id): GPS_PHOTO, quarantine_key(gated_row.id): GPS_PHOTO},
+    )
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+
+    for media_id, expected in ((open_row.id, PublicationState.LIVE), (gated_row.id, PublicationState.PENDING)):
+        row, derivatives, gathering = await _ready_state(db_session_factory, media_id)
+        assert row.status == MediaStatus.READY
+        assert row.publication_state == expected
+        assert len(derivatives) == 3
+        assert gathering.total_bytes == sum(d.size_bytes for d in derivatives) > 0
+        assert (row.claimed_at, row.available_at, row.last_error, row.attempts) == (None, None, None, 1)
+
+
+async def test_an_organization_host_gates_at_publish_through_the_backstop(
+    db_session_factory, worker, monkeypatch
+):
+    # No org account can be created through any endpoint yet; the host is
+    # constructed directly so the backstop's wiring in the worker has a
+    # subject before the church layer brings a real one.
+    t0 = _now()
+    row, _ = await _gathering_row(db_session_factory, now=t0, host_kind=AccountKind.ORGANIZATION)
+    FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r = await _row(db_session_factory, row.id)
+    assert (r.status, r.publication_state) == (MediaStatus.READY, PublicationState.PENDING)
+
+    # And the host's own `false` beats the backstop (record §5: the admin
+    # owns the switch).
+    row, _ = await _gathering_row(
+        db_session_factory, now=t0, host_kind=AccountKind.ORGANIZATION, requires_approval=False
+    )
+    FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r = await _row(db_session_factory, row.id)
+    assert (r.status, r.publication_state) == (MediaStatus.READY, PublicationState.LIVE)
+
+
+async def test_a_failed_row_stays_pending_even_where_the_gathering_resolves_open(
+    db_session_factory, worker, monkeypatch
+):
+    # Dead-lettering is not publishing: the gate is applied by the ready
+    # transaction alone, and no dead-letter path touches publication_state.
+    t0 = _now()
+    missing, _ = await _gathering_row(db_session_factory, now=t0, host_kind=AccountKind.PERSON)
+    _stub_head(monkeypatch, None)
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r = await _row(db_session_factory, missing.id)
+    assert (r.status, r.publication_state) == (MediaStatus.FAILED, PublicationState.PENDING)
+
+    undecodable, _ = await _gathering_row(db_session_factory, now=t0, host_kind=AccountKind.PERSON)
+    FakeStore(monkeypatch, {quarantine_key(undecodable.id): b"not a photograph at all"})
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r = await _row(db_session_factory, undecodable.id)
+    assert (r.status, r.publication_state) == (MediaStatus.FAILED, PublicationState.PENDING)
+
+
+async def test_the_gate_is_resolved_at_publish_time_not_snapshotted_at_confirm(
+    db_session_factory, worker, monkeypatch
+):
+    """A host who turns review on between the upload and its processing gets
+    a photograph that waits (CK-41): the row was confirmed into an OPEN
+    gathering, the setting flips to `true` before the claim, and the publish
+    transaction reads the gathering then — `ready`, still `pending`. And the
+    reverse: confirmed into a gated gathering, flipped open before the
+    claim, published `live`. Nothing on the media row could have said
+    otherwise, because nothing about the gate is stored there."""
+    t0 = _now()
+    waits, waits_gathering = await _gathering_row(db_session_factory, now=t0, host_kind=AccountKind.PERSON)
+    goes, goes_gathering = await _gathering_row(
+        db_session_factory, now=t0, host_kind=AccountKind.PERSON, requires_approval=True
+    )
+    async with db_session_factory() as db:
+        (await db.get(Gathering, waits_gathering)).requires_approval = True
+        (await db.get(Gathering, goes_gathering)).requires_approval = None
+        await db.commit()
+    FakeStore(monkeypatch, {quarantine_key(waits.id): GPS_PHOTO, quarantine_key(goes.id): GPS_PHOTO})
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r = await _row(db_session_factory, waits.id)
+    assert (r.status, r.publication_state) == (MediaStatus.READY, PublicationState.PENDING)
+    r = await _row(db_session_factory, goes.id)
+    assert (r.status, r.publication_state) == (MediaStatus.READY, PublicationState.LIVE)
+
+
+async def test_live_lands_in_the_ready_transaction_never_beside_it(
+    db_session_factory, worker, monkeypatch, caplog
+):
+    """At the instant of the delete — after the one commit — a second
+    session already sees `ready`, three rows, the bytes moved AND `live`
+    together: a photograph that is ready but not published, or published
+    but not counted, is a state nothing here can produce. And the worker
+    says so on its own line, after the `ready` line."""
+    t0 = _now()
+    row, _ = await _gathering_row(db_session_factory, now=t0, host_kind=AccountKind.PERSON)
+    store = FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
+    seen: list[tuple] = []
+
+    async def observe(key):
+        r, derivatives, gathering = await _ready_state(db_session_factory, row.id)
+        seen.append((r.status, r.publication_state, len(derivatives), gathering.total_bytes))
+
+    store.on_delete = observe
+    with caplog.at_level(logging.INFO, logger="covey-keep.worker"):
+        assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    assert seen == [(MediaStatus.READY, PublicationState.LIVE, 3, seen[0][3])]
+    assert seen[0][3] > 0
+    ready_line = caplog.text.index(f"media {row.id}: ready — three layers written")
+    live_line = caplog.text.index(f"media {row.id}: live — the gathering resolves open")
+    assert ready_line < live_line
