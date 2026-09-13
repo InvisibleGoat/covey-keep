@@ -19,7 +19,7 @@ default changes reaches every gathering under it. A snapshot on the media
 row would be a second representation of the gate — the defect class
 database-schema decision 20 and the media_tags.gathering_id rule both
 exist to prevent — and this module returning only a boolean would make
-CK-43 re-derive the ladder to say what the host is overriding, which is
+CK-44 re-derive the ladder to say what the host is overriding, which is
 why every answer names its SOURCE.
 
 THE LADDER — readable as a list (see `resolve`): the first rung with an
@@ -29,7 +29,7 @@ answer wins, and a rung with no producer answers None and is passed over.
                    nullable since 0019, NULL meaning "nobody has decided".
                    The host's explicit choice, and it outranks everything
                    beneath it, the backstop included: the admin owns the
-                   switch and we never do (record §5). Producer: CK-43's
+                   switch and we never do (record §5). Producer: CK-44's
                    override surface. Nothing writes it until then.
 
   2. GROUP         The home group's default — ONE group, the belongs-to
@@ -124,7 +124,7 @@ class JoinShape(str, Enum):
 
 
 class Source(str, Enum):
-    """Which rung answered. Returned with every resolution so CK-43's
+    """Which rung answered. Returned with every resolution so CK-44's
     accuracy statement (record §5) can say what the host is overriding
     without re-deriving the ladder."""
 

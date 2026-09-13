@@ -99,12 +99,14 @@ photograph (`GET /media/{id}/url?layer=`). Both apply ONE rule — in SQL,
 which only one is the gathering's ordinary read audience:
 
   live     the read audience (_gathering_for_read: host OR keeper OR
-           accepted invitee). Nothing is `live` today; the branch exists
-           so the publication phase never has to come back and widen an
-           audience it should have found already correct.
-  pending  THE UPLOADER AND THE HOST, AND NOBODY ELSE. Every row in the
-           database is in this state. The machine finished (`ready`); the
-           person did not approve. A keeper is not an approver, and an
+           accepted invitee). Since CK-41 the state of every photograph in
+           a gathering that resolves open through the publication ladder
+           (every gathering today); since CK-43 also what the host's
+           publish writes where a gathering resolves gated.
+  pending  THE UPLOADER AND THE HOST, AND NOBODY ELSE. A row not yet
+           `ready`, or a `ready` one in a gathering that resolves gated
+           (none on the deploy until a host can gate one — CK-44). The
+           machine finished (`ready`); the person did not approve. A keeper is not an approver, and an
            invitation grants visibility of the gathering, never of
            unreviewed media (record §5; the-book-model §10: publication is
            reserved to the host). Letting the read audience see pending
@@ -133,8 +135,61 @@ credential (storage.presign_read — the credential CK-33 proved cannot read
 quarantine), PRESIGN_TTL long, issued only to a caller the rule has already
 admitted, and NEVER LOGGED — this is the first endpoint that mints URLs at
 volume, and record §9 bites hardest here; pinned with the root logger at
-DEBUG on the success path and every refusal path. Nothing here moves
-`publication_state`: publication is the host's, and it is not built.
+DEBUG on the success path and every refusal path. The two read endpoints
+move nothing; `publication_state` is moved by the worker at `ready` where
+the gathering resolves open (CK-41) and by the host's review where it
+resolves gated (CK-43, below).
+
+THE HOST'S REVIEW (CK-43; decisions/2026-09-13-the-hosts-review.md). The
+gated branch of the publication ladder given its surface: what a host does
+with a photograph nobody has published. Three things, and every one of
+them runs INSIDE `_visible_media` — the queue is a filter on it, never a
+second criterion beside it (the CK-39 rule for `q`), and the acts require
+the row to be visible to the caller before anything else is asked.
+
+  the queue  `GET /gatherings/{id}/media?awaiting_review=true` — the
+             `ready` + `pending` rows, HOST-ONLY: a non-host draws the
+             media 404, never an empty list (an empty list would say "there
+             is a queue and it is empty," a fact only the host holds).
+             Composes with `q`.
+  publish    `POST /media/{id}/publish`, and the batch
+             `POST /gatherings/{id}/media/publish` (up to fifty ids,
+             refused WHOLE on any bad item — the CK-34 batch precedent —
+             every refusal an item-level 422 on the entry, carrying the
+             code the single act would have drawn). `ready` + `pending` →
+             `live`, stamping `published_at` and `published_by_person_id`
+             (migration 0020 — the consent-evidence columns; the worker
+             stamps the date and leaves the publisher NULL, so NULL means
+             "the rule published this" and non-NULL means "a host did").
+  decline    `POST /media/{id}/decline` — `ready` + `pending` → `removed`,
+             stamping `removed_at`. THE QUEUE'S BOTTOM: a queue with only
+             an approve action never empties (record §4), and decline is
+             the state that already exists, with the bin CK-37 already
+             reads (the uploader alone, REMOVED_BIN) — a fourth `declined`
+             state would be a second representation of "not published"
+             (decision 20's defect class). NOT a general removal: a `live`
+             row is refused (409 `not_pending`); the takedown is its own
+             phase with its trigger recorded. No bulk decline.
+
+  who        THE HOST, AND NOBODY ELSE — not a keeper, not a co-host when
+             they exist, not the uploader on their own photograph
+             (the-book-model §10; co-hosts §4: reserved, never delegable).
+             Everyone else draws the media 404 byte-identical to a missing
+             id, on the queue and on both acts (404-not-403).
+  what       a `ready` row that is `pending`. `failed` has nothing to
+             publish; an in-flight row has nothing to look at (no URL
+             exists for it); a `removed` row is NEVER resurrected by
+             approval — the worker's `CASE` and the host's guard agree —
+             and the host cannot even find one they did not upload (the
+             bin is the uploader's). Stable codes: `not_ready` (the rung),
+             `already_live`, `not_pending` (the state).
+  how        GUARDED UPDATES (the worker's `_settle` precedent): `WHERE
+             status = 'ready' AND publication_state = 'pending'` — a row
+             that moved since the caller read it changes nothing and the
+             response is its current state. A second publish of a `live`
+             row does not re-stamp.
+  quota      UNTOUCHED. `total_bytes` moved at `ready`; publication is not
+             a byte (pinned).
 
 WORDS ON A PHOTOGRAPH (CK-39; decisions/2026-09-10-captions-tags-and-
 finding-a-photograph.md). Three things a photograph can be known by, and
@@ -213,7 +268,15 @@ DEBUG); the one place a search term appears is the request line, because
 records every path (the media id in `/media/{id}/url` included) — the
 transport's, stated in the api-reference. None of the words reaches a
 reader the audience rule excludes (the search leak test is the
-enforcement).
+enforcement). Since CK-43 this module holds THE ACT THE CONSENT
+ARCHITECTURE HAS ALWAYS DESCRIBED AND NEVER HAD — a person deciding that a
+photograph may be seen — and the gate is not widened by it: `pending` is
+still the uploader and the host; the queue is the host's existing
+visibility given an action; approval is the host's alone; decline is
+removal with the contributor's bin intact; the publication stamp is
+consent evidence and never telemetry, and the publisher's person id rides
+no body. Nothing on the deploy is gated, and nothing here can gate
+anything (CK-44); the only gated subject is planted by hand.
 """
 
 import asyncio
@@ -224,7 +287,7 @@ from uuid import UUID
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import and_, delete, exists, func, literal_column, or_, select
+from sqlalchemy import and_, delete, exists, func, literal_column, or_, select, update
 from sqlalchemy.dialects.postgresql import aggregate_order_by, array_agg
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -301,6 +364,15 @@ STORAGE_UNAVAILABLE = "storage_unavailable"
 # The read side's one 409 (CK-37): the caller may see the row, but it is not
 # `ready`, so there is no object to issue a URL for. Carries the rung.
 NOT_READY = "not_ready"
+# The review's third code (CK-43): publish on a row that is already `live`
+# — nothing changes, and the stamp is not re-written. `not_pending` and
+# `not_ready` are reused: a code is a stable marker, and the message
+# beside it is the act's own.
+ALREADY_LIVE = "already_live"
+
+# The batch publish takes at most this many ids per request (CK-43) — the
+# intent batch's number, for the same reason: bounded work per request.
+MAX_PUBLISH_PER_REQUEST = 50
 
 # The contributor-visible bin (keeper record §2.8; consent doc, Revocation):
 # a removed photograph stays visible to its UPLOADER for this long after
@@ -515,6 +587,10 @@ def _media_body(row: Media) -> dict:
         "created_at": row.created_at.isoformat(),
         "filename": row.filename,
         "caption": row.caption,
+        # The publication stamp's WHEN (0020, CK-43): null until published.
+        # Never the WHO — a person id rides no body (the roster rule); the
+        # host is the only person it could be.
+        "published_at": row.published_at.isoformat() if row.published_at is not None else None,
     }
 
 
@@ -843,6 +919,7 @@ def _list_item(row: Media, display_name: Optional[str], tags: list[str], ctx: Au
 async def list_media(
     gathering_id: UUID,
     q: Optional[str] = Query(default=None, max_length=MAX_SEARCH_LENGTH),
+    awaiting_review: bool = Query(default=False),
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -858,10 +935,21 @@ async def list_media(
     criterion is ANDed with the audience rule in the same WHERE, so a term
     that matches a photograph the caller may not see returns nothing, the
     same nothing a term matching no photograph returns. A blank or absent
-    `q` is not a search."""
+    `q` is not a search.
+
+    `awaiting_review=true` (CK-43) is the host's queue — the `ready` +
+    `pending` rows, and a filter on `_visible_media` in the same WHERE like
+    `q`, never a second criterion beside it. HOST-ONLY: a non-host draws
+    the media 404 (never an empty list — an empty list would say there is
+    a queue and it is empty, a fact only the host holds). Composes with
+    `q`."""
     gathering = await _gathering_for_read(db, ctx, gathering_id)
     now = datetime.now(timezone.utc)
     criteria = [Media.gathering_id == gathering.id, _visible_media(ctx, now)]
+    if awaiting_review:
+        if not _is_host(gathering, ctx):
+            raise _media_not_found()
+        criteria.append(_awaiting_review())
     term = q.strip() if q else ""
     if term:
         criteria.append(_matches(term))
@@ -1064,3 +1152,289 @@ async def patch_media(
             db.add(MediaTag(media_id=row.id, tag=tag, added_by_person_id=ctx.person.id))
     await db.commit()
     return {**_media_body(row), "tags": await _tags_for(db, row.id)}
+
+
+# --- the host's review (CK-43) -----------------------------------------------
+# decisions/2026-09-13-the-hosts-review.md. The gated branch of the
+# publication ladder, given its surface: the queue, publish, decline. Every
+# rule above the fold: THE HOST ALONE; a `ready` row that is `pending`;
+# decline IS `removed`; guarded updates; quota untouched; the router still
+# logs nothing.
+
+
+def _is_host(gathering: Gathering, ctx: AuthContext) -> bool:
+    # The one actor. `host_account_id` NULL (the claimable state) means
+    # nobody — a hostless gathering has no queue and no acts, which is the
+    # same fact the ladder resolves it open on (nobody could ever approve).
+    return (
+        gathering.host_account_id is not None
+        and gathering.host_account_id == ctx.person.account_id
+    )
+
+
+def _awaiting_review():
+    """The queue's criterion — what the host has to decide on: processed
+    (`ready`, so a URL exists and the host can look) and not yet decided
+    (`pending`). ANDed with `_visible_media` by the caller, like `q`."""
+    return and_(
+        Media.status == MediaStatus.READY,
+        Media.publication_state == PublicationState.PENDING,
+    )
+
+
+def _review_refusal(row: Media, *, publish: bool) -> Optional[dict]:
+    """Why this row cannot be published (or declined) right now, as the
+    stable-code detail of a 409 — or None when it can. The order says
+    which fact wins when two apply: the publication state first (a `live`
+    or `removed` row is a decision already made, whatever its rung), then
+    the rung (nothing to publish, nothing to look at)."""
+    state = row.publication_state
+    if state == PublicationState.LIVE:
+        return {
+            "code": ALREADY_LIVE if publish else NOT_PENDING,
+            "publication_state": state.value,
+            "status": row.status.value,
+            "message": "this photo is already published"
+            if publish
+            else "this photo is already published — taking a published photo down isn't supported yet",
+        }
+    if state == PublicationState.REMOVED:
+        # A takedown is never undone by a queue action — the worker's rule
+        # (`live` only over `pending`), applied to the host's hand.
+        return {
+            "code": NOT_PENDING,
+            "publication_state": state.value,
+            "status": row.status.value,
+            "message": "this photo has been removed and can't be published"
+            if publish
+            else "this photo has already been removed",
+        }
+    if row.status != MediaStatus.READY:
+        return {
+            "code": NOT_READY,
+            "publication_state": state.value,
+            "status": row.status.value,
+            "message": "this photo couldn't be processed, so there is nothing to publish"
+            if row.status == MediaStatus.FAILED
+            else "this photo isn't ready yet",
+        }
+    return None
+
+
+async def _review_row(db: AsyncSession, ctx: AuthContext, media_id: UUID, now: datetime) -> Media:
+    """The row an act may touch: visible to the caller under the read rule
+    AND in a gathering the caller HOSTS — anyone else, the uploader on
+    their own photograph and a keeper included, draws the media 404
+    byte-identical to a missing id (404-not-403). Locked for the act."""
+    row = (
+        await db.execute(
+            select(Media)
+            .join(Gathering, Gathering.id == Media.gathering_id)
+            .where(
+                Media.id == media_id,
+                _visible_media(ctx, now),
+                Gathering.host_account_id.is_not(None),
+                Gathering.host_account_id == ctx.person.account_id,
+            )
+            .with_for_update(of=Media)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise _media_not_found()
+    return row
+
+
+def _review_guard():
+    # The guarded update's predicate (the worker's `_settle` precedent): a
+    # row that moved since the caller read it changes nothing.
+    return and_(
+        Media.status == MediaStatus.READY,
+        Media.publication_state == PublicationState.PENDING,
+    )
+
+
+async def _act(db: AsyncSession, row: Media, *, publish: bool, **values) -> None:
+    """Refuse with the row's current state, or apply the guarded update.
+    Under the row lock the guard cannot lose a race; it stays in the WHERE
+    anyway, because the discipline is the predicate, not the lock — and a
+    lost race, were one possible, would read back as a refusal, never a
+    500."""
+    refusal = _review_refusal(row, publish=publish)
+    if refusal is not None:
+        raise HTTPException(409, detail=refusal)
+    result = await db.execute(
+        update(Media)
+        .where(Media.id == row.id, _review_guard())
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        await db.rollback()
+        raise HTTPException(
+            409,
+            detail={
+                "code": NOT_PENDING,
+                "message": "this photo changed while you were deciding — reload and try again",
+            },
+        )
+    await db.commit()
+    await db.refresh(row)
+
+
+@router.post("/media/{media_id}/publish")
+async def publish_media(
+    media_id: UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """THE HOST PUBLISHES A PHOTOGRAPH: `ready` + `pending` → `live`,
+    stamping `published_at` and `published_by_person_id` (0020). One
+    column moves; no byte moves (`total_bytes` moved at `ready`). Refusals,
+    in order: 404 for anyone who is not this gathering's host (or for a row
+    the caller may not see); 409 `already_live` (nothing changes, the stamp
+    is not re-written); 409 `not_pending` for a `removed` row the host can
+    see (their own — a takedown is never undone); 409 `not_ready` carrying
+    the rung for anything not yet processed, `failed` included."""
+    now = datetime.now(timezone.utc)
+    row = await _review_row(db, ctx, media_id, now)
+    await _act(
+        db,
+        row,
+        publish=True,
+        publication_state=PublicationState.LIVE,
+        published_at=now,
+        published_by_person_id=ctx.person.id,
+    )
+    return _media_body(row)
+
+
+@router.post("/media/{media_id}/decline")
+async def decline_media(
+    media_id: UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """THE HOST DECLINES A PHOTOGRAPH: `ready` + `pending` → `removed`,
+    stamping `removed_at` — the queue's bottom, and it is the state that
+    already exists: the uploader keeps the contributor-visible bin for
+    REMOVED_BIN (CK-37), the host does not see it again, nothing is
+    destroyed. NOT a general removal: a `live` row is refused (409
+    `not_pending` carrying `live`) — taking down a published photograph is
+    its own phase. `published_at` is untouched (a declined photograph was
+    never published; that NULL is what tells a declined row from a
+    taken-down one when the second exists)."""
+    now = datetime.now(timezone.utc)
+    row = await _review_row(db, ctx, media_id, now)
+    await _act(
+        db,
+        row,
+        publish=False,
+        publication_state=PublicationState.REMOVED,
+        removed_at=now,
+    )
+    return _media_body(row)
+
+
+class MediaPublishBatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # min/max on the list: an empty batch and an over-long one are both
+    # field-level 422s at ["body", "media_ids"] from the model itself.
+    media_ids: list[UUID] = Field(min_length=1, max_length=MAX_PUBLISH_PER_REQUEST)
+
+
+def _batch_item_422(index: int, message: str, code: str) -> HTTPException:
+    # An item-level error landing on the offending entry (the intent
+    # batch's shape, so the frontend renders it from the one mapper) —
+    # carrying the code the single act would have drawn, so the frontend
+    # can switch on it rather than on the wording.
+    return HTTPException(
+        422,
+        detail=[
+            {
+                "loc": ["body", "media_ids", index],
+                "msg": message,
+                "type": "value_error",
+                "code": code,
+            }
+        ],
+    )
+
+
+@router.post("/gatherings/{gathering_id}/media/publish")
+async def publish_media_batch(
+    gathering_id: UUID,
+    body: MediaPublishBatchIn,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """One-tap bulk approve (roadmap §3): the host publishes up to fifty of
+    this gathering's photographs in ONE transaction, refused WHOLE on any
+    bad item and leaving nothing changed (the CK-34 batch precedent — a
+    partial success no caller can interpret is worse than a refusal). Every
+    refusal is an item-level 422 on the entry that provoked it, carrying
+    the code the single act would have drawn; a missing id, another
+    gathering's id, and an id the caller may not act on all read "no such
+    photograph" — byte-identical, so the batch confirms nothing. The
+    gathering must be the caller's to host (404 otherwise); the rows are
+    locked for the check-and-update, so two sessions racing one queue
+    cannot both stamp a row, and every row in a batch carries the same
+    `published_at`."""
+    gathering = await _gathering_for_read(db, ctx, gathering_id)
+    if not _is_host(gathering, ctx):
+        raise _media_not_found()
+    now = datetime.now(timezone.utc)
+    seen: set[UUID] = set()
+    for index, media_id in enumerate(body.media_ids):
+        if media_id in seen:
+            raise _batch_item_422(index, "that photo is listed twice", NOT_PENDING)
+        seen.add(media_id)
+    rows = {
+        row.id: row
+        for row in (
+            await db.execute(
+                select(Media)
+                .join(Gathering, Gathering.id == Media.gathering_id)
+                .where(
+                    Media.gathering_id == gathering.id,
+                    Media.id.in_(body.media_ids),
+                    _visible_media(ctx, now),
+                )
+                .with_for_update(of=Media)
+            )
+        ).scalars()
+    }
+    for index, media_id in enumerate(body.media_ids):
+        row = rows.get(media_id)
+        if row is None:
+            # One message for "no such row", "not this gathering's", and
+            # "not visible to you" — the batch confirms nothing.
+            raise _batch_item_422(index, "no such photograph", "not_found")
+        refusal = _review_refusal(row, publish=True)
+        if refusal is not None:
+            raise _batch_item_422(index, refusal["message"], refusal["code"])
+    result = await db.execute(
+        update(Media)
+        .where(Media.id.in_(body.media_ids), _review_guard())
+        .values(
+            publication_state=PublicationState.LIVE,
+            published_at=now,
+            published_by_person_id=ctx.person.id,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != len(body.media_ids):
+        # Unreachable under the locks; kept so a surprise reads as a
+        # refusal and never as a partial publish.
+        await db.rollback()
+        raise HTTPException(
+            409,
+            detail={
+                "code": NOT_PENDING,
+                "message": "a photo changed while you were deciding — reload and try again",
+            },
+        )
+    await db.commit()
+    for row in rows.values():
+        await db.refresh(row)
+    return {"media": [_media_body(rows[media_id]) for media_id in body.media_ids]}

@@ -28,8 +28,12 @@ an already-absent object is a success — Render runs two workers for ~61
 seconds on every deploy (CK-35's check (cw)), and `SKIP LOCKED` protects
 the row, not a delete a slow-dying predecessor issues.
 
-`publication_state` is never touched: processing is not publishing
-(record §5); the host's gate is unbuilt.
+`publication_state` moves here only where the gathering resolves open
+(CK-41 — `pending → live` inside the ready transaction, the ladder in
+services/publication.py applied, never approval inferred from completion;
+record §5) and never on a failure path; where it resolves gated the row
+waits for the host's review (CK-43, api/media.py). Since CK-43 the same
+statement stamps `published_at` and leaves the publisher NULL.
 
 TWO SERVICES, ONE DATABASE — the rules that must hold from this service's
 first deploy (record §8), each enforced here or in render.yaml:

@@ -147,7 +147,7 @@ async def test_create_leaves_the_gate_undecided_and_the_body_reads_the_effective
 
     # The host's own setting, once one exists, is rung 1: the body's
     # effective value follows it and the override field carries it. Written
-    # directly — no endpoint writes it until CK-43.
+    # directly — no endpoint writes it until CK-44.
     async with db_session_factory() as db:
         gathering = (await db.execute(select(Gathering))).scalars().one()
         gathering.requires_approval = True
@@ -449,7 +449,7 @@ async def test_patch_gathering_stamps_updated_at_and_limits_the_surface(
     # The patchable surface is title + memorial_decedent_name ONLY — unknown
     # fields are a 422, never a silent no-op (the /me/profile convention).
     # The gate's two body fields are readable and NOT writable (CK-41): the
-    # override is CK-43's, after CK-42's review surface exists.
+    # override is CK-44's, after CK-43's review surface (built).
     for bad in (
         {"requires_approval": False},
         {"requires_approval": True},

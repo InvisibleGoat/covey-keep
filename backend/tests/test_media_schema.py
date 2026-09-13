@@ -310,3 +310,34 @@ async def test_deleting_a_date_keeps_the_photograph_and_clears_only_its_label(
         assert rows[media_ids["first"]].occurrence_id is None
         assert rows[media_ids["second"]].occurrence_id is None
         assert rows[media_ids["unlabeled"]].occurrence_id is None
+
+
+async def test_publication_stamp_is_nullable_with_no_default_and_a_provenance_fk(
+    db_session_factory,
+):
+    """0020 (CK-43; the-hosts-review record §7): `published_at` and
+    `published_by_person_id` nullable with no default — NULL meaningful on
+    each (not yet published, or published before 0020 with nothing
+    backfilled; and THE RULE published it, no person did) — and the
+    publisher FK points at people with NO delete rule: provenance, never a
+    subject (account deletion is anonymization). A row is born with both
+    NULL."""
+    async with db_session_factory() as db:
+        media = await _columns(db, "media")
+        assert media["published_at"] == ("YES", None)
+        assert media["published_by_person_id"] == ("YES", None)
+        target, rule = (
+            await db.execute(
+                text(
+                    "SELECT confrelid::regclass::text, confdeltype::text FROM pg_constraint "
+                    "WHERE conname = 'fk_media_published_by_person_id' AND contype = 'f'"
+                )
+            )
+        ).one()
+        assert (target, rule) == ("people", "a")
+        gathering, _ = await _mk_gathering(db)
+        row = _media(gathering.id, status=MediaStatus.PENDING_UPLOAD)
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+        assert (row.published_at, row.published_by_person_id) == (None, None)

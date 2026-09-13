@@ -134,14 +134,23 @@ of the SAME transaction as the derivative rows and `total_bytes` — never
 beside it: a photograph that is `ready` but not published, or published but
 not counted, is a state nothing else in this system can produce. Where it
 resolves gated the row is `ready` and stays `pending` for the host (the
-review surface is CK-42). RESOLVED AT PUBLISH TIME, NEVER SNAPSHOTTED AT
-INTENT: a host who turns review on between the upload and its processing
+host's review — the queue, publish, decline — is CK-43, api/media.py).
+RESOLVED AT PUBLISH TIME, NEVER SNAPSHOTTED AT INTENT: a host who turns review on between the upload and its processing
 gets a photograph that waits, and a group whose default changes reaches
 every gathering under it; a snapshot on the media row would be a second
 representation of the gate (the decision-20 / media_tags.gathering_id
 defect class). `live` is written only over `pending` — a takedown is never
 undone by the worker. No dead-letter path touches `publication_state`: a
 `failed` row stays `pending`.
+
+THE PUBLICATION STAMP (CK-43, migration 0020; the-hosts-review record §7):
+where the worker writes `live` it also writes `published_at`, in the SAME
+guarded statement and under the SAME `CASE` (only over `pending` — a
+takedown is never undone and never re-dated), and it leaves
+`published_by_person_id` NULL. NULL IS THE FACT that the rule published
+the photograph and no person did; the host's publish (api/media.py) is
+the only writer of a non-NULL publisher. Nothing is backfilled: rows the
+worker published before 0020 read NULL on both, forever.
 
 Every function that writes leaves the commit to the caller (the worker
 commits after the claim and again after the outcome, so the row lock is
@@ -168,7 +177,7 @@ from typing import Optional
 from uuid import UUID
 
 from botocore.exceptions import BotoCoreError, ClientError
-from sqlalchemy import and_, case, delete, literal, or_, select, update
+from sqlalchemy import and_, case, delete, func, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Account, Gathering, Media, MediaDerivative, MediaStatus, PublicationState
@@ -437,13 +446,16 @@ async def handle_claimed(
         # never a second statement, never beside the transaction. Only
         # over `pending`: a takedown (`removed`) is never undone by the
         # worker, whatever the gate says.
+        was_pending = Media.publication_state == PublicationState.PENDING
         values["publication_state"] = case(
-            (
-                Media.publication_state == PublicationState.PENDING,
-                literal(PublicationState.LIVE, type_=PUBLICATION_STATE),
-            ),
+            (was_pending, literal(PublicationState.LIVE, type_=PUBLICATION_STATE)),
             else_=Media.publication_state,
         )
+        # The publication stamp (CK-43, 0020): WHEN, under the same guard
+        # (a removed row is never re-dated), and WHO stays NULL — the rule
+        # published this, not a person. The transaction's clock, the one
+        # `created_at` uses.
+        values["published_at"] = case((was_pending, func.now()), else_=Media.published_at)
     applied = await _settle(db, row, **values)
     if not applied:
         return Outcome.LOST_CLAIM

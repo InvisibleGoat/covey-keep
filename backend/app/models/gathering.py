@@ -86,7 +86,7 @@ class Gathering(Base):
     # decide on the host's behalf, which is exactly what decision 22 kept
     # the server from doing; creation writes nothing here (the inversion of
     # decision 22's set-it-explicitly discipline — database-schema decision
-    # 33), and CK-43's override surface is the only writer. Moderation
+    # 33), and CK-44's override surface is the only writer. Moderation
     # lives on the gathering, not the group's capability profile (CK-12);
     # the profile is rung 3's data, reachable only through a home group.
     requires_approval: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)

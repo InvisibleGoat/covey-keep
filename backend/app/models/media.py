@@ -57,7 +57,9 @@ class Media(Base):
 
     Two gates, two columns, never collapsed (record §5): `status` is the
     machine's answer (the MediaStatus ladder) and `publication_state` is the
-    host's. `status` has NO server default — a writer must state the rung:
+    host's — and since 0020 the host's gate is STAMPED when it opens
+    (`published_at`, `published_by_person_id` — see the columns), as the
+    takedown has been since 0001 (`removed_at`). `status` has NO server default — a writer must state the rung:
     a default of `processing` would let an omitted status be reclaimed by
     the worker fifteen minutes later against an object that was never
     uploaded.
@@ -125,6 +127,27 @@ class Media(Base):
     )
     removed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # The publication stamp (0020, CK-43; decisions/2026-09-13-the-hosts-
+    # review.md §7): WHO published this photograph, and WHEN. `published_at`
+    # is stamped in the same guarded statement that writes `live` — by the
+    # worker where the gathering resolves open, by the host's publish where
+    # it resolves gated — and only over `pending`, like the state itself.
+    # `published_by_person_id` IS NULL WHEN THE RULE PUBLISHED IT: an
+    # ungated gathering's rows are published by the ladder at `ready`, not
+    # by a person, and NULL is that fact rather than missing data; non-NULL
+    # means a host acted. Do not "fix" it to NOT NULL, and do not write the
+    # host's id where the worker published. Nothing is backfilled: every row
+    # published before 0020 reads NULL on both, forever (the 0018 filename
+    # precedent). Provenance, never a subject — no delete rule, like
+    # MediaTag.added_by_person_id (account deletion is anonymization). A
+    # consent-evidence column, never telemetry: the person id rides no
+    # response body.
+    published_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    published_by_person_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("people.id"), nullable=True
     )
     # Words on the photograph (0018, CK-39;
     # decisions/2026-09-10-captions-tags-and-finding-a-photograph.md).

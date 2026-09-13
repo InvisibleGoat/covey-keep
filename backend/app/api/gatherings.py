@@ -33,9 +33,11 @@ writing ANYTHING at create would be the new way to defeat the rule. Do not
 "fix" the create path back to setting it. In every gathering body
 `requires_approval` is the EFFECTIVE value (a plain boolean, so no
 consumer handles a null) and `requires_approval_override` is the host's
-own setting (null = inherited) — readable and NOT writable until CK-43:
-an override that could turn review ON before CK-42 builds the review
-surface would create a gathering whose photographs can never be published.
+own setting (null = inherited) — readable and NOT writable until CK-44:
+an override that could turn review ON before a review surface exists
+would create a gathering whose photographs can never be published (the
+surface — the host's queue, publish and decline — is built at CK-43,
+api/media.py; CK-44 ships after it).
 `requires_approval` governs contributions WITHIN the gathering; the
 gathering itself is created `live` (its own visibility is
 publication_state, a separate fact — never conflate the two).
@@ -265,10 +267,11 @@ class GatheringPatch(BaseModel):
     # immutable history (created_by_account_id), lifecycle owned by
     # services/keeping.py, or a later phase's surface — `requires_approval`
     # / `requires_approval_override` among them, deliberately (CK-41): the
-    # host's override is CK-43's, and it ships AFTER CK-42's review surface
-    # because an override that can turn review ON before anything can
-    # approve a photograph creates a gathering whose photographs can never
-    # be published. A sequencing constraint, not tidiness.
+    # host's override is CK-44's, and it ships AFTER CK-43's review surface
+    # (built — the queue, publish and decline in api/media.py) because an
+    # override that can turn review ON before anything can approve a
+    # photograph creates a gathering whose photographs can never be
+    # published. A sequencing constraint, not tidiness.
     model_config = ConfigDict(extra="forbid")
 
     title: Optional[str] = None
@@ -400,8 +403,8 @@ def _gathering_body(
     # EFFECTIVE value — a plain boolean, the same field every consumer has
     # read since CK-16, so nobody handles a null — and
     # `requires_approval_override` is the host's own setting, null when
-    # inherited (CK-43 renders a tri-state switch from it). The resolver's
-    # `source` is deliberately NOT exposed yet: CK-43's endpoint work
+    # inherited (CK-44 renders a tri-state switch from it). The resolver's
+    # `source` is deliberately NOT exposed yet: CK-44's endpoint work
     # surfaces it for the accuracy statement (record §5).
     gate = publication.resolve_gathering(
         host_setting=gathering.requires_approval, host_kind=host_kind

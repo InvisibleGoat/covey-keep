@@ -21,7 +21,7 @@ photograph that goes live (decisions/2026-09-09-consent-gate-defaults.md
     set to UNDECIDED, which is what is true: every `true` in the database
     is CK-16's fail-closed interim (decision 22), and no override surface
     has ever existed, so no person has ever expressed a preference here.
-    THIS IS WHY THE CORRECTION DOES NOT RECUR: from CK-43 onward the
+    THIS IS WHY THE CORRECTION DOES NOT RECUR: from CK-44 onward the
     column can carry a host's intent, and a phase that backfilled it after
     that would be overwriting someone's choice. 0019 is the one migration
     that may write this column wholesale, and only because nothing in it
@@ -45,7 +45,7 @@ photograph that goes live (decisions/2026-09-09-consent-gate-defaults.md
 The downgrade restores NOT NULL and must therefore choose a value for the
 NULLs: false. It cannot distinguish "inherited open" from "the host chose
 open" and does not pretend to — nothing before 0019 could carry a choice,
-and after CK-43 a downgrade would lose the host's `true` as readily as
+and after CK-44 a downgrade would lose the host's `true` as readily as
 anything else, which is the honest price of a downgrade across a column
 whose meaning changed. (c) is NOT reversed: a photograph published by this
 migration stays `live`, the way 0014's downgrade says what it leaves

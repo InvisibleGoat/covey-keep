@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0019"
+EXPECTED_REVISION = "0020"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -899,9 +899,9 @@ async def verify(conn, ck: Checks) -> None:
         #
         # DELIBERATELY NOT ASSERTED: "no ready+pending row exists in a
         # gathering that resolves open." It is true the instant 0019 runs
-        # and CK-43 can legitimately break it — a host who turns review
+        # and CK-44 can legitimately break it — a host who turns review
         # off later does not retroactively publish what waited, and
-        # whether they may is CK-43's decision to make. That check belongs
+        # whether they may is CK-44's decision to make. That check belongs
         # to CK-41's deploy verification (WORKING-ON-NOW check (dy)), run
         # once, not to a standing verifier.
         live_unready = await scalar(
@@ -915,6 +915,96 @@ async def verify(conn, ck: Checks) -> None:
         )
     else:
         ck.check(False, "media publication integrity", "media table missing")
+
+    print("\n-- media: the publication stamp (0020, CK-43) --")
+    # WHO published a photograph, and WHEN (decisions/2026-09-13-the-hosts-
+    # review.md §7). Both nullable, and NULL is meaningful on each:
+    # `published_at` NULL means not (yet) published — or published before
+    # 0020, which nothing backfills; `published_by_person_id` NULL means
+    # THE RULE published it (the worker, where the gathering resolves
+    # open) and no person did. A phase that "fixed" either to NOT NULL
+    # would erase the distinction the columns exist to record.
+    assert_columns(ck, columns, "media", nullable=("published_at", "published_by_person_id"))
+    stamp_default = (
+        await conn.execute(
+            text(
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'media' "
+                "AND column_name = 'published_at'"
+            )
+        )
+    ).scalar()
+    ck.check(
+        stamp_default is None,
+        "media.published_at has no server default (the publish writes it, or nothing does)",
+        f"default is {stamp_default!r}",
+    )
+    # Provenance, never a subject: the publisher FK points at people with
+    # NO delete rule — account deletion is anonymization, and the record
+    # of who published stays attributed to the anonymized person (the
+    # media_tags.added_by_person_id shape).
+    publisher_fk = await fk_rule(conn, "fk_media_published_by_person_id")
+    ck.check(
+        publisher_fk is not None and publisher_fk[0] == "people",
+        "media.published_by_person_id references people",
+        f"found {publisher_fk!r}",
+    )
+    ck.check(
+        publisher_fk is not None and publisher_fk[1] == "a",
+        "media.published_by_person_id has no delete rule (provenance; nothing cascades from a person)",
+        f"delete rule is {publisher_fk[1] if publisher_fk else None!r}",
+    )
+
+    print("\n-- media publication stamp integrity (CK-43) --")
+    # Guarded on the COLUMNS, not just the table: `media` exists at 0019, and
+    # an integrity query over a column that is not there is a crash, not a
+    # FAIL (the temporary-downgrade negative test found this).
+    if "media" in tables and {"published_at", "published_by_person_id"} <= set(columns["media"]):
+        # (1) A person's act is always dated: a publisher with no
+        # published_at means something wrote around both writers (the
+        # host's publish stamps the pair together).
+        undated_publisher = await scalar(
+            conn,
+            "SELECT count(*) FROM media "
+            "WHERE published_by_person_id IS NOT NULL AND published_at IS NULL",
+        )
+        ck.check(
+            undated_publisher == 0,
+            "every media row with a publisher carries a published_at",
+            f"{undated_publisher} media row(s) with a publisher and no published_at",
+        )
+        # (2) A stamped row is never still `pending`: the stamp is written
+        # in the same statement that leaves `pending` (to `live`), and a
+        # row that later leaves `live` (a takedown, when built) keeps it.
+        stamped_pending = await scalar(
+            conn,
+            "SELECT count(*) FROM media "
+            "WHERE published_at IS NOT NULL AND publication_state = 'pending'",
+        )
+        ck.check(
+            stamped_pending == 0,
+            "no pending media row carries a published_at",
+            f"{stamped_pending} pending media row(s) carrying a published_at",
+        )
+        # DELIBERATELY NOT ASSERTED: "every live row has a published_at."
+        # Its only truthful form is "...except the rows published before
+        # 0020" (migration 0019's correction and CK-41's worker), and the
+        # bound that scoping needs — the migration's instant — is recorded
+        # nowhere; a created_at chosen by hand would be a magic number in a
+        # verifier. Recorded as a fact instead: after 0020 every path that
+        # writes `live` stamps it, so this number can only ever shrink — a
+        # run that reads it LARGER than the last is the finding.
+        unstamped_live = await scalar(
+            conn,
+            "SELECT count(*) FROM media WHERE publication_state = 'live' AND published_at IS NULL",
+        )
+        ck.info("live media rows with no published_at (published before 0020; must never grow)", unstamped_live)
+    else:
+        ck.check(
+            False,
+            "media publication stamp integrity",
+            "media table or its published_at / published_by_person_id columns missing",
+        )
 
     print("\n-- media upload integrity (CK-34) --")
     if "media" in tables:

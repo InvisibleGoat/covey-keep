@@ -1408,7 +1408,7 @@ async def test_the_gate_is_applied_at_publish_open_goes_live_gated_stays_pending
     groupless, privately joined gathering resolves OPEN, so its photograph
     is `ready` AND `live` after the one commit — the first time any media
     row reaches `live`; a gathering whose host said `true` (rung 1 — written
-    directly, no endpoint writes it until CK-43) resolves GATED, so its
+    directly, no endpoint writes it until CK-44) resolves GATED, so its
     photograph is `ready` and still `pending` for the host. Both read back
     from the database, and everything else about `ready` — three rows,
     bytes moved, no job state — identical between them."""
@@ -1529,3 +1529,71 @@ async def test_live_lands_in_the_ready_transaction_never_beside_it(
     ready_line = caplog.text.index(f"media {row.id}: ready — three layers written")
     live_line = caplog.text.index(f"media {row.id}: live — the gathering resolves open")
     assert ready_line < live_line
+
+
+# --- CK-43: the publication stamp, and the `removed` guard pinned ---------------
+
+
+async def test_the_worker_stamps_published_at_and_leaves_the_publisher_null(
+    db_session_factory, worker, monkeypatch
+):
+    """The publication stamp (0020; the-hosts-review record §7) from the
+    worker's side: where the gathering resolves OPEN the ready transaction
+    writes `published_at` in the same statement as `live` and leaves
+    `published_by_person_id` NULL — NULL IS THE FACT that the rule
+    published it and no person did. Where it resolves GATED neither is
+    written (the host's publish will write both). A `failed` row carries
+    neither on either permanent path."""
+    t0 = _now()
+    open_row, _ = await _gathering_row(db_session_factory, now=t0, host_kind=AccountKind.PERSON)
+    gated_row, _ = await _gathering_row(
+        db_session_factory, now=t0, host_kind=AccountKind.PERSON, requires_approval=True
+    )
+    FakeStore(
+        monkeypatch,
+        {quarantine_key(open_row.id): GPS_PHOTO, quarantine_key(gated_row.id): GPS_PHOTO},
+    )
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+
+    r = await _row(db_session_factory, open_row.id)
+    assert (r.status, r.publication_state) == (MediaStatus.READY, PublicationState.LIVE)
+    assert r.published_at is not None
+    assert r.published_by_person_id is None
+    r = await _row(db_session_factory, gated_row.id)
+    assert (r.status, r.publication_state) == (MediaStatus.READY, PublicationState.PENDING)
+    assert (r.published_at, r.published_by_person_id) == (None, None)
+
+    missing, _ = await _gathering_row(db_session_factory, now=t0, host_kind=AccountKind.PERSON)
+    _stub_head(monkeypatch, None)
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r = await _row(db_session_factory, missing.id)
+    assert (r.status, r.published_at, r.published_by_person_id) == (MediaStatus.FAILED, None, None)
+
+
+async def test_a_removed_row_reclaimed_stays_removed_and_unstamped(db_session_factory, worker, monkeypatch):
+    """The `removed` guard, pinned against a constructed subject (the
+    finding CK-42.1 recorded: the `CASE` that writes `live` — and now
+    `published_at` — only over `pending` had no committed test). A stalled
+    `processing` row that is already `removed` is re-claimed, processed to
+    `ready`, and stays `removed` with no stamp: a takedown is never undone
+    by the worker, and never re-dated. No product path produces this
+    sequence today (decline requires `ready`, and a `ready` row is never
+    claimed again); the guard holds against a future one anyway."""
+    t0 = _now()
+    stale = t0 - RECLAIM_AFTER - timedelta(minutes=1)
+    async with db_session_factory() as db:
+        gathering = await _mk_gathering(db)  # hostless: resolves open — the guard is the only thing in the way
+        row = _media(gathering.id, status=MediaStatus.PROCESSING, size=len(GPS_PHOTO), claimed_at=stale)
+        row.publication_state = PublicationState.REMOVED
+        row.removed_at = t0 - timedelta(hours=1)
+        db.add(row)
+        await db.commit()
+        media_id = row.id
+    FakeStore(monkeypatch, {quarantine_key(media_id): GPS_PHOTO})
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r, derivatives, _ = await _ready_state(db_session_factory, media_id)
+    assert r.status == MediaStatus.READY and len(derivatives) == 3
+    assert r.publication_state == PublicationState.REMOVED
+    assert (r.published_at, r.published_by_person_id) == (None, None)
+    assert r.removed_at is not None
