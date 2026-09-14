@@ -46,6 +46,9 @@ interface GatheringForm {
   title: string
   decedentName: string
   rsvpListVisibility: string
+  // The host's switch (CK-44): whether photos wait for the host. Two
+  // states at the surface — see gatheringPatch for what each one writes.
+  reviewPhotos: boolean
 }
 
 interface OccurrenceForm {
@@ -77,15 +80,22 @@ function occurrenceToForm(occurrence: Occurrence, zone: string): OccurrenceForm 
 
 // PATCH bodies carry only what changed, under merge-patch semantics (CK-22):
 // an ABSENT field leaves the stored value alone, an explicit `null` clears
-// it. On the gathering nothing is clearable — title is NOT NULL and the
-// decedent's name is pinned by the memorial CHECK — so a blanked one goes
-// out as "" and the server's own refusal renders inline (never a fake
-// clear, never a swallowed edit).
+// it. On the gathering's text fields nothing is clearable — title is NOT
+// NULL and the decedent's name is pinned by the memorial CHECK — so a
+// blanked one goes out as "" and the server's own refusal renders inline
+// (never a fake clear, never a swallowed edit). The one clearable field is
+// the host's switch (CK-44): on writes `true`, off writes an explicit `null`
+// — inherit, the CK-22 rule exactly — and NEVER `false`. Explicit false
+// means "open regardless of what my group later says", and with no group
+// default for it to differ from it is indistinguishable from inherit today
+// and would ask a host for a preference about a future they have not met;
+// the API accepts it, the surface produces it with nothing until rung 2
+// exists (consent-gate-defaults 2.3.0 §8).
 function gatheringPatch(
   form: GatheringForm,
   gathering: GatheringWithOccurrences,
-): Record<string, string> {
-  const patch: Record<string, string> = {}
+): Record<string, string | boolean | null> {
+  const patch: Record<string, string | boolean | null> = {}
   const title = form.title.trim()
   if (title !== gathering.title) patch.title = title
   if (gathering.gathering_type === 'memorial') {
@@ -97,7 +107,17 @@ function gatheringPatch(
   if (form.rsvpListVisibility !== gathering.rsvp_list_visibility) {
     patch.rsvp_list_visibility = form.rsvpListVisibility
   }
+  if (form.reviewPhotos !== reviewIsOn(gathering)) {
+    patch.requires_approval_override = form.reviewPhotos ? true : null
+  }
   return patch
+}
+
+// What the switch reads: the host's OWN setting, never the effective value
+// (a gathering the ladder gates without the host's say-so would otherwise
+// render a switch that is "on" and writes nothing when turned off).
+function reviewIsOn(gathering: Pick<GatheringWithOccurrences, 'requires_approval_override'>): boolean {
+  return gathering.requires_approval_override === true
 }
 
 // The occurrence's optional fields (ends_at, location, map_url) ARE clearable
@@ -133,7 +153,28 @@ function occurrencePatch(
   return patch
 }
 
-const GATHERING_FIELDS = ['title', 'memorial_decedent_name', 'rsvp_list_visibility']
+const GATHERING_FIELDS = [
+  'title',
+  'memorial_decedent_name',
+  'rsvp_list_visibility',
+  'requires_approval_override',
+]
+
+// §5's accuracy statement (decisions/2026-09-09-consent-gate-defaults.md;
+// the-hosts-review §13), rendered on the turning-off path and only there.
+// Two clauses: what turning review off means for this gathering — the
+// switch renders only for the host, a person, whose groupless and
+// privately joined gathering inherits OPEN, so "off" means photos publish
+// as soon as they are ready and nobody looks at them first (the record's
+// own word for it: unreviewed) — and the honest one about what is already
+// waiting: it still needs the host's decision, and the queue stays until
+// it gets one (the strand rule). Plain: a hint, never a warning, a block or
+// a confirmation. The premise of the first clause is structural today and
+// the body does not yet say what inherit resolves to; the share link or
+// the group default, whichever comes first, must make this conditional
+// (consent-gate-defaults 2.3.0 §8 carries the trigger).
+const REVIEW_OFF_STATEMENT =
+  "Turning this off means photos are published as soon as they're ready — everyone in this gathering can see them, and nobody looks at them first. Photos already waiting still need your decision, and “Awaiting your review” stays until they get it."
 const OCCURRENCE_FIELDS = ['starts_at', 'ends_at', 'location', 'map_url']
 const INVITE_FIELDS = ['destination', 'channel']
 const RSVP_FIELDS = ['response', 'stay_included', 'companions', 'arrival_time']
@@ -504,10 +545,11 @@ function OccurrenceRsvp({
 // surfaces keeper counts or gathering removal: those are later phases'
 // surfaces. `requires_approval` — the EFFECTIVE value, resolved through the
 // publication ladder (CK-41) — is READ by the Photos section since CK-43.1
-// to decide whether the host's review exists at all, and is written by
-// nothing: the host's own switch is CK-44's. The gathering type is not
-// editable — the backend's patchable surface is title + decedent name +
-// RSVP-list visibility only.
+// to decide whether the host's review exists, and is written by nothing;
+// `requires_approval_override` — the host's OWN setting — is what the
+// switch on the edit form writes since CK-44 (true, or null for inherit).
+// The gathering type is not editable — the backend's patchable surface is
+// title + decedent name + RSVP-list visibility + the switch.
 export function GatheringDetail() {
   const { id } = useParams()
   const { person } = useAuth()
@@ -523,6 +565,7 @@ export function GatheringDetail() {
     title: '',
     decedentName: '',
     rsvpListVisibility: 'INVITEES',
+    reviewPhotos: false,
   })
   const [gatheringErrors, setGatheringErrors] = useState<FormErrors>(noErrors())
   const [gatheringSubmitting, setGatheringSubmitting] = useState(false)
@@ -671,6 +714,9 @@ export function GatheringDetail() {
   const canEdit = person !== null && gathering.host_account_id === person.account_id
 
   const gatheringDirty = Object.keys(gatheringPatch(gatheringForm, gathering)).length > 0
+  // The turning-off path, and only that path: review was on when the form
+  // opened and the box is now unchecked. Re-checking withdraws it.
+  const turningReviewOff = reviewIsOn(gathering) && !gatheringForm.reviewPhotos
   const editedOccurrence =
     editingOccurrenceId === null
       ? null
@@ -685,6 +731,7 @@ export function GatheringDetail() {
       title: gathering.title,
       decedentName: gathering.memorial_decedent_name ?? '',
       rsvpListVisibility: gathering.rsvp_list_visibility,
+      reviewPhotos: reviewIsOn(gathering),
     })
     setGatheringErrors(noErrors())
     setEditingGathering(true)
@@ -946,6 +993,33 @@ export function GatheringDetail() {
             Everyone can always see their own answer; you always see the full list.
           </p>
           <FieldError errors={gatheringErrors} field="rsvp_list_visibility" />
+
+          {/* The host's switch (CK-44; consent-gate-defaults §5 and §10.3):
+              rung 1 of the publication ladder, written by a person. Host
+              only — this form renders for nobody else — and never disabled.
+              Two states at the surface: on writes `true`, off writes an
+              explicit `null` (inherit) and never `false` (see
+              gatheringPatch). The statement below appears on the
+              turning-off path alone; turning it on needs no justification
+              and gets none. */}
+          <label htmlFor="edit-review-photos">
+            <input
+              id="edit-review-photos"
+              type="checkbox"
+              checked={gatheringForm.reviewPhotos}
+              aria-describedby={describedBy(gatheringErrors, 'requires_approval_override')}
+              onChange={(event) =>
+                setGatheringForm((form) => ({ ...form, reviewPhotos: event.target.checked }))
+              }
+            />{' '}
+            Review photos before they're published
+          </label>
+          <p className="field-hint">
+            When this is on, each photo waits for you to publish or decline it before anyone
+            else in this gathering can see it.
+          </p>
+          {turningReviewOff && <p className="field-hint">{REVIEW_OFF_STATEMENT}</p>}
+          <FieldError errors={gatheringErrors} field="requires_approval_override" />
 
           <button type="submit" disabled={!gatheringDirty || gatheringSubmitting}>
             {gatheringSubmitting ? 'Saving…' : 'Save'}
@@ -1224,9 +1298,10 @@ export function GatheringDetail() {
           photograph nobody has approved. Collapsed by default: no media
           request until opened. isHost chooses the wording of who can see a
           pending photograph, and — with the gathering's effective
-          requires_approval (CK-41), since CK-43.1 — whether the host's
-          review exists in the section at all; the server decides who sees
-          anything and who may act. */}
+          requires_approval (CK-41), since CK-43.1, or with anything waiting
+          in the list, since CK-44 — whether the host's review exists in the
+          section at all; the server decides who sees anything and who may
+          act. The switch that writes the setting is in the edit form above. */}
       <section className="auth-card" aria-labelledby="photos-heading">
         <h2 id="photos-heading">Photos</h2>
         <GatheringMedia

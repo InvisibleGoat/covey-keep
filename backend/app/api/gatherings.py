@@ -33,11 +33,19 @@ writing ANYTHING at create would be the new way to defeat the rule. Do not
 "fix" the create path back to setting it. In every gathering body
 `requires_approval` is the EFFECTIVE value (a plain boolean, so no
 consumer handles a null) and `requires_approval_override` is the host's
-own setting (null = inherited) — readable and NOT writable until CK-44:
-an override that could turn review ON before a review surface exists
-would create a gathering whose photographs can never be published (the
-surface — the host's queue, publish and decline — is built at CK-43,
-api/media.py; CK-44 ships after it).
+own setting (null = inherited) — readable since CK-41 and, since CK-44,
+WRITABLE through PATCH: `true` gates, `false` opens, an explicit `null`
+clears to inherit, absent leaves it alone (the CK-22 clearing rule
+exactly). The effective value stays read-only — one writable
+representation of the gate, never two. The override ships after CK-43's
+review surface (the host's queue, publish and decline — api/media.py) on
+purpose: an override that could turn review ON before anything could
+approve a photograph would have created a gathering whose photographs
+could never be published. A gathering whose review is turned OFF with a
+photograph still waiting publishes nothing as a side effect — the
+frontend keeps the host's queue rendered while anything waits
+(decisions/2026-09-13-the-hosts-review.md §13); nothing here moves a
+media row on the way off, and nothing ever may.
 `requires_approval` governs contributions WITHIN the gathering; the
 gathering itself is created `live` (its own visibility is
 publication_state, a separate fact — never conflate the two).
@@ -262,31 +270,43 @@ class GatheringCreate(BaseModel):
 
 class GatheringPatch(BaseModel):
     # The patchable surface is title + memorial_decedent_name +
-    # rsvp_list_visibility ONLY, mirroring /me/profile: unknown fields are a
-    # 422, never a silent no-op. Everything else on the row is either
-    # immutable history (created_by_account_id), lifecycle owned by
-    # services/keeping.py, or a later phase's surface — `requires_approval`
-    # / `requires_approval_override` among them, deliberately (CK-41): the
-    # host's override is CK-44's, and it ships AFTER CK-43's review surface
-    # (built — the queue, publish and decline in api/media.py) because an
-    # override that can turn review ON before anything can approve a
-    # photograph creates a gathering whose photographs can never be
-    # published. A sequencing constraint, not tidiness.
+    # rsvp_list_visibility + requires_approval_override ONLY, mirroring
+    # /me/profile: unknown fields are a 422, never a silent no-op.
+    # Everything else on the row is either immutable history
+    # (created_by_account_id), lifecycle owned by services/keeping.py, or a
+    # later phase's surface. `requires_approval` — the EFFECTIVE value the
+    # body carries — is deliberately NOT here: it is resolved, never
+    # written, and a second writable representation of the gate is the
+    # defect class database-schema decision 20 exists to prevent.
+    #
+    # `requires_approval_override` (CK-44; consent-gate-defaults §10.3, §5)
+    # is rung 1 of the publication ladder — the host's own choice, the one
+    # rung a person sets on the gathering — writable at last, and it shipped
+    # AFTER CK-43's review surface on purpose: an override that could turn
+    # review ON before anything could approve a photograph would have
+    # created a gathering whose photographs could never be published.
     model_config = ConfigDict(extra="forbid")
 
     title: Optional[str] = None
     memorial_decedent_name: Optional[str] = None
     rsvp_list_visibility: Optional[RSVPListVisibility] = None
+    # Tri-state, and every value is a real request: True gates, False opens
+    # ("open regardless of what my group later says" — accepted, and
+    # produced by nothing until rung 2 gives it a meaning), and an EXPLICIT
+    # null clears to inherit (NULL in the column — the ladder answers again).
+    # No validator: null is the clear, the one field on this model that
+    # follows the CK-22 rule in full. Absent, as everywhere, leaves it alone.
+    requires_approval_override: Optional[bool] = None
 
     # Field validators run only when the field is PRESENT in the body
     # (validate_default is off), so a None inside one is an explicit null —
-    # the merge-patch "clear" request (CK-22) — and no field here is
-    # clearable: title is NOT NULL, the memorial CHECK requires the
-    # decedent's name present iff the type is memorial (so clearing it on a
-    # memorial would violate the constraint, and it is already NULL on
-    # everything else), and rsvp_list_visibility is NOT NULL — the list
-    # always has SOME visibility. Every refusal is a field-level 422, never
-    # a constraint firing as a 500.
+    # the merge-patch "clear" request (CK-22) — and none of the THREE text /
+    # enum fields is clearable: title is NOT NULL, the memorial CHECK
+    # requires the decedent's name present iff the type is memorial (so
+    # clearing it on a memorial would violate the constraint, and it is
+    # already NULL on everything else), and rsvp_list_visibility is NOT
+    # NULL — the list always has SOME visibility. Every refusal is a
+    # field-level 422, never a constraint firing as a 500.
 
     @field_validator("title")
     @classmethod
@@ -319,12 +339,14 @@ class GatheringPatch(BaseModel):
     def _something_to_patch(self) -> "GatheringPatch":
         # A patch is empty when no field was PROVIDED — not when every value
         # is None: under merge-patch semantics an explicit null is a real
-        # request (refused above for all three fields, but the emptiness test
-        # must still be about presence, the same rule as OccurrencePatch).
+        # request (refused above for the three text/enum fields, and THE
+        # clear for requires_approval_override — `{"requires_approval_override":
+        # null}` has all-None values and is a real patch; a value-based
+        # emptiness test would silently reject it, the trap CK-22 pinned).
         if not self.model_fields_set:
             raise ValueError(
                 "nothing to update — provide title, memorial_decedent_name, "
-                "and/or rsvp_list_visibility"
+                "rsvp_list_visibility, and/or requires_approval_override"
             )
         return self
 
@@ -403,9 +425,16 @@ def _gathering_body(
     # EFFECTIVE value — a plain boolean, the same field every consumer has
     # read since CK-16, so nobody handles a null — and
     # `requires_approval_override` is the host's own setting, null when
-    # inherited (CK-44 renders a tri-state switch from it). The resolver's
-    # `source` is deliberately NOT exposed yet: CK-44's endpoint work
-    # surfaces it for the accuracy statement (record §5).
+    # inherited — the switch CK-44 renders (two-state at the surface: it
+    # writes true and null; false is accepted and produced by nothing until
+    # rung 2 exists). The resolver's `source` is deliberately NOT exposed:
+    # CK-44's accuracy statement turned out not to need it — what the
+    # turning-off path has to state is what INHERIT resolves to, which the
+    # source does not say when the source is HOST — and it needed nothing
+    # today, because every gathering the switch can render on (a person's,
+    # groupless, privately joined) inherits open. The trigger for exposing
+    # the inherited answer here is the share link or rung 2, whichever
+    # arrives first (consent-gate-defaults 2.3.0 §8).
     gate = publication.resolve_gathering(
         host_setting=gathering.requires_approval, host_kind=host_kind
     )
@@ -698,9 +727,20 @@ async def patch_gathering(
 ) -> dict:
     gathering = await _gathering_for_admin(db, ctx, gathering_id)
     # Merge patch (CK-22): a field applies iff it was PRESENT in the body.
-    # Neither of these is clearable (the model refuses explicit null), so a
-    # provided value is always non-None here.
+    # None of the three text/enum fields is clearable (the model refuses
+    # explicit null), so a provided value is always non-None for them; the
+    # override is the exception, and None there IS the request.
     provided = body.model_fields_set
+    if "requires_approval_override" in provided:
+        # The host's switch (CK-44): rung 1 of the publication ladder,
+        # written by a person for the first time in the column's life.
+        # True gates, False opens, None clears to inherit. Host-gated like
+        # everything else here — `_gathering_for_admin` already drew the
+        # 404 for anyone else. Nothing here touches a media row: turning
+        # review off publishes nothing that was waiting (the-hosts-review
+        # §13), and the worker reads this column at publish time, never
+        # from a snapshot, so the next `ready` sees the new answer.
+        gathering.requires_approval = body.requires_approval_override
     if "memorial_decedent_name" in provided:
         # The type-dependent half of the memorial gate needs the row: only a
         # memorial carries a decedent name (the CHECK would fire as a 500

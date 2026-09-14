@@ -16,7 +16,14 @@ export interface Gathering {
   gathering_type: string
   title: string
   memorial_decedent_name: string | null
+  // The publication gate (CK-41): `requires_approval` is the EFFECTIVE
+  // value, resolved through the ladder — read by the Photos section to
+  // know whether a ready photograph waits. `requires_approval_override` is
+  // the host's own setting: true gates, false opens, null inherits — the
+  // switch on the edit surface writes true and null (CK-44; false is the
+  // API's third value, produced by nothing until a group default exists).
   requires_approval: boolean
+  requires_approval_override: boolean | null
   // Who may read the occurrence RSVP lists (CK-27) — the host's setting:
   // HOST_ONLY | INVITEES | ATTENDEES. Labels live in lib/rsvps.ts.
   rsvp_list_visibility: string

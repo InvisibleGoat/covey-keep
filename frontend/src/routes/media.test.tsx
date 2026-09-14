@@ -412,7 +412,13 @@ test('a ready pending photograph says who can see it — from the viewer\'s seat
 
   renderMedia({ isHost: false })
   fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
-  expect(await screen.findByText('Only you and the host can see this.')).toBeTruthy()
+  // Since CK-44 the pending line also says what it waits on — the host,
+  // who can act on it whatever the switch says (edited here for that).
+  expect(
+    await screen.findByText(
+      'Only you and the host can see this. Waiting for the host to publish or decline it.',
+    ),
+  ).toBeTruthy()
   // Never "shared", never "waiting for approval".
   expect(screen.queryByText(/shared|approv|review/i)).toBeNull()
 
@@ -461,8 +467,13 @@ test('the host sees a pending photograph of theirs as visible to them alone, and
 
   renderMedia({ isHost: true })
   fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
-  expect(await screen.findByText('Only you can see this.')).toBeTruthy()
-  expect(screen.getByText('Only grandma and you can see this.')).toBeTruthy()
+  // The host is told it waits for them (CK-44: on every ready + pending row).
+  expect(
+    await screen.findByText('Only you can see this. Waiting for you to publish or decline it.'),
+  ).toBeTruthy()
+  expect(
+    screen.getByText('Only grandma and you can see this. Waiting for you to publish or decline it.'),
+  ).toBeTruthy()
 })
 
 test('the list polls while a photograph is being prepared and stops the moment everything is terminal', async () => {
@@ -492,7 +503,9 @@ test('the list polls while a photograph is being prepared and stops the moment e
   await screen.findByText('Being prepared — usually within a minute, longer for a big batch.')
 
   // Without a manual refresh the row becomes ready.
-  await screen.findByText('Only you and the host can see this.')
+  await screen.findByText(
+    'Only you and the host can see this. Waiting for the host to publish or decline it.',
+  )
   await waitFor(() => {
     expect(calls(mock, 'GET', endsWith('/media'))).toHaveLength(3)
   })

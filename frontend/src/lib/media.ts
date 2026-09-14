@@ -25,9 +25,13 @@
 // asked for with `awaiting_review=true` (mediaListPath); publish and decline
 // are the two acts (reviewMedia), each refused with a STABLE CODE the copy
 // switches on and never the server's wording (reviewRefusalMessage); and the
-// pending line becomes conditional on the gathering resolving gated
-// (mediaStateMessage's `gated` — record §8: where nobody reviews, the line
-// says who can see the photograph and nothing about what it waits on).
+// pending line's second sentence — what the photograph waits on — follows
+// on every `ready` + `pending` row (mediaStateMessage; record §8 as
+// restated at 1.2.0, CK-44: a row may say it is waiting exactly when
+// someone can act on it, and under the strand rule someone always can —
+// the host's queue renders while anything waits, whatever the switch says
+// (anyWaiting, the list-level half of the same predicate). Where review is
+// off and nothing waits, no line names a reviewer or what it waits on.
 import { authFetch } from './api'
 import { networkErrors } from './formErrors'
 
@@ -316,19 +320,25 @@ export function anyInFlight(items: Pick<MediaItem, 'status'>[]): boolean {
 // outcome, never the file's contents (pipeline record §6.5: "we couldn't
 // process this photo", not "corrupt").
 //
-// Where the gathering resolves GATED (`viewer.gated` — the detail body's
-// effective `requires_approval`, CK-41) someone genuinely does decide, and
-// the pending line saying nothing about it would be the opposite lie
-// (the-hosts-review §8). So, and only then, the line gains a second
-// sentence saying what the photograph waits on. It is read by the uploader,
+// A `ready` row that is `pending` is WAITING — for the host, who can act on
+// it (the-hosts-review §8, restated at 1.2.0 by CK-44): the host's queue
+// renders while anything waits, whatever the gathering's own switch says
+// (§13 — the strand rule), so on every such row someone genuinely can
+// decide, and the line saying nothing about it would be a lie in the other
+// direction. So the pending line carries a second sentence saying what the
+// photograph waits on — a function of the ROW alone, with no gathering-level
+// flag: CK-43.1's `gated` parameter is gone, because "gated" was never the
+// accurate condition (an open gathering can hold a waiting row; a gated one
+// with nothing waiting has no line to write). It is read by the uploader,
 // who may not be the host, and by the host, who in a family gathering
 // usually IS the uploader — so the host's copy addresses them as the one
 // who decides ("waiting for you"), never as a person waiting on "the host",
 // which would be themselves. Both readings are true at once. Nothing here
-// names the product as the reviewer: a host publishes or declines.
+// names the product as the reviewer: a host publishes or declines. Where
+// nothing waits there is no such row, and no line names a reviewer.
 export function mediaStateMessage(
   item: Pick<MediaItem, 'status' | 'publication_state' | 'is_own' | 'uploader_display_name'>,
-  viewer: { isHost: boolean; gated?: boolean },
+  viewer: { isHost: boolean },
 ): string {
   switch (item.status) {
     case 'pending_upload':
@@ -363,9 +373,8 @@ export function mediaStateMessage(
         : viewer.isHost
           ? `Only ${uploader} and you can see this.`
           : `Only ${uploader} and the host can see this.`
-      if (!viewer.gated) return audience
-      // Gated: what it waits on, from the same seat. The host decides, so
-      // the host is told it waits for them — the common case in a family
+      // What it waits on, from the same seat. The host decides, so the
+      // host is told it waits for them — the common case in a family
       // gathering is a host reading their own photograph.
       return viewer.isHost
         ? `${audience} Waiting for you to publish or decline it.`
@@ -392,6 +401,18 @@ export function mediaStateMessage(
 // the server would refuse (a `live` one, a `failed` one) is its own defect.
 export function awaitingReview(item: Pick<MediaItem, 'status' | 'publication_state'>): boolean {
   return item.status === 'ready' && item.publication_state === 'pending'
+}
+
+// The list-level half of the same predicate (CK-44; the-hosts-review §13):
+// whether anything the caller can see is waiting. The host's review renders
+// while review is ON or while this is true — `isHost && (requiresApproval
+// || anyWaiting(items))` — so a photograph that was waiting when the host
+// turned review off is never stranded: the queue and both acts stay
+// reachable until the host decides it. Derived from the list as loaded,
+// never remembered (a waiting row a search term hides is not on the screen,
+// and the switch follows the screen); nothing is published on the way off.
+export function anyWaiting(items: Pick<MediaItem, 'status' | 'publication_state'>[]): boolean {
+  return items.some(awaitingReview)
 }
 
 // The batch endpoint takes up to fifty ids (api-reference, the batch form).

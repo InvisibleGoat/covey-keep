@@ -73,20 +73,25 @@ test('the message is read from publication_state: the same ready row says two di
   expect(mediaStateMessage({ status: 'ready', publication_state: 'live', ...own }, { isHost: false })).toBe(
     'Everyone in this gathering can see it.',
   )
+  // A ready + pending row: who can see it — and, since CK-44 (the-hosts-
+  // review §8 at 1.2.0), what it waits on: the host, who can act on it
+  // whatever the gathering's own switch says. (Edited at CK-44: these
+  // three pinned the CK-38 sentence alone; the second sentence follows on
+  // every such row now, and lib/media-review.test.ts pins both seats.)
   expect(
     mediaStateMessage({ status: 'ready', publication_state: 'pending', ...own }, { isHost: false }),
-  ).toBe('Only you and the host can see this.')
+  ).toBe('Only you and the host can see this. Waiting for the host to publish or decline it.')
   // The uploader IS the host: the two admitted people are one.
   expect(
     mediaStateMessage({ status: 'ready', publication_state: 'pending', ...own }, { isHost: true }),
-  ).toBe('Only you can see this.')
+  ).toBe('Only you can see this. Waiting for you to publish or decline it.')
   // The host looking at someone else's pending photograph.
   expect(
     mediaStateMessage(
       { status: 'ready', publication_state: 'pending', is_own: false, uploader_display_name: 'grandma' },
       { isHost: true },
     ),
-  ).toBe('Only grandma and you can see this.')
+  ).toBe('Only grandma and you can see this. Waiting for you to publish or decline it.')
   // The bin (nothing removes yet; the branch is derived, like CK-37's).
   expect(
     mediaStateMessage({ status: 'ready', publication_state: 'removed', ...own }, { isHost: false }),
@@ -121,7 +126,14 @@ test('no state message implies a reviewer, an approval, or that a pending photog
           { ...row, is_own, uploader_display_name: 'grandma' },
           { isHost },
         )
-        expect(message).not.toMatch(/approv|review|shared|posted|publish/i)
+        expect(message).not.toMatch(/approv|review|shared|posted/i)
+        // "publish" is banned as the product's claim; a ready + pending row
+        // names the HOST's act — "waiting for the host to publish or decline
+        // it" — which is the one place the word may appear (edited at
+        // CK-44, when that sentence stopped depending on a gathering flag).
+        if (!(row.status === 'ready' && row.publication_state === 'pending')) {
+          expect(message).not.toMatch(/publish/i)
+        }
       }
     }
   }

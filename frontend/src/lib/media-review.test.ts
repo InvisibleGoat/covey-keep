@@ -1,13 +1,18 @@
-// CK-43.1 pins on the helpers the review surface rests on. The value under
-// test: THE STRING — the pending line is conditional on the gathering
-// resolving gated (the-hosts-review §8), and it is pinned byte for byte both
-// ways, because a conditional wired backwards looks completely normal on
-// one gathering; the queue is the same list path with the flag; a refused
-// act's copy switches on the server's CODE and never its wording; and the
-// batch's error keys cover every sent index.
+// CK-43.1 pins on the helpers the review surface rests on, restated at
+// CK-44. The value under test: THE STRING — a `ready` + `pending` row says
+// what it waits on, from each seat, pinned byte for byte because the
+// sentence is read by the host and the uploader at once; and its condition
+// is the ROW's, not the gathering's (the-hosts-review §8 at 1.2.0: a row
+// may say it is waiting exactly when someone can act on it, and under the
+// strand rule — §13 — the host always can). `anyWaiting` is the same
+// predicate over the list, so the queue and the sentence cannot drift; the
+// queue is the same list path with the flag; a refused act's copy switches
+// on the server's CODE and never its wording; and the batch's error keys
+// cover every sent index.
 import { expect, test } from 'vitest'
 import { networkErrors } from './formErrors'
 import {
+  anyWaiting,
   awaitingReview,
   MAX_PUBLISH_BATCH,
   mediaListPath,
@@ -20,36 +25,30 @@ const pending = { status: 'ready', publication_state: 'pending' }
 const own = { ...pending, is_own: true, uploader_display_name: 'Steven' }
 const theirs = { ...pending, is_own: false, uploader_display_name: 'grandma' }
 
-test('THE STRING, gated: the same pending row says what it waits on, from each seat — and the host is told it waits for them', () => {
-  // The uploader, who is not the host.
-  expect(mediaStateMessage(own, { isHost: false, gated: true })).toBe(
+test('THE STRING: a ready + pending row says what it waits on, from each seat — and the host is told it waits for them', () => {
+  // The uploader, who is not the host: the host is named as the actor and
+  // both outcomes are named, so nothing reads as the product reviewing.
+  expect(mediaStateMessage(own, { isHost: false })).toBe(
     'Only you and the host can see this. Waiting for the host to publish or decline it.',
   )
   // The host reading their OWN photograph — the common case in a family
-  // gathering (STEP 5's edge, decided): never a person waiting on "the
+  // gathering (CK-43.1's edge, decided): never a person waiting on "the
   // host", which would be themselves.
-  expect(mediaStateMessage(own, { isHost: true, gated: true })).toBe(
+  expect(mediaStateMessage(own, { isHost: true })).toBe(
     'Only you can see this. Waiting for you to publish or decline it.',
   )
   // The host reading someone else's.
-  expect(mediaStateMessage(theirs, { isHost: true, gated: true })).toBe(
+  expect(mediaStateMessage(theirs, { isHost: true })).toBe(
     'Only grandma and you can see this. Waiting for you to publish or decline it.',
   )
   // A non-host reading someone else's pending photograph cannot happen
   // under the audience rule; the function still answers honestly.
-  expect(mediaStateMessage(theirs, { isHost: false, gated: true })).toBe(
+  expect(mediaStateMessage(theirs, { isHost: false })).toBe(
     'Only grandma and the host can see this. Waiting for the host to publish or decline it.',
   )
 })
 
-test('THE STRING, open: the pending line is exactly what CK-38 wrote — nothing about what it waits on, because nothing waits', () => {
-  for (const gated of [false, undefined]) {
-    expect(mediaStateMessage(own, { isHost: false, gated })).toBe('Only you and the host can see this.')
-    expect(mediaStateMessage(own, { isHost: true, gated })).toBe('Only you can see this.')
-    expect(mediaStateMessage(theirs, { isHost: true, gated })).toBe('Only grandma and you can see this.')
-  }
-  // And no other rung or state changes with the gate: gated or not, the
-  // in-flight lines, the live line, the bin and the failure read the same.
+test('no other rung or state says what it waits on: the in-flight lines, the live line, the bin and the failure name no reviewer, no queue, no waiting', () => {
   for (const row of [
     { status: 'pending_upload', publication_state: 'pending' },
     { status: 'uploaded', publication_state: 'pending' },
@@ -59,20 +58,36 @@ test('THE STRING, open: the pending line is exactly what CK-38 wrote — nothing
     { status: 'failed', publication_state: 'pending' },
   ]) {
     for (const isHost of [true, false]) {
-      const item = { ...row, is_own: true, uploader_display_name: 'Steven' }
-      expect(mediaStateMessage(item, { isHost, gated: true })).toBe(
-        mediaStateMessage(item, { isHost, gated: false }),
-      )
+      for (const is_own of [true, false]) {
+        const line = mediaStateMessage({ ...row, is_own, uploader_display_name: 'grandma' }, { isHost })
+        expect(line).not.toMatch(/approv|review|queue|publish|declin|waiting for/i)
+      }
     }
   }
 })
 
-test('no copy for an open gathering names a reviewer, an approval, a queue, or what a photograph waits on', () => {
-  for (const row of [own, theirs]) {
+test('ONE PREDICATE: a row says it waits exactly when the host may act on it, and anyWaiting is that predicate over the list — the queue and the sentence cannot drift', () => {
+  const rows = [
+    { status: 'ready', publication_state: 'pending' },
+    { status: 'ready', publication_state: 'live' },
+    { status: 'ready', publication_state: 'removed' },
+    { status: 'failed', publication_state: 'pending' },
+    { status: 'processing', publication_state: 'pending' },
+    { status: 'uploaded', publication_state: 'pending' },
+    { status: 'pending_upload', publication_state: 'pending' },
+  ]
+  for (const row of rows) {
     for (const isHost of [true, false]) {
-      const line = mediaStateMessage(row, { isHost, gated: false })
-      expect(line).not.toMatch(/approv|review|queue|publish|declin|waiting for/i)
+      const line = mediaStateMessage({ ...row, is_own: true, uploader_display_name: 'Steven' }, { isHost })
+      expect(/waiting for (you|the host) to publish or decline it\./i.test(line)).toBe(awaitingReview(row))
     }
+  }
+  // The list-level half: true iff some row is a ready + pending row.
+  expect(anyWaiting(rows)).toBe(true)
+  expect(anyWaiting(rows.filter((row) => !awaitingReview(row)))).toBe(false)
+  expect(anyWaiting([])).toBe(false)
+  for (const subset of [rows.slice(0, 1), rows.slice(1), rows.slice(3, 5)]) {
+    expect(anyWaiting(subset)).toBe(subset.some(awaitingReview))
   }
 })
 

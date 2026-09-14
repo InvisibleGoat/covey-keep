@@ -216,6 +216,9 @@ function detailBody(over: Record<string, unknown> = {}) {
     title: 'Test Potluck',
     memorial_decedent_name: null,
     requires_approval: true,
+    // The host's own setting (CK-41's body field; the switch reads it since
+    // CK-44 — added to this fixture then, a shape change only).
+    requires_approval_override: null,
     rsvp_list_visibility: 'INVITEES',
     publication_state: 'live',
     created_by_account_id: 'acct-1',
@@ -782,4 +785,122 @@ test('a detail 404 renders the one not-found screen', async () => {
   )
   expect(await screen.findByText('Nothing here')).toBeTruthy()
   expect(screen.getByText("There's no gathering to show at this address.")).toBeTruthy()
+})
+
+// ---- CK-44: the host's switch on the edit surface ----
+
+// §5's accuracy statement, verbatim (consent-gate-defaults 2.3.0; the
+// strand rule's clause in its second sentence).
+const REVIEW_OFF_STATEMENT =
+  "Turning this off means photos are published as soon as they're ready — everyone in this gathering can see them, and nobody looks at them first. Photos already waiting still need your decision, and “Awaiting your review” stays until they get it."
+
+// A detail stub whose PATCH records what was sent and answers with the
+// server's view after the write (the switch's two states).
+function switchStub(saved: Record<string, unknown>, after: Record<string, unknown>) {
+  const sent: { body: unknown } = { body: null }
+  const mock = vi.fn((url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET'
+    if (method === 'GET') return Promise.resolve(json(200, detailBody(saved)))
+    if (method === 'PATCH') {
+      sent.body = JSON.parse(init!.body as string)
+      const { occurrences: _occurrences, ...body } = detailBody(after)
+      return Promise.resolve(json(200, body))
+    }
+    throw new Error(`no stub for ${method} ${String(url)}`)
+  })
+  vi.stubGlobal('fetch', mock)
+  return sent
+}
+
+const switchBox = () =>
+  screen.getByLabelText(/review photos before they're published/i) as HTMLInputElement
+
+test("the host's switch is in the edit form, off when nobody has decided, and turning it on sends exactly the override — with no statement on that path", async () => {
+  const sent = switchStub(
+    { requires_approval: false, requires_approval_override: null },
+    { requires_approval: true, requires_approval_override: true },
+  )
+  renderDetail()
+  fireEvent.click(await screen.findByRole('button', { name: /edit gathering/i }))
+  const box = switchBox()
+  expect(box.checked).toBe(false)
+  expect(box.disabled).toBe(false)
+  const save = screen.getByRole('button', { name: /^save$/i }) as HTMLButtonElement
+  expect(save.disabled).toBe(true)
+  expect(screen.queryByText(REVIEW_OFF_STATEMENT)).toBeNull()
+
+  fireEvent.click(box)
+  expect(box.checked).toBe(true)
+  expect(save.disabled).toBe(false)
+  // Turning it on needs no justification and gets none — no statement, no
+  // lecture, nothing about what "off" would mean.
+  expect(screen.queryByText(REVIEW_OFF_STATEMENT)).toBeNull()
+  expect(screen.queryByText(/nobody looks at them/i)).toBeNull()
+
+  fireEvent.click(save)
+  await waitFor(() => {
+    expect(sent.body).not.toBeNull()
+  })
+  // `true`, and nothing else in the body: the other fields are untouched.
+  expect(sent.body).toEqual({ requires_approval_override: true })
+})
+
+test('turning review off shows the accuracy statement verbatim — plain, no warning styling, no block — and sends an explicit null, never false', async () => {
+  const sent = switchStub(
+    { requires_approval: true, requires_approval_override: true },
+    { requires_approval: false, requires_approval_override: null },
+  )
+  renderDetail()
+  fireEvent.click(await screen.findByRole('button', { name: /edit gathering/i }))
+  const box = switchBox()
+  expect(box.checked).toBe(true)
+  // Review is on and untouched: no statement.
+  expect(screen.queryByText(REVIEW_OFF_STATEMENT)).toBeNull()
+
+  fireEvent.click(box)
+  expect(box.checked).toBe(false)
+  const statement = screen.getByText(REVIEW_OFF_STATEMENT)
+  // A plain statement: a hint, not an alert, not a warning, no confirmation
+  // control, and the save is not blocked by it.
+  expect(statement.className).toBe('field-hint')
+  expect(statement.getAttribute('role')).toBeNull()
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(screen.queryByRole('button', { name: /anyway|confirm|sure|keep review/i })).toBeNull()
+  expect((screen.getByRole('button', { name: /^save$/i }) as HTMLButtonElement).disabled).toBe(false)
+  // It belongs to the turning-off path: re-checking withdraws it.
+  fireEvent.click(box)
+  expect(screen.queryByText(REVIEW_OFF_STATEMENT)).toBeNull()
+  fireEvent.click(box)
+  expect(screen.getByText(REVIEW_OFF_STATEMENT)).toBeTruthy()
+  // Nothing on the form — either path — claims the gathering becomes safe,
+  // reviewed, screened or verified; a gathering that resolves open is
+  // unreviewed, and the statement says so in plain words.
+  const form = screen.getByRole('form', { name: /edit gathering/i })
+  expect(form.textContent).not.toMatch(/\bsafe\b|screen|verif|reviewed|approv/i)
+  expect(form.textContent).toContain('nobody looks at them first')
+
+  fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+  await waitFor(() => {
+    expect(sent.body).not.toBeNull()
+  })
+  // Off is inherit: an EXPLICIT null (the CK-22 clearing rule), never false.
+  expect(sent.body).toEqual({ requires_approval_override: null })
+  expect(JSON.stringify(sent.body)).toBe('{"requires_approval_override":null}')
+})
+
+test('the switch renders for nobody but the host: a member of a gathering under review sees no switch, no statement and no review vocabulary', async () => {
+  stubFetchRoutes([
+    {
+      method: 'GET',
+      path: '/gatherings/g-1',
+      response: () =>
+        json(200, detailBody({ host_account_id: 'acct-2', requires_approval: true, requires_approval_override: true })),
+    },
+  ])
+  renderDetail()
+  await screen.findByText('Test Potluck')
+  expect(screen.queryByRole('button', { name: /edit gathering/i })).toBeNull()
+  expect(screen.queryByLabelText(/review photos/i)).toBeNull()
+  expect(screen.queryByText(REVIEW_OFF_STATEMENT)).toBeNull()
+  expect(document.body.textContent).not.toMatch(/nobody looks|publish|declin|waiting for/i)
 })

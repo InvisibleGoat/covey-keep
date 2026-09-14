@@ -446,15 +446,17 @@ async def test_patch_gathering_stamps_updated_at_and_limits_the_surface(
         assert gathering.title == "Renamed potluck"
         assert gathering.updated_at is not None
 
-    # The patchable surface is title + memorial_decedent_name ONLY — unknown
+    # The patchable surface is title + memorial_decedent_name +
+    # rsvp_list_visibility + requires_approval_override ONLY — unknown
     # fields are a 422, never a silent no-op (the /me/profile convention).
-    # The gate's two body fields are readable and NOT writable (CK-41): the
-    # override is CK-44's, after CK-43's review surface (built).
+    # `requires_approval` — the EFFECTIVE value — is readable and NOT
+    # writable (CK-41): one writable representation of the gate, never
+    # two. (Narrowed at CK-44: `requires_approval_override` left this
+    # refused list the day it became the host's to write; its own pins are
+    # under "the host's switch" below. The effective field stays here.)
     for bad in (
         {"requires_approval": False},
         {"requires_approval": True},
-        {"requires_approval_override": True},
-        {"requires_approval_override": None},
         {"publication_state": "removed"},
         {"host_account_id": None},
         {"gathering_type": "memorial"},
@@ -1066,3 +1068,129 @@ async def test_account_deletion_lapses_an_api_created_gathering(
         # The gathering and its occurrence outlive their creator's account.
         occurrence = (await db.execute(select(Occurrence))).scalars().one()
         assert str(occurrence.gathering_id) == created["id"]
+
+
+# --- the host's switch (CK-44): the override, written by a person ---------------
+
+
+async def test_the_host_writes_the_override_in_all_three_values_and_absent_leaves_it_alone(
+    client, capsys, db_session_factory
+):
+    """CK-44: rung 1 of the publication ladder gets its writer. `true` gates,
+    `false` opens, an explicit `null` clears to inherit (the merge-patch
+    clearing convention — decisions/2026-08-27-optional-field-clearing.md),
+    and an absent field leaves the stored value alone. Every response carries
+    the EFFECTIVE value re-resolved beside the stored override, so a caller
+    sees what the ladder now says without a second request; `updated_at` is
+    stamped like every patch. Nothing here touches a media row."""
+    headers = await _signed_in_headers(client, capsys, "switch@example.com")
+    created = await _create(client, headers)
+    gathering_id = created["id"]
+    assert created["requires_approval"] is False
+    assert created["requires_approval_override"] is None
+
+    # On: a person's choice, for the first time in the column's life.
+    on = await client.patch(
+        f"/gatherings/{gathering_id}",
+        json={"requires_approval_override": True},
+        headers=headers,
+    )
+    assert on.status_code == 200, on.text
+    assert on.json()["requires_approval_override"] is True
+    assert on.json()["requires_approval"] is True  # rung 1 beats everything
+    assert on.json()["updated_at"] is not None
+    async with db_session_factory() as db:
+        gathering = (await db.execute(select(Gathering))).scalars().one()
+        assert gathering.requires_approval is True
+        stamped_at = gathering.updated_at
+        assert stamped_at is not None
+
+    # Absent leaves it alone: a title-only patch does not touch the gate.
+    renamed = await client.patch(
+        f"/gatherings/{gathering_id}", json={"title": "Renamed"}, headers=headers
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["requires_approval_override"] is True
+    assert renamed.json()["requires_approval"] is True
+
+    # The detail and the list read what the patch body read.
+    detail = await client.get(f"/gatherings/{gathering_id}", headers=headers)
+    assert detail.json()["requires_approval"] is True
+    assert detail.json()["requires_approval_override"] is True
+    (item,) = (await client.get("/gatherings", headers=headers)).json()["gatherings"]
+    assert item["requires_approval"] is True
+    assert item["requires_approval_override"] is True
+
+    # Explicit false: open regardless — accepted by the API, produced by no
+    # surface today (consent-gate-defaults 2.3.0 §8: the third state waits
+    # for rung 2, the first thing it could differ from).
+    off = await client.patch(
+        f"/gatherings/{gathering_id}",
+        json={"requires_approval_override": False},
+        headers=headers,
+    )
+    assert off.status_code == 200
+    assert off.json()["requires_approval_override"] is False
+    assert off.json()["requires_approval"] is False
+    async with db_session_factory() as db:
+        gathering = (await db.execute(select(Gathering))).scalars().one()
+        assert gathering.requires_approval is False
+
+    # Explicit null: inherit — NULL in the column, and the ladder answering
+    # again (a person's groupless private gathering resolves open). The
+    # all-None body is a real patch, never "nothing to update".
+    cleared = await client.patch(
+        f"/gatherings/{gathering_id}",
+        json={"requires_approval_override": None},
+        headers=headers,
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["requires_approval_override"] is None
+    assert cleared.json()["requires_approval"] is False
+    async with db_session_factory() as db:
+        gathering = (await db.execute(select(Gathering))).scalars().one()
+        assert gathering.requires_approval is None
+        assert gathering.updated_at is not None
+        assert gathering.updated_at > stamped_at
+        assert gathering.title == "Renamed"
+
+
+async def test_the_switch_is_the_hosts_alone_and_the_refusal_is_the_gathering_404(
+    client, capsys, db_session_factory
+):
+    """The switch is host-only like the rest of the PATCH surface: a keeper
+    who is not the host, and a stranger, each draw the gathering 404
+    byte-identical to a missing id (never a 403 — that the gate exists is
+    not information the audience gets), and the column does not move. The
+    keeper can still READ the gathering: the refusal is about the act."""
+    host_headers = await _signed_in_headers(client, capsys, "host@example.com")
+    keeper_address = "keeper@example.com"
+    keeper_headers = await _signed_in_headers(client, capsys, keeper_address)
+    stranger_headers = await _signed_in_headers(client, capsys, "stranger@example.com")
+    created = await _create(client, host_headers)
+    gathering_id = created["id"]
+    async with db_session_factory() as db:
+        gathering = (await db.execute(select(Gathering))).scalars().one()
+        await keep(db, await _account_for(db, keeper_address), gathering)
+        await db.commit()
+
+    body = {"requires_approval_override": True}
+    missing = await client.patch(
+        "/gatherings/00000000-0000-0000-0000-000000000000",
+        json=body,
+        headers=keeper_headers,
+    )
+    assert missing.status_code == 404
+    for headers in (keeper_headers, stranger_headers):
+        refused = await client.patch(
+            f"/gatherings/{gathering_id}", json=body, headers=headers
+        )
+        assert refused.status_code == 404
+        assert refused.content == missing.content
+    assert (
+        await client.get(f"/gatherings/{gathering_id}", headers=keeper_headers)
+    ).status_code == 200
+    async with db_session_factory() as db:
+        gathering = (await db.execute(select(Gathering))).scalars().one()
+        assert gathering.requires_approval is None  # still nobody's decision
+        assert gathering.updated_at is None

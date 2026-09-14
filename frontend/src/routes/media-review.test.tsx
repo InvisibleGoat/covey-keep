@@ -1,15 +1,21 @@
-// CK-43.1 pins on the review surface. The value under test: the queue and
-// every review control are ABSENT for a gathering that resolves open —
-// host or not — and absent for a non-host member of a gated one, and the
-// pending line then says nothing about what it waits on; for the host of a
-// gated gathering the queue is the same list asked for with the flag,
-// holding only ready + pending rows (a live row and a removed row both
-// excluded), with its own empty state and no polling; publishing removes
-// the row from the queue and its line becomes the live line; declining
-// takes a second click, says what it is, and lands the row in the bin; a
-// refused act renders from its CODE and never the server's wording; the
-// batch's item-level 422 lands on the row that caused it and nothing is
-// published; and the publication stamp is rendered nowhere.
+// CK-43.1 pins on the review surface, restated at CK-44 (the strand rule,
+// the-hosts-review §13). The value under test: the queue and every review
+// control are ABSENT where review is off and nothing is waiting — host or
+// not — and absent for a non-host member whatever the switch says, whose
+// waiting row's line names the host as the one who acts; for the host the
+// review renders while review is on OR anything waits — the queue is the
+// same list asked for with the flag, holding only ready + pending rows (a
+// live row and a removed row both excluded), with its own empty state and
+// no polling; THE STRAND is fixed — a host who turned review off keeps the
+// queue, both acts and the waiting line until the last waiting row is
+// decided, and then all of it goes; the switch's two directions reach the
+// section through its prop; the waiting line and the queue share one
+// predicate at the render; publishing removes the row from the queue and
+// its line becomes the live line; declining takes a second click, says
+// what it is, and lands the row in the bin; a refused act renders from its
+// CODE and never the server's wording; the batch's item-level 422 lands on
+// the row that caused it and nothing is published; and the publication
+// stamp is rendered nowhere.
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { GatheringMedia } from '../components/GatheringMedia'
@@ -176,8 +182,11 @@ function reviewServer(initial: Row[]) {
   return { routes, rows }
 }
 
-function renderMedia(over: Partial<Parameters<typeof GatheringMedia>[0]> = {}) {
-  return render(
+// The element itself, so a test can re-render it with the switch flipped
+// — the way the detail page hands the section a new `requiresApproval`
+// after the host saves the edit form (CK-44).
+function mediaElement(over: Partial<Parameters<typeof GatheringMedia>[0]> = {}) {
+  return (
     <GatheringMedia
       gatheringId="g-1"
       isHost={true}
@@ -187,8 +196,12 @@ function renderMedia(over: Partial<Parameters<typeof GatheringMedia>[0]> = {}) {
       pollIntervalMs={20}
       searchDebounceMs={20}
       {...over}
-    />,
+    />
   )
+}
+
+function renderMedia(over: Partial<Parameters<typeof GatheringMedia>[0]> = {}) {
+  return render(mediaElement(over))
 }
 
 async function openPhotos() {
@@ -204,9 +217,9 @@ function nameOf(row: HTMLElement): string | undefined {
   return row.querySelector('strong')?.textContent ?? undefined
 }
 
-// What must not reach the page for a gathering that resolves open: a
-// reviewer, an approval, a queue, an act, or what a photograph waits on.
-const OPEN_GATHERING_BAN = /approv|review|queue|publish|declin|waiting for/i
+// What must not reach the page where review is off and nothing is waiting:
+// a reviewer, an approval, a queue, an act, or what a photograph waits on.
+const NOTHING_WAITING_BAN = /approv|review|queue|publish|declin|waiting for/i
 
 function expectNoReviewSurface() {
   expect(screen.queryByRole('group', { name: 'Show' })).toBeNull()
@@ -240,32 +253,151 @@ const openGatheringRows = () => [
   mediaRow({ id: 'm-fail', status: 'failed' }),
 ]
 
-test('for a gathering that resolves open there is no queue and no review control — host or not — and the pending line names nothing it waits on', async () => {
-  const mock = stubRoutes(reviewServer(openGatheringRows()).routes)
+// Review off, nothing waiting: a live row, a removed row, a failed row —
+// every state but the one that waits.
+const nothingWaitingRows = () => [
+  mediaRow({ id: 'm-live', publication_state: 'live', published_at: STAMP }),
+  mediaRow({ id: 'm-gone', publication_state: 'removed', removed_at: '2026-09-10T12:00:00+00:00' }),
+  mediaRow({ id: 'm-fail', status: 'failed' }),
+]
 
-  // The host of an open gathering: the seat with the most to be tempted by.
+test('where review is off and nothing is waiting there is no queue and no review control — host or not — and no line names what a photograph waits on', async () => {
+  // (Rewritten at CK-44: CK-43.1's version rendered an OPEN gathering with
+  // two waiting rows and expected nothing — under the strand rule those
+  // rows are exactly what makes the review render, so the "nothing" case
+  // is now the one with nothing waiting; the waiting case is pinned below.)
+  const mock = stubRoutes(reviewServer(nothingWaitingRows()).routes)
+
+  // The host, with review off: the seat with the most to be tempted by.
   renderMedia({ isHost: true, requiresApproval: false })
   await openPhotos()
   let rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
-  expect(rows).toHaveLength(5)
+  expect(rows).toHaveLength(3)
   expectNoReviewSurface()
-  // THE STRING, open: exactly what CK-38 wrote — who can see it, no more.
-  expect(rows[0].textContent).toContain('Only you can see this.')
-  expect(rows[1].textContent).toContain('Only grandma and you can see this.')
-  expect(rows[2].textContent).toContain('Everyone in this gathering can see it.')
-  expect(document.body.textContent).not.toMatch(OPEN_GATHERING_BAN)
+  // Every line exactly as CK-38 wrote it — and nothing about waiting.
+  expect(rows[0].textContent).toContain('Everyone in this gathering can see it.')
+  expect(rows[1].textContent).toContain('Removed. Only you can still see it, for 30 days after removal.')
+  expect(rows[2].textContent).toContain("We couldn't process this photo.")
+  expect(document.body.textContent).not.toMatch(NOTHING_WAITING_BAN)
   // No request ever asked for the queue.
   expect(listRequests(mock).every(([url]) => !url.includes('awaiting_review'))).toBe(true)
 
-  // A non-host member, uploader of one row.
+  // A non-host member, uploader of the same rows.
   cleanup()
   renderMedia({ isHost: false, requiresApproval: false })
   await openPhotos()
   rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
+  expect(rows).toHaveLength(3)
   expectNoReviewSurface()
-  expect(rows[0].textContent).toContain('Only you and the host can see this.')
-  expect(document.body.textContent).not.toMatch(OPEN_GATHERING_BAN)
+  expect(document.body.textContent).not.toMatch(NOTHING_WAITING_BAN)
   expect(listRequests(mock).every(([url]) => !url.includes('awaiting_review'))).toBe(true)
+})
+
+test('THE STRAND, fixed: with review off and rows waiting, the host still gets the queue, both acts and the waiting line — and all of it goes when the last one is decided', async () => {
+  const server = reviewServer(openGatheringRows())
+  const mock = stubRoutes(server.routes)
+
+  // The exact state CK-43.1's deploy run observed as orphaned: review off,
+  // two rows still ready + pending.
+  renderMedia({ isHost: true, requiresApproval: false })
+  await openPhotos()
+  let rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
+  expect(rows).toHaveLength(5)
+  // ONE PREDICATE at the render: the rows that say they are waiting are
+  // exactly the rows that carry the acts, and the queue exists because
+  // they do — none of it keyed on the switch.
+  const waiting = rows.filter((row) =>
+    /Waiting for you to publish or decline it\./.test(row.textContent ?? ''),
+  )
+  expect(waiting).toHaveLength(2)
+  expect(rows[0].textContent).toContain('Only you can see this. Waiting for you to publish or decline it.')
+  expect(rows[1].textContent).toContain(
+    'Only grandma and you can see this. Waiting for you to publish or decline it.',
+  )
+  for (const row of waiting) {
+    expect(within(row).getByRole('button', { name: 'Publish' })).toBeTruthy()
+    expect(within(row).getByRole('button', { name: 'Decline' })).toBeTruthy()
+  }
+  for (const row of rows.slice(2)) {
+    expect(row.textContent).not.toMatch(/waiting for/i)
+    expect(within(row).queryByRole('button', { name: /^publish|^decline/i })).toBeNull()
+  }
+  expect(screen.getByRole('group', { name: 'Show' })).toBeTruthy()
+
+  // The queue: the same list with the flag, holding the two waiting rows.
+  fireEvent.click(screen.getByRole('button', { name: 'Awaiting your review' }))
+  await screen.findByText('Showing 2 photos awaiting your review.')
+  expect(listRequests(mock).at(-1)![0]).toContain('awaiting_review=true')
+  rows = photoRows(screen.getByRole('list', { name: 'Photos' }))
+  expect(rows).toHaveLength(2)
+
+  // Decide them — one published, one declined on the second click.
+  fireEvent.click(within(rows[0]).getByRole('button', { name: 'Publish' }))
+  await screen.findByText('Showing 1 photo awaiting your review.')
+  rows = photoRows(screen.getByRole('list', { name: 'Photos' }))
+  fireEvent.click(within(rows[0]).getByRole('button', { name: 'Decline' }))
+  fireEvent.click(within(rows[0]).getByRole('button', { name: 'Decline it' }))
+  await waitFor(() => {
+    expect(calls(mock, 'POST', endsWith('/media/m-theirs/decline'))).toHaveLength(1)
+  })
+  expect(server.rows.get('m-mine')!.publication_state).toBe('live')
+  expect(server.rows.get('m-theirs')!.publication_state).toBe('removed')
+
+  // Nothing waits any more, and review is off: the review closes by itself
+  // — back to the full list (grandma's declined row is in her bin, not the
+  // host's list), no switch, no act, no checkbox, no "nothing is waiting",
+  // and no line naming what a photograph waits on. Nothing was published
+  // by the switch: the two rows moved by the host's own acts alone.
+  await waitFor(() => {
+    expect(photoRows(screen.getByRole('list', { name: 'Photos' }))).toHaveLength(4)
+  })
+  expectNoReviewSurface()
+  expect(screen.queryByText('Nothing is waiting for your review.')).toBeNull()
+  expect(screen.queryByText('No photos yet.')).toBeNull()
+  expect(document.body.textContent).not.toMatch(NOTHING_WAITING_BAN)
+  expect(listRequests(mock).at(-1)![0]).not.toContain('awaiting_review')
+})
+
+test("a non-host uploader whose row waits on a gathering with review off reads that it waits for the host — who can act on it — and gets no control", async () => {
+  const mock = stubRoutes(reviewServer([mediaRow({ id: 'm-mine' })]).routes)
+
+  renderMedia({ isHost: false, requiresApproval: false })
+  await openPhotos()
+  const rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
+  expect(rows).toHaveLength(1)
+  // True, not a promise: the host's queue renders while this row waits.
+  expect(rows[0].textContent).toContain(
+    'Only you and the host can see this. Waiting for the host to publish or decline it.',
+  )
+  expectNoReviewSurface()
+  expect(listRequests(mock).every(([url]) => !url.includes('awaiting_review'))).toBe(true)
+  expect(document.body.textContent).not.toMatch(/approv|shared|screen/i)
+})
+
+test("the switch, from the section's side: turning review on makes the queue appear with nothing waiting; turning it off with nothing waiting removes everything", async () => {
+  stubRoutes(reviewServer(nothingWaitingRows()).routes)
+  const view = renderMedia({ isHost: true, requiresApproval: false })
+  await openPhotos()
+  await screen.findByRole('list', { name: 'Photos' })
+  expectNoReviewSurface()
+
+  // The host turns review on: the detail re-reads and hands the section the
+  // new effective value. The queue appears, with its own empty state.
+  view.rerender(mediaElement({ isHost: true, requiresApproval: true }))
+  expect(screen.getByRole('group', { name: 'Show' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Awaiting your review' }))
+  expect(await screen.findByText('Nothing is waiting for your review.')).toBeTruthy()
+
+  // And off again, with nothing waiting: everything goes, and the view
+  // falls back to the full list on its own.
+  view.rerender(mediaElement({ isHost: true, requiresApproval: false }))
+  await waitFor(() => {
+    expect(screen.queryByRole('group', { name: 'Show' })).toBeNull()
+  })
+  expect(screen.queryByText('Nothing is waiting for your review.')).toBeNull()
+  expect(photoRows(await screen.findByRole('list', { name: 'Photos' }))).toHaveLength(3)
+  expectNoReviewSurface()
+  expect(document.body.textContent).not.toMatch(NOTHING_WAITING_BAN)
 })
 
 test('a non-host member of a gated gathering gets the waiting line and no control — the queue is the host\'s alone', async () => {

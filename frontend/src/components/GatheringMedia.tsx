@@ -11,6 +11,7 @@ import {
 import { type Occurrence } from '../lib/gatherings'
 import {
   anyInFlight,
+  anyWaiting,
   awaitingReview,
   confirmUpload,
   fetchLayerObjectUrl,
@@ -91,15 +92,26 @@ import { FieldError, FormLevelErrors } from './FieldError'
 // And, since CK-43.1, the host's review (decisions/2026-09-13-the-hosts-
 // review.md — decided before its backend was built at CK-43):
 //
-// 6. THE REVIEW EXISTS ONLY WHERE THE GATHERING RESOLVES GATED, AND ONLY FOR
-//    THE HOST. The detail body carries `requires_approval` as the EFFECTIVE
-//    value (CK-41's ladder), and that one fact decides everything here: the
-//    queue, the publish and decline controls, and the pending line's second
-//    sentence all exist when it is true and the caller is the host, and
-//    none of them exists otherwise — not disabled, not hidden-but-present.
-//    A control that cannot succeed teaches a host the product does
-//    something it does not, and where nobody reviews, no copy may name a
-//    reviewer, an approval or a queue. The queue is THE SAME LIST asked for
+// 6. THE REVIEW EXISTS FOR THE HOST WHILE REVIEW IS ON OR ANYTHING IS
+//    WAITING, AND FOR NOBODY ELSE (the-hosts-review §13 — the strand rule,
+//    CK-44). The detail body carries `requires_approval` as the EFFECTIVE
+//    value (CK-41's ladder) and this list carries the rows, and
+//    `isHost && (requiresApproval || anyWaiting(items))` is the one gate on
+//    the queue, the publish and decline controls and the batch. CK-43.1
+//    gated all of it on the setting alone, and its deploy run found the
+//    strand: turn review off with a row still `ready` + `pending` and the
+//    row was orphaned — no control could reach it — though re-setting the
+//    flag restored it verbatim, because stranding writes nothing. So the
+//    queue now renders while anything waits, whatever the switch says:
+//    nothing is published as a side effect of turning review off, the
+//    switch is never refused, and the host who turned it off still clears
+//    what waited. Where review is off and nothing waits, nothing renders —
+//    not disabled, not hidden-but-present — and no string names a reviewer,
+//    an approval or a queue: a control that cannot succeed teaches a host
+//    the product does something it does not. The pending line's second
+//    sentence follows the same predicate — a `ready` + `pending` row is
+//    waiting for the host, who can act on it — with no gathering-level
+//    flag at all (lib/media.ts::mediaStateMessage). The queue is THE SAME LIST asked for
 //    with `awaiting_review=true` (record §10 — a filter, never a sibling
 //    route), rendered through the same rows; its empty state is its own
 //    ("nothing is waiting"), never "no photos yet". Publish and decline
@@ -119,7 +131,9 @@ interface Props {
   isHost: boolean
   // The gathering's effective `requires_approval` (CK-41): true means a
   // ready photograph waits for the host. Read, never written here — the
-  // host's own switch is CK-44's.
+  // host's own switch lives on the gathering's edit surface (CK-44) — and
+  // one of the two things that render the review: this, or anything
+  // waiting in the list (the strand rule, point 6 above).
   requiresApproval: boolean
   occurrences: Occurrence[]
   zone: string
@@ -390,14 +404,22 @@ export function GatheringMedia({
   const [searchInput, setSearchInput] = useState('')
   const [term, setTerm] = useState('')
 
-  // The host's review (CK-43.1). `reviewer` is the one gate: the host of a
-  // gathering that resolves gated, and nobody else, sees any of it. The
+  // The host's review (CK-43.1; the strand rule CK-44). `reviewer` is the
+  // one gate: the host, while review is on OR anything the host can see is
+  // waiting — and nobody else. `items` is the list as loaded, so a waiting
+  // row on the screen always carries its acts, and a queue with nothing
+  // left in it, on a gathering whose review is off, closes by itself. The
   // queue is a view of the same list (`awaiting_review=true`); the
   // selection is the batch's; a refused act's message is kept per row until
   // the row moves; a decline waits for its second click.
-  const reviewer = isHost && requiresApproval
+  const reviewer = isHost && (requiresApproval || anyWaiting(items ?? []))
   const [view, setView] = useState<'all' | 'queue'>('all')
   const queueView = reviewer && view === 'queue'
+  // The full list's own lines (the filtered state, "No photos yet.") key on
+  // the VIEW, not on `!queueView`: in the one render between the review
+  // closing by itself and the view falling back (below), neither view's
+  // status line belongs on the screen.
+  const allView = view === 'all'
   const [selected, setSelected] = useState<string[]>([])
   const [rowErrors, setRowErrors] = useState<Record<string, FormErrors>>({})
   const [actingId, setActingId] = useState<string | null>(null)
@@ -477,6 +499,20 @@ export function GatheringMedia({
       return kept.length === current.length ? current : kept
     })
   }, [items])
+
+  // When the review closes by itself — the last waiting row decided on a
+  // gathering whose review is off, or the host turning review off with
+  // nothing waiting — the view falls back to the full list and the queue's
+  // transient state goes with it; the load effect above re-reads without
+  // the flag the moment `queueView` flips.
+  useEffect(() => {
+    if (reviewer || view === 'all') return
+    setView('all')
+    setSelected([])
+    setBatchErrors(noErrors())
+    setBatchSent([])
+    setDecliningId(null)
+  }, [reviewer, view])
 
   function noteProblem(mediaId: string, problem: LocalProblem) {
     setProblems((prev) => ({ ...prev, [mediaId]: problem }))
@@ -761,11 +797,11 @@ export function GatheringMedia({
         </p>
       </div>
 
-      {/* The host's review (CK-43.1): the queue is a view of this same list
-          — asked for with `awaiting_review=true`, rendered through the same
-          rows — and the switch exists only for the host of a gathering that
-          resolves gated. Where nothing waits for anyone, nothing here
-          renders and no string below reaches the page. */}
+      {/* The host's review (CK-43.1; CK-44): the queue is a view of this
+          same list — asked for with `awaiting_review=true`, rendered through
+          the same rows — and the switch exists only for the host, while
+          review is on or anything waits. Where review is off and nothing
+          waits, nothing here renders and no string below reaches the page. */}
       {reviewer && (
         <div className="media-view" role="group" aria-label="Show">
           <button
@@ -804,7 +840,7 @@ export function GatheringMedia({
         </p>
       )}
 
-      {items !== null && !loadFailed && !queueView && filtered && (
+      {items !== null && !loadFailed && allView && filtered && (
         // The filtered view says it is one, and how to leave it; an empty
         // result is a state with the way back, never a blank area.
         <p className="field-hint" role="status">
@@ -828,7 +864,7 @@ export function GatheringMedia({
         </p>
       )}
 
-      {items !== null && items.length === 0 && !loadFailed && !filtered && !queueView && (
+      {items !== null && items.length === 0 && !loadFailed && !filtered && allView && (
         // The empty state is a real screen (CK-17): the control that fills
         // it is right above.
         <p className="field-hint">No photos yet.</p>
@@ -890,13 +926,14 @@ export function GatheringMedia({
             // This device's knowledge overrides the server's rung for a row
             // whose upload never landed FROM HERE; otherwise the row's own
             // state decides, through the one message function — which says
-            // what the row waits on only where the gathering resolves gated.
+            // what a ready + pending row waits on (the host, who can act on
+            // it — the same predicate `reviewable` below reads).
             const message =
               problem === 'upload_failed'
                 ? "This upload didn't finish."
                 : problem === 'confirm_failed'
                   ? "This upload couldn't be confirmed."
-                  : mediaStateMessage(item, { isHost, gated: requiresApproval })
+                  : mediaStateMessage(item, { isHost })
             const offerRetry = item.status === 'failed' || problem !== undefined
             // The editor: the caller's own rows only (the server reserves
             // the edit to the uploader — no affordance that cannot succeed),
@@ -904,10 +941,12 @@ export function GatheringMedia({
             // failed photograph has nothing to caption.
             const offerEdit = item.is_own && !offerRetry
             const editing = offerEdit && editingId === item.id
-            // The acts: the host of a gated gathering, on a ready row that
-            // is pending — the server's own criterion, so no control is
-            // ever offered on a row the server would refuse. The checkbox
-            // belongs to the queue view, where the batch is built.
+            // The acts: the host, on a ready row that is pending — the
+            // server's own criterion, so no control is ever offered on a
+            // row the server would refuse; and a waiting row on the screen
+            // is what makes `reviewer` true for the host, so it always
+            // carries them. The checkbox belongs to the queue view, where
+            // the batch is built.
             const reviewable = reviewer && awaitingReview(item)
             const declining = reviewable && decliningId === item.id
             const batchIndex = batchSent.indexOf(item.id)
@@ -1040,7 +1079,7 @@ export function GatheringMedia({
           </p>
           <TagList tags={opened.tags} label={`Tags on ${mediaName(opened)}`} />
           <p className="field-hint">
-            {mediaStateMessage(opened, { isHost, gated: requiresApproval })}
+            {mediaStateMessage(opened, { isHost })}
           </p>
           <button type="button" onClick={() => setOpenedId(null)}>
             Close
