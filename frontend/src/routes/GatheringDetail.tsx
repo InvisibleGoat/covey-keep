@@ -501,9 +501,13 @@ function OccurrenceRsvp({
 }
 
 // The view-and-edit detail (CK-17 read-only; editing CK-18). Nothing here
-// surfaces requires_approval, keeper counts, or gathering removal: those are
-// later phases' surfaces. The gathering type is not editable — the backend's
-// patchable surface is title + decedent name + RSVP-list visibility only.
+// surfaces keeper counts or gathering removal: those are later phases'
+// surfaces. `requires_approval` — the EFFECTIVE value, resolved through the
+// publication ladder (CK-41) — is READ by the Photos section since CK-43.1
+// to decide whether the host's review exists at all, and is written by
+// nothing: the host's own switch is CK-44's. The gathering type is not
+// editable — the backend's patchable surface is title + decedent name +
+// RSVP-list visibility only.
 export function GatheringDetail() {
   const { id } = useParams()
   const { person } = useAuth()
@@ -1218,13 +1222,17 @@ export function GatheringDetail() {
           list is filtered server-side by the per-state audience rule, so a
           keeper or invitee who uploaded nothing sees an empty list, never a
           photograph nobody has approved. Collapsed by default: no media
-          request until opened. isHost only chooses the wording of who can
-          see a pending photograph; the server decides who sees anything. */}
+          request until opened. isHost chooses the wording of who can see a
+          pending photograph, and — with the gathering's effective
+          requires_approval (CK-41), since CK-43.1 — whether the host's
+          review exists in the section at all; the server decides who sees
+          anything and who may act. */}
       <section className="auth-card" aria-labelledby="photos-heading">
         <h2 id="photos-heading">Photos</h2>
         <GatheringMedia
           gatheringId={gathering.id}
           isHost={canEdit}
+          requiresApproval={gathering.requires_approval}
           occurrences={gathering.occurrences}
           zone={zone}
         />

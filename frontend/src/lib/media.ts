@@ -19,7 +19,17 @@
 // never a clear, explicit null is); and the tag list REPLACES the set on the
 // server, so tagsPatch always carries every tag the photograph should end up
 // with — sending only the new one silently deletes the rest.
+//
+// THE HOST'S REVIEW (CK-43.1, the surface for CK-43's backend;
+// decisions/2026-09-13-the-hosts-review.md): the queue is the same list
+// asked for with `awaiting_review=true` (mediaListPath); publish and decline
+// are the two acts (reviewMedia), each refused with a STABLE CODE the copy
+// switches on and never the server's wording (reviewRefusalMessage); and the
+// pending line becomes conditional on the gathering resolving gated
+// (mediaStateMessage's `gated` — record §8: where nobody reviews, the line
+// says who can see the photograph and nothing about what it waits on).
 import { authFetch } from './api'
+import { networkErrors } from './formErrors'
 
 export type MediaStatus = 'pending_upload' | 'uploaded' | 'processing' | 'ready' | 'failed'
 export type PublicationState = 'pending' | 'live' | 'removed'
@@ -51,6 +61,12 @@ export interface MediaItem {
   filename: string | null
   caption: string | null
   tags: string[]
+  // The publication stamp's date (CK-43; migration 0020): null until
+  // published, set by the worker where the gathering resolves open and by
+  // the host's publish where it is gated. Carried because the body carries
+  // it and RENDERED NOWHERE — the stamp is consent evidence, never row
+  // furniture (record §7), and the publisher's person id rides no body.
+  published_at: string | null
 }
 
 export interface MediaList {
@@ -192,10 +208,23 @@ export const SEARCH_DEBOUNCE_MS = 300
 // `q` at all — never an empty one — and a whitespace-only entry is the same
 // as an empty box (the server treats blank as "not a search" too). Search
 // is per gathering: the endpoint is, and so is this.
-export function mediaListPath(gatheringId: string, term: string): string {
+//
+// The host's queue (CK-43.1) is the SAME list asked for with
+// `awaiting_review=true` — a filter on the list, never a sibling route
+// (record §10), so the surface has one list shape; it composes with `q`
+// on the server, inside the audience rule. The flag goes only when the
+// queue is what is wanted — never `awaiting_review=false`.
+export function mediaListPath(
+  gatheringId: string,
+  term: string,
+  options: { awaitingReview?: boolean } = {},
+): string {
+  const params: string[] = []
+  if (options.awaitingReview) params.push('awaiting_review=true')
   const trimmed = term.trim()
+  if (trimmed !== '') params.push(`q=${encodeURIComponent(trimmed)}`)
   const base = `/gatherings/${gatheringId}/media`
-  return trimmed === '' ? base : `${base}?q=${encodeURIComponent(trimmed)}`
+  return params.length === 0 ? base : `${base}?${params.join('&')}`
 }
 
 // The caption under the Patch-semantics convention (CK-22 — the same four
@@ -278,16 +307,28 @@ export function anyInFlight(items: Pick<MediaItem, 'status'>[]): boolean {
 // `live` branch is written now for a case nothing reaches yet, exactly as
 // CK-37 wrote its `live` audience branch.
 //
-// Two things this copy may never say (consent-gate-defaults §9; the CK-37
-// record's DATA-HANDLING): that anyone will review or has approved the
-// photograph — for a family gathering nobody ever will, so that copy is wrong
-// today and wrong after the fix — and that a `pending` photograph is shared
-// or visible to the gathering. It is not; the audience rule is what makes
-// that true. The `failed` line names the outcome, never the file's contents
-// (pipeline record §6.5: "we couldn't process this photo", not "corrupt").
+// Two things this copy may never say for a gathering that resolves OPEN
+// (consent-gate-defaults §9; the CK-37 record's DATA-HANDLING): that anyone
+// will review or has approved the photograph — for a family gathering nobody
+// ever will, so that copy is wrong today and wrong after the fix — and that
+// a `pending` photograph is shared or visible to the gathering. It is not;
+// the audience rule is what makes that true. The `failed` line names the
+// outcome, never the file's contents (pipeline record §6.5: "we couldn't
+// process this photo", not "corrupt").
+//
+// Where the gathering resolves GATED (`viewer.gated` — the detail body's
+// effective `requires_approval`, CK-41) someone genuinely does decide, and
+// the pending line saying nothing about it would be the opposite lie
+// (the-hosts-review §8). So, and only then, the line gains a second
+// sentence saying what the photograph waits on. It is read by the uploader,
+// who may not be the host, and by the host, who in a family gathering
+// usually IS the uploader — so the host's copy addresses them as the one
+// who decides ("waiting for you"), never as a person waiting on "the host",
+// which would be themselves. Both readings are true at once. Nothing here
+// names the product as the reviewer: a host publishes or declines.
 export function mediaStateMessage(
   item: Pick<MediaItem, 'status' | 'publication_state' | 'is_own' | 'uploader_display_name'>,
-  viewer: { isHost: boolean },
+  viewer: { isHost: boolean; gated?: boolean },
 ): string {
   switch (item.status) {
     case 'pending_upload':
@@ -315,12 +356,20 @@ export function mediaStateMessage(
       // viewer's seat: the two admitted people collapse to one when the
       // uploader is the host.
       const uploader = item.uploader_display_name ?? 'the person who added it'
-      if (item.is_own) {
-        return viewer.isHost ? 'Only you can see this.' : 'Only you and the host can see this.'
-      }
+      const audience = item.is_own
+        ? viewer.isHost
+          ? 'Only you can see this.'
+          : 'Only you and the host can see this.'
+        : viewer.isHost
+          ? `Only ${uploader} and you can see this.`
+          : `Only ${uploader} and the host can see this.`
+      if (!viewer.gated) return audience
+      // Gated: what it waits on, from the same seat. The host decides, so
+      // the host is told it waits for them — the common case in a family
+      // gathering is a host reading their own photograph.
       return viewer.isHost
-        ? `Only ${uploader} and you can see this.`
-        : `Only ${uploader} and the host can see this.`
+        ? `${audience} Waiting for you to publish or decline it.`
+        : `${audience} Waiting for the host to publish or decline it.`
     }
     case 'removed':
       return item.is_own
@@ -329,6 +378,106 @@ export function mediaStateMessage(
     default:
       return `Ready — ${item.publication_state}.`
   }
+}
+
+// ---------------------------------------------------------------------------
+// The host's review (CK-43.1). The queue is the list with the flag; the two
+// acts are below; the batch lives in the component beside the upload batch.
+// ---------------------------------------------------------------------------
+
+// What the host may act on: a `ready` row that is `pending` (record §3) —
+// the server's own criterion for the queue, mirrored here ONLY to decide
+// whether a row carries the publish and decline controls. It is a predicate
+// over the row's own state, never state of its own: an affordance on a row
+// the server would refuse (a `live` one, a `failed` one) is its own defect.
+export function awaitingReview(item: Pick<MediaItem, 'status' | 'publication_state'>): boolean {
+  return item.status === 'ready' && item.publication_state === 'pending'
+}
+
+// The batch endpoint takes up to fifty ids (api-reference, the batch form).
+export const MAX_PUBLISH_BATCH = 50
+
+export type ReviewAct = 'publish' | 'decline'
+
+export type ReviewOutcome =
+  | { ok: true }
+  // The 409's stable code (already_live | not_pending | not_ready) with the
+  // state the server reports beside it, `not_found` for the 404 (the row
+  // moved out of the host's sight — the bin is the uploader's), or this
+  // module's own words for the rest. The server's `message` is NOT carried:
+  // the codes are the contract, the strings are ours (record §3).
+  | { ok: false; code: string; publication_state?: string; status?: string }
+
+// One act on one photograph. A guarded update on the server: a row that
+// moved since the list was read is refused with its current state, never
+// changed, and the code says which state that is.
+export async function reviewMedia(mediaId: string, act: ReviewAct): Promise<ReviewOutcome> {
+  try {
+    const response = await authFetch(`/media/${mediaId}/${act}`, { method: 'POST' })
+    if (response.ok) return { ok: true }
+    if (response.status === 404) return { ok: false, code: 'not_found' }
+    if (response.status === 409) {
+      const body = (await response.json().catch(() => null)) as {
+        detail?: { code?: string; publication_state?: string; status?: string }
+      } | null
+      return {
+        ok: false,
+        code: body?.detail?.code ?? 'failed',
+        publication_state: body?.detail?.publication_state,
+        status: body?.detail?.status,
+      }
+    }
+    return { ok: false, code: 'failed' }
+  } catch {
+    return { ok: false, code: 'unreachable' }
+  }
+}
+
+// What a refused act tells the host — switched on the CODE and never the
+// wording (record §3: the codes are the contract, the strings are ours), so
+// a reworded server message changes nothing here. Each line says what state
+// the photograph is actually in, and none claims anything was destroyed:
+// a declined photograph is in its uploader's bin for thirty days.
+export function reviewRefusalMessage(
+  act: ReviewAct,
+  refusal: { code: string; publication_state?: string; status?: string },
+): string {
+  switch (refusal.code) {
+    case 'already_live':
+      return 'This photo is already published — everyone in this gathering can see it.'
+    case 'not_pending':
+      if (refusal.publication_state === 'live') {
+        // Decline on a published photograph: the takedown is unbuilt
+        // (record §11), and the copy says so rather than pretending.
+        return act === 'publish'
+          ? 'This photo is already published — everyone in this gathering can see it.'
+          : "This photo is already published, and taking a published photo down isn't possible here yet."
+      }
+      return act === 'publish'
+        ? "This photo was declined or removed, so it can't be published."
+        : 'This photo was already declined or removed.'
+    case 'not_ready':
+      return refusal.status === 'failed'
+        ? "This photo couldn't be processed, so there's nothing to publish."
+        : "This photo isn't ready yet — it can't be published or declined until it is."
+    case 'not_found':
+      return "This photo isn't here any more — refresh the list to see what's waiting."
+    case 'unreachable':
+      return networkErrors().form[0]
+    default:
+      return 'Something went wrong. Nothing changed — try again.'
+  }
+}
+
+// The 422 keys the batch form renders inline: the list as a whole (the
+// count bounds) and each sent id by its index — the server refuses the
+// batch WHOLE on the first bad entry and lands the refusal on that entry
+// (`["body","media_ids",N]`), carrying the single act's code beside the
+// message, so the one mapper renders it on the row that caused it.
+export function publishBatchErrorFields(count: number): string[] {
+  const fields = ['media_ids']
+  for (let index = 0; index < count; index++) fields.push(`media_ids.${index}`)
+  return fields
 }
 
 // ---------------------------------------------------------------------------

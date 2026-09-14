@@ -98,6 +98,9 @@ function renderMedia(over: Partial<Parameters<typeof GatheringMedia>[0]> = {}) {
     <GatheringMedia
       gatheringId="g-1"
       isHost={false}
+      // The gathering resolves open — every gathering these pins were written
+      // against (CK-43.1 added the prop; the review surface has its own pins).
+      requiresApproval={false}
       occurrences={occurrences}
       zone="America/Chicago"
       pollIntervalMs={20}

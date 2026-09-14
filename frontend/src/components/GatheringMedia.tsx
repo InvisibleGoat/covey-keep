@@ -11,22 +11,29 @@ import {
 import { type Occurrence } from '../lib/gatherings'
 import {
   anyInFlight,
+  awaitingReview,
   confirmUpload,
   fetchLayerObjectUrl,
   intentErrorFields,
   intentItem,
+  MAX_PUBLISH_BATCH,
   mediaListPath,
   mediaName,
   mediaStateMessage,
   mediaWordsPatch,
   PICKER_ACCEPT,
   POLL_INTERVAL_MS,
+  publishBatchErrorFields,
   putUpload,
+  REMOVED_BIN_DAYS,
+  reviewMedia,
+  reviewRefusalMessage,
   SEARCH_DEBOUNCE_MS,
   wordsErrorFields,
   type IntentResponse,
   type MediaItem,
   type MediaList,
+  type ReviewAct,
   type ServableLayer,
 } from '../lib/media'
 import { FieldError, FormLevelErrors } from './FieldError'
@@ -45,15 +52,15 @@ import { FieldError, FormLevelErrors } from './FieldError'
 //    a URL for none). Pending is a real state, not a spinner; the list polls
 //    while anything is non-terminal and makes no request at all otherwise.
 //
-// 2. THE COPY IS DERIVED FROM publication_state, NEVER FIXED. Every row today
-//    is `pending` — visible to its uploader and the host, and nobody else
-//    (decisions/2026-09-09-who-may-see-an-unapproved-photograph.md) — but
-//    for a private, person-owned gathering that is temporary: the publication
-//    phase moves ready rows to `live` on completion, with no review step
-//    ever (decisions/2026-09-09-consent-gate-defaults.md §1). So the `live`
-//    line is written now, and no copy here implies a reviewer, an approval
-//    queue, or a "waiting for approval" — that would be wrong today and
-//    wrong after the fix. lib/media.ts::mediaStateMessage is the one home.
+// 2. THE COPY IS DERIVED FROM publication_state, NEVER FIXED. A `pending`
+//    row is visible to its uploader and the host, and nobody else
+//    (decisions/2026-09-09-who-may-see-an-unapproved-photograph.md); for a
+//    private, person-owned gathering — every gathering today — the worker
+//    moves a ready row to `live` on completion with no review step ever
+//    (decisions/2026-09-09-consent-gate-defaults.md §1, built at CK-41). So
+//    for a gathering that resolves OPEN no copy here implies a reviewer, an
+//    approval queue, or a "waiting for approval" — nobody reviews, and the
+//    copy would be a lie. lib/media.ts::mediaStateMessage is the one home.
 //
 // 3. A PRESIGNED URL NEVER LEAVES THE NETWORK CALL (record §9). The intent
 //    response is a local of the upload handler, spent on the PUTs and gone;
@@ -81,12 +88,39 @@ import { FieldError, FormLevelErrors } from './FieldError'
 //    filtered view says so and offers the way back; an empty result is a
 //    state, not a blank area.
 //
+// And, since CK-43.1, the host's review (decisions/2026-09-13-the-hosts-
+// review.md — decided before its backend was built at CK-43):
+//
+// 6. THE REVIEW EXISTS ONLY WHERE THE GATHERING RESOLVES GATED, AND ONLY FOR
+//    THE HOST. The detail body carries `requires_approval` as the EFFECTIVE
+//    value (CK-41's ladder), and that one fact decides everything here: the
+//    queue, the publish and decline controls, and the pending line's second
+//    sentence all exist when it is true and the caller is the host, and
+//    none of them exists otherwise — not disabled, not hidden-but-present.
+//    A control that cannot succeed teaches a host the product does
+//    something it does not, and where nobody reviews, no copy may name a
+//    reviewer, an approval or a queue. The queue is THE SAME LIST asked for
+//    with `awaiting_review=true` (record §10 — a filter, never a sibling
+//    route), rendered through the same rows; its empty state is its own
+//    ("nothing is waiting"), never "no photos yet". Publish and decline
+//    switch on the server's stable codes, never its wording; decline is
+//    removal — the contributor's 30-day bin, nothing destroyed — and takes
+//    a deliberate second click. Bulk approve is the batch endpoint, refused
+//    whole on any bad item, the refusal landing on the row that caused it.
+//    A `ready` + `pending` row is terminal for `status`, so nothing here
+//    polls the queue: only the host's own act moves it. The publication
+//    stamp rides every body and is rendered nowhere (record §7).
+//
 // Collapsed by default (the CK-25/CK-27 pattern): the detail page stays one
 // request until the person opens this section.
 
 interface Props {
   gatheringId: string
   isHost: boolean
+  // The gathering's effective `requires_approval` (CK-41): true means a
+  // ready photograph waits for the host. Read, never written here — the
+  // host's own switch is CK-44's.
+  requiresApproval: boolean
   occurrences: Occurrence[]
   zone: string
   // Overridable for tests only; the product uses the one constant each.
@@ -332,6 +366,7 @@ function MediaWordsEditor({
 export function GatheringMedia({
   gatheringId,
   isHost,
+  requiresApproval,
   occurrences,
   zone,
   pollIntervalMs = POLL_INTERVAL_MS,
@@ -355,6 +390,24 @@ export function GatheringMedia({
   const [searchInput, setSearchInput] = useState('')
   const [term, setTerm] = useState('')
 
+  // The host's review (CK-43.1). `reviewer` is the one gate: the host of a
+  // gathering that resolves gated, and nobody else, sees any of it. The
+  // queue is a view of the same list (`awaiting_review=true`); the
+  // selection is the batch's; a refused act's message is kept per row until
+  // the row moves; a decline waits for its second click.
+  const reviewer = isHost && requiresApproval
+  const [view, setView] = useState<'all' | 'queue'>('all')
+  const queueView = reviewer && view === 'queue'
+  const [selected, setSelected] = useState<string[]>([])
+  const [rowErrors, setRowErrors] = useState<Record<string, FormErrors>>({})
+  const [actingId, setActingId] = useState<string | null>(null)
+  const [decliningId, setDecliningId] = useState<string | null>(null)
+  const [batchErrors, setBatchErrors] = useState<FormErrors>(noErrors())
+  // The ids the last batch sent, in order — a refusal lands on
+  // `media_ids.N`, and N is this list's index for the row it names.
+  const [batchSent, setBatchSent] = useState<string[]>([])
+  const [publishing, setPublishing] = useState(false)
+
   const fileInput = useRef<HTMLInputElement>(null)
   const alive = useRef(true)
   useEffect(() => {
@@ -370,15 +423,19 @@ export function GatheringMedia({
   }, [searchInput, searchDebounceMs])
 
   // The list loads only once the section is opened, and re-reads after every
-  // upload step, on each poll tick, and when the search term settles. The
-  // term rides the request as `q`; the server decides what the caller may
-  // see and narrows within that — nothing is filtered or cached here.
+  // upload step, on each poll tick, when the search term settles, and when
+  // the host switches between all photos and the queue. The term rides the
+  // request as `q` and the queue as `awaiting_review=true`; the server
+  // decides what the caller may see and narrows within that — nothing is
+  // filtered or cached here.
   useEffect(() => {
     if (!open) return
     let cancelled = false
     async function load() {
       try {
-        const response = await authFetch(mediaListPath(gatheringId, term))
+        const response = await authFetch(
+          mediaListPath(gatheringId, term, { awaitingReview: queueView }),
+        )
         if (cancelled) return
         if (response.ok) {
           const body = (await response.json()) as Partial<MediaList>
@@ -395,25 +452,131 @@ export function GatheringMedia({
     return () => {
       cancelled = true
     }
-  }, [gatheringId, open, reloadKey, term])
+  }, [gatheringId, open, reloadKey, term, queueView])
 
   // Poll while anything is still moving; stop the moment everything is
   // `ready` or `failed`. `items` is a fresh array per load, so each read
   // re-arms exactly one timer; a load that failed does not — the person gets
-  // a retry control instead of a page hammering a failing endpoint.
+  // a retry control instead of a page hammering a failing endpoint. The
+  // queue never polls by construction: every row in it is `ready`, and
+  // nothing but the host's own act moves one (CK-43.1).
   useEffect(() => {
     if (!open || loadFailed || items === null || !anyInFlight(items)) return
     const timer = setTimeout(() => setReloadKey((key) => key + 1), pollIntervalMs)
     return () => clearTimeout(timer)
   }, [open, loadFailed, items, pollIntervalMs])
 
+  // The batch selection follows the list: an id the last read no longer
+  // returned (published, declined, or gone from the queue) is dropped, so
+  // no batch ever names a row the host cannot see on the screen.
+  useEffect(() => {
+    if (items === null) return
+    const present = new Set(items.map((item) => item.id))
+    setSelected((current) => {
+      const kept = current.filter((id) => present.has(id))
+      return kept.length === current.length ? current : kept
+    })
+  }, [items])
+
   function noteProblem(mediaId: string, problem: LocalProblem) {
     setProblems((prev) => ({ ...prev, [mediaId]: problem }))
+  }
+
+  // The review's transient state — a decline awaiting its second click and
+  // the last batch's refusal — is dropped whenever the list is re-read on
+  // the host's own initiative: the refusal it explains belongs to the rows
+  // as they were.
+  function clearBatch() {
+    setBatchErrors(noErrors())
+    setBatchSent([])
+    setDecliningId(null)
+  }
+
+  function switchView(next: 'all' | 'queue') {
+    if (next === view) return
+    setView(next)
+    setSelected([])
+    clearBatch()
   }
 
   function showAll() {
     setSearchInput('')
     setTerm('')
+    if (view !== 'all') switchView('all')
+  }
+
+  function refresh() {
+    clearBatch()
+    setRowErrors({})
+    setReloadKey((key) => key + 1)
+  }
+
+  // One act on one photograph (CK-43.1). Optimistic-free: a success re-reads
+  // the list and the server's body is what renders (the row leaves the
+  // queue; its line in the full list changes to the state it is now in). A
+  // refusal is kept ON THE ROW, in this module's words for the server's
+  // code, and the list is NOT re-read — a re-read could drop the row the
+  // message is about (a declined photograph is in nobody's queue) and take
+  // the explanation with it; the refresh control beside it is the way on.
+  async function act(item: MediaItem, which: ReviewAct) {
+    if (actingId !== null) return
+    setActingId(item.id)
+    setDecliningId(null)
+    setRowErrors((prev) => {
+      const { [item.id]: _dropped, ...rest } = prev
+      return rest
+    })
+    const outcome = await reviewMedia(item.id, which)
+    if (!alive.current) return
+    setActingId(null)
+    if (outcome.ok) {
+      setSelected((current) => current.filter((id) => id !== item.id))
+      setReloadKey((key) => key + 1)
+      return
+    }
+    setRowErrors((prev) => ({
+      ...prev,
+      [item.id]: { fields: {}, form: [reviewRefusalMessage(which, outcome)] },
+    }))
+  }
+
+  // Bulk approve (roadmap §3's one tap; record §5): the batch endpoint, the
+  // ids in the order selected. The server refuses the batch WHOLE on any
+  // bad item and changes nothing; its item-level 422 carries the row's
+  // index, so the refusal renders against the row that caused it — never
+  // as a banner alone — and the rows stay exactly as they were read.
+  async function publishSelected(event: FormEvent) {
+    event.preventDefault()
+    const ids = selected
+    if (ids.length === 0 || ids.length > MAX_PUBLISH_BATCH || publishing) return
+    setPublishing(true)
+    setBatchErrors(noErrors())
+    setBatchSent(ids)
+    try {
+      const response = await authFetch(`/gatherings/${gatheringId}/media/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ media_ids: ids }),
+      })
+      if (!alive.current) return
+      if (response.ok) {
+        setSelected([])
+        setBatchSent([])
+        setReloadKey((key) => key + 1)
+        return
+      }
+      setBatchErrors(await errorsFromResponse(response, publishBatchErrorFields(ids.length)))
+    } catch {
+      if (alive.current) setBatchErrors(networkErrors())
+    } finally {
+      if (alive.current) setPublishing(false)
+    }
+  }
+
+  function toggleSelected(mediaId: string, on: boolean) {
+    setSelected((current) =>
+      on ? (current.includes(mediaId) ? current : [...current, mediaId]) : current.filter((id) => id !== mediaId),
+    )
   }
 
   // Intent → PUT → confirm, per file, with the batch endpoint used as a
@@ -510,6 +673,21 @@ export function GatheringMedia({
   const filtered = term !== ''
   const matchCount =
     items === null ? '' : items.length === 1 ? '1 photo' : `${items.length} photos`
+  const listed = items ?? []
+  const allSelected = listed.length > 0 && listed.every((item) => selected.includes(item.id))
+  const batchRefused = Object.keys(batchErrors.fields).length > 0
+
+  // The queue's own status line (CK-43.1): what is waiting, or that nothing
+  // is — a state, never a blank area, and never "No photos yet", which
+  // means something else.
+  const queueStatus =
+    listed.length === 0
+      ? filtered
+        ? `No photos awaiting your review match “${term}”.`
+        : 'Nothing is waiting for your review.'
+      : filtered
+        ? `Showing ${matchCount} awaiting your review, matching “${term}”.`
+        : `Showing ${matchCount} awaiting your review.`
 
   return (
     <div className="media-block">
@@ -583,6 +761,32 @@ export function GatheringMedia({
         </p>
       </div>
 
+      {/* The host's review (CK-43.1): the queue is a view of this same list
+          — asked for with `awaiting_review=true`, rendered through the same
+          rows — and the switch exists only for the host of a gathering that
+          resolves gated. Where nothing waits for anyone, nothing here
+          renders and no string below reaches the page. */}
+      {reviewer && (
+        <div className="media-view" role="group" aria-label="Show">
+          <button
+            type="button"
+            className="link-button"
+            aria-pressed={!queueView}
+            onClick={() => switchView('all')}
+          >
+            All photos
+          </button>
+          <button
+            type="button"
+            className="link-button"
+            aria-pressed={queueView}
+            onClick={() => switchView('queue')}
+          >
+            Awaiting your review
+          </button>
+        </div>
+      )}
+
       {loadFailed && (
         <p className="form-error" role="alert">
           <span aria-hidden="true">⚠ </span>
@@ -600,7 +804,7 @@ export function GatheringMedia({
         </p>
       )}
 
-      {items !== null && !loadFailed && filtered && (
+      {items !== null && !loadFailed && !queueView && filtered && (
         // The filtered view says it is one, and how to leave it; an empty
         // result is a state with the way back, never a blank area.
         <p className="field-hint" role="status">
@@ -613,10 +817,67 @@ export function GatheringMedia({
         </p>
       )}
 
-      {items !== null && items.length === 0 && !loadFailed && !filtered && (
+      {items !== null && !loadFailed && queueView && (
+        // The queue's state — what is waiting, or that nothing is — with
+        // the way back to everything.
+        <p className="field-hint" role="status">
+          {queueStatus}{' '}
+          <button type="button" className="link-button" onClick={showAll}>
+            Show all photos
+          </button>
+        </p>
+      )}
+
+      {items !== null && items.length === 0 && !loadFailed && !filtered && !queueView && (
         // The empty state is a real screen (CK-17): the control that fills
         // it is right above.
         <p className="field-hint">No photos yet.</p>
+      )}
+
+      {queueView && items !== null && !loadFailed && items.length > 0 && (
+        // Bulk approve: the batch endpoint over the selected rows, refused
+        // whole on any bad item. A refusal lands on the row it names (below,
+        // through the one mapper); the line here says the consequence — that
+        // NOTHING was published — and offers the re-read, because the rows
+        // shown are the rows as they were when the batch was built.
+        <form
+          className="media-batch"
+          aria-label="Publish selected photos"
+          onSubmit={(event) => void publishSelected(event)}
+        >
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => setSelected(allSelected ? [] : listed.map((item) => item.id))}
+          >
+            {allSelected ? 'Clear selection' : 'Select all'}
+          </button>
+          <button
+            type="submit"
+            disabled={selected.length === 0 || selected.length > MAX_PUBLISH_BATCH || publishing}
+          >
+            {publishing
+              ? 'Publishing…'
+              : selected.length === 1
+                ? 'Publish 1 selected photo'
+                : `Publish ${selected.length} selected photos`}
+          </button>
+          {selected.length > MAX_PUBLISH_BATCH && (
+            <p className="field-hint">Up to {MAX_PUBLISH_BATCH} photos can be published at once.</p>
+          )}
+          <FieldError errors={batchErrors} field="media_ids" scope="publish" />
+          {batchRefused && (
+            <p className="field-hint">
+              Nothing was published — one of the selected photos can't be, and the note
+              beside it says why.{' '}
+              <button type="button" className="link-button" onClick={refresh}>
+                Refresh the list
+              </button>{' '}
+              and try again.
+            </p>
+          )}
+          <FormLevelErrors errors={batchErrors} />
+        </form>
       )}
 
       {items !== null && items.length > 0 && (
@@ -628,13 +889,14 @@ export function GatheringMedia({
             const name = mediaName(item)
             // This device's knowledge overrides the server's rung for a row
             // whose upload never landed FROM HERE; otherwise the row's own
-            // state decides, through the one message function.
+            // state decides, through the one message function — which says
+            // what the row waits on only where the gathering resolves gated.
             const message =
               problem === 'upload_failed'
                 ? "This upload didn't finish."
                 : problem === 'confirm_failed'
                   ? "This upload couldn't be confirmed."
-                  : mediaStateMessage(item, { isHost })
+                  : mediaStateMessage(item, { isHost, gated: requiresApproval })
             const offerRetry = item.status === 'failed' || problem !== undefined
             // The editor: the caller's own rows only (the server reserves
             // the edit to the uploader — no affordance that cannot succeed),
@@ -642,8 +904,28 @@ export function GatheringMedia({
             // failed photograph has nothing to caption.
             const offerEdit = item.is_own && !offerRetry
             const editing = offerEdit && editingId === item.id
+            // The acts: the host of a gated gathering, on a ready row that
+            // is pending — the server's own criterion, so no control is
+            // ever offered on a row the server would refuse. The checkbox
+            // belongs to the queue view, where the batch is built.
+            const reviewable = reviewer && awaitingReview(item)
+            const declining = reviewable && decliningId === item.id
+            const batchIndex = batchSent.indexOf(item.id)
+            const batchField = batchIndex === -1 ? null : `media_ids.${batchIndex}`
+            const rowError = rowErrors[item.id]
             return (
               <li key={item.id} className="media-item">
+                {queueView && reviewable && (
+                  <input
+                    type="checkbox"
+                    className="media-select"
+                    aria-label={`Select ${name}`}
+                    checked={selected.includes(item.id)}
+                    disabled={publishing}
+                    aria-describedby={batchField ? describedBy(batchErrors, batchField, 'publish') : undefined}
+                    onChange={(event) => toggleSelected(item.id, event.target.checked)}
+                  />
+                )}
                 {item.status === 'ready' && (
                   <button
                     type="button"
@@ -684,6 +966,59 @@ export function GatheringMedia({
                     onClose={() => setEditingId(null)}
                   />
                 )}
+                {reviewable && !declining && (
+                  <div className="media-review">
+                    <button
+                      type="button"
+                      disabled={actingId !== null}
+                      onClick={() => void act(item, 'publish')}
+                    >
+                      {actingId === item.id ? 'Publishing…' : 'Publish'}
+                    </button>
+                    <button
+                      type="button"
+                      className="link-button"
+                      disabled={actingId !== null}
+                      onClick={() => setDecliningId(item.id)}
+                    >
+                      Decline
+                    </button>
+                  </div>
+                )}
+                {declining && (
+                  // Decline is removal (record §4): the gathering never sees
+                  // it, the uploader keeps it for the bin's window, nothing
+                  // is destroyed — said plainly, and taken on a deliberate
+                  // second click, with a do-nothing beside it.
+                  <div className="media-review media-decline" role="group" aria-label={`Decline ${name}`}>
+                    <p className="field-hint">
+                      The gathering won't see this photo.{' '}
+                      {item.is_own
+                        ? `You can still see it yourself for ${REMOVED_BIN_DAYS} days.`
+                        : `${who} can still see it for ${REMOVED_BIN_DAYS} days; you won't see it again here.`}
+                    </p>
+                    <button type="button" onClick={() => void act(item, 'decline')}>
+                      {actingId === item.id ? 'Declining…' : 'Decline it'}
+                    </button>
+                    <button
+                      type="button"
+                      className="link-button"
+                      disabled={actingId !== null}
+                      onClick={() => setDecliningId(null)}
+                    >
+                      Leave it waiting
+                    </button>
+                  </div>
+                )}
+                {batchField && <FieldError errors={batchErrors} field={batchField} scope="publish" />}
+                {rowError && (
+                  <div className="media-review">
+                    <FormLevelErrors errors={rowError} />
+                    <button type="button" className="link-button" onClick={refresh}>
+                      Refresh the list
+                    </button>
+                  </div>
+                )}
               </li>
             )
           })}
@@ -704,7 +1039,9 @@ export function GatheringMedia({
             <strong>{mediaName(opened)}</strong>
           </p>
           <TagList tags={opened.tags} label={`Tags on ${mediaName(opened)}`} />
-          <p className="field-hint">{mediaStateMessage(opened, { isHost })}</p>
+          <p className="field-hint">
+            {mediaStateMessage(opened, { isHost, gated: requiresApproval })}
+          </p>
           <button type="button" onClick={() => setOpenedId(null)}>
             Close
           </button>

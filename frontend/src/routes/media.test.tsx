@@ -141,6 +141,9 @@ function renderMedia(over: Partial<Parameters<typeof GatheringMedia>[0]> = {}) {
     <GatheringMedia
       gatheringId="g-1"
       isHost={false}
+      // The gathering resolves open — every gathering these pins were written
+      // against (CK-43.1 added the prop; the review surface has its own pins).
+      requiresApproval={false}
       occurrences={detailBody().occurrences}
       zone="America/Chicago"
       pollIntervalMs={20}
@@ -541,18 +544,28 @@ test('a PUT that fails leaves an honest row: not "on its way", with the one try-
   expect(document.body.innerHTML).not.toContain('putsig123')
 })
 
-test('no source in the upload surface names a reviewer, an approval, or calls a pending photograph shared', () => {
+test('no source in the upload surface calls a pending photograph shared, or claims anything screens or approves it', () => {
   // The copy rule, pinned at the source (the brand.test.tsx discipline):
   // for a private family gathering nobody will ever review a photograph
   // (consent-gate-defaults §1), so copy that teaches a family to expect
   // review is wrong today and wrong after the fix. The words are banned
   // from the strings this surface can render; a comment may explain the
   // rule, so comments are stripped before the scan.
+  //
+  // Narrowed at CK-43.1 (the-hosts-review §8): where a gathering resolves
+  // GATED a host genuinely does review, so the source now legitimately
+  // carries the word "review" for that case and a source scan can no
+  // longer prove the open-gathering rule. "Review" moved to a RENDER pin —
+  // routes/media-review.test.tsx renders an open gathering, host and not,
+  // and asserts no reviewer, approval, queue or waiting-for reaches the
+  // page. What stays banned everywhere, in every string, is here: a
+  // pending photograph is never "shared", nothing "screens" anything, and
+  // no string claims an approval — a host publishes.
   const stripComments = (source: string) =>
     source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
   for (const source of [mediaComponentSource, mediaLibSource]) {
     const code = stripComments(source)
     expect(code).not.toMatch(/waiting for approval/i)
-    expect(code).not.toMatch(/['"`][^'"`\n]*\b(approv|review|shared|screen)\w*[^'"`\n]*['"`]/i)
+    expect(code).not.toMatch(/['"`][^'"`\n]*\b(approv|shared|screen)\w*[^'"`\n]*['"`]/i)
   }
 })
