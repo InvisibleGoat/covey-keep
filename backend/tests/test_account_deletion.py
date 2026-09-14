@@ -11,6 +11,7 @@ from app.models import (
     Group,
     KeptGathering,
     MagicLinkToken,
+    Membership,
     Occurrence,
     Person,
     Post,
@@ -209,8 +210,14 @@ async def test_contributions_survive_deletion(client, capsys, db_session_factory
         assert gathering_row.created_by_account_id == account_id
         occurrence_row = (await db.execute(select(Occurrence))).scalars().one()
         assert occurrence_row.gathering_id == gathering_row.id
+        # The group row survives. (Edited at CK-45: this line pinned
+        # `admin_person_id == person_id` — the row's SURVIVAL was the point
+        # and the column was incidental; since CK-45 deletion relinquishes
+        # group admin, so the row survives with its admin NULL — the leg
+        # pinned in full by test_deletion_relinquishes_group_admin_and_
+        # retains_memberships below.)
         group_row = (await db.execute(select(Group))).scalars().one()
-        assert group_row.admin_person_id == person_id
+        assert group_row.admin_person_id is None
 
 
 async def test_deletion_lapses_kept_statuses(client, capsys, db_session_factory):
@@ -295,3 +302,90 @@ async def test_deletion_lapses_kept_statuses(client, capsys, db_session_factory)
                 select(func.count()).select_from(Account).where(Account.id == account_id)
             )
         ) == 1
+
+
+async def test_deletion_relinquishes_group_admin_and_retains_memberships(
+    client, capsys, db_session_factory
+):
+    """CK-45: the sixth deletion-path integration. A former member administers
+    nothing — `admin_person_id` and `backup_admin_person_id` are set NULL
+    wherever the deleted person held them (the nullable columns' documented
+    "needs an admin" state, reachable for the first time), the backup admin
+    is NOT promoted, and every `memberships` row is RETAINED, still
+    attributed to the anonymized person — the retention default: nothing
+    cascades from a person. `updated_at` is untouched: a relinquishment is
+    not a rename."""
+    address = "groupadmin@example.com"
+    other_address = "othermember@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    await _sign_in(client, capsys, other_address)
+    # (1) A group the person created through the API: admin + first member.
+    response = await client.post("/groups", json={"name": "Finch family"}, headers=headers)
+    assert response.status_code == 201, response.text
+    own_group_id = response.json()["id"]
+    async with db_session_factory() as db:
+        person_id = (
+            await db.execute(select(Person.id).where(Person.email == address))
+        ).scalar_one()
+        other_id = (
+            await db.execute(select(Person.id).where(Person.email == other_address))
+        ).scalar_one()
+        profile = (
+            await db.execute(
+                select(CapabilityProfile).where(CapabilityProfile.name == "household-default")
+            )
+        ).scalars().one()
+        # (2) A group someone else administers, with the person as BACKUP
+        # admin and a member — constructed directly (nothing sets the backup
+        # column or adds a second member through the API yet).
+        backed = Group(
+            group_type=GroupType.HOUSEHOLD,
+            capability_profile_id=profile.id,
+            name="Other family",
+            admin_person_id=other_id,
+            backup_admin_person_id=person_id,
+        )
+        db.add(backed)
+        await db.flush()
+        db.add_all(
+            [
+                Membership(group_id=backed.id, person_id=other_id),
+                Membership(group_id=backed.id, person_id=person_id),
+            ]
+        )
+        await db.commit()
+        backed_id = backed.id
+
+    assert (await client.post("/me/delete", json=DELETE_BODY, headers=headers)).status_code == 204
+
+    async with db_session_factory() as db:
+        own = (await db.execute(select(Group).where(Group.id == own_group_id))).scalars().one()
+        # Relinquished: the group survives, administered by nobody — never
+        # by "a former member".
+        assert own.admin_person_id is None
+        assert own.backup_admin_person_id is None
+        assert own.updated_at is None
+        backed_row = (await db.execute(select(Group).where(Group.id == backed_id))).scalars().one()
+        # The other person's admin stands; the deleted person's backup slot
+        # is cleared and NOT promoted into anything.
+        assert backed_row.admin_person_id == other_id
+        assert backed_row.backup_admin_person_id is None
+        assert backed_row.updated_at is None
+        # Every membership row retained, still attributed to the anonymized
+        # person (row counts, not trust).
+        own_members = (
+            await db.execute(select(Membership.person_id).where(Membership.group_id == own.id))
+        ).scalars().all()
+        assert own_members == [person_id]
+        backed_members = set(
+            (
+                await db.execute(
+                    select(Membership.person_id).where(Membership.group_id == backed_id)
+                )
+            ).scalars().all()
+        )
+        assert backed_members == {other_id, person_id}
+        anonymized = (
+            await db.execute(select(Person).where(Person.id == person_id))
+        ).scalars().one()
+        assert anonymized.anonymized_at is not None

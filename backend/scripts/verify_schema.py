@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0020"
+EXPECTED_REVISION = "0021"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -623,6 +623,74 @@ async def verify(conn, ck: Checks) -> None:
         present=("admin_person_id", "backup_admin_person_id"),
         absent=("steward_person_id", "backup_steward_person_id"),
     )
+
+    print("\n-- groups: the first surface (0021, CK-45) --")
+    # The row became user-mutable at CK-45 (PATCH /groups/{id} renames it),
+    # so it gains `updated_at` in the same phase — the 0004/0010/0014
+    # precedent; adding one a phase late cost CK-28's check (bt) its
+    # evidence. Nullable with no default: a never-renamed group has no
+    # meaningful value, and a rename writes it or nothing does. The default
+    # is read with .first() so a MISSING column is a FAIL here too, not a
+    # vacuous pass over an empty result.
+    assert_columns(ck, columns, "groups", nullable=("updated_at",))
+    groups_updated_default = (
+        await conn.execute(
+            text(
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'groups' "
+                "AND column_name = 'updated_at'"
+            )
+        )
+    ).first()
+    ck.check(
+        groups_updated_default is not None and groups_updated_default[0] is None,
+        "groups.updated_at has no server default (a rename writes it, or nothing does)",
+        "column missing"
+        if groups_updated_default is None
+        else f"default is {groups_updated_default[0]!r}",
+    )
+
+    print("\n-- groups integrity (CK-45) --")
+    if {"groups", "memberships", "capability_profiles"} <= tables:
+        # (1) A group wears a profile of its OWN type. The failing write is
+        # the rung-2 gate's exact failure mode: a TEAM group created against
+        # the household profile — a group whose publication template belongs
+        # to another kind of group. The create path checks it at its one
+        # write site; this is the deployed backstop.
+        mismatched_profiles = await scalar(
+            conn,
+            "SELECT count(*) FROM groups g "
+            "JOIN capability_profiles p ON p.id = g.capability_profile_id "
+            "WHERE p.group_type <> g.group_type",
+        )
+        ck.check(
+            mismatched_profiles == 0,
+            "every group's capability profile is of the group's own type",
+            f"{mismatched_profiles} group(s) wearing a profile of another type",
+        )
+        # (2) A group never exists with zero members. Its failing write is
+        # real and named: a create path that committed the group before the
+        # membership — the ordering the creation transaction exists to
+        # prevent (creator = admin + first member, one commit).
+        memberless_groups = await scalar(
+            conn,
+            "SELECT count(*) FROM groups g "
+            "WHERE NOT EXISTS (SELECT 1 FROM memberships m WHERE m.group_id = g.id)",
+        )
+        ck.check(
+            memberless_groups == 0,
+            "every group has at least one membership",
+            f"{memberless_groups} group(s) with no membership row",
+        )
+        # DELIBERATELY NOT ASSERTED: "every group is HOUSEHOLD." True the
+        # instant CK-45 ships and legitimately breakable by the phase that
+        # admits TEAM (the CK-41 check (dy) precedent) — it is a check run
+        # once, recorded in WORKING-ON-NOW, never a script that will fail
+        # correctly later.
+    else:
+        ck.check(
+            False, "groups integrity", "groups / memberships / capability_profiles missing"
+        )
 
     print("\n-- named CHECK constraints --")
     for name in (
@@ -1216,7 +1284,18 @@ async def verify(conn, ck: Checks) -> None:
     # `media` joins the list at CK-34, the phase that first writes it: a
     # count above zero is a fact to record against the baseline, never a
     # failure — and pending rows come and go with the reap.
-    for table in ("people", "accounts", "gatherings", "kept_gatherings", "media"):
+    # `groups` and `memberships` join at CK-45, the phase that first writes
+    # them (the tables have existed since 0001): a count above zero is the
+    # baseline to record, never a failure.
+    for table in (
+        "people",
+        "accounts",
+        "gatherings",
+        "kept_gatherings",
+        "media",
+        "groups",
+        "memberships",
+    ):
         if table in tables:
             ck.info(f"{table} rows", await scalar(conn, f"SELECT count(*) FROM {table}"))
         else:

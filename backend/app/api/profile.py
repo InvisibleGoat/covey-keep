@@ -23,6 +23,7 @@ from app.models import (
 )
 from app.security import hash_token
 from app.services.email import send_email
+from app.services.groups import relinquish_group_admin
 from app.services.keeping import lapse_kept_statuses
 from app.services.retention import purge_stale
 
@@ -348,7 +349,16 @@ async def delete_account(
     # (The accounts row itself is retained: it carries no PII, and the
     # person's gatherings and contributions still reference it.)
     await lapse_kept_statuses(db, person.account_id, now=now)
+    # Group admin is relinquished (CK-45, services/groups.py): a former
+    # member administers nothing — `admin_person_id` and
+    # `backup_admin_person_id` set NULL wherever this person held them, the
+    # backup never promoted; memberships RETAINED, attributed to the
+    # anonymized row like every contribution. A PERSON fact, beside the
+    # account-spine lapse above — the two are keyed on different ids on
+    # purpose.
+    await relinquish_group_admin(db, person.id)
 
     # One commit = one transaction: anonymization, auth-material deletion,
-    # and the kept-status lapse land together or not at all.
+    # the kept-status lapse and the group-admin relinquishment land
+    # together or not at all.
     await db.commit()

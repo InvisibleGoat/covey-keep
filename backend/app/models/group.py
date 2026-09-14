@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Text
+from sqlalchemy import DateTime, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, created_at_col, uuid_pk
@@ -31,6 +31,14 @@ class Group(Base):
     )
     backup_admin_person_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("people.id"), nullable=True
+    )
+    # Stamped on every successful rename (PATCH /groups/{id}) and by nothing
+    # else — the 0004/0010/0014 shape, added WITH the mutability (CK-45,
+    # migration 0021). Nullable: a never-renamed group has no meaningful
+    # value, and NULL is that fact. Account deletion's admin relinquishment
+    # (services/groups.py) is a lifecycle write, not a rename: unstamped.
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = created_at_col()
 
