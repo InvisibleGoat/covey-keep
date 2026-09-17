@@ -23,6 +23,10 @@ Pinned:
 - the three layers, their formats, content types, storage classes and
   long-edge targets; the thumbnail under ~30 KB; never upscaled — a small
   original yields three small renditions;
+- THE TARGETS ARE ORDERED LARGEST-FIRST (CK-46): archival > web >
+  thumbnail, because each layer is derived from the one above it and
+  `_fit` never upscales — an archival target at or below the web target
+  would hand the web layer archival-sized pixels with nothing failing;
 - the real format comes from the bytes: GIF, BMP and TIFF are refused as
   unsupported, a renamed .mov and random bytes as undecodable, a truncated
   JPEG as undecodable — every one Undecodable (permanent), reason in
@@ -43,6 +47,7 @@ from PIL import ExifTags, Image, ImageCms
 from app.models import MediaLayer
 from app.services import processing
 from app.services.processing import (
+    ARCHIVAL_JPEG_QUALITY,
     ARCHIVAL_LONG_EDGE,
     DECODABLE_FORMATS,
     MAX_PIXELS,
@@ -180,24 +185,47 @@ def test_the_three_layers_their_formats_classes_and_targets():
     assert Image.open(io.BytesIO(web.data)).format == "WEBP"
     assert Image.open(io.BytesIO(thumbnail.data)).format == "WEBP"
 
-    # Long-edge targets (media-layers record §1), aspect preserved.
-    assert (archival.width, archival.height) == (ARCHIVAL_LONG_EDGE, 2667)
-    assert (web.width, web.height) == (WEB_LONG_EDGE, 1707)
+    # Long-edge targets (media-layers record §1), aspect preserved — to
+    # within a pixel of rounding through the chain: web is derived from
+    # archival (3200x2133), not from the original, so 2133 * 0.8 rounds to
+    # 1706 where the original's 4000 * 0.64 would have given 1707.
+    assert (archival.width, archival.height) == (ARCHIVAL_LONG_EDGE, 2133)
+    assert (web.width, web.height) == (WEB_LONG_EDGE, 1706)
     assert (thumbnail.width, thumbnail.height) == (THUMBNAIL_LONG_EDGE, 267)
     for rendition in (archival, web, thumbnail):
         assert Image.open(io.BytesIO(rendition.data)).size == (rendition.width, rendition.height)
         assert rendition.size_bytes == len(rendition.data) > 0
     assert thumbnail.size_bytes <= THUMBNAIL_TARGET_BYTES
-    # The record's numbers, so nobody re-imports the wrong ones.
-    assert (ARCHIVAL_LONG_EDGE, WEB_LONG_EDGE, THUMBNAIL_TARGET_BYTES) == (4000, 2560, 30_000)
+    # The record's numbers (1.2.0 — CK-46's archival respec), so nobody
+    # re-imports the wrong ones: 4000/q90 was the spec until CK-46, and the
+    # photographs ingested under it keep it; this pins what is written NOW.
+    assert (ARCHIVAL_LONG_EDGE, ARCHIVAL_JPEG_QUALITY) == (3200, 85)
+    assert (WEB_LONG_EDGE, THUMBNAIL_TARGET_BYTES) == (2560, 30_000)
     assert (STORAGE_CLASS_INFREQUENT_ACCESS, STORAGE_CLASS_STANDARD) == ("STANDARD_IA", "STANDARD")
 
 
 def test_a_portrait_original_fits_its_long_edge():
     archival, web, thumbnail = render_layers(_photo(3000, 4500))
-    assert (archival.width, archival.height) == (2667, ARCHIVAL_LONG_EDGE)
-    assert (web.width, web.height) == (1707, WEB_LONG_EDGE)
+    assert (archival.width, archival.height) == (2133, ARCHIVAL_LONG_EDGE)
+    assert (web.width, web.height) == (1706, WEB_LONG_EDGE)
     assert (thumbnail.width, thumbnail.height) == (267, THUMBNAIL_LONG_EDGE)
+
+
+def test_the_layer_targets_are_ordered_largest_first():
+    # WHAT THIS PREVENTS (CK-46): the derivation chain is largest-first —
+    # web = _fit(archival, WEB_LONG_EDGE), thumbnail = _fit(web, ...) — and
+    # `_fit` never upscales. A respec that ever takes the archival target at
+    # or below the web target would not fail: the web layer would silently
+    # come out at archival size, every page would serve a print master as
+    # its web image, and nothing would throw. The respec that shrank the
+    # archival target from 4000 to 3200 cut the margin over the web target
+    # from 1440 px to 640 px, which is why this is pinned now.
+    assert ARCHIVAL_LONG_EDGE > WEB_LONG_EDGE > THUMBNAIL_LONG_EDGE
+    # And the observable consequence, on an input larger than every target:
+    # each layer is strictly smaller than the one it was derived from.
+    archival, web, thumbnail = render_layers(_photo(6000, 4000))
+    assert archival.width > web.width > thumbnail.width
+    assert archival.height > web.height > thumbnail.height
 
 
 def test_a_small_original_is_never_upscaled_and_still_yields_three_layers():
@@ -282,7 +310,7 @@ def test_the_pixel_guard_refuses_from_the_header_before_any_pixel_is_decoded():
 
 def test_exactly_the_limit_passes():
     archival, web, thumbnail = render_layers(_tiny_png_of(5000, 10_000))  # 50.0 MP
-    assert (archival.width, archival.height) == (2000, ARCHIVAL_LONG_EDGE)
+    assert (archival.width, archival.height) == (1600, ARCHIVAL_LONG_EDGE)
     assert (web.width, web.height) == (1280, WEB_LONG_EDGE)
     assert (thumbnail.width, thumbnail.height) == (200, THUMBNAIL_LONG_EDGE)
 

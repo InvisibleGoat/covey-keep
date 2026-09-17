@@ -10,7 +10,7 @@ knows nothing about a media row, a bucket, or a key.
 WHAT COMES OUT, per `decisions/2026-08-25-media-derivative-layers.md` §1/§4:
 
     layer      target                          format       storage class
-    archival   ~4000px long edge, quality 90   JPEG         Infrequent Access
+    archival   ~3200px long edge, quality 85   JPEG         Infrequent Access
     web        ~2560px long edge               WebP q82     Standard
     thumbnail  ~400px long edge, <= ~30 KB     WebP         Standard
 
@@ -20,6 +20,17 @@ thumbnail layer that are all 640px and differ only in encoding. §5's format
 fact is why the web layer's quality is where it is: against JPEG, WebP saves
 25-35% (the 90% figure that circulates is PNG->WebP), so ~2560px WebP lands
 in the record's 400-700 KB band at a quality that does not visibly cost.
+
+The archival target is the print master's, and it is sized to the real
+requirement (record §2, restated at 1.2.0): a 300 dpi 8x10 needs 2400x3000,
+and a full-bleed page at the standard 0.125" bleed about 2475x3075, so
+3200 covers both with margin and an 8.5x11 page at ~290 dpi. It was
+4000/q90 until CK-46 (2026-09-16), which was over-built for anything the
+book prints and cost roughly half of every photograph's stored bytes for
+nothing. Transcode-on-ingest is unfixable retroactively: every photograph
+ingested before the respec keeps the old spec forever, correctly — a
+reprocess would be destroying print masters to reclaim bytes — and the
+size of a deployed archival row says which spec wrote it.
 
 THE ORDER OF OPERATIONS IS THE POINT, and each step is here for a reason:
 
@@ -107,10 +118,16 @@ Image.MAX_IMAGE_PIXELS = MAX_PIXELS
 # or BMP is a photograph a family takes.
 DECODABLE_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "HEIF"})
 
-# The layer targets (media-layers record §1) — long edge in pixels; never
-# exceeded, never reached by upscaling.
-ARCHIVAL_LONG_EDGE = 4000
-ARCHIVAL_JPEG_QUALITY = 90
+# The layer targets (media-layers record §1, 1.2.0) — long edge in pixels;
+# never exceeded, never reached by upscaling. THE ORDER IS LOAD-BEARING:
+# each layer is derived from the one above it (render_layers, step 4) and
+# `_fit` never upscales, so an archival target at or below the web target
+# would hand the web layer archival-sized pixels — silently, and with
+# nothing failing. ARCHIVAL > WEB > THUMBNAIL is pinned by test. The
+# archival spec was 4000/q90 until CK-46; the module docstring says why
+# it changed and why nothing already stored is reprocessed.
+ARCHIVAL_LONG_EDGE = 3200
+ARCHIVAL_JPEG_QUALITY = 85
 WEB_LONG_EDGE = 2560
 WEB_WEBP_QUALITY = 82
 THUMBNAIL_LONG_EDGE = 400
@@ -244,8 +261,10 @@ def render_layers(data: bytes) -> tuple[Rendition, Rendition, Rendition]:
     image = _open(data)
 
     # A JPEG can be decoded straight to a reduced size by the DCT (draft):
-    # a 48-megapixel original bound for a 4000px archival layer never has
-    # to exist at full size in memory. A no-op for every other format.
+    # a 48-megapixel original bound for the archival layer's long edge never
+    # has to exist at full size in memory (and the smaller that target, the
+    # cheaper the decode — CK-46's respec bought that for free). A no-op for
+    # every other format.
     image.draft("RGB", _fit_box(image.width, image.height, ARCHIVAL_LONG_EDGE))
 
     try:
