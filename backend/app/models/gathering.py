@@ -54,6 +54,18 @@ class Gathering(Base):
             " OR (gathering_type <> 'memorial' AND memorial_decedent_name IS NULL)",
             name="memorial_decedent_name",
         ),
+        # The keeper shape (0022, CK-49a; keeper record v2 §3.1): a gathering
+        # that belongs to a group finds its keeper THROUGH the group and never
+        # stores it beside itself — at most one of the two is set. Both NULL
+        # is legal and is the Unkept rung (§5). The gathering_invitations
+        # exactly-one-target idiom applied as at-most-one; the two-
+        # representations defect (database-schema decision 20's class) made
+        # structural rather than remembered. Nothing reads either column
+        # until CK-49b — kept_gatherings below is still the truth.
+        CheckConstraint(
+            "owning_group_id IS NULL OR keeper_account_id IS NULL",
+            name="group_gathering_has_no_keeper",
+        ),
     )
 
     id: Mapped[UUID] = uuid_pk()
@@ -71,6 +83,30 @@ class Gathering(Base):
     # groups encode "needs an admin". Reverting from keeper to observer
     # relinquishes this (services/keeping.py); the claim flow is a later phase.
     host_account_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("accounts.id"), nullable=True
+    )
+    # The belongs-to link (decisions/2026-09-02-groups-as-homes.md §3) as a
+    # COLUMN WITH NO WRITER AND NO READER (0022, CK-49a). It exists so the
+    # CHECK in __table_args__ is honest and the keeper resolver's group rung
+    # is testable; the write path, the home-group default and publication
+    # rungs 2 and 3 are Arc B's and none of it is built. Every row is NULL
+    # and stays NULL until then — the 0019 precedent (requires_approval sat
+    # nullable with no writer until CK-44). The class docstring's "the only
+    # gathering↔group link is a GatheringInvitation row" is still true of
+    # every row in the database, and stops being true the day Arc B writes
+    # here; that phase amends the docstring, not this one.
+    owning_group_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("groups.id"), nullable=True
+    )
+    # A standalone gathering's own keeper — an account (0022, CK-49a; keeper
+    # record v2 §3.1). NULL when the gathering belongs to a group (the group's
+    # keeper answers, through services/keeping.py::resolve_keeper) and NULL
+    # when nobody keeps it (§5's Unkept rung). Backfilled once at 0022 from
+    # kept_gatherings; NOTHING WRITES IT UNTIL CK-49b — keep() still writes a
+    # kept row and nothing here — so a gathering created after 0022 holds a
+    # kept row and NULL here until 0023 re-runs the backfill and drops the
+    # relation. No consumer reads it until then; kept_gatherings is the truth.
+    keeper_account_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("accounts.id"), nullable=True
     )
     gathering_type: Mapped[GatheringType] = mapped_column(GATHERING_TYPE, nullable=False)

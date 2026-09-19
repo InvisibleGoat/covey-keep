@@ -32,6 +32,20 @@ class Group(Base):
     backup_admin_person_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("people.id"), nullable=True
     )
+    # The group's KEEPER — an account, where the two admin columns above are
+    # people (0022, CK-49a; keeper record v2 §3.1, §7: administering is a
+    # relationship with the people, keeping is a relationship with the bill,
+    # and the two land on different spines). The first account fact on this
+    # table, and it authorizes nothing about membership. NULL is the unkept
+    # state (§5). Backfilled once at 0022 from the admin person's account —
+    # the creator is still the first keeper; NOTHING WRITES IT UNTIL CK-49b,
+    # and nothing reads it until then. Every gathering that belongs to this
+    # group (gatherings.owning_group_id — no writer yet) is kept by this
+    # account and has no keeper of its own; an ARCHIVED group still keeps
+    # its gatherings, and the resolver never reads the archive state (§3.1).
+    keeper_account_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("accounts.id"), nullable=True
+    )
     # Stamped on every successful rename (PATCH /groups/{id}) and by nothing
     # else — the 0004/0010/0014 shape, added WITH the mutability (CK-45,
     # migration 0021). Nullable: a never-renamed group has no meaningful

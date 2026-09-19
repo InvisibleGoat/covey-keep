@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0021"
+EXPECTED_REVISION = "0022"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -243,6 +243,21 @@ async def fk_rule(conn, conname: str):
                 "WHERE conname = :c AND contype = 'f'"
             ),
             {"c": conname},
+        )
+    ).first()
+
+
+async def column_type_and_default(conn, table: str, column: str):
+    """(data_type, column_default) for one column, or None when the column
+    is missing — read with .first() so a missing column FAILs the assertion
+    that reads it rather than passing vacuously over an empty result."""
+    return (
+        await conn.execute(
+            text(
+                "SELECT data_type, column_default FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = :t AND column_name = :c"
+            ),
+            {"t": table, "c": column},
         )
     ).first()
 
@@ -690,6 +705,91 @@ async def verify(conn, ck: Checks) -> None:
     else:
         ck.check(
             False, "groups integrity", "groups / memberships / capability_profiles missing"
+        )
+
+    print("\n-- the keeper shape, half-built (0022, CK-49a) --")
+    # Keeper model v2 §3.1 as columns, and NOTHING reads them yet: this
+    # block asserts the shape 0022 left, not that any consumer uses it —
+    # `kept_gatherings` is still the truth for quota, audience, grace and
+    # the deletion lapse until CK-49b (migration 0023) switches the
+    # consumers and drops the relation. Three columns, all uuid, all
+    # nullable (NULL is a state on each: the unkept rung; "belongs to no
+    # group"), no server default (one would invent a keeper), each an FK
+    # with no delete rule (an account is anonymized and never deleted, a
+    # group is archived and never deleted — nothing cascades from either).
+    # `owning_group_id` has NO WRITER: Arc B's, and every row is NULL.
+    for table, column, target in (
+        ("gatherings", "owning_group_id", "groups"),
+        ("groups", "keeper_account_id", "accounts"),
+        ("gatherings", "keeper_account_id", "accounts"),
+    ):
+        assert_columns(ck, columns, table, present=(column,), nullable=(column,))
+        shape = await column_type_and_default(conn, table, column)
+        ck.check(
+            shape is not None and shape[0] == "uuid",
+            f"{table}.{column} is uuid",
+            "column missing" if shape is None else f"type is {shape[0]!r}",
+        )
+        ck.check(
+            shape is not None and shape[1] is None,
+            f"{table}.{column} has no server default (NULL is a state, never invented)",
+            "column missing" if shape is None else f"default is {shape[1]!r}",
+        )
+        fk = await fk_rule(conn, f"fk_{table}_{column}")
+        ck.check(
+            fk is not None and fk[0] == target,
+            f"{table}.{column} references {target}",
+            f"found {fk!r}",
+        )
+        ck.check(
+            fk is not None and fk[1] == "a",
+            f"{table}.{column} has no delete rule (nothing cascades from an account or a group)",
+            f"delete rule is {fk[1] if fk else None!r}",
+        )
+    # THE CHECK — the record's structural guarantee, named so this script
+    # and the downgrade can address it: a group gathering has no keeper of
+    # its own (at most one of the two columns is set; both NULL is legal).
+    ck.check(
+        "ck_gatherings_group_gathering_has_no_keeper" in check_constraints,
+        "CHECK ck_gatherings_group_gathering_has_no_keeper exists",
+        "constraint missing",
+    )
+
+    print("\n-- keeper shape integrity (CK-49a) --")
+    # Guarded on the COLUMNS (the CK-43 lesson): at 0021 `gatherings`
+    # exists and a query over the new columns is a crash, not a FAIL.
+    if "gatherings" in tables and {"owning_group_id", "keeper_account_id"} <= set(
+        columns["gatherings"]
+    ):
+        # The CHECK's own semantic, read back from the rows: no gathering
+        # carries both a group and its own keeper. Structurally impossible
+        # while the CHECK stands — the failing state is a database where
+        # the constraint was dropped and a row written around it.
+        double_kept = await scalar(
+            conn,
+            "SELECT count(*) FROM gatherings "
+            "WHERE owning_group_id IS NOT NULL AND keeper_account_id IS NOT NULL",
+        )
+        ck.check(
+            double_kept == 0,
+            "no gathering carries both an owning group and its own keeper",
+            f"{double_kept} gathering(s) with both columns set",
+        )
+        # DELIBERATELY NOT ASSERTED: "every gathering's keeper_account_id
+        # equals its kept_gatherings.account_id." True the instant 0022
+        # runs and false for every gathering created afterwards — creation
+        # still writes the relation and nothing writes the column until
+        # CK-49b — so it is a check run ONCE against the deploy in the
+        # migration's own verification (WORKING-ON-NOW), the CK-41 (dy) /
+        # CK-45 run-once precedent, and 0023's re-backfill is what makes
+        # the two agree again before the relation goes. Nor "every
+        # owning_group_id is NULL": true today, legitimately broken by
+        # Arc B, the same precedent.
+    else:
+        ck.check(
+            False,
+            "keeper shape integrity",
+            "gatherings table or its owning_group_id / keeper_account_id columns missing",
         )
 
     print("\n-- named CHECK constraints --")

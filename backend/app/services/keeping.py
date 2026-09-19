@@ -38,6 +38,7 @@ effects (grace stamp, admin relinquishment) land in the caller's
 transaction or not at all.
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Optional
@@ -268,3 +269,105 @@ async def lapse_kept_statuses(
         )
         .values(last_keeper_left_at=now)
     )
+
+
+# --- The keeper shape, half-built (CK-49a; keeper record v2 §3.1) ------------
+#
+# Migration 0022 added `groups.keeper_account_id`, `gatherings.keeper_account_id`
+# and `gatherings.owning_group_id` (the last with no writer), backfilled the
+# two keeper columns once from the relation above, and added the CHECK that
+# keeps a group gathering's keeper out of its own row. NOTHING BELOW THIS LINE
+# IS CALLED BY ANYTHING BUT ITS OWN TESTS: every function above still reads
+# `kept_gatherings`, which stays the truth for quota, audience, grace and the
+# deletion lapse until CK-49b switches the consumers, rewrites this module and
+# drops the relation. The resolver is added first, alone, so the cutover has
+# a tested answer to "who keeps this?" before it changes a single reader.
+
+
+class KeeperSource(str, Enum):
+    """Which rung answered — returned with every resolution, for the reason
+    services/publication.py returns its Source: a consumer handed a bare
+    account id cannot explain itself, and CK-49b's quota sum, storage screen
+    and claim button all need to say WHY this account (record §3.1)."""
+
+    # The owning group's keeper — the gathering belongs to a group, and the
+    # group is the home (§3.1: "a group is a home and holds one keeper").
+    GROUP = "GROUP"
+    # The gathering's own keeper — a standalone gathering in its person's
+    # own home.
+    OWN = "OWN"
+    # Nobody — §5's Unkept rung: read-only, claimable, fully visible. Both
+    # facts were NULL. Whether it is the GROUP that is unkept or the
+    # gathering itself is the caller's row to read (`owning_group_id`);
+    # the resolver reports the rung, not the remedy.
+    UNKEPT = "UNKEPT"
+
+
+@dataclass(frozen=True)
+class KeeperResolution:
+    # The account answerable for the gathering's bytes, or None (UNKEPT).
+    keeper_account_id: Optional[UUID]
+    source: KeeperSource
+
+
+def resolve_keeper(
+    *,
+    group_keeper_account_id: Optional[UUID],
+    own_keeper_account_id: Optional[UUID],
+) -> KeeperResolution:
+    """Who keeps this gathering? The ladder, as a list — the
+    services/publication.py mould: facts in, an answer and where it came
+    from out; no database, no network, no logging.
+
+    group_keeper_account_id  rung 1 — the owning group's `keeper_account_id`,
+                             None when the gathering belongs to no group OR
+                             its group has no keeper (both read as "the
+                             group does not answer")
+    own_keeper_account_id    rung 2 — the gathering's own `keeper_account_id`
+
+    The first rung with an answer wins; both None is UNKEPT (§5), which is
+    a state and not an error — the deploy's "Test Event" is one.
+
+    TWO FACTS, AND `groups.archived_at` IS NOT ONE OF THEM (record §3.1,
+    added at 1.2.2). An archived group still keeps its gatherings: archiving
+    is a visibility and activity state, not a storage one
+    (decisions/2026-09-17-a-group-is-archived-never-deleted.md §4) — the
+    bytes are still stored and someone is still answerable for them, so the
+    keeper resolves through the group exactly as when the group is active.
+    A resolver that consulted the archive state would be deciding a
+    lifecycle question inside a lookup, and lifecycle is the ladder's job
+    (§5): a keeper who archives a group is still its keeper, still billed
+    for it, and stops paying by releasing or lapsing (§4), a different act
+    with a different surface. DO NOT ADD THE PARAMETER. The signature is
+    pinned by test so a later "fix" that threads the archive state through
+    here fails before it ships. (At 0022 the column does not exist either —
+    the archive record is designed, not built — which is why the pin is on
+    this signature and not on a row.)
+
+    Both facts set is REFUSED, not resolved. The CHECK
+    `ck_gatherings_group_gathering_has_no_keeper` makes that row impossible
+    to store, so a caller passing both has read the wrong columns — a group
+    keeper for a gathering that has no group, or a row from a database
+    where the CHECK is gone — and the publication ladder's pass-over-None
+    discipline would hide exactly that mistake. The two-representations
+    defect (database-schema decision 20's class) is the thing the CHECK
+    exists to prevent; the resolver does not quietly prefer one copy.
+
+    NOT CALLED BY ANY CONSUMER YET. CK-49b wires it into the quota sum, the
+    read audience, the grace derivation and the deletion lapse; every
+    consumer asks this function and never reads the column directly
+    (record §3.1). Until then `kept_gatherings` answers every live question.
+    """
+    if group_keeper_account_id is not None and own_keeper_account_id is not None:
+        raise ValueError(
+            "a gathering cannot both belong to a group with a keeper and carry its "
+            "own — the CHECK forbids the row; the caller read the wrong columns"
+        )
+    rungs: tuple[tuple[KeeperSource, Optional[UUID]], ...] = (
+        (KeeperSource.GROUP, group_keeper_account_id),
+        (KeeperSource.OWN, own_keeper_account_id),
+    )
+    for source, answer in rungs:
+        if answer is not None:
+            return KeeperResolution(keeper_account_id=answer, source=source)
+    return KeeperResolution(keeper_account_id=None, source=KeeperSource.UNKEPT)
