@@ -299,7 +299,6 @@ from app.models import (
     Gathering,
     GatheringInvitation,
     GatheringType,
-    KeptGathering,
     Media,
     MediaDerivative,
     MediaLayer,
@@ -820,7 +819,9 @@ def _visible_media(ctx: AuthContext, now: datetime):
 
     Three cases, and only `live` is the gathering's read audience:
       - `live`    → host, keeper, or accepted invitee (the CK-25 audience,
-                    as EXISTS subqueries — list_gatherings' shape).
+                    as EXISTS subqueries — list_gatherings' shape; the
+                    keeper RESOLVED through `keeping.keeps_gathering`, the
+                    ladder as SQL — since CK-49b, never a kept row).
       - `pending` → the UPLOADER or the HOST, and nobody else. A keeper is
                     not an approver; an invitation is visibility of the
                     gathering, not of unreviewed media.
@@ -834,12 +835,7 @@ def _visible_media(ctx: AuthContext, now: datetime):
     person_id = ctx.person.id
     is_host = Gathering.host_account_id == account_id
     is_uploader = Media.uploader_person_id == person_id
-    keeps = exists(
-        select(KeptGathering.id).where(
-            KeptGathering.account_id == account_id,
-            KeptGathering.gathering_id == Media.gathering_id,
-        )
-    )
+    keeps = keeping.keeps_gathering(account_id, Media.gathering_id)
     invited = exists(
         select(GatheringInvitation.id).where(
             GatheringInvitation.person_id == person_id,

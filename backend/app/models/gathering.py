@@ -38,10 +38,14 @@ class Gathering(Base):
     TYPE, never a flag. Look Back stays derived (every occurrence already
     past at creation), no column.
 
-    Lifecycle (CK-13): who holds a gathering alive is the KeptGathering
-    relation — the single source of truth for both the reference count and
-    the quota arithmetic. There is deliberately no is_kept boolean and no
-    keeper-count column here: a second representation could drift."""
+    Lifecycle (CK-13, the keeper a column since CK-49b): who keeps a
+    gathering is `keeper_account_id` below — its own — or its owning
+    group's, resolved through services/keeping.py::resolve_keeper; never
+    both (the CHECK). There is deliberately no is_kept boolean and no
+    second copy anywhere: a second representation could drift. The
+    KeptGathering relation at the bottom of this module was the truth from
+    0009 to CK-49b and is read and written by nothing since; CK-49c drops
+    it."""
 
     __tablename__ = "gatherings"
     __table_args__ = (
@@ -60,8 +64,9 @@ class Gathering(Base):
         # is legal and is the Unkept rung (§5). The gathering_invitations
         # exactly-one-target idiom applied as at-most-one; the two-
         # representations defect (database-schema decision 20's class) made
-        # structural rather than remembered. Nothing reads either column
-        # until CK-49b — kept_gatherings below is still the truth.
+        # structural rather than remembered. Since CK-49b the resolver reads
+        # both columns and every consumer asks it; kept_gatherings below is
+        # a table nothing reads.
         CheckConstraint(
             "owning_group_id IS NULL OR keeper_account_id IS NULL",
             name="group_gathering_has_no_keeper",
@@ -86,11 +91,13 @@ class Gathering(Base):
         ForeignKey("accounts.id"), nullable=True
     )
     # The belongs-to link (decisions/2026-09-02-groups-as-homes.md §3) as a
-    # COLUMN WITH NO WRITER AND NO READER (0022, CK-49a). It exists so the
-    # CHECK in __table_args__ is honest and the keeper resolver's group rung
-    # is testable; the write path, the home-group default and publication
-    # rungs 2 and 3 are Arc B's and none of it is built. Every row is NULL
-    # and stays NULL until then — the 0019 precedent (requires_approval sat
+    # COLUMN WITH NO WRITER (0022, CK-49a). It exists so the CHECK in
+    # __table_args__ is honest and the keeper resolver's group rung is real:
+    # since CK-49b the resolver READS it (services/keeping.py —
+    # resolved_keeper_of, keeps_gathering) to find the group whose keeper
+    # answers; the write path, the home-group default and publication rungs
+    # 2 and 3 are Arc B's and none of it is built. Every row is NULL and
+    # stays NULL until then — the 0019 precedent (requires_approval sat
     # nullable with no writer until CK-44). The class docstring's "the only
     # gathering↔group link is a GatheringInvitation row" is still true of
     # every row in the database, and stops being true the day Arc B writes
@@ -102,10 +109,12 @@ class Gathering(Base):
     # record v2 §3.1). NULL when the gathering belongs to a group (the group's
     # keeper answers, through services/keeping.py::resolve_keeper) and NULL
     # when nobody keeps it (§5's Unkept rung). Backfilled once at 0022 from
-    # kept_gatherings; NOTHING WRITES IT UNTIL CK-49b — keep() still writes a
-    # kept row and nothing here — so a gathering created after 0022 holds a
-    # kept row and NULL here until 0023 re-runs the backfill and drops the
-    # relation. No consumer reads it until then; kept_gatherings is the truth.
+    # kept_gatherings; since CK-49b written by keep() at creation, NULLed by
+    # unkeep() and the deletion lapse, and read by every consumer THROUGH
+    # THE RESOLVER (resolved_keeper_of for a loaded row, keeps_gatherings'
+    # SQL form in the audience criteria) — never directly. A gathering
+    # created between 0022 and CK-49b holds a kept row and NULL here until
+    # CK-49c's 0023 re-runs the backfill before dropping the relation.
     keeper_account_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("accounts.id"), nullable=True
     )
@@ -133,12 +142,16 @@ class Gathering(Base):
     rsvp_list_visibility: Mapped[RSVPListVisibility] = mapped_column(
         RSVP_LIST_VISIBILITY, nullable=False, server_default=text("'INVITEES'")
     )
-    # Grace is ONE timestamp: stamped when the last keeper leaves, cleared
-    # when anyone keeps again. Archive (30d) and delete (90d) are DERIVED from
-    # it plus policy constants in code (services/keeping.py) — never stored:
-    # two stored dates can disagree with each other and with the refcount.
-    # A gathering with at least one keeper always has NULL here, and a
-    # memorial has NULL regardless of keeper count (it never enters grace).
+    # Grace is ONE timestamp: stamped when the keeper leaves (under one
+    # keeper, CK-49b, the same event the relation called "the last keeper
+    # leaving" — the meaning did not move), cleared when anyone keeps again.
+    # Archive (30d) and delete (90d) are DERIVED from it plus policy
+    # constants in code (services/keeping.py) — never stored: two stored
+    # dates can disagree with each other and with the keeper. A gathering
+    # with a keeper always has NULL here, and a memorial has NULL regardless
+    # (it never enters grace). Stays on the GATHERING under v2 (record §12
+    # item 9's gathering half, decided at CK-49b); where a GROUP's stamp
+    # lives is Arc B's, with the first gathering that resolves through one.
     last_keeper_left_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -166,13 +179,19 @@ class Gathering(Base):
 
 
 class KeptGathering(Base):
-    """One account keeping one gathering — THE single source of truth for
-    both the quota arithmetic and the reference count (roadmap §2). Quota is
-    a sum over these rows computed at request time; a gathering lives while
-    at least one of these rows exists. No other representation of "is kept"
-    may exist anywhere — no boolean on gatherings, no counter column that
-    can drift. Attended is a separate, permanent fact (attendance_records);
-    kept is this revocable status — never conflate them (keeper record §2.4)."""
+    """One account keeping one gathering — the single source of truth for
+    the quota arithmetic and the reference count from 0009 (CK-13) until
+    CK-49b, and READ AND WRITTEN BY NOTHING SINCE: the keeper is
+    `Gathering.keeper_account_id` (or the owning group's), resolved through
+    services/keeping.py. The table stays through CK-49b's deploy on purpose
+    — Render runs the pre-deploy migration while the old instance still
+    serves, and the old code reads this table — and CK-49c drops it at 0023
+    after re-running 0022's backfill over the rows creation wrote here
+    between 0022 and the cutover. Its rows are a snapshot from that moment;
+    do not read them, do not write them "for safety" (two representations
+    is decision 20's defect). What survives it: attended is a separate,
+    permanent fact (attendance_records); kept is a revocable status — never
+    conflate them (keeper record §2.4)."""
 
     __tablename__ = "kept_gatherings"
     __table_args__ = (

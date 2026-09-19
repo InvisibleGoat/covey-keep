@@ -38,11 +38,16 @@ class Group(Base):
     # and the two land on different spines). The first account fact on this
     # table, and it authorizes nothing about membership. NULL is the unkept
     # state (§5). Backfilled once at 0022 from the admin person's account —
-    # the creator is still the first keeper; NOTHING WRITES IT UNTIL CK-49b,
-    # and nothing reads it until then. Every gathering that belongs to this
+    # the creator is still the first keeper; since CK-49b read by the
+    # resolver's first rung (services/keeping.py — unreachable until Arc B
+    # writes gatherings.owning_group_id) and NULLed by the deletion lapse
+    # where the anonymized account held it; nothing else writes it (keeping
+    # a group is Arc B's surface). Every gathering that belongs to this
     # group (gatherings.owning_group_id — no writer yet) is kept by this
     # account and has no keeper of its own; an ARCHIVED group still keeps
     # its gatherings, and the resolver never reads the archive state (§3.1).
+    # No lapse stamp lives here yet: where a group's stamp lives is v2 §12
+    # item 9's group half, Arc B's to decide with its first subject.
     keeper_account_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("accounts.id"), nullable=True
     )

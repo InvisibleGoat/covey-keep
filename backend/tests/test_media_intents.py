@@ -46,7 +46,6 @@ from app.config import settings
 from app.main import app
 from app.models import (
     Gathering,
-    KeptGathering,
     Media,
     MediaDerivative,
     MediaLayer,
@@ -317,16 +316,15 @@ async def test_audience_is_the_read_audience_and_never_keeping(
     )
     headers_stranger = await _signed_in_headers(client, capsys, "stranger@example.com")
 
-    # The invitee keeps nothing — no kept row — and uploads regardless:
-    # contribution is never gated on keeping (terminology record §5).
+    # The invitee keeps nothing — the gathering's keeper is the host's
+    # account, never the invitee's (the column, since CK-49b) — and uploads
+    # regardless: contribution is never gated on keeping (terminology
+    # record §5).
     async with db_session_factory() as db:
         invitee_account = await _account_for(db, "cousin@example.com")
-        kept = await db.scalar(
-            select(func.count())
-            .select_from(KeptGathering)
-            .where(KeptGathering.account_id == invitee_account.id)
-        )
-        assert kept == 0
+        gathering = await db.get(Gathering, created["id"])
+        assert gathering.keeper_account_id is not None
+        assert gathering.keeper_account_id != invitee_account.id
     assert (await _intents(client, headers_invitee, created["id"], [_item()])).status_code == 201
     assert (await _intents(client, headers_host, created["id"], [_item()])).status_code == 201
 

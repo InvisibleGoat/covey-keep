@@ -48,7 +48,6 @@ from app.models import (
     Person,
     PublicationState,
 )
-from app.services import keeping
 from app.services.storage import PRESIGN_TTL, published_key
 from tests.test_gatherings import _account_for, _create, _signed_in_headers
 from tests.test_invitations import _accept, _invite_token
@@ -104,14 +103,16 @@ async def _cast(client, capsys, db_session_factory) -> Cast:
         headers = await _signed_in_headers(client, capsys, address)
         await _accept(client, headers, token)
         invitee_headers[address] = headers
-    # A keeper who is not the host: no keep endpoint exists yet, so the kept
-    # row is written through the service — the same path creation uses.
+    # A keeper who is not the host. Under one keeper (CK-49b) the creator
+    # is already the keeper, so this is made by MOVING the column — host ≠
+    # keeper, the sponsorship shape: keep() refuses a second keeper, and
+    # transfer has no surface yet.
     keeper = await _signed_in_headers(client, capsys, KEEPER)
     async with db_session_factory() as db:
         account = await _account_for(db, KEEPER)
         gathering = await db.get(Gathering, gathering_id)
         assert gathering.host_account_id != account.id
-        await keeping.keep(db, account, gathering)
+        gathering.keeper_account_id = account.id
         await db.commit()
         uploader_person_id = (
             await db.execute(select(Person.id).where(Person.email == UPLOADER))

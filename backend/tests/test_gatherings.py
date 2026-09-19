@@ -1,7 +1,8 @@
 """CK-16 — gathering and occurrence CRUD, the keeper schema's first surface.
 
 The load-bearing pins: creation births the gathering, its occurrences, and the
-creator's kept_gatherings row in ONE transaction (creator = first keeper +
+creator written as its keeper (`keeper_account_id`, since CK-49b — a
+`kept_gatherings` row until then) in ONE transaction (creator = keeper +
 admin, keeper record §9.2); `requires_approval` is NULL because the
 application set NOTHING (CK-41 — nobody has decided; the publication ladder
 resolves the effective value the body carries, and the column has no server
@@ -20,7 +21,6 @@ from app.models import (
     AccountKind,
     Gathering,
     GatheringType,
-    KeptGathering,
     Occurrence,
     Person,
     PublicationState,
@@ -100,11 +100,10 @@ async def test_create_births_gathering_keeper_and_admin_together(
         account = await _account_for(db, address)
         gathering = (await db.execute(select(Gathering))).scalars().one()
         # The three facts of the creation transaction (keeper record §9.2):
-        # exactly one kept row, host held by the creator, and no grace stamp
-        # — the gathering was never keeperless, even transiently.
-        kept = (await db.execute(select(KeptGathering))).scalars().one()
-        assert kept.account_id == account.id
-        assert kept.gathering_id == gathering.id
+        # the creator as keeper (the column, since CK-49b), host held by the
+        # creator, and no grace stamp — the gathering was never keeperless,
+        # even transiently.
+        assert gathering.keeper_account_id == account.id
         assert gathering.host_account_id == account.id
         assert gathering.created_by_account_id == account.id
         assert gathering.last_keeper_left_at is None
@@ -1044,8 +1043,8 @@ async def test_account_deletion_lapses_an_api_created_gathering(
 ):
     """CK-13 recorded the behaviour against fixtures; this is the first time
     the path has a REAL subject — a gathering born through POST /gatherings.
-    The kept row goes, admin is relinquished, grace is stamped, and the
-    gathering itself (and its dates) survive: deletion is anonymization,
+    The keeper column goes NULL, admin is relinquished, grace is stamped, and
+    the gathering itself (and its dates) survive: deletion is anonymization,
     never cascade."""
     address = "departing@example.com"
     headers = await _signed_in_headers(client, capsys, address)
@@ -1057,11 +1056,9 @@ async def test_account_deletion_lapses_an_api_created_gathering(
     ).status_code == 204
 
     async with db_session_factory() as db:
-        assert (
-            await db.scalar(select(func.count()).select_from(KeptGathering))
-        ) == 0
         gathering = (await db.execute(select(Gathering))).scalars().one()
         assert str(gathering.id) == created["id"]
+        assert gathering.keeper_account_id is None
         assert gathering.host_account_id is None
         assert gathering.last_keeper_left_at is not None
         assert gathering.last_keeper_left_at >= now
@@ -1171,7 +1168,11 @@ async def test_the_switch_is_the_hosts_alone_and_the_refusal_is_the_gathering_40
     gathering_id = created["id"]
     async with db_session_factory() as db:
         gathering = (await db.execute(select(Gathering))).scalars().one()
-        await keep(db, await _account_for(db, keeper_address), gathering)
+        # Under one keeper (CK-49b) the creator is already the keeper, so a
+        # keeper who is not the host is made by MOVING the column — host ≠
+        # keeper, the sponsorship shape; keep() refuses a second keeper and
+        # transfer has no surface yet.
+        gathering.keeper_account_id = (await _account_for(db, keeper_address)).id
         await db.commit()
 
     body = {"requires_approval_override": True}

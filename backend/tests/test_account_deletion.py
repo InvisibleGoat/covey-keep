@@ -222,11 +222,14 @@ async def test_contributions_survive_deletion(client, capsys, db_session_factory
 
 async def test_deletion_lapses_kept_statuses(client, capsys, db_session_factory):
     """CK-13, keeper model §8: an anonymized person's kept statuses lapse —
-    their kept rows are hard-deleted, admin is relinquished, and a gathering
-    that just lost its LAST keeper enters grace exactly as an unkeep would put
-    it there. A gathering someone else still keeps is untouched: the whole
-    point of reference counting is that no single person's deletion can take
-    an archive from the people who keep it."""
+    the keeper column goes NULL wherever their account held it, host is
+    relinquished, and a gathering that just lost its keeper enters grace
+    exactly as an unkeep would put it there. A gathering someone ELSE keeps
+    — which the person merely hosted — keeps its keeper and stays out of
+    grace: no single person's deletion can take an archive from the person
+    who keeps it. (Since CK-49b the keeper is `keeper_account_id`, one per
+    gathering; the old fixture's "kept by both" is the sponsorship shape
+    now — host and keeper two different accounts.)"""
     address = "lastkeeper@example.com"
     headers = await _signed_in_headers(client, capsys, address)
     now = datetime.now(timezone.utc)
@@ -240,7 +243,7 @@ async def test_deletion_lapses_kept_statuses(client, capsys, db_session_factory)
         other = Account(kind=AccountKind.PERSON)
         db.add(other)
         await db.flush()
-        # Solo-kept, and hosted, by the person being deleted.
+        # Kept, and hosted, by the person being deleted.
         solo = Gathering(
             created_by_account_id=account.id,
             host_account_id=account.id,
@@ -248,53 +251,50 @@ async def test_deletion_lapses_kept_statuses(client, capsys, db_session_factory)
             title="solo-kept",
             publication_state=PublicationState.LIVE,
         )
-        # Kept by the person AND by someone else.
-        shared = Gathering(
+        # Hosted by the person, kept by someone else.
+        sponsored = Gathering(
             created_by_account_id=account.id,
+            host_account_id=account.id,
             gathering_type=GatheringType.POTLUCK,
-            title="shared-kept",
+            title="kept-by-another",
             publication_state=PublicationState.LIVE,
         )
-        db.add_all([solo, shared])
+        db.add_all([solo, sponsored])
         await db.flush()
         await keep(db, account, solo)
-        await keep(db, account, shared)
-        await keep(db, other, shared)
+        await keep(db, other, sponsored)
         await db.commit()
         account_id, other_id = account.id, other.id
-        solo_id, shared_id = solo.id, shared.id
+        solo_id, sponsored_id = solo.id, sponsored.id
 
     assert (await client.post("/me/delete", json=DELETE_BODY, headers=headers)).status_code == 204
 
     async with db_session_factory() as db:
-        # Every kept row of the deleted account is gone; the other keeper's stands.
+        # The deleted account keeps nothing; the other keeper's column stands.
         assert (
             await db.scalar(
                 select(func.count())
-                .select_from(KeptGathering)
-                .where(KeptGathering.account_id == account_id)
+                .select_from(Gathering)
+                .where(Gathering.keeper_account_id == account_id)
             )
         ) == 0
-        assert (
-            await db.scalar(
-                select(func.count())
-                .select_from(KeptGathering)
-                .where(KeptGathering.account_id == other_id)
-            )
-        ) == 1
         solo_row = (
             await db.execute(select(Gathering).where(Gathering.id == solo_id))
         ).scalars().one()
-        shared_row = (
-            await db.execute(select(Gathering).where(Gathering.id == shared_id))
+        sponsored_row = (
+            await db.execute(select(Gathering).where(Gathering.id == sponsored_id))
         ).scalars().one()
-        # The solo-kept gathering lost its last keeper: stamped into grace,
+        # The gathering the person kept lost its keeper: stamped into grace,
         # host relinquished (claimable, not held by a dead account).
+        assert solo_row.keeper_account_id is None
         assert solo_row.last_keeper_left_at is not None
         assert solo_row.last_keeper_left_at >= now
         assert solo_row.host_account_id is None
-        # The shared gathering lives on, unstamped, with its other keeper.
-        assert shared_row.last_keeper_left_at is None
+        # The gathering someone else keeps lives on, unstamped, with its
+        # keeper — and its host relinquished all the same (kept or not).
+        assert sponsored_row.keeper_account_id == other_id
+        assert sponsored_row.last_keeper_left_at is None
+        assert sponsored_row.host_account_id is None
         # The accounts row itself survives (no PII; the gatherings still
         # reference it as their historical creator).
         assert (
@@ -314,7 +314,12 @@ async def test_deletion_relinquishes_group_admin_and_retains_memberships(
     is NOT promoted, and every `memberships` row is RETAINED, still
     attributed to the anonymized person — the retention default: nothing
     cascades from a person. `updated_at` is untouched: a relinquishment is
-    not a rename."""
+    not a rename. Since CK-49b the same leg relinquishes the group's KEEPER
+    (`groups.keeper_account_id`, an account fact) wherever the deleted
+    account held it — an anonymized account cannot answer for a home's
+    bytes — and writes no stamp on the group (where a group's lapse stamp
+    lives is Arc B's, with the first gathering that resolves through one);
+    a group someone else keeps is untouched."""
     address = "groupadmin@example.com"
     other_address = "othermember@example.com"
     headers = await _signed_in_headers(client, capsys, address)
@@ -330,20 +335,32 @@ async def test_deletion_relinquishes_group_admin_and_retains_memberships(
         other_id = (
             await db.execute(select(Person.id).where(Person.email == other_address))
         ).scalar_one()
+        account_id = (
+            await db.execute(select(Person.account_id).where(Person.id == person_id))
+        ).scalar_one()
+        other_account_id = (
+            await db.execute(select(Person.account_id).where(Person.id == other_id))
+        ).scalar_one()
         profile = (
             await db.execute(
                 select(CapabilityProfile).where(CapabilityProfile.name == "household-default")
             )
         ).scalars().one()
-        # (2) A group someone else administers, with the person as BACKUP
-        # admin and a member — constructed directly (nothing sets the backup
-        # column or adds a second member through the API yet).
+        # The person keeps the group they created — the 0022 backfill's
+        # shape (the creator is the first keeper); the router writes no
+        # keeper yet, so it is set here.
+        own = (await db.execute(select(Group).where(Group.id == own_group_id))).scalars().one()
+        own.keeper_account_id = account_id
+        # (2) A group someone else administers AND keeps, with the person as
+        # BACKUP admin and a member — constructed directly (nothing sets the
+        # backup column or adds a second member through the API yet).
         backed = Group(
             group_type=GroupType.HOUSEHOLD,
             capability_profile_id=profile.id,
             name="Other family",
             admin_person_id=other_id,
             backup_admin_person_id=person_id,
+            keeper_account_id=other_account_id,
         )
         db.add(backed)
         await db.flush()
@@ -361,15 +378,18 @@ async def test_deletion_relinquishes_group_admin_and_retains_memberships(
     async with db_session_factory() as db:
         own = (await db.execute(select(Group).where(Group.id == own_group_id))).scalars().one()
         # Relinquished: the group survives, administered by nobody — never
-        # by "a former member".
+        # by "a former member" — and kept by nobody: the unkept state, with
+        # no stamp anywhere on the group to say when.
         assert own.admin_person_id is None
         assert own.backup_admin_person_id is None
+        assert own.keeper_account_id is None
         assert own.updated_at is None
         backed_row = (await db.execute(select(Group).where(Group.id == backed_id))).scalars().one()
-        # The other person's admin stands; the deleted person's backup slot
-        # is cleared and NOT promoted into anything.
+        # The other person's admin and keeper stand; the deleted person's
+        # backup slot is cleared and NOT promoted into anything.
         assert backed_row.admin_person_id == other_id
         assert backed_row.backup_admin_person_id is None
+        assert backed_row.keeper_account_id == other_account_id
         assert backed_row.updated_at is None
         # Every membership row retained, still attributed to the anonymized
         # person (row counts, not trust).

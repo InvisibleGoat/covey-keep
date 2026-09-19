@@ -15,7 +15,9 @@ class Account(Base):
     be foreign-keyed to, would force every quota query to branch, and would
     turn a third account kind into a column plus a CHECK revision instead of
     a row. Quota itself is never stored — it is computed at request time over
-    what the account keeps (the kept relation is CK-13)."""
+    what the account keeps (the gatherings that resolve to it through
+    `keeper_account_id` on gatherings and groups — CK-49b; the kept relation
+    of CK-13 is read by nothing since)."""
 
     __tablename__ = "accounts"
 

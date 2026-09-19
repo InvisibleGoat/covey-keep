@@ -1,21 +1,37 @@
-"""CK-13 — the keeper lifecycle: kept relation, derived grace, memorial
-exemption, admin relinquishment.
+"""CK-13 — the keeper lifecycle: keep and unkeep, derived grace, memorial
+exemption, host relinquishment — rewritten at CK-49b against the keeper
+COLUMN (keeper record v2 §3.1).
 
-`kept_gatherings` is the single source of truth for the refcount and the
-quota arithmetic; grace is derived from one timestamp plus policy constants;
-memorials are exempt by TYPE and gated by a named decedent. The deletion-path
-half of the lifecycle (kept statuses lapsing on anonymization) is pinned in
-test_account_deletion.py, next to the rest of the deletion contract.
+The keeper is `gatherings.keeper_account_id` (or the owning group's),
+answered through `resolve_keeper`; `kept_gatherings` is still in the schema
+and read and written by nothing (CK-49c drops it — the shape test at the
+bottom dies with it). Grace is derived from one timestamp plus policy
+constants, and the 30/90 assertions below are UNCHANGED because the
+constants are: the ladder is new behaviour and arrives with its surfaces
+(v2 §5), and `grace_state` is inert — nothing but this file calls it.
+Memorials are exempt by TYPE and gated by a named decedent. The
+deletion-path half (keeping lapsing on anonymization) is pinned in
+test_account_deletion.py, next to the rest of the deletion contract; the
+resolver's group rung, the SQL form of the ladder and the cutover's own
+pins are in test_keeper_shape.py.
 """
 
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.models import Account, AccountKind, Gathering, GatheringType, KeptGathering, PublicationState
-from app.services.keeping import GraceState, account_usage, grace_state, keep, unkeep
+from app.services.keeping import (
+    GraceState,
+    KeeperSource,
+    account_usage,
+    grace_state,
+    keep,
+    resolved_keeper_of,
+    unkeep,
+)
 
 NOW = datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc)
 
@@ -50,24 +66,40 @@ async def _mk_gathering(
     return gathering
 
 
-# --- the kept relation --------------------------------------------------------
+# --- one keeper -----------------------------------------------------------------
 
 
-async def test_keeping_twice_is_rejected_by_the_unique_constraint(db_session_factory):
+async def test_a_second_keep_is_refused_and_nothing_moves(db_session_factory):
+    # The relation's unique constraint refused the same account twice; the
+    # column refuses ANY second keep — a second account is a transfer (v2
+    # §4), which has its own act and no surface yet. Nothing is written on
+    # refusal: the keeper and the stamp read exactly as before it.
     async with db_session_factory() as db:
-        account = await _mk_account(db)
+        account, another = await _mk_account(db), await _mk_account(db)
         gathering = await _mk_gathering(db)
-        await keep(db, account, gathering)
-        with pytest.raises(IntegrityError):
+        resolution = await keep(db, account, gathering)
+        assert resolution.keeper_account_id == account.id
+        assert resolution.source is KeeperSource.OWN
+        with pytest.raises(ValueError):
             await keep(db, account, gathering)
+        with pytest.raises(ValueError):
+            await keep(db, another, gathering)
+        assert gathering.keeper_account_id == account.id
+        assert gathering.last_keeper_left_at is None
 
 
-async def test_unkeep_without_a_kept_row_is_loud(db_session_factory):
+async def test_unkeep_by_a_non_keeper_is_loud(db_session_factory):
     async with db_session_factory() as db:
-        account = await _mk_account(db)
+        account, another = await _mk_account(db), await _mk_account(db)
         gathering = await _mk_gathering(db)
+        # Nobody keeps it: loud, as before.
         with pytest.raises(LookupError):
             await unkeep(db, account, gathering)
+        # Somebody else keeps it: just as loud, and the keeper is untouched.
+        await keep(db, account, gathering)
+        with pytest.raises(LookupError):
+            await unkeep(db, another, gathering)
+        assert gathering.keeper_account_id == account.id
 
 
 # --- grace: one timestamp, derived state -------------------------------------
@@ -87,19 +119,25 @@ async def test_last_unkeep_stamps_and_a_new_keep_clears(db_session_factory):
         await db.commit()
 
 
-async def test_a_gathering_with_keepers_never_carries_the_stamp(db_session_factory):
-    # THE invariant: at least one keeper ⇒ last_keeper_left_at IS NULL.
+async def test_a_kept_gathering_never_carries_the_stamp_and_resolves_to_its_keeper(
+    db_session_factory,
+):
+    # THE invariant, restated for one keeper: a keeper ⇒ last_keeper_left_at
+    # IS NULL, and the resolver names that keeper (its own — rung 2); the
+    # keeper leaving IS the last keeper leaving, so the stamp lands then and
+    # the row resolves UNKEPT — a state, not an error.
     async with db_session_factory() as db:
-        first, second = await _mk_account(db), await _mk_account(db)
+        account = await _mk_account(db)
         gathering = await _mk_gathering(db)
-        await keep(db, first, gathering)
-        await keep(db, second, gathering)
+        await keep(db, account, gathering)
         assert gathering.last_keeper_left_at is None
-        # One keeper leaving is not the LAST keeper leaving.
-        await unkeep(db, first, gathering, now=NOW)
-        assert gathering.last_keeper_left_at is None
-        await unkeep(db, second, gathering, now=NOW)
+        resolution = await resolved_keeper_of(db, gathering)
+        assert resolution.keeper_account_id == account.id
+        assert resolution.source is KeeperSource.OWN
+        await unkeep(db, account, gathering, now=NOW)
         assert gathering.last_keeper_left_at == NOW
+        assert gathering.keeper_account_id is None
+        assert (await resolved_keeper_of(db, gathering)).source is KeeperSource.UNKEPT
         await db.commit()
 
 
@@ -132,8 +170,8 @@ async def test_memorial_never_enters_grace(db_session_factory):
         )
         await keep(db, account, memorial)
         await unkeep(db, account, memorial, now=NOW)
-        # The last keeper just left — and the stamp stays NULL: a memorial
-        # never enters grace, whatever its keeper count.
+        # The keeper just left — and the stamp stays NULL: a memorial never
+        # enters grace.
         assert memorial.last_keeper_left_at is None
         assert grace_state(memorial, NOW + timedelta(days=200)) is GraceState.LIVE
         await db.commit()
@@ -165,7 +203,7 @@ async def test_memorial_requires_a_decedent_and_a_non_memorial_rejects_one(
         assert memorial.id is not None
 
 
-# --- quota: computed fresh over kept gatherings -------------------------------
+# --- quota: computed fresh over the gatherings that resolve to the account ----
 
 
 async def test_account_usage_sums_only_kept_gatherings_and_tracks_total_bytes(
@@ -205,27 +243,32 @@ async def test_memorial_is_excluded_from_account_usage(db_session_factory):
         await db.commit()
 
 
-# --- admin and the claimable state --------------------------------------------
+# --- host and the claimable state ------------------------------------------------
 
 
-async def test_unkeep_relinquishes_admin_only_when_the_departing_account_held_it(
+async def test_unkeep_relinquishes_host_only_when_the_departing_account_held_it(
     db_session_factory,
 ):
     async with db_session_factory() as db:
-        admin, other = await _mk_account(db), await _mk_account(db)
-        gathering = await _mk_gathering(db, host_account_id=admin.id)
-        await keep(db, admin, gathering)
-        await keep(db, other, gathering)
-        # A non-admin keeper leaving changes nothing about admin.
-        await unkeep(db, other, gathering, now=NOW)
-        assert gathering.host_account_id == admin.id
-        await keep(db, other, gathering)
-        # The admin reverting to observer relinquishes admin in the same
-        # transaction — NULL is the claimable state, and `other` (still a
-        # keeper) is who the later claim flow will offer it to.
-        await unkeep(db, admin, gathering, now=NOW)
-        assert gathering.host_account_id is None
-        assert gathering.last_keeper_left_at is None  # other still keeps it
+        host, other = await _mk_account(db), await _mk_account(db)
+        # Hosted by one account and kept by another — the sponsorship shape
+        # (grandma keeps, her grandson hosts), legal under one keeper because
+        # host and keeper are two facts.
+        sponsored = await _mk_gathering(db, host_account_id=host.id)
+        await keep(db, other, sponsored)
+        await unkeep(db, other, sponsored, now=NOW)
+        # The keeper leaving changes nothing about the host; the gathering
+        # is stamped (its keeper left) and still hosted.
+        assert sponsored.host_account_id == host.id
+        assert sponsored.last_keeper_left_at == NOW
+        # Hosted AND kept by the same account: the host reverting to
+        # observer relinquishes the host in the same flush — NULL is the
+        # claimable state.
+        own = await _mk_gathering(db, host_account_id=host.id)
+        await keep(db, host, own)
+        await unkeep(db, host, own, now=NOW)
+        assert own.host_account_id is None
+        assert own.last_keeper_left_at == NOW
         await db.commit()
 
 
@@ -291,8 +334,11 @@ async def test_0009_constraint_names_and_no_steward_orphans(db_session_factory):
 
 
 async def test_kept_at_defaults_server_side(db_session_factory):
-    # The service always sets kept_at explicitly; the server default exists so
-    # the column can never silently be NULL through any other write path.
+    # The table is still in the schema (CK-49b left it for the deploy
+    # window; CK-49c drops it, and this test with it) and its shape is
+    # unchanged: the server default exists so the column can never silently
+    # be NULL through any write path. Nothing in the app writes here since
+    # the cutover — this is a rolled-back probe of the schema, not a keep.
     async with db_session_factory() as db:
         account = await _mk_account(db)
         gathering = await _mk_gathering(db)

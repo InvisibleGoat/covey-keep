@@ -1,7 +1,7 @@
 """Gathering and occurrence CRUD (CK-16) — the keeper schema's first surface.
 
 The load-bearing rule is the creation transaction: a gathering, its
-occurrences, and the creator's kept_gatherings row are born TOGETHER
+occurrences, and the creator written as its keeper are born TOGETHER
 (keeper record §9.2 — creator is first keeper and host). A gathering must
 never exist with zero keepers, not even transiently within the request, so
 creation routes through services/keeping.py::keep and commits once.
@@ -80,14 +80,13 @@ from app.models import (
     Gathering,
     GatheringInvitation,
     GatheringType,
-    KeptGathering,
     Occurrence,
     PublicationState,
     RSVP,
     RSVPListVisibility,
 )
 from app.services import publication
-from app.services.keeping import keep
+from app.services.keeping import keep, keeps_gathering, resolved_keeper_of
 
 router = APIRouter(prefix="", tags=["gatherings"])
 
@@ -486,20 +485,17 @@ async def _gathering_for_read(
     """Reads require the caller's account to keep the gathering, the caller's
     person to hold an accepted invitation (CK-25 — an invitation grants
     visibility, nothing more), or host. Checked against the
-    keeper/host/invitation facts, never creatorship."""
+    keeper/host/invitation facts, never creatorship. "Keep" is the
+    RESOLVED keeper (CK-49b — `services/keeping.py::resolved_keeper_of`:
+    the owning group's keeper, else the gathering's own; never a
+    `kept_gatherings` row, which nothing reads since the cutover)."""
     gathering = await db.get(Gathering, gathering_id)
     if gathering is None:
         raise _not_found()
     account_id = ctx.person.account_id
     if gathering.host_account_id == account_id:
         return gathering
-    kept = await db.scalar(
-        select(KeptGathering.id).where(
-            KeptGathering.account_id == account_id,
-            KeptGathering.gathering_id == gathering_id,
-        )
-    )
-    if kept is not None:
+    if (await resolved_keeper_of(db, gathering)).keeper_account_id == account_id:
         return gathering
     # Keeping is an ACCOUNT fact; an invitation targets the PERSON — the
     # invitee never chose to keep anything, so the checks live on different
@@ -661,12 +657,10 @@ async def list_gatherings(
         )
         .subquery("lead_occurrence")
     )
-    kept_by_caller = exists(
-        select(KeptGathering.id).where(
-            KeptGathering.account_id == ctx.person.account_id,
-            KeptGathering.gathering_id == Gathering.id,
-        )
-    )
+    # The resolver's ladder as SQL (CK-49b): the gathering resolves to the
+    # caller's account — through its group's keeper, else its own. Still an
+    # EXISTS inside the one statement (the statement-count pin holds).
+    kept_by_caller = keeps_gathering(ctx.person.account_id, Gathering.id)
     invited_person = exists(
         select(GatheringInvitation.id).where(
             GatheringInvitation.person_id == ctx.person.id,

@@ -1,25 +1,50 @@
-"""Keeping — the keeper-model lifecycle (CK-13, keeper record §2.3–2.7, §8).
+"""Keeping — who keeps a gathering, and what follows from it (CK-13; rewritten
+against the keeper column at CK-49b, keeper record v2 §3.1).
 
-The `kept_gatherings` relation is the SINGLE source of truth for both the
-reference count and the quota arithmetic. Everything here derives from it at
-request time:
+THE KEEPER IS A COLUMN, RESOLVED THROUGH THE HOME. A standalone gathering
+carries its own keeper (`gatherings.keeper_account_id`); a gathering that
+belongs to a group has none of its own and is kept by the group's
+(`groups.keeper_account_id`, reached through `gatherings.owning_group_id`);
+both NULL is the Unkept rung (§5) — a state, never an error. `resolve_keeper`
+is the ladder, and EVERY consumer asks it: a caller holding a row goes
+through `resolved_keeper_of`, a WHERE clause that decides which rows are
+fetched at all goes through `keeps_gathering` (the same ladder as SQL — see
+its docstring for why that is safe and what pins it). Nothing reads the
+column directly, and nothing outside this module writes it.
 
-- Quota usage is a sum over an account's kept gatherings' `total_bytes` —
-  computed fresh on every call, never stored (roadmap §2). `total_bytes`
-  itself is a maintained fact about one gathering, not a cached answer to a
-  question about an account. Since CK-34 the sum also carries the bytes IN
-  FLIGHT on those gatherings — the declared size of every upload that has
-  been issued a presigned PUT and has not yet been published or failed
-  (media pipeline record §6.6: a RESERVATION, not a check — fifty
-  concurrent intents each checked against the same headroom would overshoot
-  it by forty-nine files). `total_bytes` moves only at publish, by the sum
-  over the derivative rows; the reservation releases at that moment, or
-  when the row fails or is reaped — never earlier. THIS FUNCTION IS THE ONE
-  QUOTA PATH: the reservation lives inside it rather than beside it, for
-  the reason CK-13 banned a second refcount.
+`kept_gatherings` IS STILL IN THE DATABASE AND NOTHING HERE READS OR WRITES
+IT. The table stays through this phase on purpose: Render runs the web
+service's pre-deploy migration while the OLD instance is still serving, so a
+migration that dropped it would leave the old code 500ing on every gathering
+read until the new instance took over. CK-49c drops it — after re-running
+0022's backfill over the rows created between 0022 and this phase, when
+creation still wrote the relation. Until then its rows are a snapshot that
+stopped being maintained the moment this deployed; do not read them for
+anything, and do not write them "for safety" — two representations that can
+disagree is the defect database-schema decision 20 exists to ban.
+
+What is DERIVED, and never stored, is unchanged in its rule:
+
+- Quota usage is a sum over the gatherings that RESOLVE to an account —
+  computed fresh on every call (roadmap §2). `total_bytes` itself is a
+  maintained fact about one gathering, not a cached answer to a question
+  about an account. Since CK-34 the sum also carries the bytes IN FLIGHT on
+  those gatherings — the declared size of every upload that has been issued
+  a presigned PUT and has not yet been published or failed (media pipeline
+  record §6.6: a RESERVATION, not a check — fifty concurrent intents each
+  checked against the same headroom would overshoot it by forty-nine
+  files). `total_bytes` moves only at publish, by the sum over the
+  derivative rows; the reservation releases at that moment, or when the row
+  fails or is reaped — never earlier. `account_usage` IS THE ONE QUOTA PATH:
+  the reservation lives inside it rather than beside it, for the reason
+  CK-13 banned a second refcount. (Which account the UPLOAD GATE checks is a
+  separate question — still the host's, CK-34; the gate moving to the
+  resolved keeper is v2 §6 and its own phase.)
 - Grace state is derived from ONE timestamp (`last_keeper_left_at`) plus the
-  policy constants below — never persisted. Two stored dates could disagree
-  with each other and with the refcount; a derived state cannot.
+  policy constants below — never persisted. Under one keeper "the last
+  keeper left" and "the keeper left" are the same event, so the stamp's
+  meaning did not move. The 30/90 thresholds are v2 §5's ladder in design
+  and inert in code — see the note on `grace_state`.
 - A memorial is exempt by TYPE (keeper record §9.4): quota-free and never in
   grace, keyed on `gathering_type == MEMORIAL`, never a flag. Exempt from
   the ACCOUNT quota is not unbounded: a memorial carries its own ceiling
@@ -29,13 +54,15 @@ request time:
   and stopping.
 
 Live callers: gathering creation (api/gatherings.py, CK-16) via keep — the
-creator becomes first keeper in the same transaction that births the
-gathering — the account deletion path (profile.py) via
+creator becomes keeper in the same transaction that births the gathering —
+the read audience (api/gatherings.py::_gathering_for_read via
+resolved_keeper_of; the list statement and api/media.py::_visible_media via
+keeps_gathering), the account deletion path (profile.py) via
 lapse_kept_statuses, and the upload-intent endpoint (api/media.py, CK-34)
 via account_usage / account_quota / gathering_bytes. Every function that
-writes leaves the commit to the caller, so the kept-row change and its side
-effects (grace stamp, admin relinquishment) land in the caller's
-transaction or not at all.
+writes leaves the commit to the caller, so the keeper write and its side
+effects (grace stamp, host relinquishment) land in the caller's transaction
+or not at all.
 """
 
 from dataclasses import dataclass
@@ -44,27 +71,39 @@ from enum import Enum
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import delete, exists, func, select, update
+from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.models import (
     Account,
     Gathering,
     GatheringType,
-    KeptGathering,
+    Group,
     Media,
     MediaStatus,
 )
 
-# Grace policy (keeper record §2.7): when the last keeper leaves, 30 days
+# Grace policy (keeper record §2.7): when the keeper leaves, 30 days
 # archived-but-recoverable, deletable at 90. Constants in code, thresholds
 # derived — never stored per-gathering.
+#
+# DELIBERATELY UNTOUCHED AT CK-49b. Keeper record v2 §5 replaces these two
+# rungs with five — Kept → Dunning → Unkept → Frozen → Deleted, 360 days on
+# paid — and that is new BEHAVIOUR, not a representation swap: it arrives
+# with the surfaces that give it entrances and exits (the in-app alert, the
+# claim button, the storage screen), and nothing past Frozen ships until
+# export exists (§9). These constants and grace_state are INERT either way:
+# nothing outside tests/test_keeping.py calls grace_state (verified
+# 2026-09-18). Do not "fix" the numbers here ahead of the ladder.
 ARCHIVE_AFTER = timedelta(days=30)
 DELETE_AFTER = timedelta(days=90)
 
 # Entitlement (keeper record §9.1): the free tier is 10 GB, and every account
-# is on it — the paid ladder (50 / 100) is the storage-tier phase's, which
-# will make account_quota read a subscription instead of returning this.
+# is on it — the paid ladder is the storage-tier phase's, which will make
+# account_quota read a subscription instead of returning this. (v2 §15.1
+# restates the allowance as 10,000 photo-equivalents on the ACCOUNT; the
+# number here changes with that phase, not with the cutover.)
 # Decimal units, deliberately: "10 GB" means what the keeper record, the
 # consumer storage convention (iCloud, Google) and R2's own pricing mean by
 # it — 10^9 bytes, never 2^30. One convention for every byte figure here.
@@ -115,7 +154,14 @@ class GraceState(str, Enum):
 
 def grace_state(gathering: Gathering, now: datetime) -> GraceState:
     """Derived, never persisted. A kept gathering (stamp NULL) is live; a
-    memorial is live regardless — it never enters grace."""
+    memorial is live regardless — it never enters grace.
+
+    UNTOUCHED AT CK-49b, and inert: no consumer calls this (only its own
+    tests do). Keeper record v2 §5's five-rung ladder replaces the two
+    thresholds it derives, and the ladder arrives with its surfaces — the
+    note on ARCHIVE_AFTER / DELETE_AFTER above. The stamp it reads kept its
+    meaning through the cutover: under one keeper, "the last keeper left"
+    and "the keeper left" are one event."""
     if gathering.gathering_type == GatheringType.MEMORIAL:
         return GraceState.LIVE
     if gathering.last_keeper_left_at is None:
@@ -128,167 +174,19 @@ def grace_state(gathering: Gathering, now: datetime) -> GraceState:
     return GraceState.LIVE
 
 
-async def keep(
-    db: AsyncSession,
-    account: Account,
-    gathering: Gathering,
-    *,
-    now: Optional[datetime] = None,
-) -> KeptGathering:
-    """Account starts keeping the gathering. Anyone keeping ends grace —
-    the stamp clears in the same transaction as the kept-row insert. Keeping
-    twice is rejected by the unique constraint (IntegrityError on flush)."""
-    now = now or datetime.now(timezone.utc)
-    row = KeptGathering(account_id=account.id, gathering_id=gathering.id, kept_at=now)
-    db.add(row)
-    gathering.last_keeper_left_at = None
-    await db.flush()
-    return row
-
-
-async def unkeep(
-    db: AsyncSession,
-    account: Account,
-    gathering: Gathering,
-    *,
-    now: Optional[datetime] = None,
-) -> None:
-    """Account reverts from keeper to observer. In one transaction with the
-    kept-row delete: host is relinquished if this account held it (the
-    gathering becomes claimable — keeper record §9.2), and if this was the
-    last keeper the grace stamp is set. A memorial never gets the stamp: it
-    never enters grace, whatever its keeper count."""
-    now = now or datetime.now(timezone.utc)
-    result = await db.execute(
-        delete(KeptGathering).where(
-            KeptGathering.account_id == account.id,
-            KeptGathering.gathering_id == gathering.id,
-        )
-    )
-    if result.rowcount == 0:
-        raise LookupError("account does not keep this gathering")
-    if gathering.host_account_id == account.id:
-        gathering.host_account_id = None
-    remaining = await db.scalar(
-        select(func.count())
-        .select_from(KeptGathering)
-        .where(KeptGathering.gathering_id == gathering.id)
-    )
-    if remaining == 0 and gathering.gathering_type != GatheringType.MEMORIAL:
-        gathering.last_keeper_left_at = now
-    await db.flush()
-
-
-async def account_usage(db: AsyncSession, account: Account) -> int:
-    """Bytes counted against the account's quota: over its kept gatherings,
-    memorials exempt, the sum of `total_bytes` (published) PLUS the declared
-    size of every in-flight upload (the CK-34 reservation). Computed fresh
-    on every call — the entitlement/quota rule (roadmap §2) — and logical
-    size, not physical: every keeper of a gathering counts it in full while
-    the bytes are stored once (keeper record §2.3); the reservation follows
-    the same rule, so an upload in flight counts against every keeper of
-    its gathering exactly as it will once published. ONE statement: the
-    in-flight bytes ride a correlated subquery per kept gathering."""
-    total = await db.scalar(
-        select(
-            func.coalesce(
-                func.sum(Gathering.total_bytes + _in_flight_bytes_of(Gathering.id)), 0
-            )
-        )
-        .select_from(KeptGathering)
-        .join(Gathering, Gathering.id == KeptGathering.gathering_id)
-        .where(
-            KeptGathering.account_id == account.id,
-            Gathering.gathering_type != GatheringType.MEMORIAL,
-        )
-    )
-    return int(total)
-
-
-async def account_quota(db: AsyncSession, account: Account) -> int:
-    """The bytes the account is entitled to keep. Every account is on the
-    free tier until the storage-tier phase gives this a subscription to
-    read; it takes the session and the account now so that phase changes
-    one function and no caller. Never stored (roadmap §2)."""
-    return FREE_TIER_BYTES
-
-
-async def gathering_bytes(db: AsyncSession, gathering: Gathering) -> int:
-    """One gathering's own bytes: published (`total_bytes`) plus in flight
-    (the reservation). The memorial ceiling's subject (keeper record §9.4):
-    a memorial is exempt from every ACCOUNT's quota and bounded by its OWN
-    size — a different comparison from every other type, made here so the
-    upload path has one function to call rather than a sum to re-derive."""
-    total = await db.scalar(
-        select(Gathering.total_bytes + _in_flight_bytes_of(Gathering.id)).where(
-            Gathering.id == gathering.id
-        )
-    )
-    return int(total or 0)
-
-
-async def lapse_kept_statuses(
-    db: AsyncSession, account_id: UUID, *, now: datetime
-) -> None:
-    """An anonymized person's kept statuses lapse (keeper record §8): their
-    kept rows are hard-deleted, and any gathering that just lost its last
-    keeper is stamped exactly as unkeep would stamp it — a deleted account
-    must not silently hold a gathering alive forever. Called from the account
-    deletion transaction (profile.py); the caller commits."""
-    kept_gathering_ids = (
-        await db.scalars(
-            select(KeptGathering.gathering_id).where(
-                KeptGathering.account_id == account_id
-            )
-        )
-    ).all()
-    # Host is relinquished everywhere this account held it, kept or not — a
-    # deleted account left as host would block the claimable state forever.
-    await db.execute(
-        update(Gathering)
-        .where(Gathering.host_account_id == account_id)
-        .values(host_account_id=None)
-    )
-    if not kept_gathering_ids:
-        return
-    await db.execute(
-        delete(KeptGathering).where(KeptGathering.account_id == account_id)
-    )
-    # Stamp exactly as unkeep would: only where no keeper remains, and never
-    # on a memorial.
-    await db.execute(
-        update(Gathering)
-        .where(
-            Gathering.id.in_(kept_gathering_ids),
-            Gathering.gathering_type != GatheringType.MEMORIAL,
-            ~exists(
-                select(KeptGathering.id).where(
-                    KeptGathering.gathering_id == Gathering.id
-                )
-            ),
-        )
-        .values(last_keeper_left_at=now)
-    )
-
-
-# --- The keeper shape, half-built (CK-49a; keeper record v2 §3.1) ------------
+# --- The resolver: who keeps this gathering? (CK-49a; keeper record v2 §3.1) --
 #
-# Migration 0022 added `groups.keeper_account_id`, `gatherings.keeper_account_id`
-# and `gatherings.owning_group_id` (the last with no writer), backfilled the
-# two keeper columns once from the relation above, and added the CHECK that
-# keeps a group gathering's keeper out of its own row. NOTHING BELOW THIS LINE
-# IS CALLED BY ANYTHING BUT ITS OWN TESTS: every function above still reads
-# `kept_gatherings`, which stays the truth for quota, audience, grace and the
-# deletion lapse until CK-49b switches the consumers, rewrites this module and
-# drops the relation. The resolver is added first, alone, so the cutover has
-# a tested answer to "who keeps this?" before it changes a single reader.
+# Added at CK-49a beneath the old service and called by nothing; since CK-49b
+# it is the spine of this module — every function below that needs the
+# keeper asks it, through one of the two wiring helpers after it, and never
+# reads the column on its own.
 
 
 class KeeperSource(str, Enum):
     """Which rung answered — returned with every resolution, for the reason
     services/publication.py returns its Source: a consumer handed a bare
-    account id cannot explain itself, and CK-49b's quota sum, storage screen
-    and claim button all need to say WHY this account (record §3.1)."""
+    account id cannot explain itself, and the quota sum, the storage screen
+    and the claim button all need to say WHY this account (record §3.1)."""
 
     # The owning group's keeper — the gathering belongs to a group, and the
     # group is the home (§3.1: "a group is a home and holds one keeper").
@@ -353,10 +251,10 @@ def resolve_keeper(
     defect (database-schema decision 20's class) is the thing the CHECK
     exists to prevent; the resolver does not quietly prefer one copy.
 
-    NOT CALLED BY ANY CONSUMER YET. CK-49b wires it into the quota sum, the
-    read audience, the grace derivation and the deletion lapse; every
-    consumer asks this function and never reads the column directly
-    (record §3.1). Until then `kept_gatherings` answers every live question.
+    Called, since CK-49b, by everything in this module that needs the
+    keeper — through `resolved_keeper_of` for a loaded row and, as the same
+    ladder in SQL, through `keeps_gathering` for the audience criteria — and
+    by nothing that reads the column directly (record §3.1).
     """
     if group_keeper_account_id is not None and own_keeper_account_id is not None:
         raise ValueError(
@@ -371,3 +269,238 @@ def resolve_keeper(
         if answer is not None:
             return KeeperResolution(keeper_account_id=answer, source=source)
     return KeeperResolution(keeper_account_id=None, source=KeeperSource.UNKEPT)
+
+
+async def resolved_keeper_of(db: AsyncSession, gathering: Gathering) -> KeeperResolution:
+    """The resolver for a row the caller already holds — publication.py's
+    `resolve_gathering` counterpart, the ONE place a loaded gathering's two
+    facts are read and handed to `resolve_keeper`. The group's keeper is
+    fetched only when the gathering belongs to a group (no gathering does
+    until Arc B writes `owning_group_id`), so today this is no query at
+    all; when it is one, it is one indexed lookup."""
+    group_keeper_account_id: Optional[UUID] = None
+    if gathering.owning_group_id is not None:
+        group_keeper_account_id = await db.scalar(
+            select(Group.keeper_account_id).where(Group.id == gathering.owning_group_id)
+        )
+    return resolve_keeper(
+        group_keeper_account_id=group_keeper_account_id,
+        own_keeper_account_id=gathering.keeper_account_id,
+    )
+
+
+def keeps_gathering(account_id: UUID, gathering_id):
+    """The resolver's ladder as ONE SQL criterion: TRUE when the gathering
+    whose id is `gathering_id` (a column expression — `Gathering.id` in the
+    list statement, `Media.gathering_id` in the media audience) resolves to
+    `account_id`. For the WHERE clauses that decide which rows are fetched
+    at all — the list's one statement (the CK-20 statement-count pin) and
+    `_visible_media`'s three-branch criterion (CK-37) — where a Python
+    function cannot sit.
+
+    `coalesce(the group's keeper, the gathering's own)` IS the ladder — rung
+    1, else rung 2 — and it is only safe because the CHECK
+    `ck_gatherings_group_gathering_has_no_keeper` makes a both-set row
+    impossible: on a legal row "the first non-NULL" and "the first rung with
+    an answer" are the same thing, so there is nothing for `resolve_keeper`'s
+    refusal to refuse and the SQL form cannot quietly prefer one copy. Both
+    forms are pinned to agree on every legal shape (tests/test_keeper_shape.py);
+    a consumer holding a row asks `resolved_keeper_of`, never this.
+
+    Aliased on purpose: both callers already have `Gathering` in their outer
+    FROM, and an un-aliased reference would be auto-correlated to it — a
+    join to nothing that reads as a bug in the audience.
+    """
+    kept = aliased(Gathering, name="kept_gathering")
+    home = aliased(Group, name="keeping_group")
+    return exists(
+        select(kept.id)
+        .select_from(kept)
+        .outerjoin(home, home.id == kept.owning_group_id)
+        .where(
+            kept.id == gathering_id,
+            func.coalesce(home.keeper_account_id, kept.keeper_account_id) == account_id,
+        )
+    )
+
+
+# --- The writers -----------------------------------------------------------------
+
+
+async def keep(
+    db: AsyncSession,
+    account: Account,
+    gathering: Gathering,
+    *,
+    now: Optional[datetime] = None,
+) -> KeeperResolution:
+    """Account starts keeping the gathering: the keeper column is written and
+    grace ends — the stamp clears in the same flush. Returns the resolution
+    the row now answers with (its own keeper, `OWN`).
+
+    A gathering that already has a keeper is REFUSED, whoever asks: the
+    same account keeping twice was rejected by the relation's unique
+    constraint and still is; a second account is not a second keeper but a
+    TRANSFER — atomic, needing the recipient's headroom, its own act with
+    its own surface (record §4) — and this function is not it. Nothing
+    written on refusal. A gathering that belongs to a group has no keeper of
+    its own to write (the CHECK refuses the row); keeping the group is Arc
+    B's surface."""
+    now = now or datetime.now(timezone.utc)
+    if gathering.keeper_account_id is not None:
+        raise ValueError(
+            "the gathering already has a keeper — keeping it again is a transfer "
+            "(keeper record v2 §4), not a second keep"
+        )
+    gathering.keeper_account_id = account.id
+    gathering.last_keeper_left_at = None
+    await db.flush()
+    return KeeperResolution(keeper_account_id=account.id, source=KeeperSource.OWN)
+
+
+async def unkeep(
+    db: AsyncSession,
+    account: Account,
+    gathering: Gathering,
+    *,
+    now: Optional[datetime] = None,
+) -> None:
+    """The keeper steps back. In one flush with the column going NULL: host
+    is relinquished if this account held it (the gathering becomes
+    claimable — keeper record §9.2), and the grace stamp is set — under one
+    keeper the keeper leaving IS the last keeper leaving, so the stamp's
+    meaning is exactly what it was. A memorial never gets the stamp: it
+    never enters grace. An account that is not the gathering's own keeper
+    is refused loudly — including the keeper of a group the gathering
+    belongs to, who releases the GROUP (Arc B's surface), never one
+    gathering out of it."""
+    now = now or datetime.now(timezone.utc)
+    if gathering.keeper_account_id != account.id:
+        raise LookupError("account does not keep this gathering")
+    gathering.keeper_account_id = None
+    if gathering.host_account_id == account.id:
+        gathering.host_account_id = None
+    if gathering.gathering_type != GatheringType.MEMORIAL:
+        gathering.last_keeper_left_at = now
+    await db.flush()
+
+
+# --- The derived facts -----------------------------------------------------------
+
+
+async def account_usage(db: AsyncSession, account: Account) -> int:
+    """Bytes counted against the account's quota: over the gatherings that
+    RESOLVE to it — its own, and every gathering of a group it keeps —
+    memorials exempt, the sum of `total_bytes` (published) PLUS the declared
+    size of every in-flight upload (the CK-34 reservation). Computed fresh
+    on every call — the entitlement/quota rule (roadmap §2). ONE statement
+    fetches the candidates with their two facts and their bytes (the
+    in-flight bytes ride a correlated subquery per gathering); the RESOLVER
+    decides which count, row by row — the SQL WHERE is a candidate filter
+    (a superset: either fact naming the account), never the answer, so a row
+    the CHECK forbids raises here instead of being counted once or twice.
+    With one keeper there is no logical-size device: a gathering counts
+    against exactly one account, and the bytes are stored once."""
+    rows = (
+        await db.execute(
+            select(
+                Gathering.keeper_account_id.label("own_keeper"),
+                Group.keeper_account_id.label("group_keeper"),
+                (Gathering.total_bytes + _in_flight_bytes_of(Gathering.id)).label("bytes"),
+            )
+            .select_from(Gathering)
+            .outerjoin(Group, Group.id == Gathering.owning_group_id)
+            .where(
+                Gathering.gathering_type != GatheringType.MEMORIAL,
+                or_(
+                    Gathering.keeper_account_id == account.id,
+                    Group.keeper_account_id == account.id,
+                ),
+            )
+        )
+    ).all()
+    total = 0
+    for own_keeper, group_keeper, bytes_ in rows:
+        resolution = resolve_keeper(
+            group_keeper_account_id=group_keeper, own_keeper_account_id=own_keeper
+        )
+        if resolution.keeper_account_id == account.id:
+            total += int(bytes_)
+    return total
+
+
+async def account_quota(db: AsyncSession, account: Account) -> int:
+    """The bytes the account is entitled to keep. Every account is on the
+    free tier until the storage-tier phase gives this a subscription to
+    read; it takes the session and the account now so that phase changes
+    one function and no caller. Never stored (roadmap §2)."""
+    return FREE_TIER_BYTES
+
+
+async def gathering_bytes(db: AsyncSession, gathering: Gathering) -> int:
+    """One gathering's own bytes: published (`total_bytes`) plus in flight
+    (the reservation). The memorial ceiling's subject (keeper record §9.4):
+    a memorial is exempt from every ACCOUNT's quota and bounded by its OWN
+    size — a different comparison from every other type, made here so the
+    upload path has one function to call rather than a sum to re-derive."""
+    total = await db.scalar(
+        select(Gathering.total_bytes + _in_flight_bytes_of(Gathering.id)).where(
+            Gathering.id == gathering.id
+        )
+    )
+    return int(total or 0)
+
+
+# --- The deletion leg --------------------------------------------------------------
+
+
+async def lapse_kept_statuses(
+    db: AsyncSession, account_id: UUID, *, now: datetime
+) -> None:
+    """An anonymized person's keeping lapses (keeper record §8): the keeper
+    column goes NULL wherever the deleted account held it, and every
+    gathering that just lost its keeper is stamped exactly as unkeep would
+    stamp it — a deleted account must not silently hold a gathering alive
+    forever. Called from the account deletion transaction (profile.py); the
+    caller commits.
+
+    Three writes, each guarded on the column and never on a relation:
+    (1) host relinquished on every gathering this account hosted, kept or
+    not — a deleted account left as host would block the claimable state
+    forever; (2) `gatherings.keeper_account_id` NULLed and, on every
+    non-memorial gathering it held, `last_keeper_left_at` stamped — under
+    one keeper there is no "does another keeper remain" to ask; (3)
+    `groups.keeper_account_id` NULLed wherever this account held it, the
+    CK-45 admin relinquishment's reasoning applied to the keeper column: an
+    anonymized account cannot answer for a home's bytes. NO stamp is
+    written on a group — where a group's lapse stamp lives is v2 §12 item
+    9's group half, handed to Arc B, because no gathering resolves through
+    a group until Arc B writes `owning_group_id`, so nothing can lose a
+    keeper by this write today and there is no row to reason about."""
+    await db.execute(
+        update(Gathering)
+        .where(Gathering.host_account_id == account_id)
+        .values(host_account_id=None)
+    )
+    # Stamp exactly as unkeep would: on every non-memorial gathering this
+    # account kept of its own — one statement, the stamp and the NULL in it
+    # together, so no row can carry the stamp with the keeper still set or
+    # lose its keeper unstamped.
+    await db.execute(
+        update(Gathering)
+        .where(
+            Gathering.keeper_account_id == account_id,
+            Gathering.gathering_type != GatheringType.MEMORIAL,
+        )
+        .values(keeper_account_id=None, last_keeper_left_at=now)
+    )
+    await db.execute(
+        update(Gathering)
+        .where(Gathering.keeper_account_id == account_id)
+        .values(keeper_account_id=None)
+    )
+    await db.execute(
+        update(Group)
+        .where(Group.keeper_account_id == account_id)
+        .values(keeper_account_id=None)
+    )
