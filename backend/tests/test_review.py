@@ -135,13 +135,19 @@ async def _queue(client, headers, gathering_id: str, **params):
     )
 
 
-async def _bytes(db_session_factory, cast: Cast) -> tuple[int, int]:
-    """(total_bytes of the gathering, account_usage of its host) — the two
-    numbers the review must never move."""
+async def _bytes(db_session_factory, cast: Cast) -> tuple[int, int, int]:
+    """(total_bytes of the gathering, its photo_count, account_usage of its
+    host) - the three numbers the review must never move. photo_count
+    joined at CK-51a: a decline is `removed`, and removal decrements
+    neither column (the bin holds the layers; the sweep is unbuilt)."""
     async with db_session_factory() as db:
         gathering = await db.get(Gathering, cast.gathering_id)
         host = await _account_for(db, HOST)
-        return gathering.total_bytes, await keeping.account_usage(db, host)
+        return (
+            gathering.total_bytes,
+            gathering.photo_count,
+            await keeping.account_usage(db, host),
+        )
 
 
 # --- auth ----------------------------------------------------------------------
@@ -173,11 +179,12 @@ async def test_the_host_publishes_and_the_row_goes_live_with_both_stamps(
     cast = await _cast(client, capsys, db_session_factory)
     media_id = await _photograph(db_session_factory, cast)
     # The worker's output, without the worker: the derivative rows exist,
-    # so total_bytes would already have moved — give the gathering a real
-    # number to hold still.
+    # so total_bytes (and photo_count, since CK-51a) would already have
+    # moved — give the gathering real numbers to hold still.
     async with db_session_factory() as db:
         gathering = await db.get(Gathering, cast.gathering_id)
         gathering.total_bytes = sum(size for _, size, _ in LAYER_SPECS.values())
+        gathering.photo_count = 1
         await db.commit()
     before = await _bytes(db_session_factory, cast)
     # Before: the read audience cannot see it (the rule this phase acts
@@ -483,7 +490,17 @@ async def test_a_decline_lands_removed_and_the_uploader_keeps_the_bin(
     with `not_pending` carrying `live`."""
     cast = await _cast(client, capsys, db_session_factory)
     media_id = await _photograph(db_session_factory, cast)
+    # The worker's output, without the worker (the publish test's move):
+    # real numbers on both columns, so "neither moved" is not vacuous.
+    # THE REMOVAL PIN (CK-51a): a removed photograph leaves total_bytes AND
+    # photo_count where `ready` left them - the layers stay for the bin.
+    async with db_session_factory() as db:
+        gathering = await db.get(Gathering, cast.gathering_id)
+        gathering.total_bytes = sum(size for _, size, _ in LAYER_SPECS.values())
+        gathering.photo_count = 1
+        await db.commit()
     before = await _bytes(db_session_factory, cast)
+    assert before[:2] == (sum(size for _, size, _ in LAYER_SPECS.values()), 1)
 
     response = await _decline(client, cast.host, media_id)
     assert response.status_code == 200, response.text

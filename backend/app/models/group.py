@@ -48,8 +48,10 @@ class Group(Base):
     # its gatherings, and the resolver never reads the archive state (§3.1).
     # No lapse stamp lives here yet: where a group's stamp lives is v2 §12
     # item 9's group half, Arc B's to decide with its first subject.
+    # Indexed since 0024 (CK-51a; `ix_groups_keeper_account_id`), with the
+    # gatherings one: account_usage's WHERE names both.
     keeper_account_id: Mapped[Optional[UUID]] = mapped_column(
-        ForeignKey("accounts.id"), nullable=True
+        ForeignKey("accounts.id"), nullable=True, index=True
     )
     # Stamped on every successful rename (PATCH /groups/{id}) and by nothing
     # else — the 0004/0010/0014 shape, added WITH the mutability (CK-45,

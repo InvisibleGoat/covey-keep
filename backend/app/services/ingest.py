@@ -106,7 +106,9 @@ and each step's failure mode, deliberately:
      failure mode — step 4 either commits whole or not at all — but a
      re-queued photograph would be, and an IntegrityError dead-letter would
      read as a decode bug); then `gatherings.total_bytes` is incremented
-     by the sum of the three layers' ACTUAL stored sizes in one UPDATE.
+     by the sum of the three layers' ACTUAL stored sizes - and, since
+     CK-51a (0024), `gatherings.photo_count` by ONE - in one UPDATE, the
+     same statement for both columns, so they cannot diverge.
      The caller commits. The reservation releases in the same instant
      through the one quota path (`ready` is outside IN_FLIGHT_STATUSES —
      the baton keeping.py already holds; verified by test, not rebuilt):
@@ -476,10 +478,22 @@ async def handle_claimed(
         for rendition in renditions
     )
     stored = sum(rendition.size_bytes for rendition in renditions)
+    # ONE statement, both columns (CK-51a, 0024): the bytes the quota reads
+    # today and the photograph the quota reads from CK-51b. In one UPDATE
+    # the two cannot diverge - a lost claim, a crash or a rollback moves
+    # both or neither - so the verifier's two assertions (total_bytes
+    # equals the sum over the ready rows' layers; photo_count equals the
+    # count of ready rows) are the same fact checked twice. Never a second
+    # statement beside this one. Nothing decrements either: removal keeps
+    # the layers for the 30-day bin, and the sweep that frees them does
+    # not exist (models/gathering.py says what it owes when it does).
     await db.execute(
         update(Gathering)
         .where(Gathering.id == row.gathering_id)
-        .values(total_bytes=Gathering.total_bytes + stored)
+        .values(
+            total_bytes=Gathering.total_bytes + stored,
+            photo_count=Gathering.photo_count + 1,
+        )
         .execution_options(synchronize_session=False)
     )
     await db.flush()

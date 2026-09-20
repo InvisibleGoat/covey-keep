@@ -661,7 +661,8 @@ async def test_a_missing_object_dead_letters_on_the_first_attempt(db_session_fac
         # Nothing else moved — processing is not publishing, and neither is
         # failing.
         assert row.publication_state == PublicationState.PENDING
-        assert (await db.get(Gathering, gathering_id)).total_bytes == 0
+        gathering = await db.get(Gathering, gathering_id)
+        assert (gathering.total_bytes, gathering.photo_count) == (0, 0)
         assert await db.scalar(select(func.count()).select_from(MediaDerivative)) == 0
     # Dead-lettered rows are never claimed again.
     assert await poll_once(db_session_factory, worker, _now()) is Poll.IDLE
@@ -743,6 +744,10 @@ async def test_a_present_photograph_is_processed_and_published_in_one_transactio
     # total_bytes moved by the ACTUAL stored sum, not the declared upload
     # size — the reservation over-counts in the safe direction.
     assert gathering.total_bytes != row.upload_size_bytes
+    # And the photograph count by exactly one, in the same statement
+    # (CK-51a, 0024) - read by nothing yet; tests/test_photo_count.py pins
+    # the one-statement shape and the second-session view.
+    assert gathering.photo_count == 1
     # A ready row is never claimed again.
     assert await poll_once(db_session_factory, worker, t0 + timedelta(hours=1)) is Poll.IDLE
 
@@ -762,16 +767,18 @@ async def test_the_original_is_deleted_only_after_the_ready_transaction_has_comm
 
     async def observe(key):
         r, derivatives, gathering = await _ready_state(db_session_factory, row.id)
-        seen.append((key, r.status, len(derivatives), gathering.total_bytes))
+        seen.append((key, r.status, len(derivatives), gathering.total_bytes, gathering.photo_count))
 
     store.on_delete = observe
     assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
     assert len(seen) == 1
-    key, status, derivative_count, total_bytes = seen[0]
+    key, status, derivative_count, total_bytes, photo_count = seen[0]
     assert key == quarantine_key(row.id)
     assert status == MediaStatus.READY
     assert derivative_count == 3
     assert total_bytes > 0
+    # The count is committed in the same instant as the bytes (CK-51a).
+    assert photo_count == 1
 
 
 async def test_a_reprocessed_row_does_not_trip_the_derivative_unique_constraint(
@@ -812,6 +819,9 @@ async def test_a_reprocessed_row_does_not_trip_the_derivative_unique_constraint(
     assert len(derivatives) == 3
     assert {d.content_type for d in derivatives} == {"image/jpeg", "image/webp"}
     assert gathering.total_bytes == sum(d.size_bytes for d in derivatives)
+    # One publish, one photograph - the earlier attempt's rows never
+    # reached `ready`, so nothing was counted before (CK-51a).
+    assert gathering.photo_count == 1
     assert set(store.published) == {published_key(media_id, layer) for layer in MediaLayer}
 
 
@@ -1248,7 +1258,8 @@ async def test_an_unexpected_exception_in_a_poll_does_not_kill_the_loop(db_sessi
 
 async def test_no_derivative_row_and_no_total_bytes_move_on_any_failure_path(db_session_factory, worker, monkeypatch):
     # Only the ready transaction writes a derivative row or moves
-    # total_bytes; every failure outcome leaves both alone.
+    # total_bytes - or, since CK-51a, photo_count; every failure outcome
+    # leaves all three alone.
     outcomes = [None, _client_error("InternalError", 500)]
     async with db_session_factory() as db:
         gathering = await _mk_gathering(db)
@@ -1264,7 +1275,8 @@ async def test_no_derivative_row_and_no_total_bytes_move_on_any_failure_path(db_
         assert await poll_once(db_session_factory, worker, _now()) is Poll.PROCESSED
     async with db_session_factory() as db:
         assert await db.scalar(select(func.count()).select_from(MediaDerivative)) == 0
-        assert (await db.get(Gathering, gathering_id)).total_bytes == 0
+        gathering = await db.get(Gathering, gathering_id)
+        assert (gathering.total_bytes, gathering.photo_count) == (0, 0)
         states = set((await db.execute(select(Media.publication_state))).scalars().all())
         assert states == {PublicationState.PENDING}
         # And every row left `processing` behind: claimed_at is NULL on all.
@@ -1592,8 +1604,13 @@ async def test_a_removed_row_reclaimed_stays_removed_and_unstamped(db_session_fa
         media_id = row.id
     FakeStore(monkeypatch, {quarantine_key(media_id): GPS_PHOTO})
     assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
-    r, derivatives, _ = await _ready_state(db_session_factory, media_id)
+    r, derivatives, gathering = await _ready_state(db_session_factory, media_id)
     assert r.status == MediaStatus.READY and len(derivatives) == 3
     assert r.publication_state == PublicationState.REMOVED
     assert (r.published_at, r.published_by_person_id) == (None, None)
     assert r.removed_at is not None
+    # It is `ready`, it holds its layers and its bytes, and it COUNTS: the
+    # criterion for both columns is the rung, never the publication state
+    # (CK-51a, 0024 - the verifier's invariant is stated the same way).
+    assert gathering.total_bytes == sum(d.size_bytes for d in derivatives) > 0
+    assert gathering.photo_count == 1

@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Text,
     text,
 )
@@ -116,8 +117,12 @@ class Gathering(Base):
     # consumer THROUGH THE RESOLVER (resolved_keeper_of for a loaded row,
     # keeps_gathering's SQL form in the audience criteria) — never directly.
     # THE ONLY REPRESENTATION since 0023: no relation, no boolean, no count.
+    # Indexed since 0024 (CK-51a; `ix_gatherings_keeper_account_id`) -
+    # owed since 0023 and re-homed twice; the reader is account_usage's
+    # WHERE over every gathering, not the audience criteria (those look
+    # the row up by primary key).
     keeper_account_id: Mapped[Optional[UUID]] = mapped_column(
-        ForeignKey("accounts.id"), nullable=True
+        ForeignKey("accounts.id"), nullable=True, index=True
     )
     gathering_type: Mapped[GatheringType] = mapped_column(GATHERING_TYPE, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
@@ -164,6 +169,26 @@ class Gathering(Base):
     # a question about any account.
     total_bytes: Mapped[int] = mapped_column(
         BigInteger, nullable=False, server_default=text("0")
+    )
+    # THE QUOTA'S UNIT - from CK-51b (0024, CK-51a; decisions/2026-09-20-
+    # photographs-are-the-currency.md §3, §6): a photograph is 1, whatever
+    # the file weighed, and this is the count of this gathering's `ready`
+    # photographs - the same rung, the same rows, as total_bytes above,
+    # incremented in the SAME UPDATE statement (services/ingest.py, step 4)
+    # so the two cannot diverge. total_bytes stays as cost reporting and
+    # the currency record §5's monitor; it stops being a quota input at
+    # CK-51b. NEITHER IS DECREMENTED ON REMOVAL: a removed photograph holds
+    # its layers for the 30-day bin and the sweep that frees them does not
+    # exist - when it is built it owes both columns, together, or they
+    # diverge. Same reasoning as total_bytes under the never-stored rule: a
+    # maintained fact about THIS gathering, an input to the account-level
+    # sum computed at request time, never a cached answer about any
+    # account. Backfilled once at 0024 from the existing ready rows; the
+    # server default is right here (every gathering starts at zero and the
+    # writer only ever adds). READ BY NOTHING until CK-51b - the deploy-
+    # window reason is in 0024's docstring.
+    photo_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
     )
     publication_state: Mapped[PublicationState] = mapped_column(
         PUBLICATION_STATE, nullable=False

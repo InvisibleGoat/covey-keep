@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0023"
+EXPECTED_REVISION = "0024"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -258,6 +258,21 @@ async def column_type_and_default(conn, table: str, column: str):
                 "WHERE table_schema = 'public' AND table_name = :t AND column_name = :c"
             ),
             {"t": table, "c": column},
+        )
+    ).first()
+
+
+async def index_shape(conn, name: str):
+    """(table, indexdef) for one named index in the public schema, or None
+    when it is missing - read with .first() so a missing index FAILs the
+    assertion that reads it rather than passing vacuously."""
+    return (
+        await conn.execute(
+            text(
+                "SELECT tablename, indexdef FROM pg_indexes "
+                "WHERE schemaname = 'public' AND indexname = :n"
+            ),
+            {"n": name},
         )
     ).first()
 
@@ -495,6 +510,27 @@ async def verify(conn, ck: Checks) -> None:
     # CK-16 made gatherings user-mutable; the stamp column follows the
     # people.updated_at precedent — nullable, stamped on patch.
     assert_columns(ck, columns, "gatherings", present=("updated_at",), nullable=("updated_at",))
+
+    print("\n-- gatherings.photo_count: the quota's unit, maintained and unread (0024, CK-51a) --")
+    # The count of the gathering's `ready` photographs - the same rung and
+    # the same rows as total_bytes, incremented in the SAME UPDATE statement
+    # (services/ingest.py step 4), backfilled once at 0024, READ BY NOTHING
+    # until CK-51b (the deploy-window split, 0024's docstring). INTEGER,
+    # NOT NULL, server default 0: every gathering starts at zero and the
+    # writer only ever adds, so a default is right here where it was a
+    # trap on media.status. Read with .first(), so a missing column FAILs.
+    assert_columns(ck, columns, "gatherings", present=("photo_count",), not_null=("photo_count",))
+    photo_count_shape = await column_type_and_default(conn, "gatherings", "photo_count")
+    ck.check(
+        photo_count_shape is not None and photo_count_shape[0] == "integer",
+        "gatherings.photo_count is integer",
+        "column missing" if photo_count_shape is None else f"type is {photo_count_shape[0]!r}",
+    )
+    ck.check(
+        photo_count_shape is not None and photo_count_shape[1] == "0",
+        "gatherings.photo_count defaults to 0 (a counter every row starts at zero)",
+        "column missing" if photo_count_shape is None else f"default is {photo_count_shape[1]!r}",
+    )
 
     print("\n-- gatherings: the publication gate inherits (0019, CK-41) --")
     # requires_approval is rung 1 of the publication ladder
@@ -757,6 +793,26 @@ async def verify(conn, ck: Checks) -> None:
         "CHECK ck_gatherings_group_gathering_has_no_keeper exists",
         "constraint missing",
     )
+
+    print("\n-- the keeper-column indexes (0024, CK-51a) --")
+    # An index arrives with its reader: account_usage's WHERE names both
+    # columns over every gathering (`keeper_account_id = :account OR
+    # groups.keeper_account_id = :account`). Owed since 0023 (whose kickoff
+    # was the re-run and the drop alone), re-homed past CK-50 ("no
+    # migration"), landed at 0024. Named as the models' index=True names
+    # them, so `alembic check` and this line agree. `owning_group_id` has
+    # no index on purpose: it has no writer yet, and its reader looks the
+    # group up by primary key.
+    for table, name in (
+        ("gatherings", "ix_gatherings_keeper_account_id"),
+        ("groups", "ix_groups_keeper_account_id"),
+    ):
+        shape = await index_shape(conn, name)
+        ck.check(
+            shape is not None and shape[0] == table and "(keeper_account_id)" in shape[1],
+            f"index {name} exists on {table}.keeper_account_id",
+            "index missing" if shape is None else f"found on {shape[0]!r}: {shape[1]}",
+        )
 
     print("\n-- keeper shape integrity (CK-49a) --")
     # Guarded on the COLUMNS (the CK-43 lesson): at 0021 `gatherings`
@@ -1060,6 +1116,31 @@ async def verify(conn, ck: Checks) -> None:
             "every gathering's total_bytes equals the sum over its ready photographs' layers",
             f"{drifted} gathering(s) whose total_bytes disagrees with its derivative rows",
         )
+        # (4) gatherings.photo_count is the same fact counted rather than
+        # summed (0024, CK-51a): the number of the gathering's `ready`
+        # photographs - THE SAME RUNG as (3), deliberately, and incremented
+        # in the SAME UPDATE statement as total_bytes, so (3) and (4) are one
+        # fact checked twice. Publication state is not a term: a removed-
+        # but-ready row holds its layers and its bytes and counts, and
+        # neither column is decremented on removal (the bin's sweep, when
+        # built, owes both together). A gathering whose count disagrees
+        # with its rows had a publish land half-done, or something moved
+        # one column without the other - which is exactly what a second
+        # statement beside the one UPDATE would make possible. Guarded on
+        # the column (the CK-43 lesson): at 0023 this is a crash, not a FAIL.
+        if "photo_count" in set(columns["gatherings"]):
+            miscounted = await scalar(
+                conn,
+                "SELECT count(*) FROM gatherings g WHERE g.photo_count <> "
+                "(SELECT count(*) FROM media m WHERE m.gathering_id = g.id AND m.status = 'ready')",
+            )
+            ck.check(
+                miscounted == 0,
+                "every gathering's photo_count equals the count of its ready photographs",
+                f"{miscounted} gathering(s) whose photo_count disagrees with its ready media rows",
+            )
+        else:
+            ck.check(False, "photo_count integrity", "gatherings.photo_count missing")
     else:
         ck.check(False, "media publish integrity", "media/media_derivatives/gatherings missing")
 
