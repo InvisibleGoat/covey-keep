@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0022"
+EXPECTED_REVISION = "0023"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -314,9 +314,13 @@ async def verify(conn, ck: Checks) -> None:
         ck.check(False, "alembic_version table exists", "no alembic_version table")
 
     # --- Keeper spine, structural (0008) -----------------------------------
-    print("\n-- keeper spine tables (0008/0009) --")
-    for table in ("accounts", "gatherings", "occurrences", "gathering_invitations", "kept_gatherings"):
+    print("\n-- keeper spine tables (0008/0009; the kept relation dropped at 0023) --")
+    for table in ("accounts", "gatherings", "occurrences", "gathering_invitations"):
         ck.check(table in tables, f"table {table} exists", "missing")
+    # The old kept relation went at 0023 (CK-49c), after the guarded re-run of
+    # 0022's backfill; its absence is not asserted by name here — the head
+    # assertion above is the proof (0023 drops it in the same transaction
+    # that stamps the version), and the extinction grep stays at zero.
     for table in ("events", "event_series"):
         ck.check(table not in tables, f"table {table} is dropped", "table still exists")
 
@@ -707,12 +711,11 @@ async def verify(conn, ck: Checks) -> None:
             False, "groups integrity", "groups / memberships / capability_profiles missing"
         )
 
-    print("\n-- the keeper shape, half-built (0022, CK-49a) --")
-    # Keeper model v2 §3.1 as columns, and NOTHING reads them yet: this
-    # block asserts the shape 0022 left, not that any consumer uses it —
-    # `kept_gatherings` is still the truth for quota, audience, grace and
-    # the deletion lapse until CK-49b (migration 0023) switches the
-    # consumers and drops the relation. Three columns, all uuid, all
+    print("\n-- the keeper shape (0022, CK-49a; the truth since CK-49b; alone since 0023) --")
+    # Keeper model v2 §3.1 as columns: the shape 0022 left, which CK-49b made
+    # the truth for quota, audience and the deletion lapse (every consumer
+    # asks the resolver) and CK-49c's 0023 made the ONLY representation by
+    # dropping the old relation. Three columns, all uuid, all
     # nullable (NULL is a state on each: the unkept rung; "belongs to no
     # group"), no server default (one would invent a keeper), each an FK
     # with no delete rule (an account is anonymized and never deleted, a
@@ -775,14 +778,13 @@ async def verify(conn, ck: Checks) -> None:
             "no gathering carries both an owning group and its own keeper",
             f"{double_kept} gathering(s) with both columns set",
         )
-        # DELIBERATELY NOT ASSERTED: "every gathering's keeper_account_id
-        # equals its kept_gatherings.account_id." True the instant 0022
-        # runs and false for every gathering created afterwards — creation
-        # still writes the relation and nothing writes the column until
-        # CK-49b — so it is a check run ONCE against the deploy in the
-        # migration's own verification (WORKING-ON-NOW), the CK-41 (dy) /
-        # CK-45 run-once precedent, and 0023's re-backfill is what makes
-        # the two agree again before the relation goes. Nor "every
+        # NEVER ASSERTED, AND NOW UNREPRODUCIBLE: "every gathering's
+        # keeper_account_id equals its old kept row's account." It was a
+        # check run ONCE against the deploy in 0022's own verification
+        # (WORKING-ON-NOW check (ff), 2026-09-18: nine rows, unanimous —
+        # the CK-41 (dy) / CK-45 run-once precedent), frozen at nine the
+        # moment CK-49b stopped writing the relation, and since 0023
+        # dropped it there is nothing left to compare against. Nor "every
         # owning_group_id is NULL": true today, legitimately broken by
         # Arc B, the same precedent.
     else:
@@ -847,23 +849,29 @@ async def verify(conn, ck: Checks) -> None:
     else:
         ck.check(False, "accounts backfill integrity", "people/organizations/accounts missing")
 
-    print("\n-- keeper invariant (0009) --")
-    if {"gatherings", "kept_gatherings"} <= tables:
-        # The load-bearing invariant: a gathering with at least one keeper is
-        # never in grace. Vacuously true while both tables are empty — it is
-        # written now because it is what will matter once keeping is reachable.
+    print("\n-- keeper invariant (0009; on the column since CK-49b, the relation gone at 0023) --")
+    if "gatherings" in tables and "keeper_account_id" in set(columns["gatherings"]):
+        # The load-bearing invariant in its only remaining form: a gathering
+        # with its own keeper is never in grace — keep() clears the stamp in
+        # the flush that writes the column; unkeep() and the deletion lapse
+        # stamp in the statement that NULLs it. From 0009 to 0023 this read
+        # "no kept gathering carries a stamp" through the relation, and
+        # between CK-49b and 0023 it could fail legitimately (the relation
+        # went stale). On the column it is exact — and it is also the
+        # assertion that proves 0023's release guard held on the deploy: a
+        # re-run without the guard would have written a keeper beside a stamp.
         breached = await scalar(
             conn,
-            "SELECT count(*) FROM gatherings g WHERE g.last_keeper_left_at IS NOT NULL "
-            "AND EXISTS (SELECT 1 FROM kept_gatherings k WHERE k.gathering_id = g.id)",
+            "SELECT count(*) FROM gatherings "
+            "WHERE keeper_account_id IS NOT NULL AND last_keeper_left_at IS NOT NULL",
         )
         ck.check(
             breached == 0,
-            "no kept gathering carries a last_keeper_left_at stamp",
+            "no gathering carries both its own keeper and a last_keeper_left_at stamp",
             f"{breached} gathering(s) both kept and in grace",
         )
     else:
-        ck.check(False, "keeper invariant", "gatherings/kept_gatherings missing")
+        ck.check(False, "keeper invariant", "gatherings.keeper_account_id missing")
 
     print("\n-- occurrence text integrity (CK-20) --")
     if "occurrences" in tables:
@@ -1391,7 +1399,6 @@ async def verify(conn, ck: Checks) -> None:
         "people",
         "accounts",
         "gatherings",
-        "kept_gatherings",
         "media",
         "groups",
         "memberships",

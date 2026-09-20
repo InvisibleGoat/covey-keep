@@ -1,22 +1,23 @@
-"""CK-49a — the keeper shape; CK-49b — the cutover onto it.
+"""CK-49a — the keeper shape; CK-49b — the cutover onto it; CK-49c — the
+only representation left.
 
 Migration 0022 (CK-49a) added `gatherings.owning_group_id` (no writer),
 `groups.keeper_account_id` and `gatherings.keeper_account_id`, backfilled the
-two keeper columns once from `kept_gatherings`, and added the CHECK that
+two keeper columns once from the old kept relation, and added the CHECK that
 keeps a group gathering's keeper out of its own row; `services/keeping.py`
 gained `resolve_keeper`, then called by nothing. Pinned here from that
 phase: the resolver's two rungs and its refusals, the CHECK refused on a
 real row (an unexercised constraint is a comment), the three constraint
 names.
 
-CK-49b made the column the truth — every consumer asks the resolver, and
-`kept_gatherings` stays in the schema unread and unwritten until CK-49c
-drops it. Its pins, at the bottom: creation and `keep()` write the column
-and NO kept row (CK-49a's two negative pins, inverted — the phase's
-signature); a gathering whose keeper is set and whose kept row is absent —
-the state every gathering created after this deploy is in, and nothing
-before now had exercised — is fully visible to its keeper through the
-keeper rung ALONE; the SQL form of the ladder agrees with the Python
+CK-49b made the column the truth — every consumer asks the resolver — and
+CK-49c (migration 0023) re-ran 0022's backfill under the release guard and
+dropped the relation, so the column is now the only representation there
+is. The pins at the bottom, from the cutover: creation and `keep()` write
+the column (the "and no kept row" half of each died with the table — there
+is no longer a second place a keep could land); a gathering whose keeper
+is set is fully visible to its keeper through the keeper rung ALONE; the
+SQL form of the ladder agrees with the Python
 resolver on every legal shape and correlates correctly with a `Gathering`
 in the outer FROM; and a gathering that belongs to a group (constructed —
 `owning_group_id` still has no writer) is seen, listed and counted by the
@@ -27,7 +28,7 @@ import inspect
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.api.groups import HOUSEHOLD_PROFILE_NAME
@@ -39,7 +40,6 @@ from app.models import (
     GatheringType,
     Group,
     GroupType,
-    KeptGathering,
     Media,
     MediaStatus,
     Person,
@@ -242,20 +242,15 @@ async def test_0022_constraint_names_and_the_three_nullable_columns(db_session_f
 # --- the cutover (CK-49b): the column is written, the relation is not -----------
 
 
-async def _kept_rows(db) -> int:
-    return await db.scalar(select(func.count()).select_from(KeptGathering))
-
-
 async def test_creation_writes_the_keeper_column_and_no_kept_row(
     client, capsys, db_session_factory
 ):
-    # CK-49a's negative pin, inverted — the cutover's signature from the
-    # write side. Creation goes through keep(), which writes
-    # keeper_account_id and NOTHING to kept_gatherings: the relation is
-    # quiet from this deploy on, and every gathering created after it is in
-    # exactly the state the next test exercises. A "helpful" kept-row write
-    # (dual-writing — decision 20's two-representations defect, and the
-    # thing that would make CK-49c's re-run meaningless) fails here.
+    # CK-49a's negative pin, inverted at CK-49b — the cutover's signature
+    # from the write side: creation goes through keep(), which writes
+    # keeper_account_id, and since CK-49c (0023) there is nothing else it
+    # could write — the old kept relation is dropped. What survives is the
+    # behaviour: the creator's account on the column, no owning group, no
+    # stamp, and neither column in the response body.
     jwt = await _sign_in(client, capsys, "keeper-shape@example.com")
     response = await client.post(
         "/gatherings",
@@ -274,7 +269,6 @@ async def test_creation_writes_the_keeper_column_and_no_kept_row(
         assert gathering.keeper_account_id == gathering.created_by_account_id
         assert gathering.owning_group_id is None
         assert gathering.last_keeper_left_at is None
-        assert await _kept_rows(db) == 0
 
 
 async def test_keep_writes_the_column_and_never_the_relation(db_session_factory):
@@ -288,15 +282,15 @@ async def test_keep_writes_the_column_and_never_the_relation(db_session_factory)
         await db.commit()
         assert gathering.keeper_account_id == account.id
         assert gathering.last_keeper_left_at is None
-        assert await _kept_rows(db) == 0
 
 
 async def test_a_keeper_with_no_kept_row_sees_everything(client, capsys, db_session_factory):
-    # THE test this phase's correctness depends on. A gathering whose
-    # keeper_account_id is set and whose kept_gatherings row is ABSENT is
-    # the state every gathering created after this deploy is in, and
-    # nothing before now exercised it. First the deployed shape exactly
-    # (creator = host = keeper, no kept row): the detail, the list, the
+    # THE test CK-49b's correctness depended on, and still the audience's
+    # spine. A gathering whose keeper_account_id is set — the state every
+    # gathering created since the cutover is in, and since CK-49c (0023)
+    # the only shape a kept gathering can have — is visible to its keeper
+    # through the resolver. First the deployed shape exactly
+    # (creator = host = keeper): the detail, the list, the
     # media list and an upload intent all answer. Then the host is set to
     # NULL — the claimable state, legal — so that ONLY the keeper rung can
     # admit the creator, and the detail, the list and the media list
@@ -313,7 +307,6 @@ async def test_a_keeper_with_no_kept_row_sees_everything(client, capsys, db_sess
         account = await _account_for(db, address)
         gathering = await db.get(Gathering, gathering_id)
         assert gathering.keeper_account_id == account.id
-        assert await _kept_rows(db) == 0
         # A live, ready photograph by the keeper's own person, planted the
         # way the read tests plant them (the worker's output, without the
         # worker) — the media audience's keeper rung has a subject.
@@ -354,7 +347,7 @@ async def test_a_keeper_with_no_kept_row_sees_everything(client, capsys, db_sess
         assert media_missing.status_code == media_refused.status_code == 404
         assert media_refused.content == media_missing.content
 
-    # (1) The deployed shape: creator = host = keeper, and no kept row.
+    # (1) The deployed shape: creator = host = keeper.
     await _everything_answers()
     await _the_outsider_is_refused()
     intent = await client.post(

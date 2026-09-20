@@ -10,8 +10,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Text,
-    UniqueConstraint,
-    func,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -38,14 +36,16 @@ class Gathering(Base):
     TYPE, never a flag. Look Back stays derived (every occurrence already
     past at creation), no column.
 
-    Lifecycle (CK-13, the keeper a column since CK-49b): who keeps a
-    gathering is `keeper_account_id` below — its own — or its owning
-    group's, resolved through services/keeping.py::resolve_keeper; never
-    both (the CHECK). There is deliberately no is_kept boolean and no
-    second copy anywhere: a second representation could drift. The
-    KeptGathering relation at the bottom of this module was the truth from
-    0009 to CK-49b and is read and written by nothing since; CK-49c drops
-    it."""
+    Lifecycle (CK-13; the keeper a column since CK-49b, and the ONLY
+    representation since CK-49c): who keeps a gathering is
+    `keeper_account_id` below — its own — or its owning group's, resolved
+    through services/keeping.py::resolve_keeper; never both (the CHECK).
+    There is deliberately no is_kept boolean and no second copy anywhere:
+    a second representation could drift. The kept relation that was the
+    truth from 0009 to CK-49b (one row per account keeping one gathering)
+    is gone — migration 0023 re-ran 0022's backfill under the release
+    guard and dropped the table — so the keeper lives on this row and
+    nowhere else."""
 
     __tablename__ = "gatherings"
     __table_args__ = (
@@ -65,8 +65,8 @@ class Gathering(Base):
         # exactly-one-target idiom applied as at-most-one; the two-
         # representations defect (database-schema decision 20's class) made
         # structural rather than remembered. Since CK-49b the resolver reads
-        # both columns and every consumer asks it; kept_gatherings below is
-        # a table nothing reads.
+        # both columns and every consumer asks it; since CK-49c (0023) the
+        # old kept relation is gone and there is no other copy to disagree.
         CheckConstraint(
             "owning_group_id IS NULL OR keeper_account_id IS NULL",
             name="group_gathering_has_no_keeper",
@@ -109,12 +109,13 @@ class Gathering(Base):
     # record v2 §3.1). NULL when the gathering belongs to a group (the group's
     # keeper answers, through services/keeping.py::resolve_keeper) and NULL
     # when nobody keeps it (§5's Unkept rung). Backfilled once at 0022 from
-    # kept_gatherings; since CK-49b written by keep() at creation, NULLed by
-    # unkeep() and the deletion lapse, and read by every consumer THROUGH
-    # THE RESOLVER (resolved_keeper_of for a loaded row, keeps_gatherings'
-    # SQL form in the audience criteria) — never directly. A gathering
-    # created between 0022 and CK-49b holds a kept row and NULL here until
-    # CK-49c's 0023 re-runs the backfill before dropping the relation.
+    # the old kept relation, and once more at 0023 under the release guard
+    # (a stamped gathering is Unkept on purpose and got no keeper back)
+    # before that relation was dropped; since CK-49b written by keep() at
+    # creation, NULLed by unkeep() and the deletion lapse, and read by every
+    # consumer THROUGH THE RESOLVER (resolved_keeper_of for a loaded row,
+    # keeps_gathering's SQL form in the audience criteria) — never directly.
+    # THE ONLY REPRESENTATION since 0023: no relation, no boolean, no count.
     keeper_account_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("accounts.id"), nullable=True
     )
@@ -174,39 +175,6 @@ class Gathering(Base):
     # precedent: the column arrives with the phase that makes the row mutable.
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
-    )
-    created_at: Mapped[datetime] = created_at_col()
-
-
-class KeptGathering(Base):
-    """One account keeping one gathering — the single source of truth for
-    the quota arithmetic and the reference count from 0009 (CK-13) until
-    CK-49b, and READ AND WRITTEN BY NOTHING SINCE: the keeper is
-    `Gathering.keeper_account_id` (or the owning group's), resolved through
-    services/keeping.py. The table stays through CK-49b's deploy on purpose
-    — Render runs the pre-deploy migration while the old instance still
-    serves, and the old code reads this table — and CK-49c drops it at 0023
-    after re-running 0022's backfill over the rows creation wrote here
-    between 0022 and the cutover. Its rows are a snapshot from that moment;
-    do not read them, do not write them "for safety" (two representations
-    is decision 20's defect). What survives it: attended is a separate,
-    permanent fact (attendance_records); kept is a revocable status — never
-    conflate them (keeper record §2.4)."""
-
-    __tablename__ = "kept_gatherings"
-    __table_args__ = (
-        UniqueConstraint("account_id", "gathering_id"),
-    )
-
-    id: Mapped[UUID] = uuid_pk()
-    account_id: Mapped[UUID] = mapped_column(
-        ForeignKey("accounts.id"), nullable=False, index=True
-    )
-    gathering_id: Mapped[UUID] = mapped_column(
-        ForeignKey("gatherings.id"), nullable=False, index=True
-    )
-    kept_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     created_at: Mapped[datetime] = created_at_col()
 

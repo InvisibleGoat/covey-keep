@@ -487,8 +487,8 @@ async def _gathering_for_read(
     visibility, nothing more), or host. Checked against the
     keeper/host/invitation facts, never creatorship. "Keep" is the
     RESOLVED keeper (CK-49b — `services/keeping.py::resolved_keeper_of`:
-    the owning group's keeper, else the gathering's own; never a
-    `kept_gatherings` row, which nothing reads since the cutover)."""
+    the owning group's keeper, else the gathering's own; the old kept
+    relation is gone since 0023)."""
     gathering = await db.get(Gathering, gathering_id)
     if gathering is None:
         raise _not_found()

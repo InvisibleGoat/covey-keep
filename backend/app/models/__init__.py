@@ -29,7 +29,6 @@ from app.models.gathering import (
     Gathering,
     GatheringInvitation,
     GatheringInvitationPending,
-    KeptGathering,
     Occurrence,
 )
 from app.models.group import Group, SubGroup
@@ -60,7 +59,6 @@ __all__ = [
     "InvitationChannel",
     "ItemClaim",
     "ItemSlot",
-    "KeptGathering",
     "MagicLinkToken",
     "Media",
     "MediaDerivative",

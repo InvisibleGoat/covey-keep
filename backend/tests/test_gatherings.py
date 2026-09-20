@@ -1,8 +1,8 @@
 """CK-16 — gathering and occurrence CRUD, the keeper schema's first surface.
 
 The load-bearing pins: creation births the gathering, its occurrences, and the
-creator written as its keeper (`keeper_account_id`, since CK-49b — a
-`kept_gatherings` row until then) in ONE transaction (creator = keeper +
+creator written as its keeper (`keeper_account_id`, since CK-49b — a row in
+the old kept relation until then, dropped at 0023) in ONE transaction (creator = keeper +
 admin, keeper record §9.2); `requires_approval` is NULL because the
 application set NOTHING (CK-41 — nobody has decided; the publication ladder
 resolves the effective value the body carries, and the column has no server
@@ -363,7 +363,7 @@ async def test_season_cap_at_occurrence_add(client, capsys):
 # --- reads: the keeper's list, and 404-not-403 --------------------------------
 
 
-async def test_list_shows_only_kept_gatherings_newest_first(client, capsys):
+async def test_list_shows_only_gatherings_the_caller_keeps_newest_first(client, capsys):
     headers_a = await _signed_in_headers(client, capsys, "lister@example.com")
     headers_b = await _signed_in_headers(client, capsys, "other@example.com")
     first = await _create(client, headers_a, title="First created")

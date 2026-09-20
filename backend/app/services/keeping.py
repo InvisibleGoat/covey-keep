@@ -12,16 +12,15 @@ fetched at all goes through `keeps_gathering` (the same ladder as SQL — see
 its docstring for why that is safe and what pins it). Nothing reads the
 column directly, and nothing outside this module writes it.
 
-`kept_gatherings` IS STILL IN THE DATABASE AND NOTHING HERE READS OR WRITES
-IT. The table stays through this phase on purpose: Render runs the web
-service's pre-deploy migration while the OLD instance is still serving, so a
-migration that dropped it would leave the old code 500ing on every gathering
-read until the new instance took over. CK-49c drops it — after re-running
-0022's backfill over the rows created between 0022 and this phase, when
-creation still wrote the relation. Until then its rows are a snapshot that
-stopped being maintained the moment this deployed; do not read them for
-anything, and do not write them "for safety" — two representations that can
-disagree is the defect database-schema decision 20 exists to ban.
+THE OLD KEPT RELATION NO LONGER EXISTS (CK-49c, migration 0023). It stayed
+in the schema through CK-49b's deploy on purpose — Render runs the web
+service's pre-deploy migration while the OLD instance is still serving, and
+the old code read it — and 0023 re-ran 0022's backfill under the release
+guard (a stamped gathering is Unkept on purpose and gets no keeper back;
+an anonymized account is never assigned) and then dropped it. The keeper
+column is the only representation there is; a second one — a boolean, a
+counter, a relation kept "for safety" — is the defect database-schema
+decision 20 exists to ban.
 
 What is DERIVED, and never stored, is unchanged in its rule:
 

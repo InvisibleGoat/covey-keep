@@ -9,7 +9,6 @@ from app.models import (
     CapabilityProfile,
     Gathering,
     Group,
-    KeptGathering,
     MagicLinkToken,
     Membership,
     Occurrence,

@@ -3,9 +3,9 @@ exemption, host relinquishment — rewritten at CK-49b against the keeper
 COLUMN (keeper record v2 §3.1).
 
 The keeper is `gatherings.keeper_account_id` (or the owning group's),
-answered through `resolve_keeper`; `kept_gatherings` is still in the schema
-and read and written by nothing (CK-49c drops it — the shape test at the
-bottom dies with it). Grace is derived from one timestamp plus policy
+answered through `resolve_keeper`, and since CK-49c (migration 0023) it is
+the only representation there is — the old kept relation is dropped, and
+this file's shape probe of it went with it. Grace is derived from one timestamp plus policy
 constants, and the 30/90 assertions below are UNCHANGED because the
 constants are: the ladder is new behaviour and arrives with its surfaces
 (v2 §5), and `grace_state` is inert — nothing but this file calls it.
@@ -19,10 +19,10 @@ pins are in test_keeper_shape.py.
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from app.models import Account, AccountKind, Gathering, GatheringType, KeptGathering, PublicationState
+from app.models import Account, AccountKind, Gathering, GatheringType, PublicationState
 from app.services.keeping import (
     GraceState,
     KeeperSource,
@@ -206,7 +206,7 @@ async def test_memorial_requires_a_decedent_and_a_non_memorial_rejects_one(
 # --- quota: computed fresh over the gatherings that resolve to the account ----
 
 
-async def test_account_usage_sums_only_kept_gatherings_and_tracks_total_bytes(
+async def test_account_usage_sums_only_gatherings_the_account_keeps_and_tracks_total_bytes(
     db_session_factory,
 ):
     async with db_session_factory() as db:
@@ -282,18 +282,13 @@ async def test_0009_constraint_names_and_no_steward_orphans(db_session_factory):
             for r in await db.execute(
                 text(
                     "SELECT conname FROM pg_constraint WHERE conname IN "
-                    "('uq_kept_gatherings_account_id_gathering_id', "
-                    " 'fk_kept_gatherings_account_id', 'fk_kept_gatherings_gathering_id', "
-                    " 'ck_gatherings_memorial_decedent_name', "
+                    "('ck_gatherings_memorial_decedent_name', "
                     " 'fk_gatherings_host_account_id', 'fk_gatherings_created_by_account_id', "
                     " 'fk_groups_admin_person_id', 'fk_groups_backup_admin_person_id')"
                 )
             )
         }
         assert constraints == {
-            "uq_kept_gatherings_account_id_gathering_id",
-            "fk_kept_gatherings_account_id",
-            "fk_kept_gatherings_gathering_id",
             "ck_gatherings_memorial_decedent_name",
             "fk_gatherings_host_account_id",
             "fk_gatherings_created_by_account_id",
@@ -331,26 +326,3 @@ async def test_0009_constraint_names_and_no_steward_orphans(db_session_factory):
         assert "backup_admin_person_id" in group_columns
         assert "steward_person_id" not in group_columns
         assert "backup_steward_person_id" not in group_columns
-
-
-async def test_kept_at_defaults_server_side(db_session_factory):
-    # The table is still in the schema (CK-49b left it for the deploy
-    # window; CK-49c drops it, and this test with it) and its shape is
-    # unchanged: the server default exists so the column can never silently
-    # be NULL through any write path. Nothing in the app writes here since
-    # the cutover — this is a rolled-back probe of the schema, not a keep.
-    async with db_session_factory() as db:
-        account = await _mk_account(db)
-        gathering = await _mk_gathering(db)
-        db.add(KeptGathering(account_id=account.id, gathering_id=gathering.id))
-        await db.flush()
-        row = (
-            await db.execute(
-                select(KeptGathering).where(
-                    KeptGathering.account_id == account.id,
-                    KeptGathering.gathering_id == gathering.id,
-                )
-            )
-        ).scalar_one()
-        assert row.kept_at is not None
-        await db.rollback()

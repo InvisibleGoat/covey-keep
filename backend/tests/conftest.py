@@ -82,8 +82,8 @@ async def clean_tables(migrated_test_db):
     # Per-test isolation matters here: the rate limit counts magic_link_tokens
     # rows over a 15-minute window, so leftovers would trip it across tests.
     # Since CK-16 the truncate includes `accounts`: gathering CRUD creates
-    # accounts-anchored rows (gatherings, occurrences — and kept_gatherings,
-    # which nothing writes since CK-49b and CK-49c drops) that a people-only
+    # accounts-anchored rows (gatherings, occurrences; the old kept relation
+    # too, until 0023 dropped it) that a people-only
     # truncate leaves behind — CASCADE from accounts takes the whole keeper
     # spine with it. (Seed rows — the capability profile, the role ladder —
     # reference neither table and survive, as they must.)
