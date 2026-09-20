@@ -50,14 +50,24 @@ Everything here is part of the accept/refuse decision:
 - THE QUOTA — a RESERVATION, not a check (record §6.6): every in-flight
   upload's declared size counts inside services/keeping.py::account_usage,
   THE one quota path (a second one is the failure to avoid, for the reason
-  CK-13 banned a second refcount). Gated on the gathering's HOST account —
-  the standing keeper — and on nobody else: other keepers are allowed over
-  quota rather than an upload being refused (blocking a grandmother's
-  upload because a cousin is full turns one person's spending decision
-  into everyone else's outage). The host account row is locked for the
-  check-and-insert so two concurrent batches cannot both pass against the
-  same headroom. A refusal states the limit and what would exceed it, and
-  NEVER the host's usage — the caller may not be the host.
+  CK-13 banned a second refcount). Gated on the gathering's RESOLVED
+  KEEPER — since CK-50 (keeper record v2 §6): the owning group's keeper,
+  else the gathering's own, through keeping.resolved_keeper_of, never the
+  host (CK-34 charged the host, which was right under the old model and
+  wrong once host and keeper are two facts, v2 §7 — a person who merely
+  runs the day must not pay for bytes they do not keep) — and on nobody
+  else: the uploader may be over their own quota and still upload
+  (blocking a grandmother's upload because a cousin is full turns one
+  person's spending decision into everyone else's outage). The keeper
+  account row is locked for the check-and-insert so two concurrent batches
+  cannot both pass against the same headroom. A refusal states the limit
+  and what would exceed it, and NEVER anyone's usage, and NEVER whose
+  storage it is — the caller may be neither host nor keeper. A gathering
+  that resolves to NO keeper (the Unkept rung — both columns NULL) refuses
+  every upload: no quota subject. The reserved quantity is still the
+  declared byte count — the modeled reservation size is its own phase,
+  behind its own decision record (the declared original and the stored
+  derivatives are different units; CK-36 measured HEIC under-reserving).
 - THE MEMORIAL CEILING — 5 GB per memorial gathering (keeper record §9.4).
   Memorials are exempt from the ACCOUNT quota and are NOT exempt from their
   own ceiling; the comparison is against the memorial gathering's OWN bytes
@@ -599,29 +609,45 @@ async def _enforce_limits(
     """The quota reservation and the memorial ceiling, against DB state.
     Field-level 422s on the batch (["body", "items"]) — the refusal is about
     the batch as a whole, and it names the limit and what would exceed it,
-    never the host's usage (the caller may not be the host)."""
-    if gathering.host_account_id is None:
-        # The claimable state (keeper record §9.2): no host means no quota
-        # to charge, and bytes with no quota subject is the failure the
-        # keeper model exists to prevent. Refused; whether a hostless
-        # gathering should accept uploads is the claim flow's question.
+    never anyone's usage and never WHOSE storage it is (the caller may be
+    neither host nor keeper, and another account's usage is not theirs to
+    learn).
+
+    THE SUBJECT IS THE GATHERING'S RESOLVED KEEPER (CK-50; keeper record v2
+    §6) — the mechanism CK-34 built with the subject changed and nothing
+    else: one lookup through the resolver, THAT account's row locked, the
+    same 422s, the same memorial branch, the same reserved quantity (the
+    declared bytes — the modeled size is its own phase, behind its own
+    decision record). The host is not consulted here at all: the host and
+    the keeper are two facts (v2 §7), and charging the host meant a person
+    who merely runs the day paying for bytes they do not keep."""
+    resolution = await keeping.resolved_keeper_of(db, gathering)
+    if resolution.keeper_account_id is None:
+        # The Unkept rung (v2 §5) — both columns NULL, read-only and
+        # claimable: nobody answers for the bytes, and bytes with no quota
+        # subject is the failure the keeper model exists to prevent.
+        # Refused, memorial or not (the branch below never runs for it).
+        # The copy says what is true and stops: the claim surface — the
+        # way someone comes to keep it — is unbuilt, so nothing here may
+        # describe one.
         raise _field_422(
             "gathering_id",
-            "this gathering has no host, so photos can't be added until someone takes it on",
+            "nobody keeps this gathering, so photos can't be added to it",
             where="path",
         )
-    # Serialise the check-and-insert per host account: two concurrent
+    # Serialise the check-and-insert per keeper account: two concurrent
     # batches must not both pass against the same headroom. The lock is
     # released by the caller's commit (or rollback on a refusal).
-    host = (
+    keeper = (
         await db.execute(
-            select(Account).where(Account.id == gathering.host_account_id).with_for_update()
+            select(Account).where(Account.id == resolution.keeper_account_id).with_for_update()
         )
     ).scalar_one()
     noun = "this photo" if count == 1 else f"these {count} photos"
     if gathering.gathering_type == GatheringType.MEMORIAL:
         # Exempt from the account quota; bounded by its own ceiling — the
-        # gathering's own bytes, published plus in flight.
+        # gathering's own bytes, published plus in flight. Never consulted
+        # an account, still doesn't (untouched at CK-50).
         own = await keeping.gathering_bytes(db, gathering)
         ceiling = keeping.MEMORIAL_CEILING_BYTES
         if own + batch_bytes > ceiling:
@@ -631,13 +657,15 @@ async def _enforce_limits(
                 f"{noun} ({_human_bytes(batch_bytes)}) would go past it",
             )
         return
-    usage = await keeping.account_usage(db, host)
-    quota = await keeping.account_quota(db, host)
+    usage = await keeping.account_usage(db, keeper)
+    quota = await keeping.account_quota(db, keeper)
     if usage + batch_bytes > quota:
+        # Neutral about whose account it is: "the space this gathering is
+        # kept in" names neither the host nor the keeper.
         raise _field_422(
             "items",
-            f"the host's storage is limited to {_human_bytes(quota)}, and {noun} "
-            f"({_human_bytes(batch_bytes)}) would go past it",
+            f"the space this gathering is kept in is limited to {_human_bytes(quota)}, "
+            f"and {noun} ({_human_bytes(batch_bytes)}) would go past it",
         )
 
 

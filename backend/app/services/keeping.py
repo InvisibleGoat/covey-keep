@@ -36,9 +36,11 @@ What is DERIVED, and never stored, is unchanged in its rule:
   derivative rows; the reservation releases at that moment, or when the row
   fails or is reaped — never earlier. `account_usage` IS THE ONE QUOTA PATH:
   the reservation lives inside it rather than beside it, for the reason
-  CK-13 banned a second refcount. (Which account the UPLOAD GATE checks is a
-  separate question — still the host's, CK-34; the gate moving to the
-  resolved keeper is v2 §6 and its own phase.)
+  CK-13 banned a second refcount. Since CK-50 the UPLOAD GATE asks the same
+  resolver for its subject (api/media.py::_enforce_limits via
+  resolved_keeper_of — v2 §6): the gathering's resolved keeper's row is
+  locked and its usage checked, never the host's; a gathering that
+  resolves UNKEPT refuses the upload — no quota subject.
 - Grace state is derived from ONE timestamp (`last_keeper_left_at`) plus the
   policy constants below — never persisted. Under one keeper "the last
   keeper left" and "the keeper left" are the same event, so the stamp's
@@ -57,8 +59,9 @@ creator becomes keeper in the same transaction that births the gathering —
 the read audience (api/gatherings.py::_gathering_for_read via
 resolved_keeper_of; the list statement and api/media.py::_visible_media via
 keeps_gathering), the account deletion path (profile.py) via
-lapse_kept_statuses, and the upload-intent endpoint (api/media.py, CK-34)
-via account_usage / account_quota / gathering_bytes. Every function that
+lapse_kept_statuses, and the upload-intent endpoint (api/media.py, CK-34;
+its subject the resolved keeper since CK-50) via resolved_keeper_of /
+account_usage / account_quota / gathering_bytes. Every function that
 writes leaves the commit to the caller, so the keeper write and its side
 effects (grace stamp, host relinquishment) land in the caller's transaction
 or not at all.

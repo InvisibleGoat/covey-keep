@@ -13,11 +13,16 @@ The load-bearing pins:
   refused whole);
 - the audience is the read audience and is NEVER keeping: an invitee with
   no kept row uploads; a stranger's 404 is byte-identical to a missing id;
-- the quota is a RESERVATION on the HOST's account — a batch that would
-  exceed it is refused, the reservation survives confirm, releases at
-  `failed`, and is released by the reap; other keepers may be over their
-  own quota; a refusal never states the host's usage; a hostless gathering
-  refuses;
+- the quota is a RESERVATION on the resolved KEEPER's account (CK-50; the
+  host's until then) — a batch that would exceed it is refused, the
+  reservation survives confirm, releases at `failed`, and is released by
+  the reap; the uploader may be over their own quota; a refusal never
+  states anyone's usage or WHOSE storage it is; a gathering with no
+  keeper refuses (a memorial too), a hostless one with a keeper does not;
+  THE PHASE'S PROOF — host and keeper two accounts, the keeper's headroom
+  deciding in both directions and the reservation landing on the keeper;
+  a group gathering charging the GROUP's keeper (the resolver's first
+  rung at the gate) and refusing once the group's keeper is gone;
 - a memorial is exempt from the account quota and refused above its own
   ceiling, with in-flight bytes counting toward it;
 - confirm verifies rather than trusts: a missing object and a size mismatch
@@ -46,6 +51,7 @@ from app.config import settings
 from app.main import app
 from app.models import (
     Gathering,
+    Group,
     Media,
     MediaDerivative,
     MediaLayer,
@@ -57,6 +63,7 @@ from app.services import keeping
 from app.services.storage import PRESIGN_TTL, quarantine_key
 from tests.test_gatherings import _account_for, _create, _field_errors, _signed_in_headers
 from tests.test_invitations import _accept, _invite_token
+from tests.test_keeper_shape import _mk_group
 
 MISSING_ID = "00000000-0000-0000-0000-000000000000"
 MB = 1_000_000
@@ -337,10 +344,17 @@ async def test_audience_is_the_read_audience_and_never_keeping(
         assert await _media_count(db) == 2
 
 
-# --- the quota: a reservation on the host's account -------------------------
+# --- the quota: a reservation on the resolved KEEPER's account (CK-50) -------
+# CK-34 charged the gathering's host. Since CK-50 the subject is the resolved
+# keeper (keeper record v2 §6) — one lookup through the resolver, that
+# account's row locked, the same mechanism otherwise. Under one keeper the
+# creator is keeper and host at once, so every test that reads "the host"
+# below was true then and is true now; the ones that separate the two
+# facts (host ≠ keeper — the sponsorship shape, made by MOVING the column,
+# since transfer has no surface) are the phase's proof.
 
 
-async def test_reservation_blocks_a_batch_that_would_exceed_the_hosts_quota(
+async def test_reservation_blocks_a_batch_that_would_exceed_the_keepers_quota(
     client, capsys, db_session_factory, monkeypatch
 ):
     monkeypatch.setattr(keeping, "FREE_TIER_BYTES", 50 * MB)
@@ -367,7 +381,7 @@ async def test_reservation_blocks_a_batch_that_would_exceed_the_hosts_quota(
         assert (await db.get(Gathering, created["id"])).total_bytes == 0
 
     # Confirming does not release the reservation — the bytes now sit in
-    # quarantine, still against the host's quota until published.
+    # quarantine, still against the keeper's quota until published.
     _stub_head(monkeypatch, (25 * MB, "image/jpeg"))
     for media_id in ids:
         assert (await _confirm(client, headers, media_id)).status_code == 200
@@ -414,14 +428,16 @@ async def test_reservation_is_released_by_the_reap(
         assert set(rows) == {response.json()["intents"][0]["media"]["id"]}
 
 
-async def test_other_keepers_may_be_over_their_own_quota(
+async def test_an_uploader_may_be_over_their_own_quota(
     client, capsys, db_session_factory, monkeypatch
 ):
-    # The cousin hosts their own, over-full gathering; the grandmother's
+    # The cousin keeps their own, over-full gathering; the grandmother's
     # gathering is fine. The cousin uploads to the grandmother's gathering
-    # regardless — the check is the HOST's quota, never the uploader's.
+    # regardless — the check is the KEEPER's quota, never the uploader's
+    # (blocking a grandmother's upload because a cousin is full turns one
+    # person's spending decision into everyone else's outage).
     monkeypatch.setattr(keeping, "FREE_TIER_BYTES", 50 * MB)
-    headers_host, headers_cousin, created = await _host_and_invitee(
+    headers_keeper, headers_cousin, created = await _host_and_invitee(
         client, capsys, "grandmother@example.com", "cousin@example.com"
     )
     own = await _create(client, headers_cousin, title="The cousin's own")
@@ -430,11 +446,11 @@ async def test_other_keepers_may_be_over_their_own_quota(
         cousin = await _account_for(db, "cousin@example.com")
         assert await keeping.account_usage(db, cousin) > await keeping.account_quota(db, cousin)
     assert (await _intents(client, headers_cousin, created["id"], [_item(MB)])).status_code == 201
-    # Control: the same cousin on their own gathering is refused.
+    # Control: the same cousin on the gathering they keep is refused.
     assert (await _intents(client, headers_cousin, own["id"], [_item(1)])).status_code == 422
 
 
-async def test_a_quota_refusal_never_discloses_the_hosts_usage(
+async def test_a_quota_refusal_never_discloses_usage_or_whose_storage_it_is(
     client, capsys, db_session_factory, monkeypatch
 ):
     monkeypatch.setattr(keeping, "FREE_TIER_BYTES", 50 * MB)
@@ -446,14 +462,84 @@ async def test_a_quota_refusal_never_discloses_the_hosts_usage(
     refused = await _intents(client, headers_invitee, created["id"], [_item(8 * MB)])
     assert refused.status_code == 422
     message = refused.json()["detail"][0]["msg"]
-    # The limit and the batch are stated; the host's 43 MB is not.
+    # The limit and the batch are stated; the keeper's 43 MB is not.
     assert "50 MB" in message
     assert "8" in message and "MB" in message
     assert "43" not in message
     assert "7" not in message  # nor the headroom, which is usage in disguise
+    # And never WHOSE storage it is: the caller may be neither host nor
+    # keeper, and "the keeper's storage is limited to X" tells a guest
+    # about someone else's account. Neither word appears.
+    assert "host" not in message
+    assert "keeper" not in message
 
 
-async def test_a_hostless_gathering_refuses_uploads(client, capsys, db_session_factory):
+async def test_the_keepers_headroom_decides_and_the_hosts_is_irrelevant(
+    client, capsys, db_session_factory, monkeypatch
+):
+    # THE test that proves the phase (v2 §6, §7): the host and the keeper
+    # are two accounts, and only the keeper's headroom is consulted — in
+    # BOTH directions. The sponsorship shape: grandma keeps the family
+    # home; her grandson hosts the barbecue. Each has a gathering of their
+    # own to be full through.
+    monkeypatch.setattr(keeping, "FREE_TIER_BYTES", 50 * MB)
+    host_addr, keeper_addr = "grandson@example.com", "grandma@example.com"
+    headers_host = await _signed_in_headers(client, capsys, host_addr)
+    headers_keeper = await _signed_in_headers(client, capsys, keeper_addr)
+    barbecue = await _create(client, headers_host, title="The barbecue")
+    hosts_own = await _create(client, headers_host, title="The grandson's own")
+    keepers_own = await _create(client, headers_keeper, title="Grandma's own")
+    async with db_session_factory() as db:
+        keeper_account = await _account_for(db, keeper_addr)
+        host_account = await _account_for(db, host_addr)
+        gathering = await db.get(Gathering, barbecue["id"])
+        assert gathering.host_account_id == host_account.id
+        gathering.keeper_account_id = keeper_account.id  # moved: host ≠ keeper
+        await db.commit()
+        resolution = await keeping.resolved_keeper_of(db, gathering)
+        assert resolution.keeper_account_id == keeper_account.id
+
+    # Direction 1: the KEEPER is full and the host is empty → refused. The
+    # host's plentiful headroom is irrelevant, and no row is written.
+    async with db_session_factory() as db:
+        await _set_total_bytes(db, keepers_own["id"], 60 * MB)
+        assert await keeping.account_usage(db, await _account_for(db, keeper_addr)) == 60 * MB
+        assert await keeping.account_usage(db, await _account_for(db, host_addr)) == 0
+    refused = await _intents(client, headers_host, barbecue["id"], [_item(MB)])
+    assert refused.status_code == 422
+    assert _locs(refused) == [["body", "items"]]
+    async with db_session_factory() as db:
+        assert await _media_count(db) == 0
+
+    # Direction 2: the keeper is empty and the HOST is full → allowed, and
+    # the reservation lands on the keeper's account and nowhere near the
+    # host's. The host is over quota on their own gathering the whole time.
+    async with db_session_factory() as db:
+        await _set_total_bytes(db, keepers_own["id"], 0)
+        await _set_total_bytes(db, hosts_own["id"], 60 * MB)
+        assert await keeping.account_usage(db, await _account_for(db, host_addr)) == 60 * MB
+    allowed = await _intents(client, headers_host, barbecue["id"], [_item(3 * MB)])
+    assert allowed.status_code == 201, allowed.text
+    async with db_session_factory() as db:
+        assert await _media_count(db) == 1
+        assert await keeping.account_usage(db, await _account_for(db, keeper_addr)) == 3 * MB
+        assert await keeping.account_usage(db, await _account_for(db, host_addr)) == 60 * MB
+    # Control: the same host on the gathering they keep THEMSELVES is
+    # refused — there, their own headroom decides.
+    assert (await _intents(client, headers_host, hosts_own["id"], [_item(1)])).status_code == 422
+    # And the keeper, who is not the host here, uploads to the barbecue
+    # against their own headroom like anyone else in the audience.
+    assert (await _intents(client, headers_keeper, barbecue["id"], [_item(MB)])).status_code == 201
+
+
+async def test_a_hostless_gathering_with_a_keeper_is_uploadable(
+    client, capsys, db_session_factory
+):
+    # CK-34 refused a hostless gathering (no quota subject, under the host
+    # gate). Under v2 §6 the subject is the keeper, and the claimable state
+    # (host NULL — v2 §9.2) has one: the upload is accepted and the
+    # reservation lands on the keeper. The CK-34 refusal is closed by the
+    # gate, not by the claim flow.
     headers = await _signed_in_headers(client, capsys, "keeper@example.com")
     created = await _create(client, headers)
     async with db_session_factory() as db:
@@ -461,13 +547,103 @@ async def test_a_hostless_gathering_refuses_uploads(client, capsys, db_session_f
             update(Gathering).where(Gathering.id == created["id"]).values(host_account_id=None)
         )
         await db.commit()
-    # The caller still keeps it (the read audience admits them); there is
-    # simply nobody's quota to charge.
-    response = await _intents(client, headers, created["id"], [_item()])
-    assert response.status_code == 422
-    assert _locs(response) == [["path", "gathering_id"]]
+    response = await _intents(client, headers, created["id"], [_item(4 * MB)])
+    assert response.status_code == 201, response.text
+    async with db_session_factory() as db:
+        assert await _media_count(db) == 1
+        account = await _account_for(db, "keeper@example.com")
+        assert await keeping.account_usage(db, account) == 4 * MB
+
+
+async def test_a_keeperless_gathering_refuses_uploads(client, capsys, db_session_factory):
+    # The Unkept rung (v2 §5): both keeper columns NULL. The host is still
+    # set — a host does not rescue it; the subject is the keeper and there
+    # is none, so there is nobody's quota to charge. A memorial refuses the
+    # same way: its ceiling never needed an account, but an unkept
+    # gathering is read-only whatever its type, and the memorial branch
+    # sits after the subject check exactly as it did under the host gate.
+    headers = await _signed_in_headers(client, capsys, "host@example.com")
+    potluck = await _create(client, headers)
+    memorial = await _create(
+        client, headers, gathering_type="memorial", title="For Edith", memorial_decedent_name="Edith"
+    )
+    async with db_session_factory() as db:
+        await db.execute(
+            update(Gathering)
+            .where(Gathering.id.in_([potluck["id"], memorial["id"]]))
+            .values(keeper_account_id=None)
+        )
+        await db.commit()
+        for gathering_id in (potluck["id"], memorial["id"]):
+            gathering = await db.get(Gathering, gathering_id)
+            assert gathering.host_account_id is not None
+            assert (await keeping.resolved_keeper_of(db, gathering)).source is keeping.KeeperSource.UNKEPT
+    for gathering_id in (potluck["id"], memorial["id"]):
+        response = await _intents(client, headers, gathering_id, [_item()])
+        assert response.status_code == 422
+        assert _locs(response) == [["path", "gathering_id"]]
+        message = response.json()["detail"][0]["msg"]
+        # The copy names keeping, not hosting — and describes no way to come
+        # to keep it: the claim surface is unbuilt, so it says what is true
+        # and stops.
+        assert "keep" in message
+        assert "host" not in message
+        for claim_flow_word in ("claim", "take it on", "takes it on", "become"):
+            assert claim_flow_word not in message
     async with db_session_factory() as db:
         assert await _media_count(db) == 0
+
+
+async def test_a_group_gathering_charges_the_groups_keeper(
+    client, capsys, db_session_factory, monkeypatch
+):
+    # The resolver's first rung reaching the quota gate for the first time.
+    # A constructed subject, because `owning_group_id` still has no writer
+    # (Arc B's): the creator's gathering is moved into a group whose keeper
+    # is a second account, its own keeper column NULLed (the CHECK
+    # insists), its host left as the creator so the creator still uploads
+    # through the read audience. The GROUP's keeper's headroom decides.
+    monkeypatch.setattr(keeping, "FREE_TIER_BYTES", 50 * MB)
+    creator_addr, keeper_addr = "creator@example.com", "group-keeper@example.com"
+    headers_creator = await _signed_in_headers(client, capsys, creator_addr)
+    headers_keeper = await _signed_in_headers(client, capsys, keeper_addr)
+    created = await _create(client, headers_creator, title="Belongs to a group")
+    keepers_own = await _create(client, headers_keeper, title="The group keeper's own")
+    async with db_session_factory() as db:
+        keeper_account = await _account_for(db, keeper_addr)
+        group = await _mk_group(db)
+        group.keeper_account_id = keeper_account.id
+        gathering = await db.get(Gathering, created["id"])
+        gathering.keeper_account_id = None
+        gathering.owning_group_id = group.id
+        await db.commit()
+        group_id = group.id
+        resolution = await keeping.resolved_keeper_of(db, gathering)
+        assert resolution.source is keeping.KeeperSource.GROUP
+        assert resolution.keeper_account_id == keeper_account.id
+        # The group's keeper is full, through a gathering of their own.
+        await _set_total_bytes(db, keepers_own["id"], 60 * MB)
+    refused = await _intents(client, headers_creator, created["id"], [_item(MB)])
+    assert refused.status_code == 422
+    assert _locs(refused) == [["body", "items"]]
+    async with db_session_factory() as db:
+        assert await _media_count(db) == 0
+        # With headroom, the reservation lands on the group's keeper and on
+        # nobody else — not the creator, who hosts it and keeps nothing.
+        await _set_total_bytes(db, keepers_own["id"], 0)
+    allowed = await _intents(client, headers_creator, created["id"], [_item(3 * MB)])
+    assert allowed.status_code == 201, allowed.text
+    async with db_session_factory() as db:
+        assert await keeping.account_usage(db, await _account_for(db, keeper_addr)) == 3 * MB
+        assert await keeping.account_usage(db, await _account_for(db, creator_addr)) == 0
+        # The group's keeper going NULL leaves the gathering Unkept through
+        # the first rung — refused as keeperless, though its host stands.
+        group = await db.get(Group, group_id)
+        group.keeper_account_id = None
+        await db.commit()
+    unkept = await _intents(client, headers_creator, created["id"], [_item(MB)])
+    assert unkept.status_code == 422
+    assert _locs(unkept) == [["path", "gathering_id"]]
 
 
 # --- the memorial: exempt from the account quota, bounded by its own ceiling -
@@ -483,13 +659,13 @@ async def test_memorial_is_exempt_from_the_account_quota_and_refused_above_its_c
     memorial = await _create(
         client, headers, gathering_type="memorial", title="For Edith", memorial_decedent_name="Edith"
     )
-    # The host is over their account quota through the potluck...
+    # The keeper is over their account quota through the potluck...
     async with db_session_factory() as db:
         await _set_total_bytes(db, potluck["id"], 60 * MB)
     # ...and the memorial accepts an upload regardless (the exemption).
     first = await _intents(client, headers, memorial["id"], [_item(25 * MB)])
     assert first.status_code == 201, first.text
-    # Control: the same host on the potluck is refused.
+    # Control: the same keeper on the potluck is refused.
     assert (await _intents(client, headers, potluck["id"], [_item(1)])).status_code == 422
 
     # The ceiling: 25 MB in flight + 25 MB more > 30 MB. The in-flight
@@ -508,6 +684,47 @@ async def test_memorial_is_exempt_from_the_account_quota_and_refused_above_its_c
         account = await _account_for(db, "mourner@example.com")
         assert await keeping.account_usage(db, account) == 60 * MB
 
+
+async def test_a_memorial_ignores_its_keepers_quota_and_keeps_its_ceiling(
+    client, capsys, db_session_factory, monkeypatch
+):
+    # The memorial branch, untouched at CK-50, seen from the new subject:
+    # host ≠ keeper, the KEEPER over quota — and the memorial accepts an
+    # upload regardless (exempt from the account quota, whoever's it is);
+    # the ceiling still binds against the memorial's own bytes; and none of
+    # it counts against the keeper's account.
+    monkeypatch.setattr(keeping, "FREE_TIER_BYTES", 50 * MB)
+    monkeypatch.setattr(keeping, "MEMORIAL_CEILING_BYTES", 30 * MB)
+    host_addr, keeper_addr = "host@example.com", "mourner@example.com"
+    headers_host = await _signed_in_headers(client, capsys, host_addr)
+    headers_keeper = await _signed_in_headers(client, capsys, keeper_addr)
+    memorial = await _create(
+        client, headers_host, gathering_type="memorial", title="For Edith", memorial_decedent_name="Edith"
+    )
+    keepers_potluck = await _create(client, headers_keeper)
+    async with db_session_factory() as db:
+        keeper_account = await _account_for(db, keeper_addr)
+        gathering = await db.get(Gathering, memorial["id"])
+        gathering.keeper_account_id = keeper_account.id  # moved: host ≠ keeper
+        await db.commit()
+        await _set_total_bytes(db, keepers_potluck["id"], 60 * MB)
+        keeper_account = await _account_for(db, keeper_addr)
+        assert await keeping.account_usage(db, keeper_account) > await keeping.account_quota(
+            db, keeper_account
+        )
+    # Exempt: the host uploads to the memorial though its keeper is full.
+    first = await _intents(client, headers_host, memorial["id"], [_item(25 * MB)])
+    assert first.status_code == 201, first.text
+    # Control: the keeper on the potluck they keep is refused.
+    assert (await _intents(client, headers_keeper, keepers_potluck["id"], [_item(1)])).status_code == 422
+    # The ceiling still binds, on the memorial's own bytes.
+    second = await _intents(client, headers_host, memorial["id"], [_item(25 * MB)])
+    assert second.status_code == 422
+    assert _locs(second) == [["body", "items"]]
+    assert "memorial" in second.json()["detail"][0]["msg"]
+    async with db_session_factory() as db:
+        assert await keeping.gathering_bytes(db, await db.get(Gathering, memorial["id"])) == 25 * MB
+        assert await keeping.account_usage(db, await _account_for(db, keeper_addr)) == 60 * MB
 
 # --- confirm: verifies, then flips one rung ---------------------------------
 
