@@ -66,19 +66,30 @@ Everything here is part of the accept/refuse decision:
   (blocking a grandmother's upload because a cousin is full turns one
   person's spending decision into everyone else's outage). The keeper
   account row is locked for the check-and-insert so two concurrent batches
-  cannot both pass against the same headroom. A refusal states the limit,
-  the room left and what is being added — something a person can act on
-  — and NEVER anyone's usage figure, and NEVER whose storage it is: the
-  caller may be neither host nor keeper. THE BIN CLAUSE (bin record §5,
-  binding): where the space is full AND some of what it holds is in the
-  30-day bin, the refusal names the bin and offers to empty it — the bin
-  is counted on the refusal path alone (keeping.account_bin_count), never
-  on the accepted path; where the bin is empty the refusal names no bin,
-  the CK-50 discipline on copy for an affordance that cannot deliver. The
-  count the refusal names is CHARGED, never visible (bin record §4): a
-  binned photograph still counts because it is still stored. A gathering
-  that resolves to NO keeper (the Unkept rung — both columns NULL) refuses
-  every upload: no quota subject.
+  cannot both pass against the same headroom. WHO IS ASKING decides how
+  much a refusal says (CK-51b.1; currency record 2.6.0 §3, bin record
+  1.1.0 §5) — the caller's account against the resolved keeper's, the
+  comparison _gathering_for_read already makes. THE KEEPER, asking about
+  their own space, reads the limit, the room left and what is being
+  added — something they can act on — and THE BIN CLAUSE where the space
+  is full AND some of what it holds is in the 30-day bin: the refusal
+  names the bin and offers to empty it (the bin counted on that path
+  alone, keeping.account_bin_count, never on the accepted path); where
+  the bin is empty it names no bin, the CK-50 discipline on copy for an
+  affordance that cannot deliver. EVERYONE ELSE reads the limit and the
+  batch and nothing more: only the keeper can free room or empty a bin,
+  so to any other caller both figures are unusable, and "empty the bin"
+  offered to them is copy naming an affordance they cannot use — the
+  same defect; the room left is usage in disguise (CK-50's rule,
+  restored — CK-51b had named it to every caller and said so), and the
+  bin count is a fact about another person's deletions. The bin is NOT
+  counted for them: a query whose answer may not be shown is not run. A
+  host who does not keep the gathering reads the withheld form. Neither
+  form names anyone's usage figure or WHOSE storage it is (the caller may
+  be neither host nor keeper). The count a refusal names is CHARGED,
+  never visible (bin record §4): a binned photograph still counts because
+  it is still stored. A gathering that resolves to NO keeper (the Unkept
+  rung — both columns NULL) refuses every upload: no quota subject.
 - THE MEMORIAL CEILING — 5,000 PHOTOGRAPHS per memorial gathering (keeper
   record §9.4; in photographs since CK-51b, currency record §8 — one unit
   across every gathering type). Memorials are exempt from the ACCOUNT quota
@@ -623,16 +634,18 @@ def _media_body(row: Media) -> dict:
     }
 
 
-async def _enforce_limits(db: AsyncSession, gathering: Gathering, count: int) -> None:
+async def _enforce_limits(
+    db: AsyncSession, gathering: Gathering, count: int, caller_account_id: UUID
+) -> None:
     """The quota reservation and the memorial ceiling, against DB state —
     IN PHOTOGRAPHS (CK-51b): `count` is the batch's item count, and it is
     the quantity throughout — reserved, compared, and named in the copy. No
     byte figure is read here. Field-level 422s on the batch
     (["body", "items"]) — the refusal is about the batch as a whole; it
-    names the limit, the room left and what is being added, and never
-    anyone's usage figure and never WHOSE storage it is (the caller may be
-    neither host nor keeper, and another account's usage is not theirs to
-    learn).
+    names the limit and what is being added — and, to the keeper alone,
+    the room left and the bin (WHO IS ASKING, below) — and never anyone's
+    usage figure and never WHOSE storage it is (the caller may be neither
+    host nor keeper, and another account's usage is not theirs to learn).
 
     THE SUBJECT IS THE GATHERING'S RESOLVED KEEPER (CK-50; keeper record v2
     §6) — one lookup through the resolver, THAT account's row locked, the
@@ -643,14 +656,29 @@ async def _enforce_limits(db: AsyncSession, gathering: Gathering, count: int) ->
     the batch-level 422, the keeperless 422 and the memorial branch are
     CK-50's, verbatim in shape.
 
-    THE BIN CLAUSE (bin record §5, binding on this phase): when the quota
-    refuses, and only then, the bin is counted — `account_bin_count`, the
-    one call it may ever have — and where it is not empty the refusal says
-    so and offers to empty it (the space is full because of photographs a
-    person can still free); where it is empty the refusal names no bin, an
-    affordance that cannot deliver being the CK-50 discipline's exact case.
-    The bin is not counted on the accepted path: the hot path pays for the
-    quota's one statement and nothing more."""
+    WHO IS ASKING decides how much the refusal says (CK-51b.1; the currency
+    record 2.6.0 §3, the bin record 1.1.0 §5). `caller_account_id` — the
+    id, not the context, so the function stays DB-shaped — is compared
+    against the resolved keeper's, the comparison _gathering_for_read
+    already makes; no second resolution. THE KEEPER, asking about their own
+    space, reads the room left, and THE BIN CLAUSE (bin record §5) where
+    the space is full and some of what it holds is in the 30-day bin — the
+    bin counted then, and only then, through `account_bin_count`, the one
+    call it may ever have; where the bin is empty the refusal names no
+    bin, an affordance that cannot deliver being the CK-50 discipline's
+    exact case. EVERYONE ELSE reads ONE form — the limit and the batch —
+    and nothing more, because only the keeper can free room or empty a
+    bin: to any other caller both figures are unusable, "empty the bin"
+    offered to them names an affordance they cannot use (the defect CK-50
+    refused when it declined v2 §6's claim-flow sentence), the room left
+    is usage in disguise (CK-50's rule, restored — CK-51b named it to every
+    caller and reported the retired pin, which is how the collision was
+    found), and the bin count is a fact about another person's deletions.
+    The bin is NOT counted on that path — a query whose answer may not be
+    shown is not run — nor on the accepted path: the hot path pays for the
+    quota's one statement and nothing more. A host who does not keep the
+    gathering reads the withheld form; an ORGANIZATION keeper leaves every
+    caller reading it (open in the records — the org member surface)."""
     resolution = await keeping.resolved_keeper_of(db, gathering)
     if resolution.keeper_account_id is None:
         # The Unkept rung (v2 §5) — both columns NULL, read-only and
@@ -691,10 +719,19 @@ async def _enforce_limits(db: AsyncSession, gathering: Gathering, count: int) ->
     quota = await keeping.account_quota(db, keeper)
     if usage + count > quota:
         # Neutral about whose account it is: "this space" names neither the
-        # host nor the keeper, and neither number below is anyone's usage —
-        # the allowance, the room left in it, and what is being added are
-        # what a person can act on (currency record §3). The bin is counted
-        # HERE, on the refusal path alone (bin record §5).
+        # host nor the keeper, and no number below is anyone's usage.
+        if caller_account_id != resolution.keeper_account_id:
+            # Not the keeper: the withheld form (CK-51b.1) — the limit and
+            # the batch, and nothing more. No room figure, no bin count, no
+            # direction naming whose space it is; the bin is not counted.
+            raise _field_422(
+                "items",
+                f"this space is full — it holds {quota:,} photos, and you're adding {count:,}",
+            )
+        # The keeper, about their own space: the allowance, the room left
+        # in it, and what is being added are what they can act on (currency
+        # record §3). The bin is counted HERE, on the keeper's refusal alone
+        # (bin record §5).
         binned = await keeping.account_bin_count(db, keeper)
         if binned > 0:
             raise _field_422(
@@ -751,8 +788,10 @@ async def create_intents(
 
     # The quantity is the batch's item count (CK-51b): a photograph is 1,
     # whatever it declared. The declared sizes are signed into the PUTs
-    # below and read by nothing here.
-    await _enforce_limits(db, gathering, len(body.items))
+    # below and read by nothing here. The caller's account decides how
+    # much a refusal says (CK-51b.1): the keeper reads their own room and
+    # bin; everyone else the limit and the batch.
+    await _enforce_limits(db, gathering, len(body.items), caller_account_id=ctx.person.account_id)
 
     rows = [
         Media(
