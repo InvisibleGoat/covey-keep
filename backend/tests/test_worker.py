@@ -864,13 +864,15 @@ async def test_a_delete_that_fails_after_the_commit_leaves_the_row_ready(
     assert await poll_once(db_session_factory, worker, t0 + timedelta(hours=1)) is Poll.IDLE
 
 
-async def test_the_reservation_releases_at_ready_and_total_bytes_takes_over(
+async def test_the_reservation_releases_at_ready_and_photo_count_takes_over(
     db_session_factory, worker, monkeypatch
 ):
     """The baton keeping.py already holds (`ready` is outside
-    IN_FLIGHT_STATUSES), verified and not rebuilt: before, the account's
-    usage is the DECLARED size; after, it is the derivatives' ACTUAL sum —
-    the two differ, on purpose."""
+    IN_FLIGHT_STATUSES), verified and not rebuilt — in PHOTOGRAPHS since
+    CK-51b: before, the account's usage is ONE (the in-flight row); after,
+    it is ONE (photo_count took over) — the same number on purpose, because
+    a photograph is 1 whatever it declared and whatever it stored. The
+    bytes still move beside it, on the gathering, for the monitor."""
     declared = 4 * MB
     async with db_session_factory() as db:
         keeper = await _mk_account(db)
@@ -883,14 +885,51 @@ async def test_the_reservation_releases_at_ready_and_total_bytes_takes_over(
     FakeStore(monkeypatch, {quarantine_key(media_id): GPS_PHOTO})
 
     async with db_session_factory() as db:
-        assert await keeping.account_usage(db, await db.get(Account, keeper_id)) == declared
+        assert await keeping.account_usage(db, await db.get(Account, keeper_id)) == 1
     assert await poll_once(db_session_factory, worker, _now()) is Poll.PROCESSED
     _, derivatives, gathering = await _ready_state(db_session_factory, media_id)
     stored = sum(d.size_bytes for d in derivatives)
     async with db_session_factory() as db:
-        assert await keeping.account_usage(db, await db.get(Account, keeper_id)) == stored
+        assert await keeping.account_usage(db, await db.get(Account, keeper_id)) == 1
+    assert gathering.photo_count == 1
     assert 0 < stored < declared
     assert gathering.total_bytes == stored
+
+
+async def test_the_monitor_logs_charged_against_stored_at_ready_and_on_no_other_path(
+    db_session_factory, worker, monkeypatch, caplog
+):
+    """THE MONITOR (CK-51b; the currency record §5) — one INFO line at the
+    publish UPDATE: the charged unit (1), the three layers' ACTUAL stored
+    bytes, PHOTOGRAPH_BYTES and their ratio. The first comparison of charged
+    against stored the system has ever had, and PHOTOGRAPH_BYTES's one
+    runtime use. Byte counts and a row id only — never a URL, a key or the
+    endpoint. And on a dead-letter path there is no charge, so no line."""
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, size=len(GPS_PHOTO), available_at=t0)
+    FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
+    with caplog.at_level(logging.INFO, logger="covey-keep.ingest"):
+        assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    _, derivatives, gathering = await _ready_state(db_session_factory, row.id)
+    stored = sum(d.size_bytes for d in derivatives)
+    lines = [r for r in caplog.records if r.name == "covey-keep.ingest"]
+    assert len(lines) == 1
+    line = lines[0].getMessage()
+    assert line == (
+        f"media {row.id}: charged 1 photograph; stored {stored} bytes against "
+        f"{keeping.PHOTOGRAPH_BYTES} modeled ({stored / keeping.PHOTOGRAPH_BYTES:.2f}x)"
+    )
+    assert gathering.photo_count == 1 and gathering.total_bytes == stored
+    for forbidden in ("r2.invalid", "uploads/", "media/", "http"):
+        assert forbidden not in line, forbidden
+
+    # A dead-letter charges nothing and logs no monitor line.
+    caplog.clear()
+    _stub_head(monkeypatch, None)
+    await _uploaded_row(db_session_factory, available_at=t0)
+    with caplog.at_level(logging.INFO, logger="covey-keep.ingest"):
+        assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    assert [r for r in caplog.records if r.name == "covey-keep.ingest"] == []
 
 
 async def test_an_undecodable_upload_dead_letters_on_the_first_attempt_and_its_original_goes(
@@ -1132,7 +1171,9 @@ async def test_a_claim_lost_to_a_reclaim_cannot_overwrite_the_other_workers_outc
 
 async def test_dead_lettering_releases_the_quota_reservation(db_session_factory, worker, monkeypatch):
     # No second mechanism: `failed` is outside IN_FLIGHT_STATUSES, so the one
-    # quota path stops counting the row the moment the worker marks it.
+    # quota path stops counting the row the moment the worker marks it. In
+    # photographs since CK-51b: two in flight, then one, then none — the
+    # declared sizes (4096 and 2048) decide nothing.
     _stub_head(monkeypatch, None)
     async with db_session_factory() as db:
         keeper = await _mk_account(db)
@@ -1145,17 +1186,18 @@ async def test_dead_lettering_releases_the_quota_reservation(db_session_factory,
 
     async with db_session_factory() as db:
         keeper = await db.get(Account, keeper_id)
-        assert await keeping.account_usage(db, keeper) == 4096 + 2048
+        assert await keeping.account_usage(db, keeper) == 2
 
     assert await poll_once(db_session_factory, worker, _now()) is Poll.PROCESSED
     async with db_session_factory() as db:
         keeper = await db.get(Account, keeper_id)
-        assert await keeping.account_usage(db, keeper) == 2048  # one released
+        assert await keeping.account_usage(db, keeper) == 1  # one released
     assert await poll_once(db_session_factory, worker, _now()) is Poll.PROCESSED
     async with db_session_factory() as db:
         keeper = await db.get(Account, keeper_id)
         assert await keeping.account_usage(db, keeper) == 0
-        assert (await db.get(Gathering, gathering_id)).total_bytes == 0  # untouched, CK-36's
+        gathering = await db.get(Gathering, gathering_id)
+        assert (gathering.total_bytes, gathering.photo_count) == (0, 0)  # untouched, CK-36's / CK-51a's
 
 
 # --- the loop --------------------------------------------------------------------

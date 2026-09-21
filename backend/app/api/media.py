@@ -47,10 +47,16 @@ Everything here is part of the accept/refuse decision:
   invalid: partial acceptance would need a per-item error shape the
   frontend does not have and would leave the caller reconciling which
   intents exist.
-- THE QUOTA — a RESERVATION, not a check (record §6.6): every in-flight
-  upload's declared size counts inside services/keeping.py::account_usage,
-  THE one quota path (a second one is the failure to avoid, for the reason
-  CK-13 banned a second refcount). Gated on the gathering's RESOLVED
+- THE QUOTA — IN PHOTOGRAPHS, since CK-51b (decisions/2026-09-20-
+  photographs-are-the-currency.md §3): a photograph is 1 whatever the file
+  weighed, and the batch's ITEM COUNT is the quantity throughout — the
+  reservation, the comparison and the refusal. A RESERVATION, not a check
+  (record §6.6): every in-flight upload counts ONE inside
+  services/keeping.py::account_usage, THE one quota path (a second one is
+  the failure to avoid, for the reason CK-13 banned a second refcount).
+  No byte figure is read on this path and none appears in its copy (the
+  25 MB per-file cap is a transfer guard and keeps _human_bytes as its
+  only caller). Gated on the gathering's RESOLVED
   KEEPER — since CK-50 (keeper record v2 §6): the owning group's keeper,
   else the gathering's own, through keeping.resolved_keeper_of, never the
   host (CK-34 charged the host, which was right under the old model and
@@ -60,21 +66,29 @@ Everything here is part of the accept/refuse decision:
   (blocking a grandmother's upload because a cousin is full turns one
   person's spending decision into everyone else's outage). The keeper
   account row is locked for the check-and-insert so two concurrent batches
-  cannot both pass against the same headroom. A refusal states the limit
-  and what would exceed it, and NEVER anyone's usage, and NEVER whose
-  storage it is — the caller may be neither host nor keeper. A gathering
+  cannot both pass against the same headroom. A refusal states the limit,
+  the room left and what is being added — something a person can act on
+  — and NEVER anyone's usage figure, and NEVER whose storage it is: the
+  caller may be neither host nor keeper. THE BIN CLAUSE (bin record §5,
+  binding): where the space is full AND some of what it holds is in the
+  30-day bin, the refusal names the bin and offers to empty it — the bin
+  is counted on the refusal path alone (keeping.account_bin_count), never
+  on the accepted path; where the bin is empty the refusal names no bin,
+  the CK-50 discipline on copy for an affordance that cannot deliver. The
+  count the refusal names is CHARGED, never visible (bin record §4): a
+  binned photograph still counts because it is still stored. A gathering
   that resolves to NO keeper (the Unkept rung — both columns NULL) refuses
-  every upload: no quota subject. The reserved quantity is still the
-  declared byte count — the modeled reservation size is its own phase,
-  behind its own decision record (the declared original and the stored
-  derivatives are different units; CK-36 measured HEIC under-reserving).
-- THE MEMORIAL CEILING — 5 GB per memorial gathering (keeper record §9.4).
-  Memorials are exempt from the ACCOUNT quota and are NOT exempt from their
-  own ceiling; the comparison is against the memorial gathering's OWN bytes
-  (keeping.gathering_bytes), never an account's — a different check from
-  every other type, and therefore the one that is easy to omit by writing
-  the exemption and stopping. This router is the only place it can ever be
-  enforced.
+  every upload: no quota subject.
+- THE MEMORIAL CEILING — 5,000 PHOTOGRAPHS per memorial gathering (keeper
+  record §9.4; in photographs since CK-51b, currency record §8 — one unit
+  across every gathering type). Memorials are exempt from the ACCOUNT quota
+  and are NOT exempt from their own ceiling; the comparison is against the
+  memorial gathering's OWN count (keeping.gathering_units, published plus
+  in flight), never an account's — a different check from every other
+  type, and therefore the one that is easy to omit by writing the
+  exemption and stopping. This router is the only place it can ever be
+  enforced. No bin clause on a memorial (bin record §7.4: whether a
+  memorial's bin empties at all is the sweep phase's question).
 - THE REAP — an abandoned intent is normal traffic (record §4) and holds a
   reservation; unreaped it leaks quota forever. purge_stale (CK-24) reaps
   `pending_upload` rows 24 hours after intent — the same number as the
@@ -82,9 +96,11 @@ Everything here is part of the accept/refuse decision:
   on one clock — at the top of this endpoint, its fifth customer, and THE
   FIRST CONTENT TABLE it has touched: the `where` criterion is what keeps
   it off ready, published photographs (retention.py's second invariant).
-  The cost, stated: an abandoned batch holds its reservation for a day (up
-  to 1.25 GB against a 10 GB free tier). No second state releases it
-  earlier — `failed` means the retry ladder is spent and is not borrowed.
+  The cost, stated: an abandoned batch holds its reservation for a day —
+  since CK-51b at most 50 photo-equivalents against 10,000, half a percent
+  (it was up to 1.25 GB against a 10 GB tier while the reservation was in
+  bytes). No second state releases it earlier — `failed` means the retry
+  ladder is spent and is not borrowed.
 
 Nothing else moves. Confirm flips `pending_upload → uploaded` and stamps
 `uploaded_at` (decided at CK-34, migration 0017: NULL until confirm) and
@@ -319,7 +335,8 @@ from app.models import (
     PublicationState,
 )
 # The module, not its names: the limits are read at call time, so a test
-# can narrow FREE_TIER_BYTES / MEMORIAL_CEILING_BYTES on keeping itself.
+# can narrow FREE_TIER_PHOTOGRAPHS / MEMORIAL_CEILING_PHOTOGRAPHS on
+# keeping itself.
 from app.services import keeping
 from app.services.retention import purge_stale
 from app.services.storage import (
@@ -463,8 +480,11 @@ def _item_422(index: int, field: str, message: str) -> HTTPException:
 
 
 def _human_bytes(value: int) -> str:
-    # Decimal units, the keeping.py convention; the largest unit that reads
-    # as a whole-ish number. Copy, not arithmetic: nothing parses this.
+    # Decimal units; the largest unit that reads as a whole-ish number.
+    # Copy, not arithmetic: nothing parses this. ONE CALLER since CK-51b:
+    # the 25 MB per-file cap's message (MAX_UPLOAD_BYTES). No quota or
+    # ceiling refusal may reach for it — those are in photographs, and a
+    # byte figure in one is the wrong currency (pinned).
     for unit, size in (("GB", 1_000_000_000), ("MB", 1_000_000), ("KB", 1_000)):
         if value >= size:
             scaled = value / size
@@ -603,24 +623,34 @@ def _media_body(row: Media) -> dict:
     }
 
 
-async def _enforce_limits(
-    db: AsyncSession, gathering: Gathering, batch_bytes: int, count: int
-) -> None:
-    """The quota reservation and the memorial ceiling, against DB state.
-    Field-level 422s on the batch (["body", "items"]) — the refusal is about
-    the batch as a whole, and it names the limit and what would exceed it,
-    never anyone's usage and never WHOSE storage it is (the caller may be
+async def _enforce_limits(db: AsyncSession, gathering: Gathering, count: int) -> None:
+    """The quota reservation and the memorial ceiling, against DB state —
+    IN PHOTOGRAPHS (CK-51b): `count` is the batch's item count, and it is
+    the quantity throughout — reserved, compared, and named in the copy. No
+    byte figure is read here. Field-level 422s on the batch
+    (["body", "items"]) — the refusal is about the batch as a whole; it
+    names the limit, the room left and what is being added, and never
+    anyone's usage figure and never WHOSE storage it is (the caller may be
     neither host nor keeper, and another account's usage is not theirs to
     learn).
 
     THE SUBJECT IS THE GATHERING'S RESOLVED KEEPER (CK-50; keeper record v2
-    §6) — the mechanism CK-34 built with the subject changed and nothing
-    else: one lookup through the resolver, THAT account's row locked, the
-    same 422s, the same memorial branch, the same reserved quantity (the
-    declared bytes — the modeled size is its own phase, behind its own
-    decision record). The host is not consulted here at all: the host and
-    the keeper are two facts (v2 §7), and charging the host meant a person
-    who merely runs the day paying for bytes they do not keep."""
+    §6) — one lookup through the resolver, THAT account's row locked, the
+    same 422s, the same memorial branch. The host is not consulted here at
+    all: the host and the keeper are two facts (v2 §7), and charging the
+    host meant a person who merely runs the day paying for bytes they do
+    not keep. THE UNIT changed at CK-51b and nothing else did: the lock,
+    the batch-level 422, the keeperless 422 and the memorial branch are
+    CK-50's, verbatim in shape.
+
+    THE BIN CLAUSE (bin record §5, binding on this phase): when the quota
+    refuses, and only then, the bin is counted — `account_bin_count`, the
+    one call it may ever have — and where it is not empty the refusal says
+    so and offers to empty it (the space is full because of photographs a
+    person can still free); where it is empty the refusal names no bin, an
+    affordance that cannot deliver being the CK-50 discipline's exact case.
+    The bin is not counted on the accepted path: the hot path pays for the
+    quota's one statement and nothing more."""
     resolution = await keeping.resolved_keeper_of(db, gathering)
     if resolution.keeper_account_id is None:
         # The Unkept rung (v2 §5) — both columns NULL, read-only and
@@ -643,29 +673,40 @@ async def _enforce_limits(
             select(Account).where(Account.id == resolution.keeper_account_id).with_for_update()
         )
     ).scalar_one()
-    noun = "this photo" if count == 1 else f"these {count} photos"
     if gathering.gathering_type == GatheringType.MEMORIAL:
         # Exempt from the account quota; bounded by its own ceiling — the
-        # gathering's own bytes, published plus in flight. Never consulted
-        # an account, still doesn't (untouched at CK-50).
-        own = await keeping.gathering_bytes(db, gathering)
-        ceiling = keeping.MEMORIAL_CEILING_BYTES
-        if own + batch_bytes > ceiling:
+        # gathering's own COUNT, published plus in flight (in photographs
+        # since CK-51b; the branch's shape is CK-34's). Never consulted an
+        # account, still doesn't. No bin clause here (bin record §7.4).
+        own = await keeping.gathering_units(db, gathering)
+        ceiling = keeping.MEMORIAL_CEILING_PHOTOGRAPHS
+        if own + count > ceiling:
+            these = "this one" if count == 1 else f"these {count:,}"
             raise _field_422(
                 "items",
-                f"a memorial holds up to {_human_bytes(ceiling)} of photos, and "
-                f"{noun} ({_human_bytes(batch_bytes)}) would go past it",
+                f"a memorial holds up to {ceiling:,} photos, and {these} would go past it",
             )
         return
     usage = await keeping.account_usage(db, keeper)
     quota = await keeping.account_quota(db, keeper)
-    if usage + batch_bytes > quota:
-        # Neutral about whose account it is: "the space this gathering is
-        # kept in" names neither the host nor the keeper.
+    if usage + count > quota:
+        # Neutral about whose account it is: "this space" names neither the
+        # host nor the keeper, and neither number below is anyone's usage —
+        # the allowance, the room left in it, and what is being added are
+        # what a person can act on (currency record §3). The bin is counted
+        # HERE, on the refusal path alone (bin record §5).
+        binned = await keeping.account_bin_count(db, keeper)
+        if binned > 0:
+            raise _field_422(
+                "items",
+                f"this space is full — {quota:,} photos, and {binned:,} of them are in "
+                f"the bin. Empty the bin to make room.",
+            )
+        room = max(quota - usage, 0)
+        room_clause = f"has room for {room:,} more" if room > 0 else "has no room left"
         raise _field_422(
             "items",
-            f"the space this gathering is kept in is limited to {_human_bytes(quota)}, "
-            f"and {noun} ({_human_bytes(batch_bytes)}) would go past it",
+            f"this space holds {quota:,} photos and {room_clause}, and you're adding {count:,}",
         )
 
 
@@ -708,8 +749,10 @@ async def create_intents(
             if occurrence_id not in own_dates:
                 raise _item_422(index, "occurrence_id", "that date isn't part of this gathering")
 
-    batch_bytes = sum(item.size_bytes for item in body.items)
-    await _enforce_limits(db, gathering, batch_bytes, len(body.items))
+    # The quantity is the batch's item count (CK-51b): a photograph is 1,
+    # whatever it declared. The declared sizes are signed into the PUTs
+    # below and read by nothing here.
+    await _enforce_limits(db, gathering, len(body.items))
 
     rows = [
         Media(

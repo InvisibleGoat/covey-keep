@@ -14,17 +14,28 @@ The load-bearing pins:
 - the audience is the read audience and is NEVER keeping: an invitee with
   no kept row uploads; a stranger's 404 is byte-identical to a missing id;
 - the quota is a RESERVATION on the resolved KEEPER's account (CK-50; the
-  host's until then) — a batch that would exceed it is refused, the
-  reservation survives confirm, releases at `failed`, and is released by
-  the reap; the uploader may be over their own quota; a refusal never
-  states anyone's usage or WHOSE storage it is; a gathering with no
-  keeper refuses (a memorial too), a hostless one with a keeper does not;
-  THE PHASE'S PROOF — host and keeper two accounts, the keeper's headroom
-  deciding in both directions and the reservation landing on the keeper;
-  a group gathering charging the GROUP's keeper (the resolver's first
-  rung at the gate) and refusing once the group's keeper is gone;
+  host's until then), IN PHOTOGRAPHS since CK-51b (the currency record §3:
+  a photograph is 1 whatever it weighed, the reservation is the batch's
+  item count, `photo_count` plus the in-flight rows is the usage) — a
+  batch that would exceed it is refused, the reservation survives confirm,
+  releases at `failed`, and is released by the reap; the uploader may be
+  over their own quota; a refusal never states anyone's usage figure,
+  WHOSE storage it is, or a byte unit; a gathering with no keeper refuses
+  (a memorial too), a hostless one with a keeper does not; CK-50's PROOF
+  — host and keeper two accounts, the keeper's headroom deciding in both
+  directions and the reservation landing on the keeper; a group gathering
+  charging the GROUP's keeper (the resolver's first rung at the gate) and
+  refusing once the group's keeper is gone;
+- CK-51b's own pins: 10,000 photographs admitted and the 10,001st refused
+  whatever it weighs; a 24 MB photograph and a 40 KB one each costing
+  exactly 1, with the byte columns unread; THE TWO REFUSALS by their exact
+  copy — the bin empty (no bin named) and the bin not empty (the bin
+  named, emptying offered; bin record §5) — neither naming a usage figure,
+  whose storage it is, or a byte unit; `account_bin_count` reached from
+  the refusal path alone; no quota or ceiling refusal spelling GB or MB;
 - a memorial is exempt from the account quota and refused above its own
-  ceiling, with in-flight bytes counting toward it;
+  ceiling — 5,000 photographs, one unit across every gathering type — with
+  in-flight rows counting toward it;
 - confirm verifies rather than trusts: a missing object and a size mismatch
   each refuse and change nothing; success flips exactly one rung, stamps
   uploaded_at (NULL until then — 0017) and available_at, and moves nothing
@@ -36,9 +47,11 @@ The load-bearing pins:
   success path and on a failure path after presigning.
 """
 
+import inspect
 import logging
 import urllib.parse
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from botocore.exceptions import ClientError
@@ -119,6 +132,23 @@ async def _set_total_bytes(db, gathering_id: str, total: int) -> None:
         update(Gathering).where(Gathering.id == gathering_id).values(total_bytes=total)
     )
     await db.commit()
+
+
+async def _set_photo_count(db, gathering_id: str, count: int) -> None:
+    # The quota's unit since CK-51b: the gathering's committed photographs,
+    # planted directly (the worker is the only writer; test_photo_count.py
+    # pins its increment).
+    await db.execute(
+        update(Gathering).where(Gathering.id == gathering_id).values(photo_count=count)
+    )
+    await db.commit()
+
+
+def _names_no_byte_unit(message: str) -> None:
+    # A quota or ceiling refusal is in photographs, never bytes: none of
+    # the units _human_bytes can spell, and not the word itself.
+    for unit in ("GB", "MB", "KB", "byte"):
+        assert unit not in message, message
 
 
 async def _host_and_invitee(client, capsys, host_addr: str, invitee_addr: str):
@@ -357,28 +387,31 @@ async def test_audience_is_the_read_audience_and_never_keeping(
 async def test_reservation_blocks_a_batch_that_would_exceed_the_keepers_quota(
     client, capsys, db_session_factory, monkeypatch
 ):
-    monkeypatch.setattr(keeping, "FREE_TIER_BYTES", 50 * MB)
+    monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 2)
     headers = await _signed_in_headers(client, capsys, "full@example.com")
     created = await _create(client, headers)
 
-    # Exactly the quota, reserved by two pending intents.
+    # Exactly the quota, reserved by two pending intents — two photographs,
+    # whatever they declared.
     first = await _intents(client, headers, created["id"], [_item(25 * MB), _item(25 * MB)])
     assert first.status_code == 201, first.text
     ids = [i["media"]["id"] for i in first.json()["intents"]]
 
-    # One more byte would exceed it: refused on the batch, no row, and the
-    # message names the limit and the batch — never the usage.
+    # One more photograph would exceed it: refused on the batch, no row, and
+    # the message names the allowance and the batch — never the usage.
     refused = await _intents(client, headers, created["id"], [_item(1)])
     assert refused.status_code == 422
     assert _locs(refused) == [["body", "items"]]
     message = refused.json()["detail"][0]["msg"]
-    assert "50 MB" in message
+    assert "2 photos" in message
+    _names_no_byte_unit(message)
     async with db_session_factory() as db:
         assert await _media_count(db) == 2
         account = await _account_for(db, "full@example.com")
         # The reservation IS the usage: nothing is committed yet.
-        assert await keeping.account_usage(db, account) == 50 * MB
-        assert (await db.get(Gathering, created["id"])).total_bytes == 0
+        assert await keeping.account_usage(db, account) == 2
+        gathering = await db.get(Gathering, created["id"])
+        assert (gathering.total_bytes, gathering.photo_count) == (0, 0)
 
     # Confirming does not release the reservation — the bytes now sit in
     # quarantine, still against the keeper's quota until published.
@@ -399,7 +432,7 @@ async def test_reservation_is_released_by_the_reap(
 ):
     # An abandoned batch holds the whole quota — until the reap at the top
     # of the next intent request lets it go. Same request, one path.
-    monkeypatch.setattr(keeping, "FREE_TIER_BYTES", 50 * MB)
+    monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 1)
     headers = await _signed_in_headers(client, capsys, "abandoned@example.com")
     created = await _create(client, headers)
     async with db_session_factory() as db:
@@ -436,13 +469,13 @@ async def test_an_uploader_may_be_over_their_own_quota(
     # regardless — the check is the KEEPER's quota, never the uploader's
     # (blocking a grandmother's upload because a cousin is full turns one
     # person's spending decision into everyone else's outage).
-    monkeypatch.setattr(keeping, "FREE_TIER_BYTES", 50 * MB)
+    monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 2)
     headers_keeper, headers_cousin, created = await _host_and_invitee(
         client, capsys, "grandmother@example.com", "cousin@example.com"
     )
     own = await _create(client, headers_cousin, title="The cousin's own")
     async with db_session_factory() as db:
-        await _set_total_bytes(db, own["id"], 60 * MB)
+        await _set_photo_count(db, own["id"], 3)
         cousin = await _account_for(db, "cousin@example.com")
         assert await keeping.account_usage(db, cousin) > await keeping.account_quota(db, cousin)
     assert (await _intents(client, headers_cousin, created["id"], [_item(MB)])).status_code == 201
@@ -453,20 +486,25 @@ async def test_an_uploader_may_be_over_their_own_quota(
 async def test_a_quota_refusal_never_discloses_usage_or_whose_storage_it_is(
     client, capsys, db_session_factory, monkeypatch
 ):
-    monkeypatch.setattr(keeping, "FREE_TIER_BYTES", 50 * MB)
+    monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 50)
     _, headers_invitee, created = await _host_and_invitee(
         client, capsys, "host@example.com", "invitee@example.com"
     )
     async with db_session_factory() as db:
-        await _set_total_bytes(db, created["id"], 43 * MB)
-    refused = await _intents(client, headers_invitee, created["id"], [_item(8 * MB)])
+        await _set_photo_count(db, created["id"], 43)
+    refused = await _intents(client, headers_invitee, created["id"], [_item(8 * MB)] * 8)
     assert refused.status_code == 422
     message = refused.json()["detail"][0]["msg"]
-    # The limit and the batch are stated; the keeper's 43 MB is not.
-    assert "50 MB" in message
-    assert "8" in message and "MB" in message
+    # The allowance, the room left and the batch are stated; the keeper's
+    # 43 is not. (The room left — 7 — IS named since CK-51b: the currency
+    # record §3 decided the refusal should say something a person can act
+    # on, and headroom is that; CK-50's pin against it is retired with the
+    # unit, deliberately.)
+    assert "50 photos" in message
+    assert "room for 7 more" in message
+    assert "adding 8" in message
     assert "43" not in message
-    assert "7" not in message  # nor the headroom, which is usage in disguise
+    _names_no_byte_unit(message)
     # And never WHOSE storage it is: the caller may be neither host nor
     # keeper, and "the keeper's storage is limited to X" tells a guest
     # about someone else's account. Neither word appears.
@@ -482,7 +520,7 @@ async def test_the_keepers_headroom_decides_and_the_hosts_is_irrelevant(
     # BOTH directions. The sponsorship shape: grandma keeps the family
     # home; her grandson hosts the barbecue. Each has a gathering of their
     # own to be full through.
-    monkeypatch.setattr(keeping, "FREE_TIER_BYTES", 50 * MB)
+    monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 3)
     host_addr, keeper_addr = "grandson@example.com", "grandma@example.com"
     headers_host = await _signed_in_headers(client, capsys, host_addr)
     headers_keeper = await _signed_in_headers(client, capsys, keeper_addr)
@@ -502,8 +540,8 @@ async def test_the_keepers_headroom_decides_and_the_hosts_is_irrelevant(
     # Direction 1: the KEEPER is full and the host is empty → refused. The
     # host's plentiful headroom is irrelevant, and no row is written.
     async with db_session_factory() as db:
-        await _set_total_bytes(db, keepers_own["id"], 60 * MB)
-        assert await keeping.account_usage(db, await _account_for(db, keeper_addr)) == 60 * MB
+        await _set_photo_count(db, keepers_own["id"], 4)
+        assert await keeping.account_usage(db, await _account_for(db, keeper_addr)) == 4
         assert await keeping.account_usage(db, await _account_for(db, host_addr)) == 0
     refused = await _intents(client, headers_host, barbecue["id"], [_item(MB)])
     assert refused.status_code == 422
@@ -515,15 +553,15 @@ async def test_the_keepers_headroom_decides_and_the_hosts_is_irrelevant(
     # the reservation lands on the keeper's account and nowhere near the
     # host's. The host is over quota on their own gathering the whole time.
     async with db_session_factory() as db:
-        await _set_total_bytes(db, keepers_own["id"], 0)
-        await _set_total_bytes(db, hosts_own["id"], 60 * MB)
-        assert await keeping.account_usage(db, await _account_for(db, host_addr)) == 60 * MB
+        await _set_photo_count(db, keepers_own["id"], 0)
+        await _set_photo_count(db, hosts_own["id"], 4)
+        assert await keeping.account_usage(db, await _account_for(db, host_addr)) == 4
     allowed = await _intents(client, headers_host, barbecue["id"], [_item(3 * MB)])
     assert allowed.status_code == 201, allowed.text
     async with db_session_factory() as db:
         assert await _media_count(db) == 1
-        assert await keeping.account_usage(db, await _account_for(db, keeper_addr)) == 3 * MB
-        assert await keeping.account_usage(db, await _account_for(db, host_addr)) == 60 * MB
+        assert await keeping.account_usage(db, await _account_for(db, keeper_addr)) == 1
+        assert await keeping.account_usage(db, await _account_for(db, host_addr)) == 4
     # Control: the same host on the gathering they keep THEMSELVES is
     # refused — there, their own headroom decides.
     assert (await _intents(client, headers_host, hosts_own["id"], [_item(1)])).status_code == 422
@@ -552,7 +590,7 @@ async def test_a_hostless_gathering_with_a_keeper_is_uploadable(
     async with db_session_factory() as db:
         assert await _media_count(db) == 1
         account = await _account_for(db, "keeper@example.com")
-        assert await keeping.account_usage(db, account) == 4 * MB
+        assert await keeping.account_usage(db, account) == 1
 
 
 async def test_a_keeperless_gathering_refuses_uploads(client, capsys, db_session_factory):
@@ -603,7 +641,7 @@ async def test_a_group_gathering_charges_the_groups_keeper(
     # is a second account, its own keeper column NULLed (the CHECK
     # insists), its host left as the creator so the creator still uploads
     # through the read audience. The GROUP's keeper's headroom decides.
-    monkeypatch.setattr(keeping, "FREE_TIER_BYTES", 50 * MB)
+    monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 3)
     creator_addr, keeper_addr = "creator@example.com", "group-keeper@example.com"
     headers_creator = await _signed_in_headers(client, capsys, creator_addr)
     headers_keeper = await _signed_in_headers(client, capsys, keeper_addr)
@@ -622,7 +660,7 @@ async def test_a_group_gathering_charges_the_groups_keeper(
         assert resolution.source is keeping.KeeperSource.GROUP
         assert resolution.keeper_account_id == keeper_account.id
         # The group's keeper is full, through a gathering of their own.
-        await _set_total_bytes(db, keepers_own["id"], 60 * MB)
+        await _set_photo_count(db, keepers_own["id"], 4)
     refused = await _intents(client, headers_creator, created["id"], [_item(MB)])
     assert refused.status_code == 422
     assert _locs(refused) == [["body", "items"]]
@@ -630,11 +668,11 @@ async def test_a_group_gathering_charges_the_groups_keeper(
         assert await _media_count(db) == 0
         # With headroom, the reservation lands on the group's keeper and on
         # nobody else — not the creator, who hosts it and keeps nothing.
-        await _set_total_bytes(db, keepers_own["id"], 0)
+        await _set_photo_count(db, keepers_own["id"], 0)
     allowed = await _intents(client, headers_creator, created["id"], [_item(3 * MB)])
     assert allowed.status_code == 201, allowed.text
     async with db_session_factory() as db:
-        assert await keeping.account_usage(db, await _account_for(db, keeper_addr)) == 3 * MB
+        assert await keeping.account_usage(db, await _account_for(db, keeper_addr)) == 1
         assert await keeping.account_usage(db, await _account_for(db, creator_addr)) == 0
         # The group's keeper going NULL leaves the gathering Unkept through
         # the first rung — refused as keeperless, though its host stands.
@@ -652,8 +690,8 @@ async def test_a_group_gathering_charges_the_groups_keeper(
 async def test_memorial_is_exempt_from_the_account_quota_and_refused_above_its_ceiling(
     client, capsys, db_session_factory, monkeypatch
 ):
-    monkeypatch.setattr(keeping, "FREE_TIER_BYTES", 50 * MB)
-    monkeypatch.setattr(keeping, "MEMORIAL_CEILING_BYTES", 30 * MB)
+    monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 2)
+    monkeypatch.setattr(keeping, "MEMORIAL_CEILING_PHOTOGRAPHS", 3)
     headers = await _signed_in_headers(client, capsys, "mourner@example.com")
     potluck = await _create(client, headers)
     memorial = await _create(
@@ -661,28 +699,29 @@ async def test_memorial_is_exempt_from_the_account_quota_and_refused_above_its_c
     )
     # The keeper is over their account quota through the potluck...
     async with db_session_factory() as db:
-        await _set_total_bytes(db, potluck["id"], 60 * MB)
+        await _set_photo_count(db, potluck["id"], 3)
     # ...and the memorial accepts an upload regardless (the exemption).
-    first = await _intents(client, headers, memorial["id"], [_item(25 * MB)])
+    first = await _intents(client, headers, memorial["id"], [_item(25 * MB), _item(25 * MB)])
     assert first.status_code == 201, first.text
     # Control: the same keeper on the potluck is refused.
     assert (await _intents(client, headers, potluck["id"], [_item(1)])).status_code == 422
 
-    # The ceiling: 25 MB in flight + 25 MB more > 30 MB. The in-flight
-    # bytes count — the ceiling is a reservation too.
-    second = await _intents(client, headers, memorial["id"], [_item(25 * MB)])
+    # The ceiling: 2 in flight + 2 more > 3. The in-flight rows count — the
+    # ceiling is a reservation too — and the unit is the photograph.
+    second = await _intents(client, headers, memorial["id"], [_item(25 * MB), _item(MB)])
     assert second.status_code == 422
     assert _locs(second) == [["body", "items"]]
     message = second.json()["detail"][0]["msg"]
-    assert "memorial" in message and "30 MB" in message
+    assert "memorial" in message and "3 photos" in message
+    _names_no_byte_unit(message)
     # Exactly up to the ceiling is fine.
     assert (await _intents(client, headers, memorial["id"], [_item(5 * MB)])).status_code == 201
     async with db_session_factory() as db:
-        assert await _media_count(db) == 2
-        assert await keeping.gathering_bytes(db, await db.get(Gathering, memorial["id"])) == 30 * MB
+        assert await _media_count(db) == 3
+        assert await keeping.gathering_units(db, await db.get(Gathering, memorial["id"])) == 3
         # And none of it counts against the account (memorials are exempt).
         account = await _account_for(db, "mourner@example.com")
-        assert await keeping.account_usage(db, account) == 60 * MB
+        assert await keeping.account_usage(db, account) == 3
 
 
 async def test_a_memorial_ignores_its_keepers_quota_and_keeps_its_ceiling(
@@ -693,8 +732,8 @@ async def test_a_memorial_ignores_its_keepers_quota_and_keeps_its_ceiling(
     # upload regardless (exempt from the account quota, whoever's it is);
     # the ceiling still binds against the memorial's own bytes; and none of
     # it counts against the keeper's account.
-    monkeypatch.setattr(keeping, "FREE_TIER_BYTES", 50 * MB)
-    monkeypatch.setattr(keeping, "MEMORIAL_CEILING_BYTES", 30 * MB)
+    monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 2)
+    monkeypatch.setattr(keeping, "MEMORIAL_CEILING_PHOTOGRAPHS", 3)
     host_addr, keeper_addr = "host@example.com", "mourner@example.com"
     headers_host = await _signed_in_headers(client, capsys, host_addr)
     headers_keeper = await _signed_in_headers(client, capsys, keeper_addr)
@@ -707,24 +746,258 @@ async def test_a_memorial_ignores_its_keepers_quota_and_keeps_its_ceiling(
         gathering = await db.get(Gathering, memorial["id"])
         gathering.keeper_account_id = keeper_account.id  # moved: host ≠ keeper
         await db.commit()
-        await _set_total_bytes(db, keepers_potluck["id"], 60 * MB)
+        await _set_photo_count(db, keepers_potluck["id"], 3)
         keeper_account = await _account_for(db, keeper_addr)
         assert await keeping.account_usage(db, keeper_account) > await keeping.account_quota(
             db, keeper_account
         )
     # Exempt: the host uploads to the memorial though its keeper is full.
-    first = await _intents(client, headers_host, memorial["id"], [_item(25 * MB)])
+    first = await _intents(client, headers_host, memorial["id"], [_item(25 * MB), _item(25 * MB)])
     assert first.status_code == 201, first.text
     # Control: the keeper on the potluck they keep is refused.
     assert (await _intents(client, headers_keeper, keepers_potluck["id"], [_item(1)])).status_code == 422
-    # The ceiling still binds, on the memorial's own bytes.
-    second = await _intents(client, headers_host, memorial["id"], [_item(25 * MB)])
+    # The ceiling still binds, on the memorial's own count.
+    second = await _intents(client, headers_host, memorial["id"], [_item(25 * MB), _item(25 * MB)])
     assert second.status_code == 422
     assert _locs(second) == [["body", "items"]]
     assert "memorial" in second.json()["detail"][0]["msg"]
     async with db_session_factory() as db:
-        assert await keeping.gathering_bytes(db, await db.get(Gathering, memorial["id"])) == 25 * MB
-        assert await keeping.account_usage(db, await _account_for(db, keeper_addr)) == 60 * MB
+        assert await keeping.gathering_units(db, await db.get(Gathering, memorial["id"])) == 2
+        assert await keeping.account_usage(db, await _account_for(db, keeper_addr)) == 3
+
+# --- CK-51b: the quota counts photographs -------------------------------------
+# The currency record §3 (a photograph is 1; the reservation is the batch's
+# item count; `photo_count` plus the in-flight rows is the usage), §8 (the
+# memorial ceiling in photographs), and the bin record §5 (the refusal names
+# the bin where it is not empty). The constants below are the real ones
+# except where a test says it narrows them.
+
+
+async def test_ten_thousand_photographs_are_admitted_and_the_next_is_refused_whatever_it_weighs(
+    client, capsys, db_session_factory
+):
+    # The REAL allowance. 9,999 committed; the 10,000th — at the 25 MB cap —
+    # is admitted; the 10,001st — 40 KB — is refused. Size decides nothing.
+    assert keeping.FREE_TIER_PHOTOGRAPHS == 10_000
+    headers = await _signed_in_headers(client, capsys, "tenthousand@example.com")
+    created = await _create(client, headers)
+    async with db_session_factory() as db:
+        await _set_photo_count(db, created["id"], keeping.FREE_TIER_PHOTOGRAPHS - 1)
+    admitted = await _intents(client, headers, created["id"], [_item(MAX_UPLOAD_BYTES)])
+    assert admitted.status_code == 201, admitted.text
+    async with db_session_factory() as db:
+        account = await _account_for(db, "tenthousand@example.com")
+        assert await keeping.account_usage(db, account) == 10_000
+        assert await keeping.account_quota(db, account) == 10_000
+    refused = await _intents(client, headers, created["id"], [_item(40_000)])
+    assert refused.status_code == 422
+    assert _locs(refused) == [["body", "items"]]
+    message = refused.json()["detail"][0]["msg"]
+    assert "10,000 photos" in message
+    _names_no_byte_unit(message)
+    async with db_session_factory() as db:
+        assert await _media_count(db) == 1
+
+
+async def test_a_photograph_costs_exactly_one_whatever_it_weighs_and_the_byte_columns_are_unread(
+    client, capsys, db_session_factory, monkeypatch
+):
+    monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 2)
+    headers = await _signed_in_headers(client, capsys, "weightless@example.com")
+    created = await _create(client, headers)
+    async with db_session_factory() as db:
+        # 50 GB of bytes on the row and zero photographs: the quota reads
+        # the count, and only the count.
+        await _set_total_bytes(db, created["id"], 50_000_000_000)
+        account = await _account_for(db, "weightless@example.com")
+        assert await keeping.account_usage(db, account) == 0
+    heavy = await _intents(client, headers, created["id"], [_item(24 * MB)])
+    assert heavy.status_code == 201, heavy.text
+    async with db_session_factory() as db:
+        assert await keeping.account_usage(db, await _account_for(db, "weightless@example.com")) == 1
+    light = await _intents(client, headers, created["id"], [_item(40_000)])
+    assert light.status_code == 201, light.text
+    async with db_session_factory() as db:
+        assert await keeping.account_usage(db, await _account_for(db, "weightless@example.com")) == 2
+    # The third, of any size, is one photograph too many.
+    for size in (1, 40_000, 24 * MB):
+        assert (await _intents(client, headers, created["id"], [_item(size)])).status_code == 422, size
+    async with db_session_factory() as db:
+        assert await _media_count(db) == 2
+
+
+async def test_the_refusal_when_the_bin_is_empty_names_no_bin(
+    client, capsys, db_session_factory, monkeypatch
+):
+    # The ordinary refusal (currency record §3's copy): the allowance, the
+    # room left, what is being added — and no bin, because the bin is
+    # empty and copy must not name an affordance it cannot deliver (bin
+    # record §5; the CK-50 discipline).
+    monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 10)
+    headers = await _signed_in_headers(client, capsys, "nobin@example.com")
+    created = await _create(client, headers)
+    async with db_session_factory() as db:
+        await _set_photo_count(db, created["id"], 8)
+    refused = await _intents(client, headers, created["id"], [_item(MB)] * 3)
+    assert refused.status_code == 422
+    assert _locs(refused) == [["body", "items"]]
+    message = refused.json()["detail"][0]["msg"]
+    assert message == "this space holds 10 photos and has room for 2 more, and you're adding 3"
+    assert "bin" not in message
+    assert "8" not in message  # the usage figure
+    assert "host" not in message and "keeper" not in message
+    _names_no_byte_unit(message)
+    # No room at all: still no bin, and no "room for 0 more".
+    async with db_session_factory() as db:
+        await _set_photo_count(db, created["id"], 10)
+    full = await _intents(client, headers, created["id"], [_item(MB)])
+    assert full.status_code == 422
+    assert full.json()["detail"][0]["msg"] == (
+        "this space holds 10 photos and has no room left, and you're adding 1"
+    )
+    async with db_session_factory() as db:
+        assert await _media_count(db) == 0
+
+
+async def _plant_bin(db, gathering_id: str, uploader_person_id, *, removed: int, other: int = 1):
+    # `removed` photographs in the bin — `ready` AND `removed`, with the
+    # stamp — beside `other` ready-and-live ones that are not. photo_count
+    # is planted separately: it is the column, not a derivation (CK-51a).
+    now = _now()
+    for i in range(removed + other):
+        db.add(
+            Media(
+                gathering_id=gathering_id,
+                uploader_person_id=uploader_person_id,
+                upload_content_type="image/jpeg",
+                upload_size_bytes=MB,
+                status=MediaStatus.READY,
+                publication_state=PublicationState.REMOVED if i < removed else PublicationState.LIVE,
+                removed_at=now if i < removed else None,
+                created_at=now - timedelta(minutes=i),
+                uploaded_at=now - timedelta(minutes=i),
+            )
+        )
+    await db.commit()
+
+
+async def test_the_refusal_when_the_bin_is_not_empty_names_it_and_offers_to_empty_it(
+    client, capsys, db_session_factory, monkeypatch
+):
+    # Bin record §5, binding on this phase: where the space is full and
+    # some of what fills it is in the 30-day bin, the refusal says so and
+    # offers the one thing a person can do about it. Charged, not visible:
+    # the two binned photographs still count (bin record §3, §4).
+    monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 10)
+    address = "binned@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    created = await _create(client, headers)
+    async with db_session_factory() as db:
+        person = (await db.execute(select(Person).where(Person.email == address))).scalars().one()
+        await _plant_bin(db, created["id"], person.id, removed=2, other=7)
+        await _set_photo_count(db, created["id"], 9)
+        account = await _account_for(db, address)
+        assert await keeping.account_usage(db, account) == 9
+        assert await keeping.account_bin_count(db, account) == 2
+    refused = await _intents(client, headers, created["id"], [_item(MB)] * 3)
+    assert refused.status_code == 422
+    assert _locs(refused) == [["body", "items"]]
+    message = refused.json()["detail"][0]["msg"]
+    assert message == "this space is full — 10 photos, and 2 of them are in the bin. Empty the bin to make room."
+    assert "9" not in message  # the usage figure
+    assert "host" not in message and "keeper" not in message
+    _names_no_byte_unit(message)
+    async with db_session_factory() as db:
+        assert await _media_count(db) == 9  # nothing added
+
+
+async def test_account_bin_count_is_reached_from_the_refusal_path_alone(
+    client, capsys, db_session_factory, monkeypatch
+):
+    # The hot path pays for the quota's one statement and nothing more: the
+    # bin is counted only once the quota has refused (keeping.py says why it
+    # is not folded into account_usage). Structurally — the name appears in
+    # the media router once, inside _enforce_limits, and nowhere else in the
+    # app but keeping.py itself — and behaviourally: a counting stub that
+    # raises is never reached by an accepted intent or by a memorial refusal
+    # (bin record §7.4 — no bin clause on a memorial this phase).
+    source = inspect.getsource(media_api)
+    assert source.count("keeping.account_bin_count(") == 1
+    assert "keeping.account_bin_count(" in inspect.getsource(media_api._enforce_limits)
+    app_dir = Path(media_api.__file__).resolve().parent.parent
+    callers = {
+        path.relative_to(app_dir).as_posix()
+        for path in app_dir.rglob("*.py")
+        if "account_bin_count(" in path.read_text(encoding="utf-8")
+    }
+    assert callers == {"api/media.py", "services/keeping.py"}
+
+    async def never(db, account):  # pragma: no cover — reaching it is the failure
+        raise AssertionError("account_bin_count was called on a path that is not the quota refusal")
+
+    monkeypatch.setattr(keeping, "account_bin_count", never)
+    monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 2)
+    monkeypatch.setattr(keeping, "MEMORIAL_CEILING_PHOTOGRAPHS", 1)
+    headers = await _signed_in_headers(client, capsys, "hotpath@example.com")
+    created = await _create(client, headers)
+    memorial = await _create(
+        client, headers, gathering_type="memorial", title="For Edith", memorial_decedent_name="Edith"
+    )
+    assert (await _intents(client, headers, created["id"], [_item(MB)])).status_code == 201
+    assert (await _intents(client, headers, memorial["id"], [_item(MB)])).status_code == 201
+    over = await _intents(client, headers, memorial["id"], [_item(MB)])
+    assert over.status_code == 422 and "memorial" in over.json()["detail"][0]["msg"]
+    async with db_session_factory() as db:
+        await db.execute(update(Gathering).where(Gathering.id == created["id"]).values(keeper_account_id=None))
+        await db.commit()
+    assert (await _intents(client, headers, created["id"], [_item(MB)])).status_code == 422  # keeperless
+
+
+def test_no_quota_or_ceiling_refusal_names_a_byte_unit():
+    # Grep-style, on the shipped source: the gate reads no byte column and
+    # spells no byte unit; _human_bytes keeps exactly one caller, the 25 MB
+    # per-file cap's message. The runtime half is _names_no_byte_unit on
+    # every refusal the tests above provoke.
+    gate = inspect.getsource(media_api._enforce_limits)
+    for forbidden in ("GB", "MB", "KB", "_human_bytes", "upload_size_bytes", "total_bytes", "PHOTOGRAPH_BYTES"):
+        assert forbidden not in gate, forbidden
+    source = inspect.getsource(media_api)
+    assert source.count("_human_bytes(") == 2  # the def, and the size validator
+    assert "PHOTOGRAPH_BYTES" not in source
+    for retired in ("FREE_TIER_BYTES", "MEMORIAL_CEILING_BYTES", "gathering_bytes", "_in_flight_bytes_of"):
+        assert not hasattr(keeping, retired), retired
+        assert retired not in source, retired
+
+
+async def test_a_memorial_is_bounded_at_five_thousand_photographs_with_in_flight_rows_counting(
+    client, capsys, db_session_factory
+):
+    # The REAL ceiling, in photographs (currency record §8: one unit across
+    # every gathering type). 4,998 committed; two in flight reach 5,000;
+    # one more is refused — the in-flight rows count toward it.
+    assert keeping.MEMORIAL_CEILING_PHOTOGRAPHS == 5_000
+    headers = await _signed_in_headers(client, capsys, "fivethousand@example.com")
+    memorial = await _create(
+        client, headers, gathering_type="memorial", title="For Edith", memorial_decedent_name="Edith"
+    )
+    async with db_session_factory() as db:
+        await _set_photo_count(db, memorial["id"], keeping.MEMORIAL_CEILING_PHOTOGRAPHS - 2)
+    admitted = await _intents(client, headers, memorial["id"], [_item(MAX_UPLOAD_BYTES), _item(40_000)])
+    assert admitted.status_code == 201, admitted.text
+    async with db_session_factory() as db:
+        assert await keeping.gathering_units(db, await db.get(Gathering, memorial["id"])) == 5_000
+    refused = await _intents(client, headers, memorial["id"], [_item(1)])
+    assert refused.status_code == 422
+    assert _locs(refused) == [["body", "items"]]
+    message = refused.json()["detail"][0]["msg"]
+    assert message == "a memorial holds up to 5,000 photos, and this one would go past it"
+    _names_no_byte_unit(message)
+    assert "bin" not in message
+    async with db_session_factory() as db:
+        assert await _media_count(db) == 2
+        # And the account is charged none of it (memorials are exempt).
+        assert await keeping.account_usage(db, await _account_for(db, "fivethousand@example.com")) == 0
+
 
 # --- confirm: verifies, then flips one rung ---------------------------------
 

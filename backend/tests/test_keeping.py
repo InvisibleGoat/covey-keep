@@ -14,6 +14,13 @@ deletion-path half (keeping lapsing on anonymization) is pinned in
 test_account_deletion.py, next to the rest of the deletion contract; the
 resolver's group rung, the SQL form of the ladder and the cutover's own
 pins are in test_keeper_shape.py.
+
+Since CK-51b the quota is in PHOTOGRAPHS (the currency record §3): the
+usage tests below plant `photo_count` where they planted `total_bytes`,
+with the same numbers — the unit changed, the arithmetic did not — and two
+tests are new: `gathering_units` (a memorial's own count, published plus in
+flight) and `account_bin_count` (ready-and-removed rows over the gatherings
+that resolve to the account, the refusal path's number and nothing else's).
 """
 
 from datetime import datetime, timedelta, timezone
@@ -22,11 +29,22 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from app.models import Account, AccountKind, Gathering, GatheringType, PublicationState
+from app.models import (
+    Account,
+    AccountKind,
+    Gathering,
+    GatheringType,
+    Media,
+    MediaStatus,
+    PublicationState,
+)
+from app.services import keeping
 from app.services.keeping import (
     GraceState,
     KeeperSource,
+    account_bin_count,
     account_usage,
+    gathering_units,
     grace_state,
     keep,
     resolved_keeper_of,
@@ -48,6 +66,7 @@ async def _mk_gathering(
     *,
     gathering_type: GatheringType = GatheringType.POTLUCK,
     total_bytes: int = 0,
+    photo_count: int = 0,
     memorial_decedent_name: str | None = None,
     host_account_id=None,
 ) -> Gathering:
@@ -59,6 +78,7 @@ async def _mk_gathering(
         title="keeping test gathering",
         memorial_decedent_name=memorial_decedent_name,
         total_bytes=total_bytes,
+        photo_count=photo_count,
         publication_state=PublicationState.LIVE,
     )
     db.add(gathering)
@@ -204,27 +224,32 @@ async def test_memorial_requires_a_decedent_and_a_non_memorial_rejects_one(
 
 
 # --- quota: computed fresh over the gatherings that resolve to the account ----
+# In PHOTOGRAPHS since CK-51b: the same tests, the same numbers, the unit
+# changed — `photo_count` where `total_bytes` stood.
 
 
-async def test_account_usage_sums_only_gatherings_the_account_keeps_and_tracks_total_bytes(
+async def test_account_usage_counts_only_gatherings_the_account_keeps_and_tracks_photo_count(
     db_session_factory,
 ):
     async with db_session_factory() as db:
         account = await _mk_account(db)
-        kept_small = await _mk_gathering(db, total_bytes=100)
-        kept_large = await _mk_gathering(db, total_bytes=250)
-        unkept = await _mk_gathering(db, total_bytes=999)
+        kept_small = await _mk_gathering(db, photo_count=100, total_bytes=1)
+        kept_large = await _mk_gathering(db, photo_count=250, total_bytes=1)
+        unkept = await _mk_gathering(db, photo_count=999)
         await keep(db, account, kept_small)
         await keep(db, account, kept_large)
         assert await account_usage(db, account) == 350
-        # Computed fresh: a total_bytes change shows up immediately, and an
+        # Computed fresh: a photo_count change shows up immediately, and an
         # unkeep frees the quota immediately — no stored balance to reconcile.
-        kept_small.total_bytes = 175
+        kept_small.photo_count = 175
+        assert await account_usage(db, account) == 425
+        # The byte column is not read: moving it moves nothing here.
+        kept_small.total_bytes = 10_000_000_000
         assert await account_usage(db, account) == 425
         await unkeep(db, account, kept_large)
         assert await account_usage(db, account) == 175
         await db.commit()
-        assert unkept.total_bytes == 999  # never counted against this account
+        assert unkept.photo_count == 999  # never counted against this account
 
 
 async def test_memorial_is_excluded_from_account_usage(db_session_factory):
@@ -234,12 +259,130 @@ async def test_memorial_is_excluded_from_account_usage(db_session_factory):
             db,
             gathering_type=GatheringType.MEMORIAL,
             memorial_decedent_name="Edith Hanson",
-            total_bytes=10_000_000_000,
+            photo_count=10_000,
         )
-        potluck = await _mk_gathering(db, total_bytes=100)
+        potluck = await _mk_gathering(db, photo_count=100)
         await keep(db, account, memorial)
         await keep(db, account, potluck)
         assert await account_usage(db, account) == 100
+        await db.commit()
+
+
+def _row(gathering_id, status: MediaStatus, state: PublicationState, *, removed: bool = False) -> Media:
+    now = datetime.now(timezone.utc)
+    return Media(
+        gathering_id=gathering_id,
+        guest_name="fixture",
+        upload_content_type="image/jpeg",
+        upload_size_bytes=1_000,
+        status=status,
+        publication_state=state,
+        removed_at=now if removed else None,
+        created_at=now,
+        uploaded_at=None if status == MediaStatus.PENDING_UPLOAD else now,
+    )
+
+
+async def test_the_quota_constants_are_photographs_and_the_byte_names_are_gone():
+    # The currency record §3 and §8 at 2.4.0, and the one byte figure that
+    # survives with a narrower job (§5, §7): a cost model the monitor reads
+    # and nothing else — pinned against being a quota input in
+    # test_media_intents.py's grep-style test.
+    assert keeping.FREE_TIER_PHOTOGRAPHS == 10_000
+    assert keeping.MEMORIAL_CEILING_PHOTOGRAPHS == 5_000
+    assert keeping.PHOTOGRAPH_BYTES == 1_134_630
+    for retired in ("FREE_TIER_BYTES", "MEMORIAL_CEILING_BYTES", "gathering_bytes", "_in_flight_bytes_of"):
+        assert not hasattr(keeping, retired), retired
+    assert keeping.IN_FLIGHT_STATUSES == (
+        MediaStatus.PENDING_UPLOAD,
+        MediaStatus.UPLOADED,
+        MediaStatus.PROCESSING,
+    )
+
+
+async def test_gathering_units_is_the_gatherings_own_count_published_plus_in_flight(
+    db_session_factory,
+):
+    # The memorial ceiling's subject: `photo_count` plus ONE per in-flight
+    # row — pending_upload, uploaded, processing — whatever each declared.
+    # A ready row is already in photo_count (not in flight); a failed row
+    # is nothing. Its own count, never any account's.
+    async with db_session_factory() as db:
+        account = await _mk_account(db)
+        memorial = await _mk_gathering(
+            db,
+            gathering_type=GatheringType.MEMORIAL,
+            memorial_decedent_name="Edith Hanson",
+            photo_count=3,
+            total_bytes=10_000_000_000,
+        )
+        await keep(db, account, memorial)
+        db.add_all(
+            [
+                _row(memorial.id, MediaStatus.PENDING_UPLOAD, PublicationState.PENDING),
+                _row(memorial.id, MediaStatus.UPLOADED, PublicationState.PENDING),
+                _row(memorial.id, MediaStatus.PROCESSING, PublicationState.PENDING),
+                _row(memorial.id, MediaStatus.READY, PublicationState.LIVE),
+                _row(memorial.id, MediaStatus.FAILED, PublicationState.PENDING),
+            ]
+        )
+        await db.flush()
+        assert await gathering_units(db, memorial) == 6
+        # A memorial's units touch no account's usage.
+        assert await account_usage(db, account) == 0
+        await db.commit()
+
+
+async def test_account_bin_count_counts_only_ready_removed_rows_over_gatherings_resolving_to_the_account(
+    db_session_factory,
+):
+    # The refusal path's number (bin record §5): ready AND removed, over the
+    # same candidates account_usage counts — the gatherings that resolve to
+    # the account, memorials exempt. Not a quota input: usage does not move
+    # with it.
+    from tests.test_keeper_shape import _mk_group
+
+    async with db_session_factory() as db:
+        account, other = await _mk_account(db), await _mk_account(db)
+        own = await _mk_gathering(db, photo_count=5)
+        theirs = await _mk_gathering(db, photo_count=5)
+        memorial = await _mk_gathering(
+            db, gathering_type=GatheringType.MEMORIAL, memorial_decedent_name="Edith Hanson", photo_count=5
+        )
+        await keep(db, account, own)
+        await keep(db, other, theirs)
+        await keep(db, account, memorial)
+        group = await _mk_group(db)
+        group.keeper_account_id = account.id
+        in_group = await _mk_gathering(db, photo_count=5)
+        in_group.owning_group_id = group.id
+        await db.flush()
+        db.add_all(
+            [
+                # own: two in the bin; the rest are not bin rows
+                _row(own.id, MediaStatus.READY, PublicationState.REMOVED, removed=True),
+                _row(own.id, MediaStatus.READY, PublicationState.REMOVED, removed=True),
+                _row(own.id, MediaStatus.READY, PublicationState.LIVE),
+                _row(own.id, MediaStatus.READY, PublicationState.PENDING),
+                _row(own.id, MediaStatus.FAILED, PublicationState.REMOVED, removed=True),  # not ready
+                _row(own.id, MediaStatus.UPLOADED, PublicationState.PENDING),
+                # theirs: another account's bin
+                _row(theirs.id, MediaStatus.READY, PublicationState.REMOVED, removed=True),
+                # the memorial the account keeps: exempt from the account, bin included
+                _row(memorial.id, MediaStatus.READY, PublicationState.REMOVED, removed=True),
+                # the group gathering: the resolver's first rung
+                _row(in_group.id, MediaStatus.READY, PublicationState.REMOVED, removed=True),
+            ]
+        )
+        await db.flush()
+        usage_before = await account_usage(db, account)
+        assert await account_bin_count(db, account) == 3
+        assert await account_bin_count(db, other) == 1
+        # Not a quota input: counting the bin moves nothing.
+        assert await account_usage(db, account) == usage_before == 5 + 1 + 5  # own + its uploaded row + in_group
+        # Releasing a gathering releases its bin with it.
+        await unkeep(db, account, own)
+        assert await account_bin_count(db, account) == 1
         await db.commit()
 
 

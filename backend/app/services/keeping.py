@@ -24,23 +24,34 @@ decision 20 exists to ban.
 
 What is DERIVED, and never stored, is unchanged in its rule:
 
-- Quota usage is a sum over the gatherings that RESOLVE to an account —
-  computed fresh on every call (roadmap §2). `total_bytes` itself is a
-  maintained fact about one gathering, not a cached answer to a question
-  about an account. Since CK-34 the sum also carries the bytes IN FLIGHT on
-  those gatherings — the declared size of every upload that has been issued
-  a presigned PUT and has not yet been published or failed (media pipeline
-  record §6.6: a RESERVATION, not a check — fifty concurrent intents each
-  checked against the same headroom would overshoot it by forty-nine
-  files). `total_bytes` moves only at publish, by the sum over the
-  derivative rows; the reservation releases at that moment, or when the row
-  fails or is reaped — never earlier. `account_usage` IS THE ONE QUOTA PATH:
-  the reservation lives inside it rather than beside it, for the reason
-  CK-13 banned a second refcount. Since CK-50 the UPLOAD GATE asks the same
-  resolver for its subject (api/media.py::_enforce_limits via
-  resolved_keeper_of — v2 §6): the gathering's resolved keeper's row is
-  locked and its usage checked, never the host's; a gathering that
-  resolves UNKEPT refuses the upload — no quota subject.
+- Quota usage is a COUNT OF PHOTO-EQUIVALENTS over the gatherings that
+  RESOLVE to an account — computed fresh on every call (roadmap §2). Since
+  CK-51b (decisions/2026-09-20-photographs-are-the-currency.md §3) the
+  unit is the photograph, never the byte: a photograph is 1 whatever the
+  file weighed, because every upload is re-encoded to the same three
+  fixed-target layers (the pipeline's output ceiling is what makes the
+  currency honest). `photo_count` itself is a maintained fact about one
+  gathering, not a cached answer to a question about an account. The sum
+  also carries the uploads IN FLIGHT on those gatherings — ONE per row that
+  has been issued a presigned PUT and has not yet been published or failed
+  (media pipeline record §6.6: a RESERVATION, not a check — fifty
+  concurrent intents each checked against the same headroom would overshoot
+  it by forty-nine files; the reserved quantity is the batch's item count,
+  never a byte size). `photo_count` moves only at publish, by one; the
+  reservation releases at that moment, or when the row fails or is reaped
+  — never earlier. `account_usage` IS THE ONE QUOTA PATH: the reservation
+  lives inside it rather than beside it, for the reason CK-13 banned a
+  second refcount. Since CK-50 the UPLOAD GATE asks the same resolver for
+  its subject (api/media.py::_enforce_limits via resolved_keeper_of — v2
+  §6): the gathering's resolved keeper's row is locked and its usage
+  checked, never the host's; a gathering that resolves UNKEPT refuses the
+  upload — no quota subject. `total_bytes` stays maintained beside the
+  count and is no longer a quota input: cost reporting, and the currency
+  record §5's monitor (services/ingest.py, at the one UPDATE). CHARGED,
+  NEVER VISIBLE: `photo_count` counts `ready` rows whatever their
+  publication state, so a photograph in the 30-day bin still counts — it
+  is still stored — and a surface that shows this number as "your photos"
+  is the defect the bin record §4 exists to prevent.
 - Grace state is derived from ONE timestamp (`last_keeper_left_at`) plus the
   policy constants below — never persisted. Under one keeper "the last
   keeper left" and "the keeper left" are the same event, so the stamp's
@@ -49,10 +60,11 @@ What is DERIVED, and never stored, is unchanged in its rule:
 - A memorial is exempt by TYPE (keeper record §9.4): quota-free and never in
   grace, keyed on `gathering_type == MEMORIAL`, never a flag. Exempt from
   the ACCOUNT quota is not unbounded: a memorial carries its own ceiling
-  (MEMORIAL_CEILING_BYTES), evaluated against the gathering's own bytes by
-  gathering_bytes — the upload path is the only place that comparison can
-  land (CK-34), which is why it is easy to omit by writing the exemption
-  and stopping.
+  (MEMORIAL_CEILING_PHOTOGRAPHS — in photographs since CK-51b: one unit
+  across every gathering type), evaluated against the gathering's own count
+  by gathering_units — the upload path is the only place that comparison
+  can land (CK-34), which is why it is easy to omit by writing the
+  exemption and stopping.
 
 Live callers: gathering creation (api/gatherings.py, CK-16) via keep — the
 creator becomes keeper in the same transaction that births the gathering —
@@ -60,8 +72,10 @@ the read audience (api/gatherings.py::_gathering_for_read via
 resolved_keeper_of; the list statement and api/media.py::_visible_media via
 keeps_gathering), the account deletion path (profile.py) via
 lapse_kept_statuses, and the upload-intent endpoint (api/media.py, CK-34;
-its subject the resolved keeper since CK-50) via resolved_keeper_of /
-account_usage / account_quota / gathering_bytes. Every function that
+its subject the resolved keeper since CK-50; counting photographs since
+CK-51b) via resolved_keeper_of / account_usage / account_quota /
+gathering_units — and, on its REFUSAL path alone, account_bin_count (the
+one caller it may ever have; see its docstring). Every function that
 writes leaves the commit to the caller, so the keeper write and its side
 effects (grace stamp, host relinquishment) land in the caller's transaction
 or not at all.
@@ -84,6 +98,7 @@ from app.models import (
     Group,
     Media,
     MediaStatus,
+    PublicationState,
 )
 
 # Grace policy (keeper record §2.7): when the keeper leaves, 30 days
@@ -101,27 +116,49 @@ from app.models import (
 ARCHIVE_AFTER = timedelta(days=30)
 DELETE_AFTER = timedelta(days=90)
 
-# Entitlement (keeper record §9.1): the free tier is 10 GB, and every account
-# is on it — the paid ladder is the storage-tier phase's, which will make
-# account_quota read a subscription instead of returning this. (v2 §15.1
-# restates the allowance as 10,000 photo-equivalents on the ACCOUNT; the
-# number here changes with that phase, not with the cutover.)
-# Decimal units, deliberately: "10 GB" means what the keeper record, the
-# consumer storage convention (iCloud, Google) and R2's own pricing mean by
-# it — 10^9 bytes, never 2^30. One convention for every byte figure here.
-FREE_TIER_BYTES = 10_000_000_000
+# Entitlement (keeper record v2 §15.1; the currency record §3): the free
+# tier is 10,000 PHOTO-EQUIVALENTS, and every account is on it — the paid
+# ladder is the storage-tier phase's, which will make account_quota read a
+# subscription instead of returning this. A photograph is 1, whatever the
+# file weighed; video, when it lands, enters at a rate the product
+# PUBLISHES (currency record §4), never at a measured ratio. Provisional
+# — and the monitor below moves a PRICE when the real average drifts,
+# never this unit. Until CK-51b the constant here was 10 GB, in bytes;
+# 10,000 photographs at the measured size is ≈11.3 GB, a ≈13% raise, not
+# a cut.
+FREE_TIER_PHOTOGRAPHS = 10_000
 
-# The memorial ceiling (keeper record §9.4, decided 2026-08-31): free,
-# permanent, and quota-exempt UP TO 5 GB per memorial gathering, video
-# included, revisable UPWARD ONLY — lowering it is the retroactive change
-# plan §7.6 forbids. Compared against the gathering's own bytes
-# (gathering_bytes), never against any account's usage.
-MEMORIAL_CEILING_BYTES = 5_000_000_000
+# The memorial ceiling (keeper record §9.4, decided 2026-08-31 as 5 GB;
+# currency record §8 at 2.4.0): free, permanent, and quota-exempt UP TO
+# 5,000 PHOTOGRAPHS per memorial gathering, revisable UPWARD ONLY —
+# lowering it is the retroactive change plan §7.6 forbids. ONE UNIT ACROSS
+# EVERY GATHERING TYPE: photographs for gatherings and groups but gigabytes
+# for memorials would be a daily support question — the same person, the
+# same product, two currencies. 5,000 is ≈5.67 GB at the measured size,
+# which SATISFIES the raise-only rule rather than straining it (a round
+# product number, not a conversion of the 5 GB). Compared against the
+# gathering's own count (gathering_units), never against any account's
+# usage.
+MEMORIAL_CEILING_PHOTOGRAPHS = 5_000
 
-# The rungs at which an upload's declared bytes are RESERVED: a presigned
-# PUT issued (pending_upload), the bytes confirmed in quarantine (uploaded),
-# the worker on them (processing). Released at `ready` (total_bytes takes
-# over) and at `failed` (nothing stored). Pipeline record §6.6 names
+# The measured cost of ONE stored photograph through the shipped pipeline
+# (CK-46 check (fb), 2026-09-17: archival 893,696 B on Infrequent Access +
+# web 233,890 B + thumbnail 7,044 B on Standard). A COST MODEL WITH EXACTLY
+# ONE RUNTIME USE — the monitor in services/ingest.py, which logs the
+# charged unit beside the actual stored bytes at the one UPDATE (currency
+# record §5: what we charge must never be less than what we store). NEVER
+# A QUOTA UNIT, NEVER IN A REFUSAL, NEVER IN A COMPARISON: nothing here or
+# in api/media.py may multiply, divide or compare against it — the quota is
+# a count, and the byte model audits the count instead of deriving it.
+# Provisional (one sample); the monitor is what retires it. Pinned by test:
+# this name appears in ingest.py and nowhere else outside this file.
+PHOTOGRAPH_BYTES = 1_134_630
+
+# The rungs at which an upload is RESERVED — one photo-equivalent per row,
+# whatever it declared (CK-51b): a presigned PUT issued (pending_upload),
+# the bytes confirmed in quarantine (uploaded), the worker on them
+# (processing). Released at `ready` (photo_count takes over) and at
+# `failed` (nothing stored). Pipeline record §6.6 names
 # pending_upload alone; the reservation is widened to every in-flight rung
 # deliberately — a confirmed upload whose reservation lapsed at confirm
 # would hold real bytes in quarantine against nobody's quota until the
@@ -133,12 +170,15 @@ IN_FLIGHT_STATUSES = (
 )
 
 
-def _in_flight_bytes_of(gathering_id_column):
-    """A correlated scalar subquery: the declared bytes of every in-flight
-    upload on one gathering. Zero when there are none (sum over no rows is
-    NULL; coalesced)."""
+def _in_flight_count_of(gathering_id_column):
+    """A correlated scalar subquery: the NUMBER of in-flight uploads on one
+    gathering — each one photo-equivalent, whatever it declared (CK-51b;
+    until then this subquery SUMMED their declared bytes). Zero when there
+    are none (COUNT over no rows is 0). ONE criterion, two
+    consumers: account_usage (the account's sum) and gathering_units (a
+    memorial's own)."""
     return (
-        select(func.coalesce(func.sum(Media.upload_size_bytes), 0))
+        select(func.count(Media.id))
         .where(
             Media.gathering_id == gathering_id_column,
             Media.status.in_(IN_FLIGHT_STATUSES),
@@ -391,24 +431,35 @@ async def unkeep(
 
 
 async def account_usage(db: AsyncSession, account: Account) -> int:
-    """Bytes counted against the account's quota: over the gatherings that
-    RESOLVE to it — its own, and every gathering of a group it keeps —
-    memorials exempt, the sum of `total_bytes` (published) PLUS the declared
-    size of every in-flight upload (the CK-34 reservation). Computed fresh
-    on every call — the entitlement/quota rule (roadmap §2). ONE statement
-    fetches the candidates with their two facts and their bytes (the
-    in-flight bytes ride a correlated subquery per gathering); the RESOLVER
-    decides which count, row by row — the SQL WHERE is a candidate filter
-    (a superset: either fact naming the account), never the answer, so a row
-    the CHECK forbids raises here instead of being counted once or twice.
-    With one keeper there is no logical-size device: a gathering counts
-    against exactly one account, and the bytes are stored once."""
+    """PHOTO-EQUIVALENTS counted against the account's quota: over the
+    gatherings that RESOLVE to it — its own, and every gathering of a group
+    it keeps — memorials exempt, the sum of `photo_count` (published) PLUS
+    the number of in-flight uploads (the CK-34 reservation, one per row —
+    the batch's item count, since CK-51b). THE UNIT IS THE PHOTOGRAPH: a
+    photograph is 1 whatever it weighed (currency record §3), and the byte
+    columns are not read here. Computed fresh on every call — the
+    entitlement/quota rule (roadmap §2). ONE statement fetches the
+    candidates with their two facts and their count (the in-flight count
+    rides a correlated subquery per gathering); the RESOLVER decides which
+    count, row by row — the SQL WHERE is a candidate filter (a superset:
+    either fact naming the account), never the answer, so a row the CHECK
+    forbids raises here instead of being counted once or twice. With one
+    keeper there is no logical-size device: a gathering counts against
+    exactly one account, and the photograph is stored once.
+
+    CHARGED, NEVER VISIBLE (bin record §4, binding): `photo_count` counts
+    `ready` rows regardless of `publication_state`, so a photograph in the
+    30-day bin still counts here — it is still stored. This number is the
+    quota's and the refusal's; a surface that shows it as "your photos" is
+    the defect that section exists to prevent (charged = visible + in the
+    bin, and only the first is a column). The bin's size is
+    `account_bin_count`, computed on the refusal path alone."""
     rows = (
         await db.execute(
             select(
                 Gathering.keeper_account_id.label("own_keeper"),
                 Group.keeper_account_id.label("group_keeper"),
-                (Gathering.total_bytes + _in_flight_bytes_of(Gathering.id)).label("bytes"),
+                (Gathering.photo_count + _in_flight_count_of(Gathering.id)).label("units"),
             )
             .select_from(Gathering)
             .outerjoin(Group, Group.id == Gathering.owning_group_id)
@@ -422,35 +473,99 @@ async def account_usage(db: AsyncSession, account: Account) -> int:
         )
     ).all()
     total = 0
-    for own_keeper, group_keeper, bytes_ in rows:
+    for own_keeper, group_keeper, units in rows:
         resolution = resolve_keeper(
             group_keeper_account_id=group_keeper, own_keeper_account_id=own_keeper
         )
         if resolution.keeper_account_id == account.id:
-            total += int(bytes_)
+            total += int(units)
     return total
 
 
 async def account_quota(db: AsyncSession, account: Account) -> int:
-    """The bytes the account is entitled to keep. Every account is on the
-    free tier until the storage-tier phase gives this a subscription to
-    read; it takes the session and the account now so that phase changes
-    one function and no caller. Never stored (roadmap §2)."""
-    return FREE_TIER_BYTES
+    """The PHOTO-EQUIVALENTS the account is entitled to keep. Every account
+    is on the free tier until the storage-tier phase gives this a
+    subscription to read; it takes the session and the account now so that
+    phase changes one function and no caller — the signature the byte
+    version promised, kept through the cutover. Never stored (roadmap
+    §2)."""
+    return FREE_TIER_PHOTOGRAPHS
 
 
-async def gathering_bytes(db: AsyncSession, gathering: Gathering) -> int:
-    """One gathering's own bytes: published (`total_bytes`) plus in flight
-    (the reservation). The memorial ceiling's subject (keeper record §9.4):
-    a memorial is exempt from every ACCOUNT's quota and bounded by its OWN
-    size — a different comparison from every other type, made here so the
-    upload path has one function to call rather than a sum to re-derive."""
+async def gathering_units(db: AsyncSession, gathering: Gathering) -> int:
+    """One gathering's OWN count, in photographs: published (`photo_count`)
+    plus in flight (the reservation — one per row). The memorial ceiling's
+    subject (keeper record §9.4; in photographs since CK-51b, currency
+    record §8): a memorial is exempt from every ACCOUNT's quota and bounded
+    by its OWN count — never any account's usage — a different comparison
+    from every other type, which is why it lives here rather than being
+    re-derived at the call site. (Until CK-51b this function summed the
+    gathering's bytes under a name that said so; the same shape, the byte
+    columns swapped for the count.)"""
     total = await db.scalar(
-        select(Gathering.total_bytes + _in_flight_bytes_of(Gathering.id)).where(
+        select(Gathering.photo_count + _in_flight_count_of(Gathering.id)).where(
             Gathering.id == gathering.id
         )
     )
     return int(total or 0)
+
+
+async def account_bin_count(db: AsyncSession, account: Account) -> int:
+    """How many of the photographs charged to this account are in the bin —
+    `ready` AND `removed` — over the same gatherings account_usage counts
+    (the ones that resolve to the account, memorials exempt: a memorial's
+    bin frees nothing on the account). CALLED ONLY FROM THE REFUSAL PATH
+    (api/media.py::_enforce_limits, after the quota has already refused),
+    so the refusal can say what a person can do about it — bin record §5:
+    where the space is full and the bin is not empty, the refusal names the
+    bin and offers to empty it; where the bin is empty it names no bin.
+
+    NOT FOLDED INTO account_usage, DELIBERATELY: account_usage is the hot
+    path — it runs inside every upload intent under the keeper's row lock —
+    and the bin is a per-gathering COUNT over `media` that only a refusal
+    needs; paying for it on every upload to answer a question the accepted
+    path never asks would be the wrong trade. Same candidate query, same
+    resolver loop, a different measure. NOT A QUOTA INPUT — nothing may add
+    it to, or subtract it from, usage (a binned photograph is charged; that
+    is bin record §3's whole point). Nothing else may call it — pinned by
+    test: the name appears in api/media.py exactly once, inside
+    _enforce_limits."""
+    binned = (
+        select(func.count(Media.id))
+        .where(
+            Media.gathering_id == Gathering.id,
+            Media.status == MediaStatus.READY,
+            Media.publication_state == PublicationState.REMOVED,
+        )
+        .correlate(Gathering)
+        .scalar_subquery()
+    )
+    rows = (
+        await db.execute(
+            select(
+                Gathering.keeper_account_id.label("own_keeper"),
+                Group.keeper_account_id.label("group_keeper"),
+                binned.label("binned"),
+            )
+            .select_from(Gathering)
+            .outerjoin(Group, Group.id == Gathering.owning_group_id)
+            .where(
+                Gathering.gathering_type != GatheringType.MEMORIAL,
+                or_(
+                    Gathering.keeper_account_id == account.id,
+                    Group.keeper_account_id == account.id,
+                ),
+            )
+        )
+    ).all()
+    total = 0
+    for own_keeper, group_keeper, count in rows:
+        resolution = resolve_keeper(
+            group_keeper_account_id=group_keeper, own_keeper_account_id=own_keeper
+        )
+        if resolution.keeper_account_id == account.id:
+            total += int(count)
+    return total
 
 
 # --- The deletion leg --------------------------------------------------------------

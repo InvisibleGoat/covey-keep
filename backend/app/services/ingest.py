@@ -112,9 +112,19 @@ and each step's failure mode, deliberately:
      The caller commits. The reservation releases in the same instant
      through the one quota path (`ready` is outside IN_FLIGHT_STATUSES —
      the baton keeping.py already holds; verified by test, not rebuilt):
-     the reserved bytes were the declared upload size, the committed bytes
-     are the derivatives' sum, and the two differ on purpose — the
-     reservation over-counts in the safe direction (schema-shape record §4).
+     since CK-51b the reservation was ONE photo-equivalent for this row and
+     `photo_count` takes over at exactly one, so the account's usage does
+     not move at all at `ready` — the unit is the photograph, whatever the
+     file weighed (currency record §3). The bytes ride beside it for THE
+     MONITOR (currency record §5), one INFO line after the UPDATE: the
+     charged unit, the three layers' actual stored sum, PHOTOGRAPH_BYTES
+     (the measured cost of one photograph — a cost model with this one
+     runtime use, never a quota unit) and their ratio. It is the first
+     comparison of charged against stored the system has ever had; what
+     it watches is whether the currency is still worth what we said, and
+     what it moves is a PRICE, never the count. Byte counts and a row id
+     only (media-pipeline §8's bans cover URLs and object keys, and
+     nothing here approaches them).
   5. ONLY AFTER THAT COMMIT the worker deletes the quarantine original
      (`delete_original`), and a failure there is NOT a failure of the row:
      the photograph is `ready`, the original lingers, and the 24-hour
@@ -165,14 +175,17 @@ DATA-HANDLING: this module names no person. It reads the photograph's bytes
 into memory for the length of one call and retains nothing; every rendition
 is re-encoded from pixels with no metadata carried (processing.py — the
 EXIF promise, made true here and pinned against real fixtures). It logs
-nothing itself (the worker logs media ids and outcomes — a row id is not
-personal data; a key is a function of it). `last_error` carries a stage
-name, an exception class and an S3 error code at most.
+ONE line, since CK-51b — the monitor at the publish UPDATE: a row id, the
+stored byte count, the cost model and their ratio, nothing else (the
+worker logs media ids and outcomes — a row id is not personal data; a key
+is a function of it; a byte count is a number). `last_error` carries a
+stage name, an exception class and an S3 error code at most.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional
@@ -185,6 +198,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Account, Gathering, Media, MediaDerivative, MediaStatus, PublicationState
 from app.models.enums import PUBLICATION_STATE
 from app.services import processing, publication
+from app.services.keeping import PHOTOGRAPH_BYTES
 from app.services.processing import Rendition, Undecodable
 from app.services.storage import (
     WorkerClient,
@@ -195,6 +209,10 @@ from app.services.storage import (
     quarantine_key,
     read_quarantine_object,
 )
+
+# The monitor's logger (CK-51b) — the worker's namespace, so Render's log
+# and the suite's caplog see it beside the `ready` line.
+log = logging.getLogger("covey-keep.ingest")
 
 # A `processing` row whose claim is older than this is a stall — the worker
 # that held it was killed (record §6.2, §8) — and is claimable again.
@@ -478,8 +496,8 @@ async def handle_claimed(
         for rendition in renditions
     )
     stored = sum(rendition.size_bytes for rendition in renditions)
-    # ONE statement, both columns (CK-51a, 0024): the bytes the quota reads
-    # today and the photograph the quota reads from CK-51b. In one UPDATE
+    # ONE statement, both columns (CK-51a, 0024): the photograph the quota
+    # reads (since CK-51b) and the bytes the monitor reads. In one UPDATE
     # the two cannot diverge - a lost claim, a crash or a rollback moves
     # both or neither - so the verifier's two assertions (total_bytes
     # equals the sum over the ready rows' layers; photo_count equals the
@@ -495,6 +513,22 @@ async def handle_claimed(
             photo_count=Gathering.photo_count + 1,
         )
         .execution_options(synchronize_session=False)
+    )
+    # THE MONITOR (CK-51b; currency record §5) — charged against stored, at
+    # the one place the charge is written. One photograph was charged
+    # (photo_count + 1 above) and `stored` bytes were kept; PHOTOGRAPH_BYTES
+    # is the measured cost the price assumes. A ratio drifting above 1.0
+    # across many photographs means the PRICE is wrong, never the count
+    # (a photograph is still 1) - the tier is repriced, the quota is not
+    # touched. Byte counts and a row id only. This is PHOTOGRAPH_BYTES's
+    # one runtime use; it is not a statement, so the one-UPDATE pin above
+    # holds.
+    log.info(
+        "media %s: charged 1 photograph; stored %d bytes against %d modeled (%.2fx)",
+        row.id,
+        stored,
+        PHOTOGRAPH_BYTES,
+        stored / PHOTOGRAPH_BYTES,
     )
     await db.flush()
     return Outcome.READY

@@ -162,31 +162,38 @@ class Gathering(Base):
         DateTime(timezone=True), nullable=True
     )
     # A maintained fact about THIS gathering (sum of its media bytes), kept
-    # current as media is added and removed. This is not a violation of the
-    # entitlement-never-stored rule: quota and entitlement stay computed at
-    # request time by summing total_bytes across an account's kept gatherings
-    # — this column is the input to that computation, not a cached answer to
-    # a question about any account.
+    # current as media is added. NOT A QUOTA INPUT since CK-51b: the quota
+    # counts photographs (photo_count, below), and this column is cost
+    # reporting and the currency record §5's monitor (services/ingest.py
+    # logs it beside the charged unit at the one UPDATE that moves both).
+    # Still maintained in that statement so the two never diverge, and
+    # never decremented — see photo_count.
     total_bytes: Mapped[int] = mapped_column(
         BigInteger, nullable=False, server_default=text("0")
     )
-    # THE QUOTA'S UNIT - from CK-51b (0024, CK-51a; decisions/2026-09-20-
-    # photographs-are-the-currency.md §3, §6): a photograph is 1, whatever
-    # the file weighed, and this is the count of this gathering's `ready`
-    # photographs - the same rung, the same rows, as total_bytes above,
-    # incremented in the SAME UPDATE statement (services/ingest.py, step 4)
-    # so the two cannot diverge. total_bytes stays as cost reporting and
-    # the currency record §5's monitor; it stops being a quota input at
-    # CK-51b. NEITHER IS DECREMENTED ON REMOVAL: a removed photograph holds
-    # its layers for the 30-day bin and the sweep that frees them does not
-    # exist - when it is built it owes both columns, together, or they
-    # diverge. Same reasoning as total_bytes under the never-stored rule: a
-    # maintained fact about THIS gathering, an input to the account-level
-    # sum computed at request time, never a cached answer about any
-    # account. Backfilled once at 0024 from the existing ready rows; the
-    # server default is right here (every gathering starts at zero and the
-    # writer only ever adds). READ BY NOTHING until CK-51b - the deploy-
-    # window reason is in 0024's docstring.
+    # THE QUOTA'S UNIT - since CK-51b (added at 0024, CK-51a; decisions/
+    # 2026-09-20-photographs-are-the-currency.md §3, §6): a photograph is
+    # 1, whatever the file weighed, and this is the count of this
+    # gathering's `ready` photographs - the same rung, the same rows, as
+    # total_bytes above, incremented in the SAME UPDATE statement
+    # (services/ingest.py, step 4) so the two cannot diverge. Read by
+    # services/keeping.py::account_usage (the account's sum, plus the
+    # in-flight rows) and gathering_units (a memorial's own ceiling).
+    # CHARGED, NEVER VISIBLE (the bin record §4): it counts `ready` rows
+    # whatever their publication state, so a photograph in the 30-day bin
+    # still counts - it is still stored - and a surface must never show it
+    # as "your photos" (charged = visible + in the bin; only this one is a
+    # column). NEITHER COLUMN IS DECREMENTED ON REMOVAL: a removed
+    # photograph holds its layers for the bin and the sweep that frees them
+    # does not exist - when it is built it owes both columns, together, in
+    # the one statement that deletes the layers, or they diverge. Same
+    # reasoning as total_bytes under the never-stored rule: a maintained
+    # fact about THIS gathering, an input to the account-level sum computed
+    # at request time, never a cached answer about any account. Backfilled
+    # once at 0024 from the existing ready rows; the server default is
+    # right here (every gathering starts at zero and the writer only ever
+    # adds). It was read by nothing for one full deploy (CK-51a) on
+    # purpose - the deploy-window reason is in 0024's docstring.
     photo_count: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
     )

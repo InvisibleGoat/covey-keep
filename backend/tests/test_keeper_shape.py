@@ -425,8 +425,10 @@ async def test_a_group_gathering_is_seen_listed_and_counted_by_the_groups_keeper
     # whose keeper is a second account, its own keeper column NULLed (the
     # CHECK insists) and its host NULLed so nothing but the group rung can
     # admit anyone: the group's keeper reads it, lists it and is charged
-    # its bytes; the creator — not host, not keeper, never invited — draws
-    # the 404 byte-identical to a missing id and is charged nothing.
+    # its photographs (in photographs since CK-51b — the unit changed, the
+    # number below did not); the creator — not host, not keeper, never
+    # invited — draws the 404 byte-identical to a missing id and is
+    # charged nothing.
     creator_address, keeper_address = "creator@example.com", "group-keeper@example.com"
     creator = await _signed_in_headers(client, capsys, creator_address)
     keeper = await _signed_in_headers(client, capsys, keeper_address)
@@ -441,7 +443,7 @@ async def test_a_group_gathering_is_seen_listed_and_counted_by_the_groups_keeper
         gathering.keeper_account_id = None
         gathering.owning_group_id = group.id
         gathering.host_account_id = None
-        gathering.total_bytes = 321
+        gathering.photo_count = 321
         await db.commit()
         resolution = await resolved_keeper_of(db, gathering)
         assert resolution == KeeperResolution(
