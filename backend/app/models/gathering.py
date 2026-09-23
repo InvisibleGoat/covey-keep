@@ -180,13 +180,18 @@ class Gathering(Base):
     # services/keeping.py::account_usage (the account's sum, plus the
     # in-flight rows) and gathering_units (a memorial's own ceiling).
     # CHARGED, NEVER VISIBLE (the bin record §4): it counts `ready` rows
-    # whatever their publication state, so a photograph in the 30-day bin
-    # still counts - it is still stored - and a surface must never show it
-    # as "your photos" (charged = visible + in the bin; only this one is a
-    # column). NEITHER COLUMN IS DECREMENTED ON REMOVAL: a removed
-    # photograph holds its layers for the bin and the sweep that frees them
-    # does not exist - when it is built it owes both columns, together, in
-    # the one statement that deletes the layers, or they diverge. Same
+    # whatever their publication state, so a photograph in the bin still
+    # counts - it is still stored, whatever its age (the bin is
+    # removed-and-still-stored; the 30 days are the contributor's retrieval
+    # window, a different clock - bin record §6.1) - and a surface must
+    # never show it as "your photos" (charged = visible + in the bin; only
+    # this one is a column). NEITHER COLUMN IS DECREMENTED ON REMOVAL: a
+    # removed photograph holds its layers, and removal frees nothing.
+    # DESTRUCTION DOES, since CK-54: api/media.py's marking statement drops
+    # both columns TOGETHER, in one statement, as this one raises them -
+    # and a later writer that decrements only one would diverge them. The
+    # 30-day SWEEP that destroys on a clock is Phase B and owes the same
+    # one statement. Same
     # reasoning as total_bytes under the never-stored rule: a maintained
     # fact about THIS gathering, an input to the account-level sum computed
     # at request time, never a cached answer about any account. Backfilled

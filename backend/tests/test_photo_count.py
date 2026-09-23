@@ -121,6 +121,14 @@ async def _schema(db) -> tuple[str, bool, set[str]]:
 
 BOTH_INDEXES = {"ix_gatherings_keeper_account_id", "ix_groups_keeper_account_id"}
 
+# The migration head this test upgrades BACK to. It is not 0024 any more
+# and it moves with every migration: the round trip below is 0024's, but
+# `upgrade head` reapplies everything above it too, so the assertion has
+# to name the real head rather than the revision under test. (0025,
+# CK-54, adds two enum labels and touches neither column, so passing
+# through it changes nothing here.)
+HEAD = "0025"
+
 
 async def test_0024_round_trip_backfills_the_count_and_the_downgrade_is_genuine(db_session_factory, capsys):
     """Down to 0023 — the column and both indexes gone. Rows planted THERE by
@@ -134,7 +142,7 @@ async def test_0024_round_trip_backfills_the_count_and_the_downgrade_is_genuine(
     `media` every time."""
     async with db_session_factory() as db:
         head, has_column, indexes = await _schema(db)
-    assert head == "0024" and has_column and indexes == BOTH_INDEXES
+    assert head == HEAD and has_column and indexes == BOTH_INDEXES
 
     await _migrate("downgrade", "0023", capsys)
     async with db_session_factory() as db:
@@ -190,7 +198,7 @@ async def test_0024_round_trip_backfills_the_count_and_the_downgrade_is_genuine(
     async def counts() -> dict[str, int]:
         async with db_session_factory() as db:
             head, has_column, indexes = await _schema(db)
-            assert (head, has_column, indexes) == ("0024", True, BOTH_INDEXES)
+            assert (head, has_column, indexes) == (HEAD, True, BOTH_INDEXES)
             rows = (
                 await db.execute(
                     text("SELECT id, photo_count FROM gatherings WHERE id IN (:a, :b, :c)"),

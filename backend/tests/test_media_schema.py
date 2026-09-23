@@ -91,13 +91,24 @@ async def _columns(db, table: str) -> dict[str, tuple[str, str | None]]:
 
 
 async def test_status_ladder_in_the_database_matches_the_model(db_session_factory):
-    """0016 grew media_status from 0001's pair to the five-rung ladder, in
-    ladder order (the new labels placed with BEFORE clauses). The model's
-    enum must match the DB label for label — Alembic's autogenerate does not
-    compare enum values, so this is the only place that drift would show."""
+    """0016 grew media_status from 0001's pair to the five-rung ingest
+    ladder, in ladder order (the new labels placed with BEFORE clauses);
+    0025 appended the destruction ladder's two (CK-54), which come after it
+    both chronologically and logically — a photograph is destroyed after it
+    was ready. The model's enum must match the DB label for label —
+    Alembic's autogenerate does not compare enum values, so this is the
+    only place that drift would show."""
     async with db_session_factory() as db:
         labels = await _enum_labels(db, "media_status")
-        assert labels == ["pending_upload", "uploaded", "processing", "ready", "failed"]
+        assert labels == [
+            "pending_upload",
+            "uploaded",
+            "processing",
+            "ready",
+            "failed",
+            "destroying",
+            "destroyed",
+        ]
         assert labels == [m.value for m in MediaStatus]
         layers = await _enum_labels(db, "media_layer")
         assert layers == ["archival", "web", "thumbnail"]

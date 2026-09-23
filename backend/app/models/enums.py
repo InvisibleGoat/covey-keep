@@ -81,15 +81,49 @@ class MediaStatus(str, Enum):
     failed          the retry ladder is spent; last_error says why, and the
                     quarantine object was deleted at that moment.
 
+    AND THE DESTRUCTION LADDER (CK-54, migration 0025) — a SECOND job on the
+    same row, entered from `ready` and from nowhere else, because only a
+    `ready` row has layers to destroy:
+
+    destroying      the bytes are owed a deletion and the photograph is
+                    already uncounted: the marking statement moved the row
+                    off `ready` and decremented the gathering's
+                    `photo_count` and `total_bytes` together. Claimable and
+                    retryable — it mirrors `processing`, with `claimed_at`
+                    NULL meaning "marked, never claimed" rather than
+                    malformed (there is no queued rung before it; the API
+                    marks straight here). A row that exhausts the retry
+                    ladder STAYS here with `last_error` set: it is not
+                    charged, its bytes may still exist, and `failed` would
+                    be a lie about which job failed — and would make the
+                    row visible again (see below).
+    destroyed       terminal: the three published objects are gone and the
+                    `media_derivatives` rows with them. The `media` row
+                    survives carrying its provenance AND its words — the
+                    filename, the caption, the tags (the bin record §7.2:
+                    a caption is not a likeness, and *a photograph captioned
+                    "Jenny at bat" was deleted* is an audit trail where
+                    *something was deleted* is not).
+
+    NEITHER DESTRUCTION RUNG IS VISIBLE TO ANYBODY. `api/media.py::
+    _visible_media` excludes both, which is what makes §7.2's requirement —
+    the surviving words unreachable by any list, search or surface — a
+    property of the one audience criterion rather than a rule every reader
+    must remember. Nothing counts them either: they are outside
+    `keeping.IN_FLIGHT_STATUSES` and are not `ready`, so a row in
+    destruction charges nobody and sits in no bin count.
+
     Member order mirrors the DB's enumsortorder (0016 placed the new labels
-    around the 0001 pair with BEFORE clauses), so the ladder reads top to
-    bottom in both places."""
+    around the 0001 pair with BEFORE clauses; 0025 appends these two after
+    `failed`), so the ladder reads top to bottom in both places."""
 
     PENDING_UPLOAD = "pending_upload"
     UPLOADED = "uploaded"
     PROCESSING = "processing"
     READY = "ready"
     FAILED = "failed"
+    DESTROYING = "destroying"
+    DESTROYED = "destroyed"
 
 
 class MediaLayer(str, Enum):

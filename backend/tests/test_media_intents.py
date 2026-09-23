@@ -917,7 +917,9 @@ async def test_the_refusal_when_the_bin_is_not_empty_names_it_and_offers_to_empt
     client, capsys, db_session_factory, monkeypatch
 ):
     # Bin record §5, binding on this phase: where the space is full and
-    # some of what fills it is in the 30-day bin, the refusal says so and
+    # some of what fills it is in the bin (removed and still stored,
+    # whatever its age — not the 30-day retrieval window; bin record
+    # §6.1), the refusal says so and
     # offers the one thing a person can do about it. Charged, not visible:
     # the two binned photographs still count (bin record §3, §4). THE
     # KEEPER'S form (CK-51b.1): the bin is theirs to empty — the disclosure
@@ -946,6 +948,35 @@ async def test_the_refusal_when_the_bin_is_not_empty_names_it_and_offers_to_empt
     _names_no_byte_unit(message)
     async with db_session_factory() as db:
         assert await _media_count(db) == 9  # nothing added
+
+
+async def test_the_bin_clause_agrees_with_itself_at_one_photograph(
+    client, capsys, db_session_factory, monkeypatch
+):
+    # CK-54's rider. The clause had no singular branch, so ONE binned
+    # photograph read "1 of them are in the bin" — the commonest small
+    # number, and the one a person is most likely to see, because it is
+    # what a single removal leaves behind. Both forms pinned so neither
+    # can drift away from the other.
+    monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 10)
+    address = "onebinned@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    created = await _create(client, headers)
+    async with db_session_factory() as db:
+        person = (await db.execute(select(Person).where(Person.email == address))).scalars().one()
+        await _plant_bin(db, created["id"], person.id, removed=1, other=9)
+        await _set_photo_count(db, created["id"], 10)
+        account = await _account_for(db, address)
+        assert await keeping.account_bin_count(db, account) == 1
+    refused = await _intents(client, headers, created["id"], [_item(MB)])
+    assert refused.status_code == 422
+    message = refused.json()["detail"][0]["msg"]
+    assert message == (
+        "this space is full — 10 photos, and 1 of them is in the bin. "
+        "Empty the bin to make room."
+    )
+    assert "are in the bin" not in message
+    _names_no_byte_unit(message)
 
 
 async def test_the_four_refusals_by_audience_and_bin_state(

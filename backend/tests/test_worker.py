@@ -202,6 +202,10 @@ def _stub_head(monkeypatch, result=None, *, raises: Exception | None = None):
     monkeypatch.setattr(ingest, "_read", never)
     monkeypatch.setattr(ingest, "_put", never)
     monkeypatch.setattr(ingest, "_delete", fake_delete)
+    # No INGEST path may ever delete a published object (CK-54): the
+    # destruction ladder is the only caller, and these stubs cover every
+    # claim, retry and dead-letter path in this file.
+    monkeypatch.setattr(ingest, "_delete_published", never)
     return fake_head
 
 
@@ -217,10 +221,15 @@ class FakeStore:
         self.calls: list[tuple[str, str]] = []
         self.raise_on: dict[str, Exception] = {}
         self.on_delete = None
+        # CK-54: the destruction ladder's one storage call, with the same
+        # observation hook — it is what the delete-BEFORE-commit ordering
+        # pin watches the database through.
+        self.on_delete_published = None
         monkeypatch.setattr(ingest, "_head", self._head)
         monkeypatch.setattr(ingest, "_read", self._read)
         monkeypatch.setattr(ingest, "_put", self._put)
         monkeypatch.setattr(ingest, "_delete", self._delete)
+        monkeypatch.setattr(ingest, "_delete_published", self._delete_published)
 
     def _maybe_raise(self, stage: str) -> None:
         if stage in self.raise_on:
@@ -250,6 +259,13 @@ class FakeStore:
             await self.on_delete(key)
         self._maybe_raise("delete")
         self.quarantine.pop(key, None)
+
+    async def _delete_published(self, client, key):
+        self.calls.append(("delete_published", key))
+        if self.on_delete_published is not None:
+            await self.on_delete_published(key)
+        self._maybe_raise("delete_published")
+        self.published.pop(key, None)
 
     def stages(self) -> list[str]:
         return [stage for stage, _ in self.calls]

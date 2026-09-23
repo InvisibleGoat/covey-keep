@@ -19,7 +19,10 @@ never interchangeable (media pipeline record §3, §8, §11):
 The WORKER credential (`R2_WORKER_*`, Object Read & Write on BOTH buckets)
 is the third type, `WorkerClient` (CK-35): it reads quarantine, and since
 CK-36 writes published (`put_published_object` — the one write into the
-bucket readers are served from) and deletes originals. It is built only from
+bucket readers are served from) and deletes originals — and since CK-54
+DELETES PUBLISHED OBJECTS (`delete_published_object`), which until then no
+credential in this product had ever been asked to do, because nothing had
+ever destroyed a photograph's bytes. It is built only from
 `WorkerSettings`, which the web service never constructs, and the worker
 never constructs the other two: the config split in config.py is what makes
 "neither service holds the other's keys" (§11.1) structural rather than a
@@ -221,9 +224,11 @@ class ServeClient:
 class WorkerClient:
     """The worker credential (CK-35), scoped to BOTH buckets — the one
     credential that may move a photograph from quarantine to published
-    (`put_published_object`, CK-36), and the one that may delete a
-    quarantined original. Knows both buckets by name because its credential
-    does; it is never accepted by either presign function."""
+    (`put_published_object`, CK-36), the one that may delete a quarantined
+    original, and since CK-54 the one that may DESTROY a published
+    derivative (`delete_published_object`). Knows both buckets by name
+    because its credential does; it is never accepted by either presign
+    function."""
 
     raw: Any
     quarantine_bucket: str
@@ -512,3 +517,38 @@ def put_published_object(
         ContentLength=len(body),
         StorageClass=storage_class,
     )
+
+
+def delete_published_object(worker: WorkerClient, *, key: str) -> None:
+    """Delete one derivative object from the PUBLISHED bucket (CK-54) — the
+    FIRST function in this product that destroys a photograph's stored
+    bytes. Until it existed, "remove" meant `publication_state = 'removed'`
+    and the three layers stayed in R2 forever (the bin record's Context,
+    verified in the code before it was written).
+
+    THE GUARD IS put_published_object's, for the same structural reason:
+    only the WorkerClient may touch this bucket's contents, because its
+    credential is the only one scoped to write there — the UploadClient
+    cannot reach the bucket at all and the ServeClient is read-only, which
+    CK-33's verifier proves against live R2. A destruction the web service
+    could perform would be one the credential split no longer contains.
+
+    DELETING AN ABSENT OBJECT IS A SUCCESS, never an error — the rule
+    delete_quarantine_object states, and here it is not a nicety but what
+    makes the RETRY SAFE. The destruction routine deletes the objects
+    BEFORE it commits `destroyed` (services/ingest.py says why that order
+    inverts the publish transaction's), so a crash between the deletes and
+    the commit leaves a `destroying` row whose objects are already gone;
+    the next claim deletes them again and finds nothing, and that is the
+    ordinary path rather than an edge case. R2 answers a delete of a
+    missing key with 204 anyway; the swallow below makes the guarantee
+    ours rather than the store's. Blocks on the network."""
+    worker = _require_worker(worker, "delete_published_object")
+    if not key:
+        raise ValueError("key must not be empty")
+    try:
+        worker.raw.delete_object(Bucket=worker.published_bucket, Key=key)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") in _ABSENT_CODES:
+            return
+        raise

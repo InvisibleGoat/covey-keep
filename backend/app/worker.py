@@ -28,6 +28,17 @@ an already-absent object is a success — Render runs two workers for ~61
 seconds on every deploy (CK-35's check (cw)), and `SKIP LOCKED` protects
 the row, not a delete a slow-dying predecessor issues.
 
+AND SINCE CK-54 IT DESTROYS ONE. A row the API has marked `destroying` is
+claimed by the same mechanism and settled by services/ingest.py::
+handle_destroying: the three published objects are deleted FIRST and
+`destroyed` is committed only after — the inverse of the publish order,
+and for the mirror-image reason (a row claiming destruction while its
+bytes remain is the one promise this routine exists to keep). Nothing is
+deleted from quarantine afterwards: that original went at `ready`. The
+count moved when the API marked the row, never here. The scheduled 30-day
+sweep is Phase B; this worker destroys only what a person already chose to
+destroy.
+
 `publication_state` moves here only where the gathering resolves open
 (CK-41 — `pending → live` inside the ready transaction, the ladder in
 services/publication.py applied, never approval inferred from completion;
@@ -61,12 +72,19 @@ draining, with a loud log line, so a mistyped dashboard value does not
 hammer the store.
 
 DATA-HANDLING: this process is the first component able to destroy an
-uploaded photograph, and the order above is the whole of its discipline —
-derivatives committed before the original is deleted, never the reverse.
-Log lines carry media ids, outcomes and byte counts — a row id is not
-personal data and a key is a function of it. Never a URL, never a key id,
-never a person, never the contents of anything. Uploads on the dev deploy
-remain Steven's own test images (private-alpha scope).
+uploaded photograph, and the order is the whole of its discipline — on the
+ingest path derivatives are committed before the original is deleted,
+never the reverse; on the destruction path the published objects are
+deleted before `destroyed` is committed, never the reverse. The two orders
+are opposite and both are deliberate (services/ingest.py says why each
+way round). Since CK-54 the photographs it destroys include photographs of
+children, and every one of them was chosen by a person through
+api/media.py — this process initiates nothing. Log lines carry media ids,
+outcomes and byte counts — a row id is not personal data and a key is a
+function of it. Never a URL, never a key id, never a person, never the
+contents of anything, and never a filename, caption or tag: a destroyed
+row keeps its words and this worker never reads them. Uploads on the dev
+deploy remain Steven's own test images (private-alpha scope).
 """
 
 from __future__ import annotations
@@ -136,13 +154,23 @@ async def poll_once(
             await db.commit()
             if row is None:
                 return Poll.IDLE
-            if row.status == MediaStatus.FAILED:
-                # Dead-lettered at reclaim: abandoned MAX_ATTEMPTS times. The
-                # terminal state is committed; now the original goes.
+            if row.claimed_at is None:
+                # Dead-lettered at reclaim: abandoned MAX_ATTEMPTS times.
+                # EVERY real claim stamps `claimed_at` and every reclaim
+                # dead-letter clears it, on both ladders — which is why the
+                # test is the stamp and not the rung (CK-54: a destroy job
+                # that gives up stays at `destroying`, so "the rung is
+                # failed" is true on the ingest ladder alone). The terminal
+                # state is committed; an upload's original goes now, and a
+                # destruction has none to delete.
                 log.warning("media %s dead-lettered at reclaim: %s", row.id, row.last_error)
-                await _delete_original(client, row)
+                if row.status == MediaStatus.FAILED:
+                    await _delete_original(client, row)
                 return Poll.PROCESSED
-            outcome = await ingest.handle_claimed(db, client, row, now)
+            if row.status == MediaStatus.DESTROYING:
+                outcome = await ingest.handle_destroying(db, client, row, now)
+            else:
+                outcome = await ingest.handle_claimed(db, client, row, now)
             await db.commit()
             elapsed_ms = round((time.monotonic() - started) * 1000)
     except _NOT_READY_ERRORS as exc:
@@ -183,6 +211,22 @@ async def poll_once(
                 row.publication_state.value,
             )
         await _delete_original(client, row)
+    elif outcome is ingest.Outcome.DESTROYED:
+        # Committed: the three published objects are gone and their rows
+        # with them (CK-54). Nothing follows — the quarantine original was
+        # deleted at `ready`, one job earlier. The count moved when the API
+        # marked the row, not here.
+        log.info(
+            "media %s: destroyed — the stored layers are gone (attempt %d, %d ms claim-to-destroyed)",
+            row.id,
+            row.attempts,
+            elapsed_ms,
+        )
+    elif outcome is ingest.Outcome.DESTROY_ABANDONED:
+        # The ladder is spent and the row stays at `destroying`: uncounted,
+        # invisible, and owed a bucket operation somebody must do by hand.
+        # Loud, because nothing will retry it.
+        log.error("media %s: destruction gave up: %s", row.id, row.last_error)
     elif outcome is ingest.Outcome.DEAD_LETTERED:
         log.warning("media %s: dead-lettered (attempt %d): %s", row.id, row.attempts, row.last_error)
         await _delete_original(client, row)

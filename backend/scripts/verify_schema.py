@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0024"
+EXPECTED_REVISION = "0025"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -363,6 +363,14 @@ async def verify(conn, ck: Checks) -> None:
     # The media row IS the job (record §6.1): five rungs, in ladder order.
     media_status = await enum_labels(conn, "media_status")
     for label in ("pending_upload", "uploaded", "processing", "ready", "failed"):
+        ck.check(label in media_status, f"media_status carries {label!r}", "label missing")
+    # The destruction ladder (0025, CK-54) — a second job on the same row,
+    # entered from `ready` and nowhere else. `destroying` mirrors
+    # `processing` (claimable, retryable); `destroyed` mirrors `ready`
+    # (terminal, and the layers are gone). A missing label here means the
+    # pre-deploy migration did not reach 0025, and every destroy request
+    # would 500 on an unknown enum value rather than refuse.
+    for label in ("destroying", "destroyed"):
         ck.check(label in media_status, f"media_status carries {label!r}", "label missing")
     status_default = (
         await conn.execute(
@@ -1049,15 +1057,43 @@ async def verify(conn, ck: Checks) -> None:
         # hangs off a photograph in any other rung. A row here means a
         # worker wrote around that — a half-published photograph. Detail
         # prints the count only.
+        #
+        # NARROWED AT CK-54, and the narrowing is the destruction ladder
+        # rather than a relaxation. `destroying` is the ONE rung at which a
+        # derivative row legitimately outlives `ready`: the API marks the
+        # media row and decrements the counts, and the worker deletes the
+        # objects and THEN the rows — delete-first, because a row claiming
+        # `destroyed` over bytes still in the bucket is the promise this
+        # routine exists to keep (services/ingest.py). So during a
+        # destruction the rows are exactly the record of what is still
+        # stored, which is what makes a stuck row legible to an operator.
+        # The terminal half of the same fact is asserted below and is
+        # STRICTER than this line ever was: a `destroyed` row has none.
         premature = await scalar(
             conn,
             "SELECT count(*) FROM media_derivatives d JOIN media m ON m.id = d.media_id "
-            "WHERE m.status <> 'ready'",
+            "WHERE m.status NOT IN ('ready', 'destroying')",
         )
         ck.check(
             premature == 0,
-            "no derivative row hangs off a photograph that is not ready",
-            f"{premature} derivative row(s) under a non-ready media row",
+            "no derivative row hangs off a photograph that is neither ready nor being destroyed",
+            f"{premature} derivative row(s) under a media row in no such rung",
+        )
+        # THE DESTRUCTION'S WHOLE POINT, as a property of the data (CK-54):
+        # `destroyed` means the three published objects are gone, and the
+        # derivative rows go in the same transaction that writes the rung.
+        # A row here is a photograph the product has told someone was
+        # destroyed while its layers are still described — and, since the
+        # keys are derived from these rows, still in the bucket.
+        undestroyed = await scalar(
+            conn,
+            "SELECT count(*) FROM media_derivatives d JOIN media m ON m.id = d.media_id "
+            "WHERE m.status = 'destroyed'",
+        )
+        ck.check(
+            undestroyed == 0,
+            "no destroyed photograph still has derivative rows",
+            f"{undestroyed} derivative row(s) under a destroyed media row",
         )
     else:
         ck.check(False, "media derivative integrity", "media/media_derivatives missing")
@@ -1122,8 +1158,15 @@ async def verify(conn, ck: Checks) -> None:
         # in the SAME UPDATE statement as total_bytes, so (3) and (4) are one
         # fact checked twice. Publication state is not a term: a removed-
         # but-ready row holds its layers and its bytes and counts, and
-        # neither column is decremented on removal (the bin's sweep, when
-        # built, owes both together). A gathering whose count disagrees
+        # neither column is decremented on removal.
+        # BOTH ASSERTIONS SURVIVE CK-54 UNCHANGED, and that is the argument
+        # its shape was chosen for: destruction decrements the two columns
+        # in the one statement whose transaction also moves the row off
+        # `ready`, so the row leaves the counted set and the expected sum
+        # and count drop by exactly what was subtracted. A destruction
+        # needs no new invariant, which means it has no new way to be
+        # wrong. (The rows a `destroying` photograph still holds are
+        # excluded here by the same `status = 'ready'` term.) A gathering whose count disagrees
         # with its rows had a publish land half-done, or something moved
         # one column without the other - which is exactly what a second
         # statement beside the one UPDATE would make possible. Guarded on

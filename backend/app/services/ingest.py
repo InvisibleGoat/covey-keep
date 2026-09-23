@@ -3,6 +3,14 @@ of what it does with a claimed photograph: read the original, decode it,
 strip it, render the three layers, write them, and make the row `ready`
 in ONE transaction, and only then delete the original.
 
+SINCE CK-54 THIS MODULE ALSO DESTROYS ONE. Two jobs ride the same row and
+the same claim mechanism — ingest (`uploaded` → `processing` →
+`ready`/`failed`) and destruction (`destroying` → `destroyed`) — because
+the media row IS the job and a second jobs table would be the second
+representation decision 20 bans. See DESTROY below; the order of its two
+steps deliberately inverts PUBLISH's, and that is the one thing in this
+module most likely to be "fixed" by a later reader.
+
 The media row IS the job (media pipeline record §6.1) — there is no jobs
 table, and everything a worker needs to know rides the row: `status` (the
 rung), `attempts`, `available_at` (not claimable before), `claimed_at` (the
@@ -164,6 +172,48 @@ the photograph and no person did; the host's publish (api/media.py) is
 the only writer of a non-NULL publisher. Nothing is backfilled: rows the
 worker published before 0020 read NULL on both, forever.
 
+DESTROY (CK-54; decisions/2026-09-20-the-bin-counts-and-empties.md §6,
+§7.1). The second job, entered from `ready` and nowhere else, because only
+a `ready` row has layers to destroy. The API marks the row `destroying`
+and — in ONE statement, the mirror of the publish transaction's increment
+— decrements the gathering's `photo_count` and `total_bytes` together; the
+marking statement also resets the job columns, so a photograph that took
+two attempts to ingest still gets three to be destroyed. What arrives here
+is therefore an uncounted, invisible row owed a bucket operation.
+
+  1. DELETE THE THREE PUBLISHED OBJECTS, reading their keys from the
+     derivative rows (the record of what was actually written).
+  2. ONE TRANSACTION: the guarded rung to `destroyed`, then the derivative
+     rows deleted. The caller commits.
+
+THE ORDER IS THE INVERSE OF PUBLISH'S, AND THAT IS THE POINT. Publish
+commits the database and only then deletes the quarantine original,
+because the database is the record of what exists and a lost original is
+cheaper than a lost photograph. Destruction cannot borrow that argument:
+committing `destroyed` before the objects are gone would leave a row
+claiming a photograph was destroyed while its bytes sit in the bucket —
+after the product told someone it was gone. Delete-first fails safe
+instead: a crash leaves `destroying`, the retry finds the objects absent,
+and an absent object is a SUCCESS (storage.py), so the retry is idempotent
+by construction rather than by bookkeeping.
+
+A DESTROY JOB THAT EXHAUSTS THE LADDER STAYS AT `destroying`. It does not
+become `failed`: `failed` is the ingest ladder's terminal and would claim
+the wrong job failed, and — because `api/media.py::_visible_media` excludes
+the two destruction rungs and nothing else — it would make the row VISIBLE
+AGAIN to the person who destroyed it. So the row keeps the rung, carries
+its `last_error`, and is kept out of the claim predicate by
+`attempts < MAX_ATTEMPTS` rather than by a rung change. It is not charged
+and it is seen by nobody; what it owes is a bucket operation an operator
+can retry by hand. Named rather than hidden: this is the phase's residual
+failure mode.
+
+Nothing on this path touches a gathering, a quota or a publication state.
+`publication_state` keeps whatever it had — it records what was decided
+about the photograph, and destruction is not a publication decision. There
+is no permanent failure class: an object that cannot be found is the
+success case.
+
 Every function that writes leaves the commit to the caller (the worker
 commits after the claim and again after the outcome, so the row lock is
 held for the claim alone and never across a network call). Outcomes are
@@ -174,7 +224,18 @@ was reclaimed by another cannot overwrite the other's result.
 DATA-HANDLING: this module names no person. It reads the photograph's bytes
 into memory for the length of one call and retains nothing; every rendition
 is re-encoded from pixels with no metadata carried (processing.py — the
-EXIF promise, made true here and pinned against real fixtures). It logs
+EXIF promise, made true here and pinned against real fixtures). Since
+CK-54 it also DESTROYS a photograph's stored bytes, photographs of children
+among them — and every destruction it performs is one a person already
+chose (api/media.py's permanent delete, host or uploader); nothing here
+stamps a row into `destroying`, on a clock or otherwise, and the scheduled
+30-day sweep is Phase B. The three layers die as a unit, as the removal
+rule has always required, because the `media_derivatives` rows carry no
+lifecycle of their own to diverge. The `media` row survives with its
+provenance AND its words (bin record §7.2): a caption is not a likeness,
+the row is invisible by construction once it leaves the counted rung, and
+*a photograph captioned "Jenny at bat" was deleted* is an audit trail
+where *something was deleted* is not. It logs
 ONE line, since CK-51b — the monitor at the publish UPDATE: a row id, the
 stored byte count, the cost model and their ratio, nothing else (the
 worker logs media ids and outcomes — a row id is not personal data; a key
@@ -202,6 +263,7 @@ from app.services.keeping import PHOTOGRAPH_BYTES
 from app.services.processing import Rendition, Undecodable
 from app.services.storage import (
     WorkerClient,
+    delete_published_object,
     delete_quarantine_object,
     head_quarantine_object,
     published_key,
@@ -260,6 +322,18 @@ ERROR_ABANDONED = (
     "interrupted mid-job on every attempt"
 )
 ERROR_UNDECODABLE = "could not process the upload as a photograph: {reason} (permanent)"
+# The destruction ladder's two (CK-54). Both leave the row at `destroying`:
+# the photograph is uncounted and invisible, and what is owed is a bucket
+# operation an operator can retry by hand.
+ERROR_DESTROY_ABANDONED = (
+    f"destruction claimed {MAX_ATTEMPTS} times and never finished: the worker was "
+    "interrupted mid-job on every attempt; the stored layers may still exist"
+)
+ERROR_DESTROY_FAILED = (
+    "destruction could not delete the stored layers after {attempts} attempts "
+    "(last: {cause}); the photograph is uncounted and invisible, and the layers "
+    "may still exist"
+)
 
 
 class Outcome(str, Enum):
@@ -269,6 +343,13 @@ class Outcome(str, Enum):
     # step — not the host's publication). The caller deletes the original
     # after committing.
     READY = "ready"
+    # The three published objects are gone and the derivative rows with
+    # them; the row is `destroyed` (CK-54). Nothing to delete afterwards —
+    # the quarantine original went at `ready`, one job earlier.
+    DESTROYED = "destroyed"
+    # The destruction ladder is spent: the row stays at `destroying` with
+    # its last_error. Uncounted, invisible, and owed a bucket operation.
+    DESTROY_ABANDONED = "destroy_abandoned"
     DEAD_LETTERED = "dead_lettered"
     RETRY_SCHEDULED = "retry_scheduled"
     # The worker's credential was rejected: the row is untouched, the loop
@@ -309,6 +390,10 @@ async def _delete(client: WorkerClient, key: str) -> None:
     await asyncio.to_thread(delete_quarantine_object, client, key=key)
 
 
+async def _delete_published(client: WorkerClient, key: str) -> None:
+    await asyncio.to_thread(delete_published_object, client, key=key)
+
+
 def _claimable(now: datetime):
     stale_before = now - RECLAIM_AFTER
     return or_(
@@ -323,6 +408,22 @@ def _claimable(now: datetime):
             # that strands it.
             or_(Media.claimed_at.is_(None), Media.claimed_at < stale_before),
         ),
+        # THE DESTRUCTION LADDER (CK-54). `destroying` is the queued rung
+        # AND the claimed one — the API marks straight to it, so a NULL
+        # `claimed_at` means "marked, never claimed" here rather than
+        # "malformed" as it does above; the same predicate serves both.
+        # The availability gate is the retry backoff's, exactly as
+        # `uploaded` reads it. AND `attempts < MAX_ATTEMPTS`: a destroy job
+        # that exhausts the ladder STAYS at `destroying` (see DESTROY in
+        # the module docstring — `failed` would be a lie about which job
+        # failed and would make the row visible again), so the predicate,
+        # not the rung, is what stops it being claimed forever.
+        and_(
+            Media.status == MediaStatus.DESTROYING,
+            Media.attempts < MAX_ATTEMPTS,
+            or_(Media.available_at.is_(None), Media.available_at <= now),
+            or_(Media.claimed_at.is_(None), Media.claimed_at < stale_before),
+        ),
     )
 
 
@@ -332,10 +433,21 @@ async def claim_next(db: AsyncSession, now: datetime) -> Optional[Media]:
     On a fresh `uploaded` row: stamp `claimed_at`, move to `processing`,
     `attempts` unchanged. On a stalled `processing` row: the abandoned
     attempt is counted first — and if that reaches MAX_ATTEMPTS the row is
-    dead-lettered here and returned at `failed` (the caller checks the rung
-    and deletes the original after committing) rather than run a fourth
-    time. The caller commits, promptly: the row lock lasts for the claim
-    alone."""
+    dead-lettered here and returned at `failed` (the caller deletes the
+    original after committing) rather than run a fourth time. The caller
+    commits, promptly: the row lock lasts for the claim alone.
+
+    A `destroying` row (CK-54) is claimed IN PLACE — the rung does not
+    move, because it is both the queue and the claim. A fresh one
+    (`claimed_at` NULL) is claimed with `attempts` unchanged; a stalled one
+    counts its abandoned attempt exactly as `processing` does, and on
+    reaching MAX_ATTEMPTS it stays at `destroying` with its `last_error`
+    rather than becoming `failed`.
+
+    THE CALLER TELLS A CLAIM FROM A DEAD-LETTER BY `claimed_at`, not by the
+    rung: every real claim stamps it, and every dead-letter-at-reclaim
+    clears it. That is true on both ladders, where "the rung is `failed`"
+    is true on only one."""
     row = (
         await db.execute(
             select(Media)
@@ -347,16 +459,28 @@ async def claim_next(db: AsyncSession, now: datetime) -> Optional[Media]:
     ).scalar_one_or_none()
     if row is None:
         return None
-    if row.status == MediaStatus.PROCESSING:
+    destroying = row.status == MediaStatus.DESTROYING
+    # A destroying row with no claim stamp has never been claimed; only a
+    # stamped one was abandoned. On the ingest ladder every `processing`
+    # row counts (an unstamped one is malformed — see _claimable).
+    abandoned = row.status == MediaStatus.PROCESSING or (destroying and row.claimed_at is not None)
+    if abandoned:
         row.attempts += 1
         if row.attempts >= MAX_ATTEMPTS:
-            row.status = MediaStatus.FAILED
+            if destroying:
+                # The bytes are still owed a deletion and nobody is
+                # charged for them. The rung stays so the row remains
+                # invisible and the failure remains legible.
+                row.last_error = ERROR_DESTROY_ABANDONED
+            else:
+                row.status = MediaStatus.FAILED
+                row.last_error = ERROR_ABANDONED
             row.claimed_at = None
             row.available_at = None  # terminal: no deferral survives (CK-37)
-            row.last_error = ERROR_ABANDONED
             await db.flush()
             return row
-    row.status = MediaStatus.PROCESSING
+    if not destroying:
+        row.status = MediaStatus.PROCESSING
     row.claimed_at = now
     await db.flush()
     return row
@@ -364,14 +488,21 @@ async def claim_next(db: AsyncSession, now: datetime) -> Optional[Media]:
 
 async def _settle(db: AsyncSession, row: Media, **values) -> bool:
     """Write an outcome for THIS claim only: the update is guarded on the
-    row still being `processing` under this claim's `claimed_at`. Returns
-    False when another worker has reclaimed the row meanwhile (the stall
-    case) — the caller's outcome is then void and nothing is written."""
+    row still being in the rung it was claimed at, under this claim's
+    `claimed_at`. Returns False when another worker has reclaimed the row
+    meanwhile (the stall case) — the caller's outcome is then void and
+    nothing is written.
+
+    The guarded rung is the ROW'S OWN (`processing` on the ingest ladder,
+    `destroying` on the destruction one, CK-54) rather than the literal
+    `processing`: a destroy job is claimed in place, so a hard-coded rung
+    would guard against a state it is never in and every outcome would
+    read as a lost claim."""
     result = await db.execute(
         update(Media)
         .where(
             Media.id == row.id,
-            Media.status == MediaStatus.PROCESSING,
+            Media.status == row.status,
             Media.claimed_at == row.claimed_at,
         )
         .values(**values)
@@ -502,9 +633,12 @@ async def handle_claimed(
     # both or neither - so the verifier's two assertions (total_bytes
     # equals the sum over the ready rows' layers; photo_count equals the
     # count of ready rows) are the same fact checked twice. Never a second
-    # statement beside this one. Nothing decrements either: removal keeps
-    # the layers for the 30-day bin, and the sweep that frees them does
-    # not exist (models/gathering.py says what it owes when it does).
+    # statement beside this one. Removal decrements NEITHER - a removed
+    # photograph keeps its layers in the bin (removed and still stored,
+    # whatever its age) - and since CK-54 DESTRUCTION decrements both, in
+    # one statement, the mirror of this one: api/media.py's marking
+    # statement, where the row leaves `ready` and the two columns drop
+    # together. The 30-day SWEEP that does this on a clock is Phase B.
     await db.execute(
         update(Gathering)
         .where(Gathering.id == row.gathering_id)
@@ -532,6 +666,124 @@ async def handle_claimed(
     )
     await db.flush()
     return Outcome.READY
+
+
+async def handle_destroying(
+    db: AsyncSession, client: WorkerClient, row: Media, now: datetime
+) -> Outcome:
+    """DESTROY A PHOTOGRAPH — the routine that deletes stored bytes, and the
+    first one this product has ever had (CK-54; bin record §6, §7.1). The
+    caller commits; nothing is deleted from quarantine afterwards (the
+    original went at `ready`, one job earlier).
+
+    THE ORDER INVERTS THE PUBLISH TRANSACTION'S, DELIBERATELY — do not
+    "fix" it back to match. Publishing commits the database BEFORE deleting
+    the quarantine original (PUBLISH step 5) because the database is the
+    record of what exists: a crash between them costs a lingering original
+    the lifecycle rule collects, where the other order would cost the
+    photograph. DESTRUCTION IS THE MIRROR IMAGE OF THAT ARGUMENT: the
+    objects go FIRST and `destroyed` is committed only after. Commit-first
+    plus a failed delete would leave a row claiming the photograph is
+    destroyed while its bytes sit in the bucket — after the product told
+    someone it was gone, which is the one promise this routine exists to
+    keep. Delete-first fails safe: a crash leaves the row at `destroying`,
+    the retry finds the objects absent, and DELETING AN ABSENT OBJECT IS A
+    SUCCESS (storage.py), so the retry is idempotent for free rather than
+    by bookkeeping.
+
+    THE DERIVATIVE ROWS ARE THE RECORD OF WHAT IS STORED, so they are read
+    here and deleted in the same transaction as `destroyed` — never earlier.
+    Their `storage_key` is what was actually written (the column exists for
+    that reason), and a row stuck at `destroying` stays legible to an
+    operator: these are the objects that may still exist. Deriving the keys
+    from published_key() instead would work — it is the same string by
+    construction — and would leave a stuck row saying nothing about what it
+    owes.
+
+    THE ROW IS ALREADY UNCOUNTED when this runs: the marking statement
+    decremented `photo_count` and `total_bytes` together and moved the row
+    off `ready`. Nothing here touches a gathering, a quota or a publication
+    state — `publication_state` keeps whatever it had, because it records
+    what was decided about the photograph and destruction is not a
+    publication decision.
+
+    Failures: the store not answering is TRANSIENT and climbs the same
+    ladder an upload does; a rejected credential RELEASES the claim
+    untouched, exactly as it does on the ingest side (the worker is at
+    fault, not the row). There is no permanent class — an object that
+    cannot be found is the success case, not a failure."""
+    layers = (
+        await db.execute(
+            select(MediaDerivative.storage_key)
+            .where(MediaDerivative.media_id == row.id)
+            .order_by(MediaDerivative.layer)
+        )
+    ).scalars().all()
+
+    # 1. The bytes, first. Absent is success; one key at a time, so a
+    # partial run leaves the rest for the retry.
+    try:
+        for key in layers:
+            await _delete_published(client, key)
+    except ClientError as exc:
+        code = _error_code(exc)
+        if code in CREDENTIAL_REJECTED_CODES:
+            return await _release_misconfigured(db, row)
+        return await _destroy_failure(db, row, now, f"delete: {exc.__class__.__name__} ({code})")
+    except BotoCoreError as exc:
+        return await _destroy_failure(db, row, now, f"delete: {exc.__class__.__name__}")
+
+    # 2. ONE transaction: the guarded rung first, so a claim lost to a
+    # reclaim writes nothing at all, then the derivative rows that now
+    # describe nothing. The row itself survives, words and all (bin record
+    # §7.2) — it is invisible because of the rung, not because it is empty.
+    applied = await _settle(
+        db,
+        row,
+        status=MediaStatus.DESTROYED,
+        claimed_at=None,
+        available_at=None,
+        attempts=row.attempts + 1,
+        last_error=None,
+    )
+    if not applied:
+        return Outcome.LOST_CLAIM
+    await db.execute(
+        delete(MediaDerivative)
+        .where(MediaDerivative.media_id == row.id)
+        .execution_options(synchronize_session=False)
+    )
+    await db.flush()
+    return Outcome.DESTROYED
+
+
+async def _destroy_failure(db: AsyncSession, row: Media, now: datetime, cause: str) -> Outcome:
+    """The destruction ladder's transient rung — the upload ladder's shape,
+    with two differences: the rung does not move (there is no queued state
+    to return to; `destroying` is both), and the spent ladder does not
+    become `failed`. A row that gives up stays `destroying` with its
+    last_error: uncounted, invisible, and honest about owing a deletion."""
+    attempts = row.attempts + 1
+    if attempts >= MAX_ATTEMPTS:
+        applied = await _settle(
+            db,
+            row,
+            claimed_at=None,
+            available_at=None,
+            attempts=attempts,
+            last_error=ERROR_DESTROY_FAILED.format(attempts=attempts, cause=cause),
+        )
+        return Outcome.DESTROY_ABANDONED if applied else Outcome.LOST_CLAIM
+    backoff = RETRY_BACKOFF[min(attempts, len(RETRY_BACKOFF)) - 1]
+    applied = await _settle(
+        db,
+        row,
+        claimed_at=None,
+        attempts=attempts,
+        available_at=now + backoff,
+        last_error=f"attempt {attempts} of {MAX_ATTEMPTS}: could not delete the stored layers ({cause})",
+    )
+    return Outcome.RETRY_SCHEDULED if applied else Outcome.LOST_CLAIM
 
 
 async def delete_original(client: WorkerClient, media_id: UUID) -> bool:
@@ -563,8 +815,20 @@ async def _permanent_failure(db: AsyncSession, row: Media, last_error: str) -> O
 
 
 async def _release_misconfigured(db: AsyncSession, row: Media) -> Outcome:
-    # The worker, not the row, is at fault: release untouched.
-    applied = await _settle(db, row, status=MediaStatus.UPLOADED, claimed_at=None)
+    """The worker, not the row, is at fault: release untouched.
+
+    THE RUNG IT RETURNS TO IS THE ONE IT CAME FROM. An ingest claim goes
+    back to `uploaded`, the queue it was taken from. A destruction claim
+    (CK-54) stays at `destroying`, which IS its queue — releasing it to
+    `uploaded` would hand an already-uncounted photograph back to the
+    INGEST ladder, whose first act is to HEAD a quarantine original that
+    was deleted at `ready`; the row would dead-letter to `failed` and
+    become visible again to the person who destroyed it, with its counts
+    already gone. Caught by test."""
+    released = (
+        MediaStatus.DESTROYING if row.status == MediaStatus.DESTROYING else MediaStatus.UPLOADED
+    )
+    applied = await _settle(db, row, status=released, claimed_at=None)
     return Outcome.MISCONFIGURED if applied else Outcome.LOST_CLAIM
 
 

@@ -72,7 +72,11 @@ Everything here is part of the accept/refuse decision:
   comparison _gathering_for_read already makes. THE KEEPER, asking about
   their own space, reads the limit, the room left and what is being
   added — something they can act on — and THE BIN CLAUSE where the space
-  is full AND some of what it holds is in the 30-day bin: the refusal
+  is full AND some of what it holds is in THE BIN — removed and still
+  stored, whatever its age, never a 30-day window (bin record §6.1: the
+  30 days are the CONTRIBUTOR'S RETRIEVAL window, a different clock, and
+  a bin count that carried it would hide the older rows that still
+  consume the allowance and have no way back): the refusal
   names the bin and offers to empty it (the bin counted on that path
   alone, keeping.account_bin_count, never on the accepted path); where
   the bin is empty it names no bin, the CK-50 discipline on copy for an
@@ -406,19 +410,44 @@ NOT_READY = "not_ready"
 # `not_ready` are reused: a code is a stable marker, and the message
 # beside it is the act's own.
 ALREADY_LIVE = "already_live"
+# Removal's one code of its own (CK-54): `remove` on a row already in the
+# bin. Nothing to do — and re-stamping `removed_at` would quietly restart
+# the contributor's retrieval window, which is a worse answer than a
+# refusal. `destroy` never draws it: destroying a binned photograph is
+# exactly the per-photograph "empty the bin".
+ALREADY_REMOVED = "already_removed"
+
+# The lost-race 409 for a removal or a destruction (CK-54). Unreachable
+# under the row lock, kept for the same reason the review's is: a surprise
+# must read as a refusal and never as a half-applied act — here, a
+# decrement without a mark, or the reverse.
+_CHANGED_WHILE_DECIDING = {
+    "code": NOT_PENDING,
+    "message": "this photo changed while you were looking at it — reload and try again",
+}
 
 # The batch publish takes at most this many ids per request (CK-43) — the
 # intent batch's number, for the same reason: bounded work per request.
 MAX_PUBLISH_PER_REQUEST = 50
 
-# The contributor-visible bin (keeper record §2.8; consent doc, Revocation):
-# a removed photograph stays visible to its UPLOADER for this long after
-# `removed_at`, and to nobody else at any point; at the end of the window
-# the three layers are deleted as a unit. Nothing removes anything yet —
-# removal is the publication phase's — so this constant defines the READ
-# window now, so the read rule is complete before the write that needs it
-# exists. The deletion sweep, when built, reads the same constant.
+# THE CONTRIBUTOR'S RETRIEVAL WINDOW — one of the bin's TWO CLOCKS, and the
+# one this constant is (bin record §6.1): a removed photograph stays visible
+# to its UPLOADER for this long after `removed_at`, and to nobody else at
+# any point. The OTHER clock is the storage a removed row occupies, which
+# runs until the photograph is destroyed and carries no window at all —
+# which is why `keeping.account_bin_count` has no `removed_at` term and
+# must never grow one (a keeper full, with a bin reading empty, and nothing
+# to do about it). Past this window a removed photograph is invisible to
+# everyone and still charged; the 30-day SWEEP that makes the two clocks
+# coincide is Phase B. CK-54 built the destruction they both reach.
 REMOVED_BIN = timedelta(days=30)
+
+# The two rungs of the destruction ladder (CK-54, migration 0025). Named
+# together because they are always asked about together: a row at either is
+# visible to nobody (`_visible_media`), counted by nobody (outside
+# `keeping.IN_FLIGHT_STATUSES`, and not `ready`, so neither the quota nor
+# the bin count sees it), and reachable by no act on this router.
+DESTRUCTION_STATUSES = (MediaStatus.DESTROYING, MediaStatus.DESTROYED)
 
 # The layers a read may be issued for (CK-37). The archival layer is the
 # print master on Infrequent Access (media-layers record §4): every
@@ -662,7 +691,9 @@ async def _enforce_limits(
     against the resolved keeper's, the comparison _gathering_for_read
     already makes; no second resolution. THE KEEPER, asking about their own
     space, reads the room left, and THE BIN CLAUSE (bin record §5) where
-    the space is full and some of what it holds is in the 30-day bin — the
+    the space is full and some of what it holds is in the bin (removed and
+    still stored, whatever its age — NOT the 30-day retrieval window; bin
+    record §6.1) — the
     bin counted then, and only then, through `account_bin_count`, the one
     call it may ever have; where the bin is empty the refusal names no
     bin, an affordance that cannot deliver being the CK-50 discipline's
@@ -734,10 +765,16 @@ async def _enforce_limits(
         # (bin record §5).
         binned = await keeping.account_bin_count(db, keeper)
         if binned > 0:
+            # Singular is a real case and the commonest small number: one
+            # binned photograph read "1 of them are in the bin" until
+            # CK-54. The plural form is unchanged.
+            in_the_bin = (
+                "1 of them is in the bin" if binned == 1 else f"{binned:,} of them are in the bin"
+            )
             raise _field_422(
                 "items",
-                f"this space is full — {quota:,} photos, and {binned:,} of them are in "
-                f"the bin. Empty the bin to make room.",
+                f"this space is full — {quota:,} photos, and {in_the_bin}. "
+                f"Empty the bin to make room.",
             )
         room = max(quota - usage, 0)
         room_clause = f"has room for {room:,} more" if room > 0 else "has no room left"
@@ -938,7 +975,25 @@ def _visible_media(ctx: AuthContext, now: datetime):
       - `removed` → the uploader alone, within REMOVED_BIN of `removed_at`.
                     A removed row with no `removed_at` is malformed and is
                     visible to nobody (the strict direction).
-    Nothing here consults `status`: a `pending_upload` row is as visible to
+
+    ONE THING HERE DOES CONSULT `status`, AND ONLY ONE (CK-54): A ROW IN
+    DESTRUCTION IS VISIBLE TO NOBODY, whatever its publication state. The
+    bin record §7.2 keeps a destroyed photograph's `media` row — its
+    filename, its caption, its tags — for the audit trail, on the stated
+    ground that *a photograph captioned "Jenny at bat" was deleted* records
+    what was lost where *something was deleted* does not; the property that
+    makes that safe is that THE WORDS ARE UNREACHABLE BY ANY LIST, SEARCH
+    OR SURFACE, and that record says it "follows from the row leaving
+    `ready`". It does not follow on its own — every branch above turns on
+    `publication_state`, so a destroyed `live` row would go on being
+    listed. So the exclusion is written here, in the one criterion both
+    read endpoints (and the words patch, and the review acts) apply, rather
+    than left to each of them to remember. It is also what makes a destroy
+    IMMEDIATE from the caller's side: the moment the marking statement
+    commits, the photograph is gone from every surface, before a single
+    byte has been deleted.
+
+    Nothing else consults `status`: a `pending_upload` row is as visible to
     its uploader as a `ready` one — the list shows the rung; the URL
     endpoint refuses to mint for anything but `ready` separately."""
     account_id = ctx.person.account_id
@@ -952,14 +1007,17 @@ def _visible_media(ctx: AuthContext, now: datetime):
             GatheringInvitation.gathering_id == Media.gathering_id,
         )
     )
-    return or_(
-        and_(Media.publication_state == PublicationState.LIVE, or_(is_host, keeps, invited)),
-        and_(Media.publication_state == PublicationState.PENDING, or_(is_uploader, is_host)),
-        and_(
-            Media.publication_state == PublicationState.REMOVED,
-            is_uploader,
-            Media.removed_at.is_not(None),
-            Media.removed_at > now - REMOVED_BIN,
+    return and_(
+        Media.status.notin_(DESTRUCTION_STATUSES),
+        or_(
+            and_(Media.publication_state == PublicationState.LIVE, or_(is_host, keeps, invited)),
+            and_(Media.publication_state == PublicationState.PENDING, or_(is_uploader, is_host)),
+            and_(
+                Media.publication_state == PublicationState.REMOVED,
+                is_uploader,
+                Media.removed_at.is_not(None),
+                Media.removed_at > now - REMOVED_BIN,
+            ),
         ),
     )
 
@@ -1544,3 +1602,253 @@ async def publish_media_batch(
     for row in rows.values():
         await db.refresh(row)
     return {"media": [_media_body(rows[media_id]) for media_id in body.media_ids]}
+
+
+# --- removal and destruction (CK-54) -----------------------------------------
+# decisions/2026-09-20-the-bin-counts-and-empties.md §6, §7.1, §7.2. The two
+# removal paths, and the first code in this product that destroys a
+# photograph's stored bytes.
+#
+# TWO ENDPOINTS, NOT ONE FLAG. `permanent: true` on a single endpoint would
+# mean one client bug — a stale default, a mistyped key, a form that posts
+# twice — permanently destroys what should have gone to the bin, and there
+# is no restore. Two paths make the irreversible one unreachable by
+# accident, and it costs one route.
+#
+# THIS IS ALSO THE TAKEDOWN OF A PUBLISHED PHOTOGRAPH, arriving here rather
+# than in a phase of its own: `remove` and `destroy` both act on a `live`
+# row, which `decline` has always refused (409 `not_pending`, and it still
+# does — decline is the REVIEW's bottom, for a photograph nobody has
+# published, and it is unchanged by this phase). media-pipeline.md §11's
+# takedown item is closed by these two, not by a third act.
+#
+#   remove   `ready` + (`live` | `pending`) → `removed`, stamping
+#            `removed_at`. Destroys nothing: the three layers stay, the row
+#            stays `ready`, the photograph goes on counting against the
+#            keeper's allowance (bin record §3 — we are still storing it),
+#            and the uploader keeps it for REMOVED_BIN.
+#   destroy  `ready`, ANY publication state → `destroying`, and in ONE
+#            statement the gathering's `photo_count` and `total_bytes` drop
+#            together. Immediate, irreversible, and it reaches a `removed`
+#            row as well as a live one — which is what makes it the
+#            per-photograph "empty the bin" the record's manual path
+#            describes.
+#
+# WHO: THE GATHERING'S HOST, AND THE UPLOADER FOR THEIR OWN — and NOT THE
+# KEEPER (bin record §7.1; the removal rule: ownership governs provenance
+# and retrieval, not an exclusive delete right, and a keeper holds a
+# REFERENCE, never a right to publish or destroy). A keeper who is neither
+# draws the media 404 byte-identical to a missing id, and it is pinned.
+# Note what the audience rule already implies and this phase does not
+# change: the bin is the UPLOADER's, so a host cannot reach a row someone
+# else binned. Emptying an account-level bin is the bin surface's question
+# (Phase C), with its own audience to decide.
+#
+# THE DECREMENT RIDES THE MARKING STATEMENT, and that is the whole reason
+# the API marks rather than the worker. `photo_count` and `total_bytes`
+# drop in ONE statement — the mirror of CK-51a's single-statement increment
+# (services/ingest.py step 4), for the same reason: in one statement they
+# cannot diverge, so the verifier's two assertions stay one fact checked
+# twice. AND NO NEW INVARIANT IS CREATED: `photo_count` equals the count of
+# `ready` rows stays true automatically, because the row leaves `ready` in
+# the same transaction that decremented. A shape that needed a new
+# invariant would be a shape with a new way to be wrong.
+#
+# THE BYTES GO LATER, AND THE ROW IS UNCOUNTED FIRST. Between the mark and
+# the worker's delete the photograph is charged to nobody while its layers
+# may still exist — bounded by the retry ladder, invisible to everyone, and
+# legible through `last_error` if it ever sticks (services/ingest.py names
+# it as this phase's residual failure mode). The other order — bytes first,
+# count after — would charge a keeper for a photograph the product had
+# already told them was gone.
+
+
+def _may_remove(row: Media, gathering: Gathering, ctx: AuthContext) -> bool:
+    # The host of the gathering, or the uploader of this photograph. Never
+    # the keeper (see WHO above). `_review_row`'s host test, widened by the
+    # one person whose own photograph it is.
+    return _is_host(gathering, ctx) or row.uploader_person_id == ctx.person.id
+
+
+async def _removable_row(
+    db: AsyncSession, ctx: AuthContext, media_id: UUID, now: datetime
+) -> Media:
+    """The row a removal or a destruction may touch: visible to the caller
+    under the read rule AND the caller is the host or the uploader. Anyone
+    else — a keeper, an accepted invitee, a stranger — draws the media 404
+    byte-identical to a missing id (404-not-403). Locked for the act.
+
+    A row already in destruction is excluded by `_visible_media` itself, so
+    a second destroy draws the same 404 as a missing id rather than a
+    refusal: the photograph is gone, and "gone" is the honest answer."""
+    found = (
+        await db.execute(
+            select(Media, Gathering)
+            .join(Gathering, Gathering.id == Media.gathering_id)
+            .where(Media.id == media_id, _visible_media(ctx, now))
+            .with_for_update(of=Media)
+        )
+    ).first()
+    if found is None:
+        raise _media_not_found()
+    media, gathering = found
+    if not _may_remove(media, gathering, ctx):
+        raise _media_not_found()
+    return media
+
+
+def _removal_refusal(row: Media, *, destroy: bool) -> Optional[dict]:
+    """Why this photograph cannot be removed or destroyed right now, as the
+    stable-code detail of a 409 — or None when it can. Both acts need a
+    `ready` row: only a `ready` row has stored layers, which is what
+    `remove` promises to keep and `destroy` promises to take. An in-flight
+    row would race the worker for the same id; a `failed` one has nothing
+    stored at all and is not charged for anything."""
+    if row.status != MediaStatus.READY:
+        return {
+            "code": NOT_READY,
+            "publication_state": row.publication_state.value,
+            "status": row.status.value,
+            "message": "this photo couldn't be processed, so there is nothing stored to remove"
+            if row.status == MediaStatus.FAILED
+            else "this photo isn't ready yet",
+        }
+    if not destroy and row.publication_state == PublicationState.REMOVED:
+        # Already in the bin — nothing to do, and saying so is better than
+        # re-stamping `removed_at` and quietly restarting the window.
+        return {
+            "code": ALREADY_REMOVED,
+            "publication_state": row.publication_state.value,
+            "status": row.status.value,
+            "message": "this photo is already in the bin",
+        }
+    return None
+
+
+@router.post("/media/{media_id}/remove")
+async def remove_media(
+    media_id: UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """SEND A PHOTOGRAPH TO THE BIN — `ready` + (`live` | `pending`) →
+    `removed`, stamping `removed_at`. THE TAKEDOWN OF A PUBLISHED
+    PHOTOGRAPH, which nothing has offered until now (`decline` is the
+    review's act and refuses a `live` row, unchanged).
+
+    NOTHING IS DESTROYED AND NOTHING IS FREED. The three layers stay in the
+    bucket, the row stays `ready`, and the photograph goes on counting
+    against the keeper's allowance — because it is still stored, which is
+    bin record §3's whole argument and the reason no count moves here. The
+    uploader keeps it for REMOVED_BIN; nobody else sees it again.
+
+    The host, or the uploader for their own; everyone else draws the media
+    404. 409 `not_ready` for a row with nothing stored, `already_removed`
+    for one already binned."""
+    now = datetime.now(timezone.utc)
+    row = await _removable_row(db, ctx, media_id, now)
+    refusal = _removal_refusal(row, destroy=False)
+    if refusal is not None:
+        raise HTTPException(409, detail=refusal)
+    result = await db.execute(
+        update(Media)
+        .where(
+            Media.id == row.id,
+            Media.status == MediaStatus.READY,
+            Media.publication_state.in_((PublicationState.LIVE, PublicationState.PENDING)),
+        )
+        .values(publication_state=PublicationState.REMOVED, removed_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        await db.rollback()
+        raise HTTPException(409, detail=_CHANGED_WHILE_DECIDING)
+    await db.commit()
+    await db.refresh(row)
+    return _media_body(row)
+
+
+@router.post("/media/{media_id}/destroy")
+async def destroy_media(
+    media_id: UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """DESTROY A PHOTOGRAPH PERMANENTLY — immediate, irreversible, and the
+    first path in this product that ends with a photograph's bytes gone
+    (bin record §7.1). `ready` in ANY publication state → `destroying`:
+    published, waiting for review, or already in the bin, which is what
+    makes this the per-photograph "empty the bin" as well as the permanent
+    delete. There is no restore, by definition.
+
+    ONE STATEMENT DECREMENTS `photo_count` AND `total_bytes` — the mirror of
+    the publish transaction's increment, and the reason the API marks and
+    the worker destroys (see the section comment above). The room is freed
+    the moment this returns; the worker deletes the three published objects
+    and commits `destroyed` within a poll.
+
+    THE ROW SURVIVES, WORDS AND ALL (bin record §7.2): filename, caption,
+    tags, uploader, gathering, timestamps. A caption is not a likeness, and
+    *a photograph captioned "Jenny at bat" was deleted* is an audit trail
+    where *something was deleted* is not — and the row is unreachable from
+    the moment this commits, because `_visible_media` excludes the
+    destruction rungs.
+
+    WHAT THIS DOES NOT REACH, so no copy may claim it does: a photograph
+    already in a PRINTED BOOK (consent record §1's edge — the print file is
+    a separate artifact with its own retention; revocation forbids a
+    reprint, not the copy in someone's hands). The confirmation the
+    frontend shows says "from CoveyKeep" for exactly that reason.
+
+    The host, or the uploader for their own — never the keeper, who holds a
+    reference and not a right to destroy; everyone else draws the media
+    404. 409 `not_ready` for a row with nothing stored."""
+    now = datetime.now(timezone.utc)
+    row = await _removable_row(db, ctx, media_id, now)
+    refusal = _removal_refusal(row, destroy=True)
+    if refusal is not None:
+        raise HTTPException(409, detail=refusal)
+    # The guarded mark. The job columns are RESET, not carried: a
+    # photograph that took two attempts to ingest still gets three to be
+    # destroyed, and a stale `last_error` from an ingest retry would read
+    # as a destruction failure the moment the row changed jobs.
+    result = await db.execute(
+        update(Media)
+        .where(Media.id == row.id, Media.status == MediaStatus.READY)
+        .values(
+            status=MediaStatus.DESTROYING,
+            attempts=0,
+            available_at=None,
+            claimed_at=None,
+            last_error=None,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        await db.rollback()
+        raise HTTPException(409, detail=_CHANGED_WHILE_DECIDING)
+    # ONE statement, both columns, in the same transaction as the mark
+    # (CK-51a's increment, run backwards). The byte figure is the row's own
+    # derivative rows — what was actually stored — summed inside the
+    # statement so nothing can read one number and write another. NOT
+    # clamped at zero: the invariant `photo_count` = the count of `ready`
+    # rows is exact, so a negative here is a finding the verifier makes
+    # loud, and a floor would only hide the one case where it happened to
+    # come out right.
+    stored = (
+        select(func.coalesce(func.sum(MediaDerivative.size_bytes), 0))
+        .where(MediaDerivative.media_id == row.id)
+        .scalar_subquery()
+    )
+    await db.execute(
+        update(Gathering)
+        .where(Gathering.id == row.gathering_id)
+        .values(
+            total_bytes=Gathering.total_bytes - stored,
+            photo_count=Gathering.photo_count - 1,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+    await db.refresh(row)
+    return _media_body(row)

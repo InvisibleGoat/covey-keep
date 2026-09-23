@@ -49,9 +49,14 @@ What is DERIVED, and never stored, is unchanged in its rule:
   count and is no longer a quota input: cost reporting, and the currency
   record §5's monitor (services/ingest.py, at the one UPDATE). CHARGED,
   NEVER VISIBLE: `photo_count` counts `ready` rows whatever their
-  publication state, so a photograph in the 30-day bin still counts — it
-  is still stored — and a surface that shows this number as "your photos"
-  is the defect the bin record §4 exists to prevent.
+  publication state, so a photograph in the bin still counts — it is still
+  stored, whatever its age (bin record §6.1: the bin's two clocks are the
+  contributor's 30-day RETRIEVAL window and the storage a removed row
+  occupies until it is destroyed; this is the second, and it has no
+  window) — and a surface that shows this number as "your photos" is the
+  defect the bin record §4 exists to prevent. Since CK-54 the two columns
+  DO drop, in one statement, where a photograph is destroyed
+  (api/media.py's marking statement); removal alone still frees nothing.
 - Grace state is derived from ONE timestamp (`last_keeper_left_at`) plus the
   policy constants below — never persisted. Under one keeper "the last
   keeper left" and "the keeper left" are the same event, so the stamp's
@@ -449,7 +454,9 @@ async def account_usage(db: AsyncSession, account: Account) -> int:
 
     CHARGED, NEVER VISIBLE (bin record §4, binding): `photo_count` counts
     `ready` rows regardless of `publication_state`, so a photograph in the
-    30-day bin still counts here — it is still stored. This number is the
+    bin still counts here — it is still stored, whatever its age (the bin
+    is removed-and-still-stored; the 30 days are the contributor's
+    retrieval window, a different clock — bin record §6.1). This number is the
     quota's and the refusal's; a surface that shows it as "your photos" is
     the defect that section exists to prevent (charged = visible + in the
     bin, and only the first is a column). The bin's size is

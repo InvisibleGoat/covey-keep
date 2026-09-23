@@ -38,6 +38,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from app.api.media import DESTRUCTION_STATUSES
 from app.config import settings
 from app.models import (
     Gathering,
@@ -305,11 +306,22 @@ async def test_every_rung_appears_in_the_list_with_its_state_and_only_ready_has_
     """Pending is a real state, not a spinner (pipeline record §2), and the
     list is where it becomes visible: every rung is listed with its status
     and no link; a URL is minted for `ready` alone, and every other rung
-    draws a 409 carrying a stable code and the rung."""
+    draws a 409 carrying a stable code and the rung.
+
+    NARROWED AT CK-54 to the INGEST ladder, which is what "every rung" has
+    always meant here. The destruction rungs added at 0025 are the one
+    deliberate exception to "every rung is listed": a photograph being or
+    already destroyed is visible to NOBODY (`_visible_media` excludes both,
+    which is what makes the bin record §7.2 requirement — the surviving
+    words unreachable by any surface — a property of the audience criterion
+    rather than a rule each reader must remember). Their absence is pinned
+    in tests/test_destruction.py, from every seat and on every act."""
     cast = await _cast(client, capsys, db_session_factory)
     t0 = _now()
+    ingest_rungs = [s for s in MediaStatus if s not in DESTRUCTION_STATUSES]
+    assert len(ingest_rungs) == 5
     ids = {}
-    for i, status in enumerate(MediaStatus):
+    for i, status in enumerate(ingest_rungs):
         ids[status] = await _photograph(
             db_session_factory, cast, status=status, created_at=t0 + timedelta(seconds=i)
         )
@@ -317,7 +329,7 @@ async def test_every_rung_appears_in_the_list_with_its_state_and_only_ready_has_
     listed = await _list(client, cast.uploader, cast.gathering_id)
     rows = listed.json()["media"]
     # Newest first, every rung present with its state, no URL in any row.
-    assert [r["status"] for r in rows] == [s.value for s in reversed(list(MediaStatus))]
+    assert [r["status"] for r in rows] == [s.value for s in reversed(ingest_rungs)]
     assert all("url" not in r and "last_error" not in r for r in rows)
     assert "X-Amz" not in listed.text
 
@@ -332,7 +344,7 @@ async def test_every_rung_appears_in_the_list_with_its_state_and_only_ready_has_
             assert detail["status"] == status.value
             assert "url" not in detail
     # The host sees the same rungs — pending rows are the host's to see too.
-    assert len(_ids(await _list(client, cast.host, cast.gathering_id))) == len(MediaStatus)
+    assert len(_ids(await _list(client, cast.host, cast.gathering_id))) == len(ingest_rungs)
 
 
 async def test_the_archival_layer_is_never_issued_a_url(client, capsys, db_session_factory):
