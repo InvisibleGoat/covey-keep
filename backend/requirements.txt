@@ -1,13 +1,52 @@
-fastapi
-uvicorn[standard]
-sqlalchemy[asyncio]
-asyncpg
-alembic
-pydantic-settings
+# The core six, and tzdata (CK-60). Pinned exactly, for a reason the four
+# exception comments below each state in passing: the deployed artifact must
+# be a function of the commit. Both services build with
+# `pip install -r requirements.txt`, which re-resolves on every build, so an
+# unpinned line means the running code can change with no commit behind it.
+# It did. CK-58's deploy differed from CK-56's in TWO ways — the extraction
+# in the diff, and SQLAlchemy 2.0.54 → 2.1.0, chosen by pip from a release
+# whose wheels had reached PyPI hours earlier that same afternoon — and the
+# check that compared the two deploys and called the extraction clean was
+# comparing two changes while able to see one. A pinned requirement fails
+# loudly at resolve time; an unpinned one fails silently in production.
+# alembic is the sharpest case: render.yaml's preDeployCommand runs
+# `alembic upgrade head` against the LIVE database while the old instance
+# still serves, so an Alembic release arriving unreviewed executes DDL
+# against production data inside the one window this project already has a
+# whole discipline about. On policy: the four "deliberate exception"
+# comments below are exceptions to ADDING a dependency at all (the
+# transactional-email standard's plain-stdlib precedent), not to pinning —
+# pinning rides inside each as its own clause ("a signing library moves on
+# our decision, never pip's"). These six carried no reasoning either way;
+# they were never considered. Pinning them extends that clause rather than
+# overriding a decision, and the clause bears harder on the ORM every
+# statement passes through than on a decoder. sqlalchemy[asyncio] is held at
+# 2.0.54 DELIBERATELY, one minor BEHIND the last resolve: 2.0.54 is the
+# version CK-51 through CK-56 were verified against — the verifier's 187 →
+# 190 and every real destruction — while 2.1.0 has passed only a thin slice
+# (190 schema assertions, /health, three rows read back), and the 437-test
+# suite had, until CK-60 rebuilt the local environment from this file, only
+# ever run against 2.0.52, a version neither deploy carried. Going back is
+# returning to the known state; moving to 2.1 is its own reviewed change
+# with its own checks, later. What this does NOT fix, in one sentence: the
+# transitive tree still floats — greenlet, starlette, mako, pydantic-core
+# and the rest re-resolve on every build — and the complete answer, a
+# lockfile (`pip freeze` into a requirements.lock plus a changed
+# buildCommand on BOTH services), is owed and is Steven's decision, not a
+# step to slip into a pinning phase; its trigger is the first transitive
+# package seen to move between two deploys with no commit behind it, or the
+# prod cutover, whichever comes first. Still not license to add dependencies
+# for problems that are actually simple.
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+sqlalchemy[asyncio]==2.0.54
+asyncpg==0.31.0
+alembic==1.20.0
+pydantic-settings==2.15.0
 # IANA tz database for zoneinfo. Load-bearing on Windows dev machines (no
 # system tzdb → available_timezones() would be empty and every profile
 # timezone would 422); on Linux it is a consistent first-party source.
-tzdata
+tzdata==2026.4
 # py_webauthn (CK-10). A DELIBERATE exception to the transactional-email
 # standard's "plain stdlib, no new dependency" precedent: that rule was about
 # an HTTP POST, while WebAuthn is attestation parsing, COSE key handling, and
