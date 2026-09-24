@@ -1197,6 +1197,30 @@ async def verify(conn, ck: Checks) -> None:
         # nothing can serve. Real subjects since 0019, not a vacuous
         # quantification over an empty set. Detail prints the count only.
         #
+        # NARROWED AT CK-55, and the narrowing is the destruction ladder
+        # rather than a relaxation. Destruction (CK-54) retires the
+        # rationale above BY DESIGN for two rungs: `destroy` leaves
+        # `publication_state` alone — the bin record §7.2 keeps the emptied
+        # row and its words for the audit trail, and `remove` is the act
+        # that owns that column — and makes the row unreachable through
+        # `status` instead, the one `status` term in `_visible_media`
+        # (api/media.py), which every list, search and surface consults.
+        # So a `live` row at `destroying` or `destroyed` is exactly what a
+        # destruction is designed to leave, not a photograph something
+        # wrote around the worker; CK-54's three real subjects read 189/1
+        # on the deploy until this line admitted them. BOTH rungs, not the
+        # terminal one alone: a `live` + `destroying` row is legitimate
+        # for at least a worker cycle, and indefinitely if the destruction
+        # dead-letters, so a line that failed inside that window would be
+        # a false alarm by construction. NO NEW ASSERTION stands in for
+        # what this line gave up — the difference from CK-54's narrowing
+        # of the CK-32 line, where the terminal half had to be created —
+        # because the excluded set already carries a STRICTER guarantee
+        # than this line ever gave it: "no destroyed photograph still has
+        # derivative rows" (the derivative-integrity section above). What
+        # a `live` + `destroyed` row could hide — layers still described,
+        # and so still in the bucket — is caught there.
+        #
         # DELIBERATELY NOT ASSERTED: "no ready+pending row exists in a
         # gathering that resolves open." It is true the instant 0019 runs
         # and CK-44 can legitimately break it — a host who turns review
@@ -1206,12 +1230,14 @@ async def verify(conn, ck: Checks) -> None:
         # once, not to a standing verifier.
         live_unready = await scalar(
             conn,
-            "SELECT count(*) FROM media WHERE publication_state = 'live' AND status <> 'ready'",
+            "SELECT count(*) FROM media WHERE publication_state = 'live' "
+            "AND status NOT IN ('ready', 'destroying', 'destroyed')",
         )
         ck.check(
             live_unready == 0,
-            "every live media row is ready (nothing is published without its layers)",
-            f"{live_unready} live media row(s) not in the ready rung",
+            "every live media row is ready or in the destruction ladder "
+            "(nothing is published without its layers unless it is being destroyed)",
+            f"{live_unready} live media row(s) in neither the ready rung nor the destruction ladder",
         )
     else:
         ck.check(False, "media publication integrity", "media table missing")
