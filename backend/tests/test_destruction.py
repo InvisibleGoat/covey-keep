@@ -318,6 +318,149 @@ async def test_a_destroyed_photograph_keeps_its_words_and_no_search_can_reach_th
             assert _ids(found) == []
 
 
+# --- the marking statement, called directly (CK-58) --------------------------
+# `ingest.mark_for_destruction` is the ONE copy of the mark-and-decrement,
+# extracted from `destroy_media` so the 30-day sweep (CK-59) can be its
+# second caller without re-typing the statement that keeps the two counts
+# from diverging. The endpoint tests above prove it through its first
+# caller; these three pin its contract on its own — and the third is the
+# property CK-59's concurrency safety rests on, pinned here rather than
+# there.
+
+
+async def _mark(db_session_factory, media_id: str) -> bool:
+    """Call the function the way a caller does: a freshly loaded row, one
+    transaction, committed by the caller afterwards."""
+    async with db_session_factory() as db:
+        row = await db.get(Media, UUID(media_id))
+        applied = await ingest.mark_for_destruction(db, row)
+        await db.commit()
+    return applied
+
+
+async def _job_columns(db_session_factory, media_id: str) -> tuple:
+    row = await _row(db_session_factory, media_id)
+    return (row.attempts, row.available_at, row.claimed_at, row.last_error)
+
+
+async def test_mark_for_destruction_refuses_a_row_that_is_not_ready_and_writes_nothing(
+    client, capsys, db_session_factory
+):
+    # False, and NOTHING written: not the rung, not either count, and not
+    # the job columns — the reset is part of the mark, so a refused mark
+    # must leave a failed row's history where it was.
+    cast = await _cast(client, capsys, db_session_factory)
+    live = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
+    failed = await _photograph(db_session_factory, cast, status=MediaStatus.FAILED)
+    in_flight = await _photograph(db_session_factory, cast, status=MediaStatus.UPLOADED)
+    async with db_session_factory() as db:
+        await db.execute(
+            text("UPDATE media SET attempts = 1, last_error = :why WHERE id = :id"),
+            {"why": ingest.ERROR_OBJECT_MISSING, "id": UUID(failed)},
+        )
+        await db.commit()
+    before = await _resync_counts(db_session_factory, cast.gathering_id)
+    assert before == (1, LAYER_BYTES)
+    history = await _job_columns(db_session_factory, failed)
+    assert history == (1, None, None, ingest.ERROR_OBJECT_MISSING)
+
+    for media_id, rung in ((failed, MediaStatus.FAILED), (in_flight, MediaStatus.UPLOADED)):
+        assert await _mark(db_session_factory, media_id) is False
+        assert (await _row(db_session_factory, media_id)).status is rung
+        assert await _counts(db_session_factory, cast.gathering_id) == before
+    assert await _job_columns(db_session_factory, failed) == history
+    await _invariants_hold(db_session_factory, cast.gathering_id)
+    # And the `ready` row beside them is untouched — the guard is per row.
+    assert (await _row(db_session_factory, live)).status is MediaStatus.READY
+
+
+async def test_mark_for_destruction_marks_a_ready_row_and_drops_both_counts_together(
+    client, capsys, db_session_factory
+):
+    # True, the row `destroying` with its job columns reset, both counts
+    # down in the same transaction, and nothing else touched: the
+    # publication state (bin record §7.2 — destruction is not a publication
+    # decision), the removal stamp, and the three derivative rows, which
+    # are the worker's to take. A binned row, because that is the row the
+    # sweep will hand it.
+    cast = await _cast(client, capsys, db_session_factory)
+    keep = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
+    binned_at = _now() - timedelta(days=31)
+    doomed = await _photograph(
+        db_session_factory,
+        cast,
+        publication_state=PublicationState.REMOVED,
+        removed_at=binned_at,
+    )
+    # A `ready` row after one abandoned ingest claim reads attempts = 2
+    # (CK-37); the mark must reset it, so the reset is observable.
+    async with db_session_factory() as db:
+        await db.execute(
+            text("UPDATE media SET attempts = 2 WHERE id = :id"), {"id": UUID(doomed)}
+        )
+        await db.commit()
+    count_before, bytes_before = await _resync_counts(db_session_factory, cast.gathering_id)
+    assert (count_before, bytes_before) == (2, 2 * LAYER_BYTES)
+
+    assert await _mark(db_session_factory, doomed) is True
+
+    row = await _row(db_session_factory, doomed)
+    assert row.status is MediaStatus.DESTROYING
+    assert row.publication_state is PublicationState.REMOVED
+    assert row.removed_at == binned_at
+    assert await _job_columns(db_session_factory, doomed) == (0, None, None, None)
+    assert await _counts(db_session_factory, cast.gathering_id) == (
+        count_before - 1,
+        bytes_before - LAYER_BYTES,
+    )
+    await _invariants_hold(db_session_factory, cast.gathering_id)
+    assert len(await _layer_keys(db_session_factory, doomed)) == 3
+    assert (await _row(db_session_factory, keep)).status is MediaStatus.READY
+    # Marked, it is claimable by the worker exactly as the endpoint's mark
+    # is: the same rung, the same reset columns, the same ladder.
+    async with db_session_factory() as db:
+        claimed = await ingest.claim_next(db, _now())
+        claimed_id = None if claimed is None else claimed.id
+        await db.rollback()  # look, don't take: the row stays marked and unclaimed
+    assert claimed_id == UUID(doomed)
+
+
+async def test_mark_for_destruction_called_twice_marks_once_and_the_counts_move_once(
+    client, capsys, db_session_factory
+):
+    # THE PROPERTY CK-59'S CONCURRENCY SAFETY RESTS ON, pinned here rather
+    # than there: the function's OWN `status = 'ready'` guard — not any
+    # caller's check — is what makes a double mark impossible. Twice in
+    # one transaction with the same row object (a caller asked twice; the
+    # object's `status` is stale by then, and the guard must read the
+    # database, not the object), then again from a fresh session after the
+    # commit (a second caller — the sweep and a person reaching the same
+    # row): one mark, one decrement.
+    cast = await _cast(client, capsys, db_session_factory)
+    doomed = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
+    assert await _resync_counts(db_session_factory, cast.gathering_id) == (1, LAYER_BYTES)
+
+    async with db_session_factory() as db:
+        row = await db.get(Media, UUID(doomed))
+        assert await ingest.mark_for_destruction(db, row) is True
+        assert row.status is MediaStatus.READY  # the object is stale, on purpose
+        assert await ingest.mark_for_destruction(db, row) is False
+        await db.commit()
+    assert await _counts(db_session_factory, cast.gathering_id) == (0, 0)
+
+    # A second caller, after the commit, with its own freshly loaded row.
+    assert await _mark(db_session_factory, doomed) is False
+    assert await _counts(db_session_factory, cast.gathering_id) == (0, 0)
+    await _invariants_hold(db_session_factory, cast.gathering_id)
+    row = await _row(db_session_factory, doomed)
+    assert row.status is MediaStatus.DESTROYING
+    assert len(await _layer_keys(db_session_factory, doomed)) == 3
+    # And the endpoint, asked afterwards, draws the 404 `_visible_media`
+    # gives a row in destruction — never a second decrement.
+    assert (await _destroy(client, cast.host, doomed)).status_code == 404
+    assert await _counts(db_session_factory, cast.gathering_id) == (0, 0)
+
+
 # --- who may (and may not) ---------------------------------------------------
 
 

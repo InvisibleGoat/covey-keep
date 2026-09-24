@@ -352,8 +352,8 @@ from app.models import (
 # The module, not its names: the limits are read at call time, so a test
 # can narrow FREE_TIER_PHOTOGRAPHS / MEMORIAL_CEILING_PHOTOGRAPHS on
 # keeping itself.
-from app.services import keeping
-from app.services.retention import purge_stale
+from app.services import ingest, keeping
+from app.services.retention import REMOVED_BIN, purge_stale
 from app.services.storage import (
     ServeClient,
     UploadClient,
@@ -430,17 +430,11 @@ _CHANGED_WHILE_DECIDING = {
 # intent batch's number, for the same reason: bounded work per request.
 MAX_PUBLISH_PER_REQUEST = 50
 
-# THE CONTRIBUTOR'S RETRIEVAL WINDOW — one of the bin's TWO CLOCKS, and the
-# one this constant is (bin record §6.1): a removed photograph stays visible
-# to its UPLOADER for this long after `removed_at`, and to nobody else at
-# any point. The OTHER clock is the storage a removed row occupies, which
-# runs until the photograph is destroyed and carries no window at all —
-# which is why `keeping.account_bin_count` has no `removed_at` term and
-# must never grow one (a keeper full, with a bin reading empty, and nothing
-# to do about it). Past this window a removed photograph is invisible to
-# everyone and still charged; the 30-day SWEEP that makes the two clocks
-# coincide is Phase B. CK-54 built the destruction they both reach.
-REMOVED_BIN = timedelta(days=30)
+# REMOVED_BIN — the contributor's retrieval window (30 days) — is imported
+# from services/retention.py, its home since CK-58: ONE number with two
+# readers, `_visible_media` below and the sweep (CK-59) in the worker,
+# which must not import this module. Its comment travelled with it; do not
+# define it again here.
 
 # The two rungs of the destruction ladder (CK-54, migration 0025). Named
 # together because they are always asked about together: a row at either is
@@ -1652,7 +1646,10 @@ async def publish_media_batch(
 # twice. AND NO NEW INVARIANT IS CREATED: `photo_count` equals the count of
 # `ready` rows stays true automatically, because the row leaves `ready` in
 # the same transaction that decremented. A shape that needed a new
-# invariant would be a shape with a new way to be wrong.
+# invariant would be a shape with a new way to be wrong. THE STATEMENT ITSELF
+# IS services/ingest.py::mark_for_destruction since CK-58 — one copy, called
+# from here today and from the 30-day sweep at CK-59, so the second caller
+# cannot re-type it and drift.
 #
 # THE BYTES GO LATER, AND THE ROW IS UNCOUNTED FIRST. Between the mark and
 # the worker's delete the photograph is charged to nobody while its layers
@@ -1783,9 +1780,13 @@ async def destroy_media(
 
     ONE STATEMENT DECREMENTS `photo_count` AND `total_bytes` — the mirror of
     the publish transaction's increment, and the reason the API marks and
-    the worker destroys (see the section comment above). The room is freed
-    the moment this returns; the worker deletes the three published objects
-    and commits `destroyed` within a poll.
+    the worker destroys (see the section comment above). THE MARK AND THE
+    DECREMENT ARE `services/ingest.py::mark_for_destruction` since CK-58 —
+    one copy of the marking statement, extracted so that the 30-day sweep
+    (CK-59) marks through the same statement rather than a second one it
+    could drift from; this endpoint is its first caller and the sweep its
+    second. The room is freed the moment this returns; the worker deletes
+    the three published objects and commits `destroyed` within a poll.
 
     THE ROW SURVIVES, WORDS AND ALL (bin record §7.2): filename, caption,
     tags, uploader, gathering, timestamps. A caption is not a likeness, and
@@ -1808,47 +1809,17 @@ async def destroy_media(
     refusal = _removal_refusal(row, destroy=True)
     if refusal is not None:
         raise HTTPException(409, detail=refusal)
-    # The guarded mark. The job columns are RESET, not carried: a
-    # photograph that took two attempts to ingest still gets three to be
-    # destroyed, and a stale `last_error` from an ingest retry would read
-    # as a destruction failure the moment the row changed jobs.
-    result = await db.execute(
-        update(Media)
-        .where(Media.id == row.id, Media.status == MediaStatus.READY)
-        .values(
-            status=MediaStatus.DESTROYING,
-            attempts=0,
-            available_at=None,
-            claimed_at=None,
-            last_error=None,
-        )
-        .execution_options(synchronize_session=False)
-    )
-    if result.rowcount != 1:
+    # The mark and the decrement, in this transaction — ONE function,
+    # services/ingest.py::mark_for_destruction (CK-58), because it has two
+    # callers: this endpoint, a person's choice, and the 30-day sweep
+    # (CK-59), the clock. Its own `status = 'ready'` guard is the
+    # CONCURRENCY guard — distinct from `_removal_refusal`'s policy check
+    # above, which tests the same column for the 409 and its copy — and a
+    # False here is the lost race: unreachable under the row lock, refused
+    # rather than half-applied.
+    if not await ingest.mark_for_destruction(db, row):
         await db.rollback()
         raise HTTPException(409, detail=_CHANGED_WHILE_DECIDING)
-    # ONE statement, both columns, in the same transaction as the mark
-    # (CK-51a's increment, run backwards). The byte figure is the row's own
-    # derivative rows — what was actually stored — summed inside the
-    # statement so nothing can read one number and write another. NOT
-    # clamped at zero: the invariant `photo_count` = the count of `ready`
-    # rows is exact, so a negative here is a finding the verifier makes
-    # loud, and a floor would only hide the one case where it happened to
-    # come out right.
-    stored = (
-        select(func.coalesce(func.sum(MediaDerivative.size_bytes), 0))
-        .where(MediaDerivative.media_id == row.id)
-        .scalar_subquery()
-    )
-    await db.execute(
-        update(Gathering)
-        .where(Gathering.id == row.gathering_id)
-        .values(
-            total_bytes=Gathering.total_bytes - stored,
-            photo_count=Gathering.photo_count - 1,
-        )
-        .execution_options(synchronize_session=False)
-    )
     await db.commit()
     await db.refresh(row)
     return _media_body(row)

@@ -83,6 +83,13 @@ and the privacy copy says the record is cleared when the next link is
 requested, not "within an hour". Revisit only if a customer arrives whose
 table is written far more often than its reaping endpoint is called.
 
+Since CK-58 this module is also the home of REMOVED_BIN — the contributor's
+retrieval window for a removed photograph — because retention is its
+subject, and because the two readers of that number (the read rule in
+api/media.py and the sweep, CK-59, in the worker) sit on opposite sides of
+an import boundary the worker must not cross. It is a constant beside the
+mechanism, not an input to it: see its comment below.
+
 DATA-HANDLING: this module deletes personal data and must never log, echo,
 or count-by-value what it removes. A row count is the only thing that leaves
 purge_stale.
@@ -99,6 +106,33 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # limits silently. Deliberately not imported from auth (auth imports this
 # module); the relation is pinned by test instead.
 PURGE_GRACE = timedelta(hours=1)
+
+# THE CONTRIBUTOR'S RETRIEVAL WINDOW — one of the bin's TWO CLOCKS, and the
+# one this constant is (bin record §6.1): a removed photograph stays visible
+# to its UPLOADER for this long after `removed_at`, and to nobody else at
+# any point. The OTHER clock is the storage a removed row occupies, which
+# runs until the photograph is destroyed and carries no window at all —
+# which is why `keeping.account_bin_count` has no `removed_at` term and
+# must never grow one (a keeper full, with a bin reading empty, and nothing
+# to do about it). Past this window a removed photograph is invisible to
+# everyone and still charged; the 30-day SWEEP that makes the two clocks
+# coincide is Phase B. CK-54 built the destruction they both reach.
+#
+# ONE NUMBER, TWO READERS (CK-58; bin record §6 — the CK-34 discipline of
+# two mechanisms on one constant). `api/media.py::_visible_media` reads it
+# as the window in which the uploader can still see, and so retrieve, a
+# removed photograph; the sweep (CK-59, in the worker) will read it as the
+# age at which a removed photograph is marked for destruction. Those are
+# two clocks that must show one number — a bin a person can still see into
+# after the sweep has emptied it, or one emptied before they could, is the
+# defect — and a second copy of the number is how they drift, arriving
+# through the back door (grep for the literal: this must stay its only
+# definition). It lives HERE, not in the router, because the worker must
+# not import the API layer, and retention is its subject. It is NOT a
+# purge_stale input: the sweep destroys through the marking statement
+# (services/ingest.py::mark_for_destruction), never through a purge, and
+# a removed photograph is content, not an ephemeral row.
+REMOVED_BIN = timedelta(days=30)
 
 # Tables whose EVERY row is ephemeral: a short-lived secret or request that
 # has nothing to say once its expiry is past. These may be purged by age
