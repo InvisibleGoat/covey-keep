@@ -1387,20 +1387,66 @@ async def verify(conn, ck: Checks) -> None:
         # The worker's two invariants over the job columns, properties of
         # whatever rows exist. Detail prints the count only.
         # (1) claimed_at is the reclaim clock and means "a worker holds this
-        # row": set when and only when the row is `processing`. The claim
-        # service stamps it at claim and clears it with every outcome
-        # (release, retry, dead-letter), so a disagreement means something
-        # wrote around it — a stranded row the reclaim timeout would rescue
-        # every fifteen minutes forever, or a processing row nothing can
-        # reclaim.
+        # row". The claim service stamps it at claim and clears it with
+        # every outcome (release, retry, dead-letter), so a disagreement
+        # means something wrote around it — a stranded row the reclaim
+        # timeout would rescue every fifteen minutes forever, or a
+        # processing row nothing can reclaim.
+        #
+        # NARROWED AT CK-56, and the narrowing is the destruction ladder
+        # rather than a relaxation. This was written as an iff on
+        # `processing` when `processing` was the only claimed rung. CK-54
+        # added a second ladder, and `_claim` stamps `claimed_at`
+        # unconditionally across both (services/ingest.py) — a destroy job
+        # is claimed IN PLACE, because `destroying` is both the queue and
+        # the claim — so ANY `destroying` row fails the old form while a
+        # worker holds it. Confirmed on the deploy by WORKING-ON-NOW check
+        # (gj), which read 189/1 on this line; the window is ~543 ms per
+        # row, which is why five earlier runs missed it, but a stalled
+        # claim needs a live worker to clear it, so a worker dying
+        # mid-destruction would fail this line indefinitely.
+        #
+        # It is NOT an iff on the second rung, so the narrowing keeps the
+        # two implications separately rather than widening the equality:
+        # `processing` still implies a stamp, but a `destroying` row
+        # legitimately has none when it is freshly marked (the API marks
+        # straight to the rung with the job columns reset) and when it has
+        # dead-lettered (the ladder is spent and the stamp is cleared).
+        # Everything the old line caught is still caught: a claim stamp
+        # stranded on an `uploaded`, `ready`, `failed` or `destroyed` row,
+        # and a `processing` row with no stamp.
+        #
+        # DELIBERATELY NOT ASSERTED, and the omission is chosen rather than
+        # overlooked: the second ladder's counterpart to (2) below — "a
+        # destroying row that has given up says why". A spent destruction
+        # never becomes `failed` (CK-54 refused that: it would claim the
+        # wrong job failed and would make the row visible again), so it
+        # stays at `destroying` with its last_error and (2) never sees it.
+        # Both candidate criteria were rejected at CK-56. The constant-free
+        # one — `attempts > 0 AND claimed_at IS NULL` — reads as stronger
+        # and is not: `_release_misconfigured` settles only `status` and
+        # `claimed_at` (services/ingest.py), so a row abandoned once and
+        # then released on a rejected credential sits at `destroying`,
+        # attempts 1, no stamp, no reason, three layers intact and
+        # claimable — healthy, and matching. Mirroring
+        # `ingest.MAX_ATTEMPTS` has no reachable violation today (every
+        # path that reaches the bound writes a reason) and would fail
+        # SILENTLY if the constant moved: lowered it goes vacuous while
+        # reading as coverage, raised it fires on that released row. The
+        # real question is a code one — whether `_release_misconfigured`
+        # should write a neutral reason, or clear a stale one, so that a
+        # destroying row's last_error means one thing — and once it is
+        # settled the assertion writes itself without a bound. CK-57.
         claim_mismatch = await scalar(
             conn,
             "SELECT count(*) FROM media "
-            "WHERE (status = 'processing') <> (claimed_at IS NOT NULL)",
+            "WHERE (status = 'processing' AND claimed_at IS NULL) "
+            "OR (claimed_at IS NOT NULL AND status NOT IN ('processing', 'destroying'))",
         )
         ck.check(
             claim_mismatch == 0,
-            "claimed_at is set when and only when the row is processing",
+            "claimed_at is always set on a processing row, "
+            "and set only on a processing or destroying one",
             f"{claim_mismatch} media row(s) whose claimed_at disagrees with status",
         )
         # (2) A dead-lettered row says why: `failed` always carries a
