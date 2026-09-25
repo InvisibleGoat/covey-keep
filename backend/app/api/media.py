@@ -352,7 +352,7 @@ from app.models import (
 # The module, not its names: the limits are read at call time, so a test
 # can narrow FREE_TIER_PHOTOGRAPHS / MEMORIAL_CEILING_PHOTOGRAPHS on
 # keeping itself.
-from app.services import ingest, keeping
+from app.services import destruction, keeping
 from app.services.retention import REMOVED_BIN, purge_stale
 from app.services.storage import (
     ServeClient,
@@ -1647,9 +1647,10 @@ async def publish_media_batch(
 # `ready` rows stays true automatically, because the row leaves `ready` in
 # the same transaction that decremented. A shape that needed a new
 # invariant would be a shape with a new way to be wrong. THE STATEMENT ITSELF
-# IS services/ingest.py::mark_for_destruction since CK-58 — one copy, called
-# from here today and from the 30-day sweep at CK-59, so the second caller
-# cannot re-type it and drift.
+# IS services/destruction.py::mark_for_destruction (extracted at CK-58,
+# homed there at CK-59 so that this router never imports the worker's
+# image stack) — one copy, called from here today and from the 30-day
+# sweep at CK-59, so the second caller cannot re-type it and drift.
 #
 # THE BYTES GO LATER, AND THE ROW IS UNCOUNTED FIRST. Between the mark and
 # the worker's delete the photograph is charged to nobody while its layers
@@ -1781,7 +1782,7 @@ async def destroy_media(
     ONE STATEMENT DECREMENTS `photo_count` AND `total_bytes` — the mirror of
     the publish transaction's increment, and the reason the API marks and
     the worker destroys (see the section comment above). THE MARK AND THE
-    DECREMENT ARE `services/ingest.py::mark_for_destruction` since CK-58 —
+    DECREMENT ARE `services/destruction.py::mark_for_destruction` since CK-58 —
     one copy of the marking statement, extracted so that the 30-day sweep
     (CK-59) marks through the same statement rather than a second one it
     could drift from; this endpoint is its first caller and the sweep its
@@ -1810,14 +1811,15 @@ async def destroy_media(
     if refusal is not None:
         raise HTTPException(409, detail=refusal)
     # The mark and the decrement, in this transaction — ONE function,
-    # services/ingest.py::mark_for_destruction (CK-58), because it has two
+    # services/destruction.py::mark_for_destruction (CK-58; moved there at
+    # CK-59, off the worker's import graph), because it has two
     # callers: this endpoint, a person's choice, and the 30-day sweep
     # (CK-59), the clock. Its own `status = 'ready'` guard is the
     # CONCURRENCY guard — distinct from `_removal_refusal`'s policy check
     # above, which tests the same column for the 409 and its copy — and a
     # False here is the lost race: unreachable under the row lock, refused
     # rather than half-applied.
-    if not await ingest.mark_for_destruction(db, row):
+    if not await destruction.mark_for_destruction(db, row):
         await db.rollback()
         raise HTTPException(409, detail=_CHANGED_WHILE_DECIDING)
     await db.commit()

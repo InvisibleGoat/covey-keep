@@ -179,12 +179,16 @@ in ONE statement, the mirror of the publish transaction's increment — the
 gathering's `photo_count` and `total_bytes` are decremented together; the
 marking statement also resets the job columns, so a photograph that took
 two attempts to ingest still gets three to be destroyed. THE MARKING
-STATEMENT IS `mark_for_destruction`, IN THIS MODULE (extracted from the
-API at CK-58): one copy with two callers — `api/media.py::destroy_media`
-today, a person's choice, and the 30-day sweep from CK-59, the clock —
-because re-typing it in the worker is how the two counts diverge, and
-CK-54's whole shape was chosen so the decrement rides the mark and cannot
-drift from it. It runs in its caller's transaction and never commits.
+STATEMENT IS `services/destruction.py::mark_for_destruction` (extracted
+from the API at CK-58 into this module, and moved out at CK-59: the API
+importing this module for it pulled `processing` — Pillow — into the web
+process, and destruction.py needs the models alone; it is re-exported
+here so the ladder reads whole): one copy with two callers —
+`api/media.py::destroy_media` today, a person's choice, and the 30-day
+sweep from CK-59, the clock — because re-typing it in the worker is how
+the two counts diverge, and CK-54's whole shape was chosen so the
+decrement rides the mark and cannot drift from it. It runs in its
+caller's transaction and never commits.
 What arrives at handle_destroying is therefore an uncounted, invisible
 row owed a bucket operation.
 
@@ -235,9 +239,11 @@ EXIF promise, made true here and pinned against real fixtures). Since
 CK-54 it also DESTROYS a photograph's stored bytes, photographs of children
 among them — and every destruction it performs is one a person already
 chose (api/media.py's permanent delete, host or uploader). The marking
-statement lives here since CK-58 (`mark_for_destruction`) but nothing in
-this module CALLS it, on a clock or otherwise: the scheduled 30-day sweep,
-its first caller on a clock, is CK-59. The three layers die as a unit, as
+statement (`mark_for_destruction`) lived here from CK-58 to CK-59 and is
+services/destruction.py's now; nothing in this module CALLS it, on a
+clock or otherwise — this module runs the ladder a marked row is already
+on. The scheduled 30-day sweep, its first caller on a clock, is CK-59
+and lives beside it there. The three layers die as a unit, as
 the removal
 rule has always required, because the `media_derivatives` rows carry no
 lifecycle of their own to diverge. The `media` row survives with its
@@ -268,6 +274,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Account, Gathering, Media, MediaDerivative, MediaStatus, PublicationState
 from app.models.enums import PUBLICATION_STATE
 from app.services import processing, publication
+# The entry to the destruction ladder lives in services/destruction.py
+# since CK-59 (CK-58 put it here, and the API importing this module for it
+# pulled processing — Pillow — into the web process). Re-exported so the
+# ladder reads whole from the module that runs it — claim_next, this entry,
+# handle_destroying — and so CK-58's pins resolve it by this name unedited.
+from app.services.destruction import mark_for_destruction  # noqa: F401
 from app.services.keeping import PHOTOGRAPH_BYTES
 from app.services.processing import Rendition, Undecodable
 from app.services.storage import (
@@ -675,89 +687,6 @@ async def handle_claimed(
     )
     await db.flush()
     return Outcome.READY
-
-
-async def mark_for_destruction(db: AsyncSession, row: Media) -> bool:
-    """THE ENTRY TO THE DESTRUCTION LADDER: mark a `ready` photograph
-    `destroying` and uncount it, in the caller's transaction — CK-54's
-    marking statement, extracted from `api/media.py::destroy_media` at
-    CK-58 so that it has ONE COPY AND TWO CALLERS: the endpoint today (a
-    person's choice — the host's, or the uploader's for their own) and the
-    30-day sweep from CK-59 (the clock). CK-54's whole shape was chosen so
-    that the decrement rides the marking statement and cannot drift from
-    it; a second copy typed into the worker is exactly how the two counts
-    would come to diverge. Returns True when the row was marked and
-    uncounted, False when it was not `ready` at that instant — and then
-    NOTHING was written.
-
-    Two statements, in this order, and the second only if the first took:
-
-      1. The guarded mark — `UPDATE media … WHERE id = :id AND status =
-         'ready'` — to `destroying`, with the four job columns RESET.
-      2. The one `UPDATE gatherings` that drops `photo_count` and
-         `total_bytes` together.
-
-    THE `status = 'ready'` GUARD IS THIS FUNCTION'S, NOT THE CALLER'S.
-    The endpoint's `_removal_refusal` also tests the rung — for the 409
-    and its copy, a policy check on the row it read. This guard is the
-    CONCURRENCY guard: it is what makes a double mark impossible whichever
-    two callers reach one row — the sweep and a person in the same
-    second, or one caller asked twice — because it reads the database at
-    the instant of the write, never the caller's copy of the row (which
-    may be stale; only `row.id` and `row.gathering_id` are read here).
-    Two checks on one column doing two different jobs: keep both. Pinned:
-    called twice on one row it marks once, and the counters move once.
-
-    DOES NOT COMMIT. The caller owns the transaction boundary — the
-    endpoint commits per request, the sweep will choose its own per row —
-    and the caller decides what a False means (the endpoint's lost-race
-    409; the sweep's "someone got there first", which is not an error).
-    Nothing here reads a gathering's setting, a quota or a publication
-    state: `publication_state` keeps whatever it had (bin record §7.2),
-    and the row survives, words and all — invisible from the moment the
-    caller commits, because `api/media.py::_visible_media` excludes the
-    rung."""
-    # The guarded mark. The job columns are RESET, not carried: a
-    # photograph that took two attempts to ingest still gets three to be
-    # destroyed, and a stale `last_error` from an ingest retry would read
-    # as a destruction failure the moment the row changed jobs.
-    result = await db.execute(
-        update(Media)
-        .where(Media.id == row.id, Media.status == MediaStatus.READY)
-        .values(
-            status=MediaStatus.DESTROYING,
-            attempts=0,
-            available_at=None,
-            claimed_at=None,
-            last_error=None,
-        )
-        .execution_options(synchronize_session=False)
-    )
-    if result.rowcount != 1:
-        return False
-    # ONE statement, both columns, in the same transaction as the mark
-    # (CK-51a's increment, run backwards). The byte figure is the row's own
-    # derivative rows — what was actually stored — summed inside the
-    # statement so nothing can read one number and write another. NOT
-    # clamped at zero: the invariant `photo_count` = the count of `ready`
-    # rows is exact, so a negative here is a finding the verifier makes
-    # loud, and a floor would only hide the one case where it happened to
-    # come out right.
-    stored = (
-        select(func.coalesce(func.sum(MediaDerivative.size_bytes), 0))
-        .where(MediaDerivative.media_id == row.id)
-        .scalar_subquery()
-    )
-    await db.execute(
-        update(Gathering)
-        .where(Gathering.id == row.gathering_id)
-        .values(
-            total_bytes=Gathering.total_bytes - stored,
-            photo_count=Gathering.photo_count - 1,
-        )
-        .execution_options(synchronize_session=False)
-    )
-    return True
 
 
 async def handle_destroying(
