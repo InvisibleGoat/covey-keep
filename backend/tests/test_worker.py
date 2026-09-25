@@ -115,7 +115,16 @@ from app.services.storage import (
     worker_client,
 )
 from app import worker as worker_module
-from app.worker import IDLE_JITTER, IDLE_POLL, SWEEP_BATCH, SWEEP_INTERVAL, Poll, poll_once, run
+from app.worker import (
+    IDLE_JITTER,
+    IDLE_POLL,
+    MISCONFIGURED_BACKOFF,
+    SWEEP_BATCH,
+    SWEEP_INTERVAL,
+    Poll,
+    poll_once,
+    run,
+)
 from tests.conftest import TEST_DATABASE_URL
 from tests.test_keeping import _mk_account, _mk_gathering
 
@@ -1526,6 +1535,9 @@ async def test_idle_polling_is_five_seconds_jittered(db_session_factory, worker)
     assert await run(db_session_factory, worker, stop=stop, sleep=fake_sleep) == 0
     assert len(sleeps) == 4
     assert all(IDLE_POLL - IDLE_JITTER <= d <= IDLE_POLL + IDLE_JITTER for d in sleeps)
+    # CK-62: and none of them in the backoff band — the idle interval is not
+    # the misconfigured one, pinned from this side too.
+    assert not any(_in_backoff_band(d) for d in sleeps), sleeps
 
 
 async def test_the_worker_retries_rather_than_crash_looping_when_the_schema_is_not_ready(
@@ -1583,6 +1595,152 @@ async def test_an_unexpected_exception_in_a_poll_does_not_kill_the_loop(db_sessi
 
     assert await run(db_session_factory, worker, stop=stop, sleep=fake_sleep) == 0
     assert len(sleeps) == 1
+
+
+# --- the backoff (CK-62) ----------------------------------------------------------
+# Poll.BACKOFF was returned on a rejected credential from CK-35 and branched on
+# nowhere: `run` fell through to the idle sleep, so a condition only a
+# dashboard edit can clear was retried every ~5 s — check (gx) counted one
+# release line per ≈5 s for 24 minutes, the row unpenalised throughout. These
+# pin the interval each outcome sleeps by the value handed to the injected
+# `sleep`, with the two bands asserted DISJOINT so the outcomes cannot be
+# confused, and NOT_READY pinned AT the idle interval on purpose: the worker
+# starts before the web service has migrated and must pick up promptly, so
+# that path is not to be slowed (render.yaml's worker block; the module
+# docstring's rule 2).
+
+
+def _in_backoff_band(delay: float) -> bool:
+    return MISCONFIGURED_BACKOFF - IDLE_JITTER <= delay <= MISCONFIGURED_BACKOFF + IDLE_JITTER
+
+
+def _in_idle_band(delay: float) -> bool:
+    return IDLE_POLL - IDLE_JITTER <= delay <= IDLE_POLL + IDLE_JITTER
+
+
+def test_the_backoff_is_a_minute_and_its_band_cannot_meet_the_idle_band():
+    assert MISCONFIGURED_BACKOFF == 60.0
+    assert (IDLE_POLL, IDLE_JITTER) == (5.0, 1.0)  # untouched by CK-62
+    # Disjoint with room to spare: the shortest backoff sleep is longer than the
+    # longest idle one, so a delay handed to `sleep` names its outcome.
+    assert MISCONFIGURED_BACKOFF - IDLE_JITTER > IDLE_POLL + IDLE_JITTER
+    # Loop pacing, not the per-row ladder. RETRY_BACKOFF's first rung is ALSO a
+    # minute — a coincidence of values, not a shared constant — so the pin is
+    # on the SOURCE: the loop module's CODE never names the ladder (a comment
+    # may, to say why it is not used), so a change to either number cannot
+    # move the other.
+    assert RETRY_BACKOFF[0] == timedelta(minutes=1)
+    assert not hasattr(worker_module, "RETRY_BACKOFF")
+    code = [
+        line
+        for line in Path(worker_module.__file__).read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    assert not any("RETRY_BACKOFF" in line for line in code)
+
+
+async def test_a_rejected_credential_backs_the_loop_off_for_a_minute_not_the_idle_interval(
+    db_session_factory, worker, monkeypatch, caplog
+):
+    """The (gx) shape, run through `run` rather than `poll_once`: one uploaded
+    row, the store refusing the worker credential on every HEAD (a bodiless
+    401 — the shape a HEAD delivers, CK-61). Every pass releases the row and
+    the loop sleeps MISCONFIGURED_BACKOFF — inside its band and outside the
+    idle band — and after every pass the row is exactly as (gx) found it:
+    `uploaded`, attempts 0, claimed_at cleared, available_at unchanged, the
+    reason written. The ERROR line is logged once per pass, deliberately (an
+    actively broken condition should recur in the log — the INTERVAL is what
+    CK-62 changed, never the frequency), says what the loop now does, and
+    carries no key id and no S3 code."""
+    _stub_head(monkeypatch, raises=_botocore_error(401))
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, available_at=t0)
+    sleeps: list[float] = []
+    stop = asyncio.Event()
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+        if len(sleeps) == 4:
+            stop.set()
+
+    caplog.set_level(logging.ERROR, logger="covey-keep.worker")
+    assert await run(db_session_factory, worker, stop=stop, sleep=fake_sleep) == 0
+    assert len(sleeps) == 4
+    assert all(_in_backoff_band(d) for d in sleeps), sleeps
+    assert not any(_in_idle_band(d) for d in sleeps), sleeps
+    r = await _row(db_session_factory, row.id)
+    assert (r.status, r.attempts, r.claimed_at, r.available_at, r.last_error) == (
+        MediaStatus.UPLOADED, 0, None, t0, ERROR_CREDENTIAL_REJECTED,
+    )
+    lines = [
+        rec.getMessage()
+        for rec in caplog.records
+        if rec.name == "covey-keep.worker" and rec.levelno == logging.ERROR
+    ]
+    assert len(lines) == 4  # one per pass: four polls, four releases, four lines
+    for line in lines:
+        assert f"polls again in about {int(MISCONFIGURED_BACKOFF)} s" in line
+        assert "not the idle interval" in line
+        for never in (WORKER_KEY_ID, "Unauthorized", "X-Amz", "uploads/"):
+            assert never not in line
+
+
+async def test_not_ready_keeps_the_idle_interval_and_is_never_backed_off(
+    db_session_factory, worker, monkeypatch
+):
+    """STEP 2's pin, so it cannot be undone quietly: a poll that cannot reach
+    the database or finds the schema unmigrated sleeps the IDLE interval —
+    never MISCONFIGURED_BACKOFF. The worker is designed to start before the
+    web service has finished migrating (render.yaml's worker block) and to
+    pick up the moment the schema lands; slowing this path would make a
+    documented behaviour worse. Driven through a real member of the not-ready
+    class raised from the claim (the missing-relation shape), and then through
+    the bug path — an unexpected exception the loop coerces to NOT_READY —
+    which must pace the same way."""
+    sleeps: list[float] = []
+    stop = asyncio.Event()
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+        if len(sleeps) % 3 == 0:
+            stop.set()
+
+    async def not_there(*args, **kwargs):
+        raise ProgrammingError("SELECT", {}, Exception("relation media does not exist"))
+
+    monkeypatch.setattr(ingest, "claim_next", not_there)
+    assert await run(db_session_factory, worker, stop=stop, sleep=fake_sleep) == 0
+    assert len(sleeps) == 3
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("a bug")
+
+    monkeypatch.setattr(ingest, "claim_next", boom)
+    stop.clear()
+    assert await run(db_session_factory, worker, stop=stop, sleep=fake_sleep) == 0
+    assert len(sleeps) == 6
+    assert all(_in_idle_band(d) for d in sleeps), sleeps
+    assert not any(_in_backoff_band(d) for d in sleeps), sleeps
+
+
+async def test_once_exits_1_on_a_rejected_credential_without_sleeping(db_session_factory, worker, monkeypatch):
+    """`--once` is unchanged by the backoff (the shell-side check, and what
+    (gx)'s operator runs): the first non-PROCESSED poll ends the run — 1 for
+    BACKOFF exactly as for NOT_READY, 0 for IDLE — and nothing is slept on the
+    way out; a one-shot must not wait a minute to say the credential is wrong.
+    The row is released exactly as under the loop."""
+    _stub_head(monkeypatch, raises=_client_error("AccessDenied", 403))
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, available_at=t0)
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    assert await run(db_session_factory, worker, stop=asyncio.Event(), once=True, sleep=fake_sleep) == 1
+    assert sleeps == []
+    r = await _row(db_session_factory, row.id)
+    assert (r.status, r.attempts, r.claimed_at, r.available_at) == (MediaStatus.UPLOADED, 0, None, t0)
 
 
 async def test_no_derivative_row_and_no_total_bytes_move_on_any_failure_path(db_session_factory, worker, monkeypatch):

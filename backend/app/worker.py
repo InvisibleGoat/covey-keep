@@ -75,8 +75,10 @@ first deploy (record §8), each enforced here or in render.yaml:
 2. THE WORKER TOLERATES A SCHEMA THE WEB SERVICE HAS NOT FINISHED MIGRATING.
    A poll that fails because a table or column is not there yet — or because
    the database is unreachable — is logged and retried after the idle
-   interval. The worker never crash-loops on it (pinned by test against a
-   real missing column).
+   interval — the IDLE interval, deliberately, and not MISCONFIGURED_BACKOFF
+   (CK-62 left it alone: picking up the moment the schema lands is the
+   point of this rule). The worker never crash-loops on it (pinned by test
+   against a real missing column, and pinned at the idle interval).
 3. A DEPLOY LANDS MID-JOB, and that is normal. The claim service's reclaim
    rule (services/ingest.py) makes a stalled row claimable again after
    RECLAIM_AFTER; SIGTERM sets the stop flag so the current poll finishes
@@ -89,6 +91,29 @@ jittered, when the queue is empty (record §6.2). A rejected credential
 (ingest.Outcome.MISCONFIGURED) backs off like an empty queue instead of
 draining, with a loud log line, so a mistyped dashboard value does not
 hammer the store.
+
+AMENDED AT CK-62 — the paragraph above stands as it was written at CK-35,
+and from CK-35 to CK-62 its first half was true and its second half was
+not. `Poll.BACKOFF` was returned on MISCONFIGURED and branched on nowhere:
+`run` fell through to the same IDLE_POLL sleep an empty queue gets, so the
+worker DID back off exactly like an empty queue — and when the condition
+is one only a human editing the dashboard can clear, backing off like an
+empty queue IS hammering the store: a doomed claim, a doomed HEAD, a
+release and an ERROR line every ~5 s until someone fixes the value. The
+stated purpose — "so a mistyped dashboard value does not hammer the
+store" — was not achieved. Check (gx) measured it on 2026-09-25: 24
+minutes of a rejected credential, one release line every ≈5 s (≈288
+store calls), the row unpenalised throughout — `attempts` 0,
+`available_at` fixed — so no data was ever at risk; the cost was the
+traffic and the log. The two halves of the sentence were in tension and
+each read fine alone, which is how it survived — the third surface in a
+week to describe behaviour the code did not have (CK-55's assertion
+label, CK-57's `last_error`, this). Since CK-62 the loop branches on
+BACKOFF and sleeps MISCONFIGURED_BACKOFF — a minute, jittered — whose
+comment carries the reasoning, chiefly that the fix path (editing
+R2_WORKER_* on Render) redeploys the worker, so the interval is never on
+the recovery path and costs no responsiveness. NOT_READY deliberately
+keeps the idle interval (rule 2 above, and `run`).
 
 DATA-HANDLING: this process is the first component able to destroy an
 uploaded photograph, and the order is the whole of its discipline — on the
@@ -137,6 +162,45 @@ from app.services.storage import WorkerClient, worker_client
 IDLE_POLL = 5.0
 IDLE_JITTER = 1.0
 
+# THE BACKOFF (CK-62) — the sleep after a poll that found the worker
+# misconfigured: `Poll.BACKOFF`, the loop's answer to ingest.Outcome.
+# MISCONFIGURED, the store having rejected the WORKER credential and the
+# row having been released unpenalised. No poll will succeed until a human
+# edits R2_WORKER_* in the worker's dashboard. Sixty seconds is a CHOICE,
+# not a derived number, and it rests on three facts:
+#
+#   1. The condition is human-clearable only. Nothing this process does can
+#      fix a mistyped dashboard value, so every poll before the fix is a
+#      doomed store call and an ERROR line — and nothing else.
+#   2. Responsiveness is not at stake. Editing R2_WORKER_* on Render
+#      triggers a redeploy: a fresh process that polls immediately. This
+#      interval is therefore NEVER on the recovery path; nothing anyone
+#      waits on gets slower by making it longer. That is what makes the
+#      fix nearly free, and it is why the number could be larger — a
+#      minute is the smallest one that still does the job.
+#   3. A minute cuts the store traffic and the log volume roughly
+#      twelvefold against IDLE_POLL (≈12 lines an hour instead of ≈720)
+#      while still proving liveness to anyone watching the log: a line a
+#      minute says the worker is up and still refused.
+#
+# Jittered the same way as the idle delay — ± IDLE_JITTER, an absolute
+# offset — so several workers that woke together cannot call the store
+# together (`_jittered` says why the offset does not scale). NOT
+# RETRY_BACKOFF: that ladder is per-row retry timing (`attempts`,
+# `available_at`) and this is loop pacing — one number answering two
+# unrelated questions would let a change to either silently move the
+# other. Its first rung happens to be a minute too; that is coincidence,
+# not coupling, and the two must not be merged on the strength of it.
+#
+# What was true from CK-35 to CK-62: BACKOFF was returned and branched on
+# nowhere, so it fell through to the idle sleep — ~5 s, identical to an
+# empty queue — while the enum comment said "sleep, retry, shout" and the
+# log line said "backing off". Check (gx) measured it on 2026-09-25: 24
+# minutes of a rejected credential at one release line every ≈5 s, ≈288
+# doomed store calls, the row unpenalised throughout. The loop now
+# branches on BACKOFF (run, the loop tail), and the three surfaces agree.
+MISCONFIGURED_BACKOFF = 60.0
+
 # THE SWEEP (CK-59; bin record §6) — off unless WorkerSettings.sweep_enabled,
 # and when on, run only from an IDLE poll so the queue always drains first.
 # The interval and the batch, and why each is what it is:
@@ -170,8 +234,17 @@ log = logging.getLogger("covey-keep.worker")
 class Poll(str, Enum):
     PROCESSED = "processed"  # one row settled; poll again at once
     IDLE = "idle"  # nothing claimable; sleep
-    NOT_READY = "not_ready"  # the database is unreachable or unmigrated; sleep, retry
-    BACKOFF = "backoff"  # the worker is misconfigured; sleep, retry, shout
+    # The database is unreachable or unmigrated: sleep the IDLE interval,
+    # retry. The idle interval deliberately (CK-62) — this worker starts
+    # before the web service has finished migrating and must pick up the
+    # moment the schema lands; `run`'s loop tail says why it stays short.
+    NOT_READY = "not_ready"
+    # The store rejected the worker credential: shout (one ERROR line per
+    # pass), sleep MISCONFIGURED_BACKOFF — a minute, NOT the idle interval
+    # — retry. From CK-35 to CK-62 this member was returned and never
+    # branched on, so it slept the idle interval while this comment said
+    # otherwise; the constant's comment has the measurement.
+    BACKOFF = "backoff"
 
 
 # The failures a poll survives: every SQLAlchemy/DBAPI error (an undefined
@@ -233,11 +306,20 @@ async def poll_once(
         return Poll.NOT_READY
 
     if outcome is ingest.Outcome.MISCONFIGURED:
+        # Logged on EVERY pass the condition holds, deliberately (CK-62): an
+        # actively broken worker should be seen recurring in its log, and the
+        # backoff interval already made this one line a minute instead of
+        # one every five seconds. If hours of a rejected credential ever
+        # make a line a minute too much, that is a question about
+        # rate-limiting the line — a separate one, not answered here.
         log.error(
             "media %s: the store rejected the worker credential — R2_WORKER_* is "
             "misconfigured; the row is released unpenalized with the reason in "
-            "last_error, and the worker is backing off",
+            "last_error, and the worker polls again in about %d s "
+            "(MISCONFIGURED_BACKOFF, not the idle interval): only a dashboard "
+            "edit clears this, and that edit redeploys the worker",
             row.id,
+            MISCONFIGURED_BACKOFF,
         )
         return Poll.BACKOFF
     if outcome is ingest.Outcome.READY:
@@ -308,8 +390,20 @@ async def _delete_original(client: WorkerClient, row) -> None:
         )
 
 
+def _jittered(interval: float) -> float:
+    """`interval` ± IDLE_JITTER. The jitter is an absolute offset and not a
+    fraction of the interval, because its job is the same at any interval:
+    workers that woke together must not call the store together, and a
+    second's spread does that whether they slept five seconds or sixty."""
+    return random.uniform(interval - IDLE_JITTER, interval + IDLE_JITTER)
+
+
 def _idle_delay() -> float:
-    return random.uniform(IDLE_POLL - IDLE_JITTER, IDLE_POLL + IDLE_JITTER)
+    return _jittered(IDLE_POLL)
+
+
+def _backoff_delay() -> float:
+    return _jittered(MISCONFIGURED_BACKOFF)
 
 
 async def _sweep(session_factory: async_sessionmaker[AsyncSession]) -> int:
@@ -355,10 +449,12 @@ async def run(
     sweep_enabled: bool = False,
     clock: Callable[[], float] = time.monotonic,
 ) -> int:
-    """The loop. Drains while work remains; sleeps when idle; never exits on
-    a failed poll. With `once`, returns after the first non-PROCESSED poll —
-    0 if the queue was drained to idle, 1 if the database or the credential
-    was not ready. `sleep` is injectable so tests drive it without waiting.
+    """The loop. Drains while work remains; sleeps IDLE_POLL when idle or
+    not ready, MISCONFIGURED_BACKOFF after a rejected credential (CK-62);
+    never exits on a failed poll. With `once`, returns after the first
+    non-PROCESSED poll — 0 if the queue was drained to idle, 1 if the
+    database or the credential was not ready — and sleeps on none of them.
+    `sleep` is injectable so tests drive it without waiting.
 
     THE SWEEP (CK-59) rides the same loop and is OFF unless `sweep_enabled`
     — the seventh worker variable, defaulting to False at every layer. When
@@ -390,7 +486,19 @@ async def run(
                 continue  # the marks are claimable now: drain them before sleeping
         if once:
             return 0 if outcome is Poll.IDLE else 1
-        await sleep(_idle_delay())
+        # The pace after a poll that settled nothing (CK-62). BACKOFF — the
+        # store rejected the worker credential — sleeps MISCONFIGURED_BACKOFF:
+        # nothing this process does can clear that, and the dashboard edit
+        # that does redeploys it, so a minute costs nobody anything (the
+        # constant's comment has the whole argument). IDLE and NOT_READY
+        # share the idle interval, and NOT_READY keeps it DELIBERATELY: it is
+        # the database unreachable or unmigrated, and this worker is designed
+        # to start before the web service has finished migrating and to pick
+        # up as soon as the schema lands (render.yaml's worker block; module
+        # docstring rule 2; pinned by test against a real missing column and
+        # pinned at the idle interval). A longer sleep there would make a
+        # documented behaviour worse. Do not give NOT_READY a backoff.
+        await sleep(_backoff_delay() if outcome is Poll.BACKOFF else _idle_delay())
     return 0
 
 
