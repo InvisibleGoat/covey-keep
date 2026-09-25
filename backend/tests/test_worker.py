@@ -88,6 +88,7 @@ from app.models import (
 from app.services import destruction, ingest, keeping, storage
 from app.services.ingest import (
     ERROR_ABANDONED,
+    ERROR_CREDENTIAL_REJECTED,
     ERROR_OBJECT_MISSING,
     MAX_ATTEMPTS,
     RECLAIM_AFTER,
@@ -1041,9 +1042,12 @@ async def test_a_write_failure_is_transient_and_the_retry_rewrites_all_three(
     assert len(derivatives) == 3 and len(store.published) == 3
 
 
-async def test_a_rejected_credential_on_the_write_releases_the_row_untouched(
+async def test_a_rejected_credential_on_the_write_releases_the_row_unpenalized_and_says_why(
     db_session_factory, worker, monkeypatch
 ):
+    # CK-57: `last_error` read None here until this phase — the release
+    # settled status and claimed_at alone. Now it says why the row waits;
+    # the count and the deferral are still exactly where they were.
     t0 = _now()
     row = await _uploaded_row(db_session_factory, size=len(GPS_PHOTO), available_at=t0)
     store = FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
@@ -1051,7 +1055,7 @@ async def test_a_rejected_credential_on_the_write_releases_the_row_untouched(
     assert await poll_once(db_session_factory, worker, t0) is Poll.BACKOFF
     r, derivatives, _ = await _ready_state(db_session_factory, row.id)
     assert (r.status, r.attempts, r.claimed_at, r.available_at, r.last_error) == (
-        MediaStatus.UPLOADED, 0, None, t0, None,
+        MediaStatus.UPLOADED, 0, None, t0, ERROR_CREDENTIAL_REJECTED,
     )
     assert derivatives == [] and quarantine_key(row.id) in store.quarantine
 
@@ -1149,13 +1153,14 @@ async def test_a_network_error_is_transient_too(db_session_factory, worker, monk
     assert "r2.invalid" not in r.last_error  # the endpoint is configuration, not the outcome
 
 
-async def test_a_rejected_credential_leaves_the_row_untouched_and_backs_off(
+async def test_a_rejected_credential_releases_the_row_unpenalized_says_why_and_backs_off(
     db_session_factory, worker, monkeypatch
 ):
     # The third class: the store rejected the WORKER, not the row. A
     # mistyped dashboard value must not dead-letter every photograph in the
-    # queue within minutes — the row is released exactly as it was, and the
-    # loop backs off instead of draining.
+    # queue within minutes — the row is released with nothing counted
+    # against it, saying why (CK-57), and the loop backs off instead of
+    # draining.
     _stub_head(monkeypatch, raises=_client_error("AccessDenied", 403))
     t0 = _now()
     row = await _uploaded_row(db_session_factory, available_at=t0)
@@ -1165,7 +1170,51 @@ async def test_a_rejected_credential_leaves_the_row_untouched_and_backs_off(
     assert r.attempts == 0
     assert r.claimed_at is None
     assert r.available_at == t0  # unchanged: claimable the moment the credential is fixed
-    assert r.last_error is None
+    # CK-57: the reason is written — the one column "untouched" never
+    # covered. Until then this read None, and a row waiting on the worker
+    # said nothing (or, after a transient failure, something stale).
+    assert r.last_error == ERROR_CREDENTIAL_REJECTED
+    for never in ("test-worker-key-id", "X-Amz", "uploads/", "AccessDenied"):
+        assert never not in r.last_error
+
+
+async def test_a_release_replaces_a_stale_reason_and_the_next_success_clears_it(
+    db_session_factory, worker, monkeypatch
+):
+    # THE DEFECT CK-57 CLOSES, on the ingest ladder. A transient failure
+    # leaves the retry text; until CK-57 a release on a rejected credential
+    # left that text standing, so a row waiting on the WORKER read as a row
+    # waiting on the STORE — a stale reason with nothing to say it was
+    # stale. Now the release writes its own reason over it, penalizing
+    # nothing (attempts and available_at exactly as the transient failure
+    # left them), and the success that follows clears it: last_error is
+    # why the row is not progressing right now, and nothing older.
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, size=len(GPS_PHOTO), available_at=t0)
+    store = FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
+
+    store.raise_on["head"] = _client_error("InternalError", 500)
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+    r = await _row(db_session_factory, row.id)
+    stale = r.last_error
+    assert "attempt 1 of 3" in stale and r.attempts == 1
+    assert r.available_at == t0 + RETRY_BACKOFF[0]
+
+    store.raise_on["head"] = _client_error("SignatureDoesNotMatch", 403)
+    t1 = t0 + RETRY_BACKOFF[0]
+    assert await poll_once(db_session_factory, worker, t1) is Poll.BACKOFF
+    r = await _row(db_session_factory, row.id)
+    assert r.last_error == ERROR_CREDENTIAL_REJECTED
+    assert r.last_error != stale
+    # Unpenalized: the transient failure's count and deferral, untouched.
+    assert (r.status, r.attempts, r.claimed_at, r.available_at) == (
+        MediaStatus.UPLOADED, 1, None, t0 + RETRY_BACKOFF[0],
+    )
+
+    del store.raise_on["head"]
+    assert await poll_once(db_session_factory, worker, t1) is Poll.PROCESSED
+    r = await _row(db_session_factory, row.id)
+    assert (r.status, r.attempts, r.last_error) == (MediaStatus.READY, 2, None)
 
 
 async def test_a_claim_lost_to_a_reclaim_cannot_overwrite_the_other_workers_outcome(

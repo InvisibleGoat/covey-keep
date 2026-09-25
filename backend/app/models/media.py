@@ -66,8 +66,9 @@ class Media(Base):
 
     Job bookkeeping (record §6.2) rides here as columns: `attempts` (retry
     count), `available_at` (not claimable before — the backoff ladder),
-    `claimed_at` (the reclaim clock), `last_error` (dead-letter reason; names
-    the outcome, never the file's contents)."""
+    `claimed_at` (the reclaim clock), `last_error` (why the row is not
+    progressing right now — see the column; names the outcome, never the
+    file's contents)."""
 
     __tablename__ = "media"
     __table_args__ = (
@@ -109,6 +110,24 @@ class Media(Base):
     # `available_at <= now()`, so a confirmed row must carry one — CK-34);
     # claimed_at and last_error are NULL until the worker first touches
     # the row.
+    #
+    # WHAT last_error MEANS (CK-57), and it is NARROWER THAN THE NAME: why
+    # this row is not progressing RIGHT NOW — not the last thing that ever
+    # went wrong with it. A row waiting on a backoff carries the retry
+    # text, a dead row the dead-letter text, a row released because the
+    # worker's credential was rejected says so (services/ingest.py
+    # ERROR_CREDENTIAL_REJECTED — the release writes it, replacing a stale
+    # one; until CK-57 it wrote nothing and a stale reason survived), and
+    # a row with nothing wrong carries NULL (`ready`, `destroyed`, a fresh
+    # mark). Every outcome overwrites or clears it; the one lag is while a
+    # worker holds the row (claimed_at set), when it still shows the
+    # reason it was waiting on before the claim. OPERATOR-ONLY: never in
+    # an API body (api/media.py leaves it out of `_media_body` on purpose),
+    # read by the worker's log lines and a person in psql; its content is
+    # a stage name, an exception class and an S3 error code at most. The
+    # verifier asserts the meaning on both ladders: every `failed` row
+    # carries one, and every `destroying` row that has spent an attempt
+    # and is not held carries one.
     attempts: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
     )

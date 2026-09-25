@@ -1384,8 +1384,9 @@ async def verify(conn, ck: Checks) -> None:
 
     print("\n-- media job integrity (CK-35) --")
     if "media" in tables:
-        # The worker's two invariants over the job columns, properties of
-        # whatever rows exist. Detail prints the count only.
+        # The worker's invariants over the job columns — two at CK-35, a
+        # third at CK-57 — properties of whatever rows exist. Detail prints
+        # the count only.
         # (1) claimed_at is the reclaim clock and means "a worker holds this
         # row". The claim service stamps it at claim and clears it with
         # every outcome (release, retry, dead-letter), so a disagreement
@@ -1416,6 +1417,24 @@ async def verify(conn, ck: Checks) -> None:
         # stranded on an `uploaded`, `ready`, `failed` or `destroyed` row,
         # and a `processing` row with no stamp.
         #
+        # ASSERTED AT CK-57 — (3) below, the second ladder's counterpart to
+        # (2). It was DECLINED at CK-56, and the block that follows is kept
+        # as it stood so the next reader can see that the constant-free
+        # criterion was once WRONG, and why, rather than re-derive the same
+        # rejected form. What changed in between is one keyword in
+        # services/ingest.py: `_release_misconfigured` now writes
+        # ERROR_CREDENTIAL_REJECTED into last_error, so the released row the
+        # criterion matched — `destroying`, attempts 1, no stamp, NO REASON
+        # — is no longer a reachable state: a released row says why it is
+        # waiting. That is the whole of what made the criterion valid, and
+        # it is why (3) needs no bound: every path that leaves a
+        # `destroying` row unheld with an attempt spent writes a reason
+        # (the transient rung, the spent ladder, the abandonment at
+        # reclaim, and since CK-57 the release), because last_error's
+        # meaning was narrowed to make that true — "why this row is not
+        # progressing right now" (services/ingest.py, THIRD CLASS;
+        # models/media.py). The mirrored-bound form stays rejected for the
+        # reason below. *(As it stood from CK-56 to CK-57:)*
         # DELIBERATELY NOT ASSERTED, and the omission is chosen rather than
         # overlooked: the second ladder's counterpart to (2) below — "a
         # destroying row that has given up says why". A spent destruction
@@ -1461,6 +1480,30 @@ async def verify(conn, ck: Checks) -> None:
             silent_failures == 0,
             "every failed media row carries a last_error",
             f"{silent_failures} failed media row(s) with no last_error",
+        )
+        # (3) The destruction ladder's counterpart (CK-57 — declined at
+        # CK-56, see the block above (1)): a spent destruction never becomes
+        # `failed`, so (2) never sees it; it stays at `destroying`, unheld,
+        # with its attempts spent and its reason written. CONSTANT-FREE: no
+        # MAX_ATTEMPTS mirrored in. `attempts > 0` because a fresh mark
+        # legitimately has attempts 0 and no reason (the mark resets the
+        # job columns); `claimed_at IS NULL` because a held row still shows
+        # the reason it was waiting on before the claim, which may be
+        # nothing. Everything else — the transient rung, the spent ladder,
+        # the abandonment at reclaim, the release — writes a reason, and
+        # the release writing one is what makes this line valid. Never
+        # printed.
+        silent_destructions = await scalar(
+            conn,
+            "SELECT count(*) FROM media WHERE status = 'destroying' "
+            "AND attempts > 0 AND claimed_at IS NULL "
+            "AND (last_error IS NULL OR btrim(last_error) = '')",
+        )
+        ck.check(
+            silent_destructions == 0,
+            "every destroying row that has spent an attempt and is not held carries a last_error",
+            f"{silent_destructions} destroying media row(s) that spent an attempt, "
+            "are not held, and carry no last_error",
         )
     else:
         ck.check(False, "media job integrity", "media table missing")

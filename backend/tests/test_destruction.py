@@ -36,6 +36,10 @@ The load-bearing pins:
 """
 
 import logging
+import os
+import re
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -76,7 +80,8 @@ from tests.test_media_reads import (
     _photograph,
     _url,
 )
-from tests.test_worker import WORKER_ENV, FakeStore, _client_error, _media
+from tests.conftest import TEST_DATABASE_URL
+from tests.test_worker import BACKEND_DIR, WORKER_ENV, FakeStore, _client_error, _media
 
 LAYER_BYTES = sum(size for _, size, _ in LAYER_SPECS.values())
 
@@ -898,12 +903,13 @@ async def test_a_destruction_that_cannot_reach_the_store_climbs_the_ladder_and_s
         assert _ids(await _list(client, headers, cast.gathering_id)) == []
 
 
-async def test_a_rejected_credential_leaves_a_destruction_untouched(
+async def test_a_rejected_credential_releases_a_destruction_unpenalized_and_says_why(
     client, capsys, db_session_factory, worker, monkeypatch
 ):
     # The third class (CK-35): the worker is at fault, not the row. It must
     # not consume an attempt — a mistyped dashboard value would otherwise
-    # exhaust the ladder of every queued destruction within minutes.
+    # exhaust the ladder of every queued destruction within minutes. Since
+    # CK-57 the release also says why the row is waiting.
     cast = await _cast(client, capsys, db_session_factory)
     doomed = await _photograph(
         db_session_factory, cast, publication_state=PublicationState.LIVE
@@ -916,10 +922,151 @@ async def test_a_rejected_credential_leaves_a_destruction_untouched(
     assert await poll_once(db_session_factory, worker) is Poll.BACKOFF
     row = await _row(db_session_factory, doomed)
     assert row.attempts == 0
-    assert row.last_error is None
+    # CK-57: the release writes the reason (it wrote nothing until then).
+    assert row.last_error == ingest.ERROR_CREDENTIAL_REJECTED
     # Released, and claimable again once the credential is fixed.
     assert row.status is MediaStatus.DESTROYING
     assert len(await _layer_keys(db_session_factory, doomed)) == 3
+
+
+async def test_a_release_replaces_a_stale_reason_on_the_destruction_ladder_too(
+    client, capsys, db_session_factory, worker, monkeypatch
+):
+    # The same defect on the second ladder — the one CK-56 found it on: a
+    # destruction that failed once (attempts 1, the retry text) and was then
+    # released on a rejected credential sat at `destroying` / attempts 1 /
+    # no stamp with a reason that named the STORE — or, released fresh, no
+    # reason at all — and the verifier could not tell it from a dead-letter.
+    # One call covers both ladders (_release_misconfigured picks the rung),
+    # so the destroy row now carries the credential reason with the
+    # transient failure's count and deferral exactly where they were, and
+    # the destruction that follows clears it.
+    cast = await _cast(client, capsys, db_session_factory)
+    doomed = await _photograph(
+        db_session_factory, cast, publication_state=PublicationState.LIVE
+    )
+    await _resync_counts(db_session_factory, cast.gathering_id)
+    assert (await _destroy(client, cast.host, doomed)).status_code == 200
+    store = await _seeded_store(monkeypatch, db_session_factory, doomed)
+
+    store.raise_on["delete_published"] = _client_error("InternalError", 500)
+    assert await poll_once(db_session_factory, worker) is Poll.PROCESSED
+    row = await _row(db_session_factory, doomed)
+    stale = row.last_error
+    assert f"attempt 1 of {ingest.MAX_ATTEMPTS}" in stale and row.attempts == 1
+    # Claimable again for the release (the ladder test's idiom above).
+    async with db_session_factory() as db:
+        await db.execute(
+            text("UPDATE media SET available_at = :t WHERE id = :id"),
+            {"t": _now() - timedelta(seconds=1), "id": UUID(doomed)},
+        )
+        await db.commit()
+    deferred = (await _row(db_session_factory, doomed)).available_at
+
+    store.raise_on["delete_published"] = _client_error("InvalidAccessKeyId", 403)
+    assert await poll_once(db_session_factory, worker) is Poll.BACKOFF
+    row = await _row(db_session_factory, doomed)
+    assert row.last_error == ingest.ERROR_CREDENTIAL_REJECTED
+    assert row.last_error != stale
+    # Unpenalized, on the rung it came from, its layers still described.
+    assert (row.status, row.attempts, row.claimed_at, row.available_at) == (
+        MediaStatus.DESTROYING, 1, None, deferred,
+    )
+    assert len(await _layer_keys(db_session_factory, doomed)) == 3
+    assert await _counts(db_session_factory, cast.gathering_id) == (0, 0)
+
+    del store.raise_on["delete_published"]
+    assert await poll_once(db_session_factory, worker) is Poll.PROCESSED
+    row = await _row(db_session_factory, doomed)
+    assert (row.status, row.attempts, row.last_error) == (MediaStatus.DESTROYED, 2, None)
+    assert await _layer_keys(db_session_factory, doomed) == []
+    await _invariants_hold(db_session_factory, cast.gathering_id)
+
+
+def _verifier() -> tuple[int, int, int, str]:
+    """scripts/verify_schema.py, run the way an operator runs it — a fresh
+    interpreter — against the test database. Returns (passed, failed, exit
+    code, stdout)."""
+    env = dict(os.environ)
+    env["VERIFY_DATABASE_URL"] = TEST_DATABASE_URL
+    env["PYTHONIOENCODING"] = "utf-8"
+    proc = subprocess.run(
+        [sys.executable, str(BACKEND_DIR / "scripts" / "verify_schema.py")],
+        cwd=BACKEND_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    tally = re.search(r"(\d+) passed, (\d+) failed", proc.stdout)
+    assert tally, proc.stdout + proc.stderr
+    return int(tally.group(1)), int(tally.group(2)), proc.returncode, proc.stdout
+
+
+async def test_the_verifier_asserts_a_destroying_row_that_spent_an_attempt_and_is_not_held_says_why(
+    client, capsys, db_session_factory
+):
+    # The assertion CK-56 declined and CK-57 writes (scripts/verify_schema.py,
+    # media job integrity (3)), run as the operator runs it, on four plants.
+    # The defect the constant-free criterion had at CK-56 was that a healthy
+    # released row matched it; the plant it must fire on is the one the
+    # release no longer leaves behind, and the two it must NOT fire on —
+    # a fresh mark (attempts 0) and a held row — are what keep it from being
+    # too wide. A PLANT IS NOT EVIDENCE UNTIL SOMETHING INDEPENDENT OF THE
+    # ASSERTION CONFIRMS THE ROW EXISTS (CK-56's first plant inserted nothing
+    # and every assertion passed vacuously), so each state is counted by its
+    # own SELECT before the verifier reads it.
+    label = "every destroying row that has spent an attempt and is not held carries a last_error"
+    cast = await _cast(client, capsys, db_session_factory)
+    planted = await _photograph(
+        db_session_factory,
+        cast,
+        status=MediaStatus.DESTROYING,
+        publication_state=PublicationState.LIVE,
+    )
+    await _resync_counts(db_session_factory, cast.gathering_id)
+
+    async def plant(attempts: int, held: bool, reason: str | None) -> None:
+        stamp = "now()" if held else "NULL"
+        async with db_session_factory() as db:
+            await db.execute(
+                text(
+                    f"UPDATE media SET attempts = :a, claimed_at = {stamp}, "
+                    "last_error = :e WHERE id = :id"
+                ),
+                {"a": attempts, "e": reason, "id": UUID(planted)},
+            )
+            await db.commit()
+            confirmed = await db.scalar(
+                text(
+                    "SELECT count(*) FROM media WHERE id = :id AND status = 'destroying' "
+                    f"AND attempts = :a AND claimed_at IS {'NOT ' if held else ''}NULL "
+                    f"AND last_error IS {'NOT ' if reason else ''}NULL"
+                ),
+                {"id": UUID(planted), "a": attempts},
+            )
+        assert confirmed == 1, "the plant did not land — nothing below would mean anything"
+
+    # Fires: an attempt spent, not held, no reason — the state no reachable
+    # path leaves any more, and the one the verifier exists to catch.
+    await plant(1, False, None)
+    passed, failed, code, out = _verifier()
+    assert (passed, failed, code) == (190, 1, 1), out
+    assert f"FAIL  {label}" in out and "1 destroying media row(s)" in out
+
+    # Passes with the reason present — what the release now writes.
+    await plant(1, False, ingest.ERROR_CREDENTIAL_REJECTED)
+    passed, failed, code, out = _verifier()
+    assert (passed, failed, code) == (191, 0, 0), out
+    assert f"PASS  {label}" in out
+
+    # Must NOT fire on a fresh mark (attempts 0, no reason: nothing is
+    # wrong with it) ...
+    await plant(0, False, None)
+    assert _verifier()[:3] == (191, 0, 0)
+    # ... nor on a held row: the claim writes no reason, the outcome will.
+    await plant(1, True, None)
+    assert _verifier()[:3] == (191, 0, 0)
 
 
 async def test_a_stalled_destruction_is_reclaimed_and_the_abandoned_attempt_counted(

@@ -235,7 +235,8 @@ async def poll_once(
     if outcome is ingest.Outcome.MISCONFIGURED:
         log.error(
             "media %s: the store rejected the worker credential — R2_WORKER_* is "
-            "misconfigured; the row is untouched and the worker is backing off",
+            "misconfigured; the row is released unpenalized with the reason in "
+            "last_error, and the worker is backing off",
             row.id,
         )
         return Poll.BACKOFF

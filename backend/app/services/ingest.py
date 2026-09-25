@@ -83,8 +83,33 @@ fails with AccessDenied / InvalidAccessKeyId / SignatureDoesNotMatch is a
 fact about the worker's configuration, not about the photograph. Treating
 it as transient would dead-letter every photograph in the queue within
 minutes of a mistyped dashboard value; treating it as permanent would be
-worse. So the claim is RELEASED untouched — `attempts` unchanged,
-`available_at` unchanged — and the loop backs off with a loud log line.
+worse. So the claim is RELEASED UNPENALIZED — `attempts` unchanged,
+`available_at` unchanged, the rung the one it was claimed from — and the
+loop backs off with a loud log line. UNTOUCHED COVERS THOSE TWO COLUMNS
+AND NOT `last_error` (CK-57): the release WRITES ERROR_CREDENTIAL_REJECTED
+there, replacing whatever the row carried. Until CK-57 it wrote nothing,
+and that was never decided — the two columns it protects were enumerated
+and the third was left — so a released row carried either nothing or a
+STALE reason from an earlier transient failure that this release had
+silently superseded, with no way for an operator to tell which. Writing
+the reason is not a penalty; the penalty half is the two counters.
+
+WHAT `last_error` MEANS (CK-57), and it is NARROWER THAN THE COLUMN'S NAME:
+`last_error` is WHY THIS ROW IS NOT PROGRESSING RIGHT NOW — not the last
+thing that ever went wrong with it. A row waiting on a backoff says why
+it failed (the retry text); a dead row says why it died (the dead-letter
+text); a row released on a rejected credential says the worker was
+refused (ERROR_CREDENTIAL_REJECTED); a row with nothing wrong carries NULL
+(`ready`, `destroyed`, a fresh mark, a fresh confirm). Every outcome
+overwrites or clears it, so the column never carries a reason that has
+stopped being the reason. The one moment it lags is while a worker HOLDS
+the row (`claimed_at` set): the claim itself writes nothing, so a held
+row still shows the reason it was waiting on before the claim until the
+outcome replaces it — which is why the verifier's assertions on it
+exclude held rows. The column is OPERATOR-ONLY: never in an API body
+(api/media.py leaves it out of `_media_body` on purpose), read by the
+worker's log lines and a person in psql, and its content is a stage name,
+an exception class and an S3 error code at most.
 
 PUBLISH — THE CRUX (record §8: "publish is the last step and is atomic,
 never a sequence a restart can leave half-done"; the record's word for the
@@ -355,6 +380,16 @@ ERROR_DESTROY_FAILED = (
     "(last: {cause}); the photograph is uncounted and invisible, and the layers "
     "may still exist"
 )
+# The release's one (CK-57), written on BOTH ladders by _release_misconfigured:
+# why a released row is waiting. No exception class and no S3 code — the
+# outcome is the same whichever of CREDENTIAL_REJECTED_CODES the store
+# answered with, none of them names the photograph, and what an operator
+# fixes is the dashboard, not the row.
+ERROR_CREDENTIAL_REJECTED = (
+    "the store rejected the worker's credential: a fact about the worker's "
+    "configuration, not about the photograph; the row is queued and untouched, "
+    "and runs as soon as the credential is fixed"
+)
 
 
 class Outcome(str, Enum):
@@ -373,8 +408,9 @@ class Outcome(str, Enum):
     DESTROY_ABANDONED = "destroy_abandoned"
     DEAD_LETTERED = "dead_lettered"
     RETRY_SCHEDULED = "retry_scheduled"
-    # The worker's credential was rejected: the row is untouched, the loop
-    # must back off.
+    # The worker's credential was rejected: the row is released unpenalized
+    # (`attempts` and `available_at` untouched) with ERROR_CREDENTIAL_REJECTED
+    # as its reason (CK-57), and the loop must back off.
     MISCONFIGURED = "misconfigured"
     # Another worker reclaimed this row after a stall; this outcome is void.
     LOST_CLAIM = "lost_claim"
@@ -730,9 +766,10 @@ async def handle_destroying(
 
     Failures: the store not answering is TRANSIENT and climbs the same
     ladder an upload does; a rejected credential RELEASES the claim
-    untouched, exactly as it does on the ingest side (the worker is at
-    fault, not the row). There is no permanent class — an object that
-    cannot be found is the success case, not a failure."""
+    unpenalized — `attempts` and `available_at` untouched, the reason
+    written (CK-57) — exactly as it does on the ingest side (the worker
+    is at fault, not the row). There is no permanent class — an object
+    that cannot be found is the success case, not a failure."""
     layers = (
         await db.execute(
             select(MediaDerivative.storage_key)
@@ -836,7 +873,22 @@ async def _permanent_failure(db: AsyncSession, row: Media, last_error: str) -> O
 
 
 async def _release_misconfigured(db: AsyncSession, row: Media) -> Outcome:
-    """The worker, not the row, is at fault: release untouched.
+    """The worker, not the row, is at fault: release unpenalized, and say so.
+
+    UNTOUCHED IS `attempts` AND `available_at` — AND NOT `last_error` (CK-57).
+    The two counters are the penalty half, protected because the row did
+    nothing wrong; the reason column is the operator's, and it is WRITTEN
+    here — ERROR_CREDENTIAL_REJECTED, on both ladders in this one call,
+    replacing whatever the row carried. Before CK-57 this call settled
+    `status` and `claimed_at` alone, so an ingest row released after a
+    transient failure kept its stale "attempt 1 of 3: storage did not
+    answer" while waiting on something else entirely, a fresh row said
+    nothing, and the verifier could not tell a released destruction from
+    a dead-lettered one (the assertion CK-56 declined for exactly that
+    reason, written at CK-57). Clearing instead of writing would not have
+    helped: a cleared row is `destroying` / attempts 1 / no stamp / no
+    reason — the same shape as a healthy fresh row, and the same silence
+    for the operator. See THIRD CLASS in the module docstring.
 
     THE RUNG IT RETURNS TO IS THE ONE IT CAME FROM. An ingest claim goes
     back to `uploaded`, the queue it was taken from. A destruction claim
@@ -849,7 +901,9 @@ async def _release_misconfigured(db: AsyncSession, row: Media) -> Outcome:
     released = (
         MediaStatus.DESTROYING if row.status == MediaStatus.DESTROYING else MediaStatus.UPLOADED
     )
-    applied = await _settle(db, row, status=released, claimed_at=None)
+    applied = await _settle(
+        db, row, status=released, claimed_at=None, last_error=ERROR_CREDENTIAL_REJECTED
+    )
     return Outcome.MISCONFIGURED if applied else Outcome.LOST_CLAIM
 
 
@@ -876,7 +930,9 @@ async def _transient_failure(db: AsyncSession, row: Media, now: datetime, cause:
         available_at=now + backoff,
         # The cause of the LAST failure, kept while the row retries so an
         # operator can see why a row is climbing the ladder; overwritten by
-        # the dead-letter text if it gets there, cleared at `ready`.
+        # the dead-letter text if it gets there, by ERROR_CREDENTIAL_REJECTED
+        # if a release intervenes (CK-57 — the reason is always the current
+        # one), cleared at `ready`.
         last_error=f"attempt {attempts} of {MAX_ATTEMPTS}: storage did not answer ({cause})",
     )
     return Outcome.RETRY_SCHEDULED if applied else Outcome.LOST_CLAIM
