@@ -47,13 +47,15 @@ from app.api.media import ALREADY_REMOVED, NOT_PENDING, NOT_READY
 from app.config import WorkerSettings, settings
 from app.models import (
     Gathering,
+    GatheringType,
     Media,
     MediaDerivative,
     MediaStatus,
     MediaTag,
     PublicationState,
 )
-from app.services import ingest, keeping
+from app.services import destruction, ingest, keeping
+from app.services.retention import REMOVED_BIN
 from app.services.storage import (
     WorkerClient,
     delete_published_object,
@@ -63,6 +65,7 @@ from app.services.storage import (
 )
 from app.worker import Poll, poll_once
 from tests.test_gatherings import _account_for
+from tests.test_keeping import _mk_gathering
 from tests.test_media_reads import (
     KEEPER,
     LAYER_SPECS,
@@ -73,7 +76,7 @@ from tests.test_media_reads import (
     _photograph,
     _url,
 )
-from tests.test_worker import WORKER_ENV, FakeStore, _client_error
+from tests.test_worker import WORKER_ENV, FakeStore, _client_error, _media
 
 LAYER_BYTES = sum(size for _, size, _ in LAYER_SPECS.values())
 
@@ -1079,3 +1082,266 @@ def test_delete_published_treats_an_absent_object_as_a_success(worker):
     # a credential or bucket problem can never read as a destruction.
     with pytest.raises(ClientError):
         delete_published_object(denied, key="media/x/web")
+
+
+# --- the sweep (CK-59) --------------------------------------------------------
+# `destruction.sweep_expired_bin` is the bin's automatic half: the removed
+# photographs whose retrieval window (REMOVED_BIN) has closed, marked through
+# the ONE marking statement, row by row. It marks and never destroys — the
+# worker's claim loop takes a swept row through CK-54's routine exactly as it
+# takes one the API marked. The loop's half (the switch, the interval, idle
+# only, the INFO line) is pinned in test_worker.py; these pin the function's
+# contract. No test here asserts on a filename or a caption.
+
+
+async def _sweep(db_session_factory, now: datetime, *, limit: int = 10) -> int:
+    async with db_session_factory() as db:
+        return await destruction.sweep_expired_bin(db, now, limit=limit)
+
+
+async def _statuses(db_session_factory, media_ids) -> list[MediaStatus]:
+    return [(await _row(db_session_factory, media_id)).status for media_id in media_ids]
+
+
+async def test_the_sweep_marks_at_the_window_and_not_a_second_before(client, capsys, db_session_factory):
+    """THE BOUNDARY, driven by an injected `now`: one second inside the
+    window is left alone; the window's own instant and one second past it
+    are swept. What a mark leaves is what the endpoint's mark leaves — the
+    publication state and the removal stamp untouched, the job columns
+    reset, the three layers still there for the worker to take — and the
+    counts drop by exactly the rows marked."""
+    cast = await _cast(client, capsys, db_session_factory)
+    now = _now()
+    inside = await _photograph(
+        db_session_factory,
+        cast,
+        publication_state=PublicationState.REMOVED,
+        removed_at=now - REMOVED_BIN + timedelta(seconds=1),
+    )
+    at_the_window = await _photograph(
+        db_session_factory, cast, publication_state=PublicationState.REMOVED, removed_at=now - REMOVED_BIN
+    )
+    past = await _photograph(
+        db_session_factory,
+        cast,
+        publication_state=PublicationState.REMOVED,
+        removed_at=now - REMOVED_BIN - timedelta(seconds=1),
+    )
+    assert await _resync_counts(db_session_factory, cast.gathering_id) == (3, 3 * LAYER_BYTES)
+
+    assert await _sweep(db_session_factory, now) == 2
+
+    assert await _statuses(db_session_factory, [inside, at_the_window, past]) == [
+        MediaStatus.READY,
+        MediaStatus.DESTROYING,
+        MediaStatus.DESTROYING,
+    ]
+    assert await _counts(db_session_factory, cast.gathering_id) == (1, LAYER_BYTES)
+    await _invariants_hold(db_session_factory, cast.gathering_id)
+    for media_id in (at_the_window, past):
+        row = await _row(db_session_factory, media_id)
+        assert row.publication_state is PublicationState.REMOVED  # destruction is not a publication decision
+        assert row.removed_at is not None
+        assert await _job_columns(db_session_factory, media_id) == (0, None, None, None)
+        assert len(await _layer_keys(db_session_factory, media_id)) == 3  # the worker's to take
+    # The same instant marks nothing more; a second later the third row's
+    # window has closed too.
+    assert await _sweep(db_session_factory, now) == 0
+    assert await _sweep(db_session_factory, now + timedelta(seconds=1)) == 1
+    assert await _counts(db_session_factory, cast.gathering_id) == (0, 0)
+    await _invariants_hold(db_session_factory, cast.gathering_id)
+
+
+async def test_what_the_sweep_takes_is_exactly_what_the_uploader_has_stopped_seeing(
+    client, capsys, db_session_factory
+):
+    # Bin record §6.1's two clocks meet at one instant: `_visible_media`
+    # shows the uploader a removed photograph while
+    # `removed_at > now - REMOVED_BIN`, and the sweep takes it once
+    # `removed_at <= now - REMOVED_BIN`. One number (retention.py), two
+    # readers, no gap and no overlap — nothing is swept while someone could
+    # still see it, and nothing sits invisible-and-still-charged.
+    cast = await _cast(client, capsys, db_session_factory)
+    still_visible = await _photograph(
+        db_session_factory,
+        cast,
+        publication_state=PublicationState.REMOVED,
+        removed_at=_now() - REMOVED_BIN + timedelta(minutes=1),
+    )
+    gone = await _photograph(
+        db_session_factory,
+        cast,
+        publication_state=PublicationState.REMOVED,
+        removed_at=_now() - REMOVED_BIN - timedelta(minutes=1),
+    )
+    listed = _ids(await _list(client, cast.uploader, cast.gathering_id))
+    assert still_visible in listed and gone not in listed
+
+    assert await _sweep(db_session_factory, _now()) == 1
+
+    assert await _statuses(db_session_factory, [still_visible, gone]) == [
+        MediaStatus.READY,
+        MediaStatus.DESTROYING,
+    ]
+    assert _ids(await _list(client, cast.uploader, cast.gathering_id)) == [still_visible]
+
+
+async def test_the_sweep_respects_its_limit_and_takes_the_oldest_first(client, capsys, db_session_factory):
+    # Five expired rows, a limit of two: the two whose windows closed first
+    # go, the other three wait for the next pass — and the count returned
+    # is the count marked, both times.
+    cast = await _cast(client, capsys, db_session_factory)
+    now = _now()
+    ages = (40, 50, 35, 45, 60)  # days in the bin, in planting order
+    rows = [
+        await _photograph(
+            db_session_factory,
+            cast,
+            publication_state=PublicationState.REMOVED,
+            removed_at=now - timedelta(days=age),
+        )
+        for age in ages
+    ]
+    assert await _resync_counts(db_session_factory, cast.gathering_id) == (5, 5 * LAYER_BYTES)
+
+    assert await _sweep(db_session_factory, now, limit=2) == 2
+
+    marked = [status is MediaStatus.DESTROYING for status in await _statuses(db_session_factory, rows)]
+    assert marked == [False, True, False, False, True]  # 50 and 60 days: the oldest two
+    assert await _counts(db_session_factory, cast.gathering_id) == (3, 3 * LAYER_BYTES)
+    await _invariants_hold(db_session_factory, cast.gathering_id)
+
+    assert await _sweep(db_session_factory, now, limit=10) == 3
+    assert all(status is MediaStatus.DESTROYING for status in await _statuses(db_session_factory, rows))
+    assert await _counts(db_session_factory, cast.gathering_id) == (0, 0)
+    await _invariants_hold(db_session_factory, cast.gathering_id)
+
+
+async def test_the_sweep_never_selects_a_removed_row_that_is_not_ready(client, capsys, db_session_factory):
+    # `removed` and long past the window on every other rung: nothing is
+    # stored on the in-flight and failed rungs, and the destruction rungs
+    # are already past the mark. The sweep returns 0 and writes nothing —
+    # statuses, job columns and counts exactly where they were — and a
+    # `ready` row that is not removed is not a candidate either.
+    cast = await _cast(client, capsys, db_session_factory)
+    now = _now()
+    aged = now - REMOVED_BIN - timedelta(days=5)
+    planted: dict[MediaStatus, str] = {}
+    for status in (
+        MediaStatus.PENDING_UPLOAD,
+        MediaStatus.UPLOADED,
+        MediaStatus.PROCESSING,
+        MediaStatus.FAILED,
+        MediaStatus.DESTROYING,
+        MediaStatus.DESTROYED,
+    ):
+        planted[status] = await _photograph(
+            db_session_factory,
+            cast,
+            status=status,
+            publication_state=PublicationState.REMOVED,
+            removed_at=aged,
+        )
+    live = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
+    async with db_session_factory() as db:
+        await db.execute(
+            text("UPDATE media SET attempts = 1, last_error = :why WHERE id = :id"),
+            {"why": ingest.ERROR_OBJECT_MISSING, "id": UUID(planted[MediaStatus.FAILED])},
+        )
+        await db.commit()
+    before = await _resync_counts(db_session_factory, cast.gathering_id)
+    assert before == (1, LAYER_BYTES)  # the live row alone is ready
+    history = await _job_columns(db_session_factory, planted[MediaStatus.FAILED])
+
+    assert await _sweep(db_session_factory, now) == 0
+
+    for status, media_id in planted.items():
+        assert (await _row(db_session_factory, media_id)).status is status
+    assert await _job_columns(db_session_factory, planted[MediaStatus.FAILED]) == history
+    assert (await _row(db_session_factory, live)).status is MediaStatus.READY
+    assert await _counts(db_session_factory, cast.gathering_id) == before
+    await _invariants_hold(db_session_factory, cast.gathering_id)
+
+
+async def test_a_memorials_bin_sweeps_like_any_other(db_session_factory):
+    # Bin record §7.4 (decided at CK-15 §2): permanence is a storage promise
+    # about the GATHERING, never a publication promise about a photograph in
+    # it. No memorial branch, no type branch, no account branch: the
+    # memorial's expired removed row goes at the window and its counters
+    # drop, exactly as the potluck's beside it do.
+    now = _now()
+    aged = now - REMOVED_BIN - timedelta(days=1)
+    async with db_session_factory() as db:
+        memorial = await _mk_gathering(
+            db, gathering_type=GatheringType.MEMORIAL, memorial_decedent_name="Test Decedent"
+        )
+        potluck = await _mk_gathering(db)
+        rows = []
+        for gathering in (memorial, potluck):
+            row = _media(gathering.id, status=MediaStatus.READY)
+            row.publication_state = PublicationState.REMOVED
+            row.removed_at = aged
+            db.add(row)
+            rows.append(row)
+        await db.commit()
+        memorial_id, potluck_id = memorial.id, potluck.id
+        media_ids = [str(row.id) for row in rows]
+    async with db_session_factory() as db:
+        subject = await db.get(Gathering, memorial_id)
+        assert subject.gathering_type is GatheringType.MEMORIAL and subject.memorial_decedent_name
+    # `_media` plants no layers: the count is the subject here, the bytes 0.
+    assert await _resync_counts(db_session_factory, memorial_id) == (1, 0)
+    assert await _resync_counts(db_session_factory, potluck_id) == (1, 0)
+
+    assert await _sweep(db_session_factory, now) == 2
+
+    assert await _statuses(db_session_factory, media_ids) == [MediaStatus.DESTROYING, MediaStatus.DESTROYING]
+    for gathering_id in (memorial_id, potluck_id):
+        assert await _counts(db_session_factory, gathering_id) == (0, 0)
+        await _invariants_hold(db_session_factory, gathering_id)
+
+
+async def test_two_sweeps_over_the_same_expired_row_mark_it_once(
+    client, capsys, db_session_factory, monkeypatch
+):
+    """THE CONCURRENCY PROPERTY, through the real guard — CK-58's pin,
+    exercised by the caller it was written for. Two sweeps (two worker
+    instances, or a sweep and a person) both SELECT the same expired row;
+    the first marks it and commits; the second's mark finds the row no
+    longer `ready` and returns False with nothing written. One mark, one
+    decrement, and the second pass counts 0 — "someone got there first"
+    is not an error."""
+    cast = await _cast(client, capsys, db_session_factory)
+    now = _now()
+    doomed = await _photograph(
+        db_session_factory,
+        cast,
+        publication_state=PublicationState.REMOVED,
+        removed_at=now - REMOVED_BIN - timedelta(days=1),
+    )
+    assert await _resync_counts(db_session_factory, cast.gathering_id) == (1, LAYER_BYTES)
+    real_mark = destruction.mark_for_destruction
+    inner: list[int] = []
+
+    async def raced(db, row):
+        # Between the outer sweep's SELECT and its mark, the other sweep
+        # runs to completion on the same row in its own session.
+        if not inner:
+            monkeypatch.setattr(destruction, "mark_for_destruction", real_mark)
+            async with db_session_factory() as other:
+                inner.append(await destruction.sweep_expired_bin(other, now, limit=10))
+        return await real_mark(db, row)
+
+    monkeypatch.setattr(destruction, "mark_for_destruction", raced)
+    outer = await _sweep(db_session_factory, now)
+
+    assert (inner, outer) == ([1], 0)
+    row = await _row(db_session_factory, doomed)
+    assert row.status is MediaStatus.DESTROYING
+    assert await _counts(db_session_factory, cast.gathering_id) == (0, 0)
+    await _invariants_hold(db_session_factory, cast.gathering_id)
+    assert len(await _layer_keys(db_session_factory, doomed)) == 3
+    # And a person reaching for the same photograph afterwards draws the 404
+    # `_visible_media` gives a row in destruction — never a second decrement.
+    assert (await _destroy(client, cast.host, doomed)).status_code == 404
+    assert await _counts(db_session_factory, cast.gathering_id) == (0, 0)

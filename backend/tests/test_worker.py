@@ -70,7 +70,8 @@ import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
 from PIL import ExifTags, Image
 from pydantic import ValidationError
-from sqlalchemy import func, select, text, update
+from sqlalchemy import event, func, select, text, update
+from sqlalchemy.exc import ProgrammingError
 
 from app.config import Settings, WorkerSettings, settings
 from app.db import engine
@@ -84,7 +85,7 @@ from app.models import (
     MediaStatus,
     PublicationState,
 )
-from app.services import ingest, keeping, storage
+from app.services import destruction, ingest, keeping, storage
 from app.services.ingest import (
     ERROR_ABANDONED,
     ERROR_OBJECT_MISSING,
@@ -111,7 +112,8 @@ from app.services.storage import (
     quarantine_key,
     worker_client,
 )
-from app.worker import IDLE_JITTER, IDLE_POLL, Poll, poll_once, run
+from app import worker as worker_module
+from app.worker import IDLE_JITTER, IDLE_POLL, SWEEP_BATCH, SWEEP_INTERVAL, Poll, poll_once, run
 from tests.conftest import TEST_DATABASE_URL
 from tests.test_keeping import _mk_account, _mk_gathering
 
@@ -133,6 +135,10 @@ WORKER_ENV = {
     "R2_WORKER_SECRET_ACCESS_KEY": "test-worker-secret-never-deployed",
 }
 SIX = frozenset(name.lower() for name in WORKER_ENV)
+# The seventh (CK-59): the bin sweep's switch, a boolean with a default —
+# NOT in WORKER_ENV, because a worker booted with exactly the six IS the
+# dark sweep, and the boot test below proves it boots that way.
+SEVEN = SIX | {"sweep_enabled"}
 
 
 def _now() -> datetime:
@@ -299,8 +305,14 @@ async def _uploaded_row(db_session_factory, **overrides) -> Media:
 def test_worker_settings_expose_no_web_credential_and_settings_no_worker_credential(monkeypatch):
     # Structural, on the field lists: the worker cannot reach R2_UPLOAD_* or
     # R2_SERVE_* even by mistake, and the web service cannot reach
-    # R2_WORKER_* — neither class has the field.
-    assert set(WorkerSettings.model_fields) == SIX
+    # R2_WORKER_* — neither class has the field. SEVEN fields since CK-59:
+    # the six required, and `sweep_enabled` — the bin sweep's switch, a
+    # boolean that grants no powers and defaults OFF, so the sweep ships
+    # dark. The amendment is to the COUNT alone; the credential rule in the
+    # loop below is untouched and still holds over every field, the seventh
+    # included.
+    assert set(WorkerSettings.model_fields) == SEVEN
+    assert WorkerSettings.model_fields["sweep_enabled"].default is False
     for name in WorkerSettings.model_fields:
         assert "upload" not in name and "serve" not in name and "session" not in name, name
     assert not any("worker" in name for name in Settings.model_fields)
@@ -1672,3 +1684,296 @@ async def test_a_removed_row_reclaimed_stays_removed_and_unstamped(db_session_fa
     # (CK-51a, 0024 - the verifier's invariant is stated the same way).
     assert gathering.total_bytes == sum(d.size_bytes for d in derivatives) > 0
     assert gathering.photo_count == 1
+
+
+# --- the sweep (CK-59) --------------------------------------------------------
+# The loop's half of the bin sweep: OFF unless WorkerSettings.sweep_enabled
+# (and `run`'s own default), run only from an IDLE poll and only once per
+# SWEEP_INTERVAL, its marks drained before the loop sleeps, one INFO line
+# naming a count and nothing else. The function's half — the window, the
+# limit, the guard, the memorial — is in test_destruction.py. Nothing here
+# asserts on a filename or a caption.
+
+# The shape the sweep's SELECT has at the cursor (asyncpg renders the bound
+# cutoff as a positional parameter after this). The flag-on test asserts it
+# IS emitted, which is what makes the flag-off test's "never emitted" mean
+# something.
+_SWEEP_PREDICATE = "removed_at <="
+
+
+class _Clock:
+    """A monotonic clock the test advances by hand (`run`'s `clock`)."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+async def _expired_removed_row(db_session_factory, store: FakeStore | None = None) -> Media:
+    """A `ready` + `removed` photograph 31 days into its bin — exactly what
+    the sweep exists to take — with three derivative rows, and the objects
+    in the published bucket where a store is given, so a destruction has
+    something to delete. The gathering's counters agree with the row."""
+    async with db_session_factory() as db:
+        gathering = await _mk_gathering(db, photo_count=1, total_bytes=3 * 1000)
+        row = _media(gathering.id, status=MediaStatus.READY)
+        row.publication_state = PublicationState.REMOVED
+        row.removed_at = _now() - timedelta(days=31)
+        db.add(row)
+        await db.flush()
+        for layer in MediaLayer:
+            key = published_key(row.id, layer)
+            db.add(
+                MediaDerivative(
+                    media_id=row.id,
+                    layer=layer,
+                    storage_key=key,
+                    content_type="image/webp",
+                    size_bytes=1000,
+                    storage_class=STORAGE_CLASS_STANDARD,
+                )
+            )
+            if store is not None:
+                store.published[key] = (b"x", "image/webp", STORAGE_CLASS_STANDARD)
+        await db.commit()
+        return row
+
+
+def _observe(monkeypatch, events: list) -> None:
+    """Record every poll outcome and every sweep pass, in order, through the
+    names `run` reaches them by."""
+    real_poll = worker_module.poll_once
+    real_sweep = destruction.sweep_expired_bin
+
+    async def poll(*args, **kwargs):
+        outcome = await real_poll(*args, **kwargs)
+        events.append(("poll", outcome))
+        return outcome
+
+    async def sweep(db, now, *, limit):
+        marked = await real_sweep(db, now, limit=limit)
+        events.append(("sweep", marked, limit))
+        return marked
+
+    monkeypatch.setattr(worker_module, "poll_once", poll)
+    monkeypatch.setattr(destruction, "sweep_expired_bin", sweep)
+
+
+def test_the_sweeps_numbers_and_that_its_switch_reads_a_dashboard_string(monkeypatch):
+    assert SWEEP_INTERVAL == 15 * 60.0
+    assert SWEEP_BATCH == 20
+    # The six alone: the switch is off. That is what the deployed worker
+    # boots with until someone sets the seventh in its dashboard.
+    for name in WORKER_ENV:
+        monkeypatch.setenv(name, WORKER_ENV[name])
+    monkeypatch.delenv("SWEEP_ENABLED", raising=False)
+    assert WorkerSettings(_env_file=None).sweep_enabled is False
+    # And the string a dashboard (or render.yaml) holds parses as a boolean,
+    # both ways — the slot is declared `"false"` and turned on with `true`.
+    monkeypatch.setenv("SWEEP_ENABLED", "false")
+    assert WorkerSettings(_env_file=None).sweep_enabled is False
+    monkeypatch.setenv("SWEEP_ENABLED", "true")
+    assert WorkerSettings(_env_file=None).sweep_enabled is True
+
+
+async def test_the_sweep_is_off_by_default_and_runs_no_query(db_session_factory, worker, monkeypatch):
+    """THE FLAG-OFF PROOF (the kickoff's test plan, item 4): shipping dark
+    is a claim, so it is proven rather than assumed. With `sweep_enabled`
+    left at its default — what a worker booted with the six variables runs
+    with — the loop is driven past four whole SWEEP_INTERVALs against a row
+    that is exactly what the sweep exists to take, and nothing is marked
+    and no sweep query runs: not through the function (stubbed to fail
+    loudly if reached) and not at the cursor (no statement carries the
+    sweep's predicate — the shape the flag-on test shows the sweep does
+    emit)."""
+    row = await _expired_removed_row(db_session_factory)
+
+    async def never(*args, **kwargs):
+        raise AssertionError("the sweep ran with the flag off")
+
+    monkeypatch.setattr(destruction, "sweep_expired_bin", never)
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    clock = _Clock()
+    sleeps: list[float] = []
+    stop = asyncio.Event()
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+        clock.t += SWEEP_INTERVAL  # every idle sleep crosses a whole interval
+        if len(sleeps) == 4:
+            stop.set()
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record)
+    try:
+        assert await run(db_session_factory, worker, stop=stop, sleep=fake_sleep, clock=clock) == 0
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record)
+    assert len(sleeps) == 4
+    assert statements, "the loop polled"
+    assert not [s for s in statements if _SWEEP_PREDICATE in s]
+    r = await _row(db_session_factory, row.id)
+    assert (r.status, r.publication_state) == (MediaStatus.READY, PublicationState.REMOVED)
+    async with db_session_factory() as db:
+        gathering = await db.get(Gathering, row.gathering_id)
+        assert (gathering.photo_count, gathering.total_bytes) == (1, 3000)
+
+
+async def test_with_the_flag_on_the_sweep_runs_from_idle_on_the_interval_and_drains_its_marks(
+    db_session_factory, worker, monkeypatch, caplog
+):
+    """Flag on: the first idle poll after boot sweeps (an operator who turns
+    the switch on sees the line at once), the mark is claimed and DESTROYED
+    — the three published objects gone — before the loop sleeps, the next
+    pass waits a whole SWEEP_INTERVAL and not one idle poll less, and a
+    pass that marks nothing logs nothing. The one INFO line carries the
+    count and nothing else."""
+    store = FakeStore(monkeypatch)
+    row = await _expired_removed_row(db_session_factory, store)
+    assert len(store.published) == 3
+    events: list = []
+    _observe(monkeypatch, events)
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    clock = _Clock()
+    stop = asyncio.Event()
+
+    async def fake_sleep(delay: float) -> None:
+        events.append(("sleep",))
+        clock.t += 60.0  # a minute per idle sleep: the interval elapses at the fifteenth
+        if len([e for e in events if e == ("sleep",)]) == 16:
+            stop.set()
+
+    caplog.set_level(logging.INFO, logger="covey-keep.worker")
+    event.listen(engine.sync_engine, "before_cursor_execute", record)
+    try:
+        assert (
+            await run(db_session_factory, worker, stop=stop, sleep=fake_sleep, sweep_enabled=True, clock=clock)
+            == 0
+        )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record)
+
+    # Boot: idle, sweep (one mark), the mark drained — claimed and destroyed
+    # — then idle again, and only then the first sleep.
+    assert events[:5] == [
+        ("poll", Poll.IDLE),
+        ("sweep", 1, SWEEP_BATCH),
+        ("poll", Poll.PROCESSED),
+        ("poll", Poll.IDLE),
+        ("sleep",),
+    ]
+    # Fourteen idle cycles with no pass: the interval has not elapsed.
+    assert events[5:33] == [("poll", Poll.IDLE), ("sleep",)] * 14
+    # The fifteenth minute: one more pass, marking nothing, then a sleep — not a
+    # poll, because there was nothing to drain.
+    assert events[33:] == [("poll", Poll.IDLE), ("sweep", 0, SWEEP_BATCH), ("sleep",)]
+    assert [s for s in statements if _SWEEP_PREDICATE in s], "the sweep's predicate reached the cursor"
+
+    r = await _row(db_session_factory, row.id)
+    assert r.status is MediaStatus.DESTROYED
+    assert r.publication_state is PublicationState.REMOVED  # untouched: destruction is not a publication decision
+    assert store.published == {}
+    async with db_session_factory() as db:
+        assert (await db.scalar(select(func.count()).where(MediaDerivative.media_id == row.id))) == 0
+        gathering = await db.get(Gathering, row.gathering_id)
+        assert (gathering.photo_count, gathering.total_bytes) == (0, 0)
+
+    sweep_lines = [
+        rec.getMessage()
+        for rec in caplog.records
+        if rec.name == "covey-keep.worker" and "bin sweep" in rec.getMessage()
+    ]
+    assert sweep_lines == [
+        "bin sweep: 1 photograph(s) marked for destruction; their retrieval window has closed"
+    ]
+    assert str(row.id) not in sweep_lines[0]
+
+
+async def test_the_queue_drains_before_the_sweep_and_once_drains_the_marks_too(
+    db_session_factory, worker, monkeypatch
+):
+    """Never between drains: two uploads ahead of an expired removed row,
+    `--once` with the switch on. The queue drains first, THEN the idle poll
+    sweeps, THEN the mark is drained, and the loop exits 0 at the next idle
+    without sleeping — the operator's sweep from a shell, and the proof
+    that a pass is never interleaved between two PROCESSED polls."""
+    store = FakeStore(monkeypatch)  # an empty quarantine: both uploads dead-letter on their HEAD
+    row = await _expired_removed_row(db_session_factory, store)
+    first = await _uploaded_row(db_session_factory, created_at=_now() - timedelta(minutes=2))
+    second = await _uploaded_row(db_session_factory, created_at=_now() - timedelta(minutes=1))
+    events: list = []
+    _observe(monkeypatch, events)
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    assert (
+        await run(
+            db_session_factory,
+            worker,
+            stop=asyncio.Event(),
+            once=True,
+            sleep=fake_sleep,
+            sweep_enabled=True,
+            clock=_Clock(),
+        )
+        == 0
+    )
+    assert events == [
+        ("poll", Poll.PROCESSED),
+        ("poll", Poll.PROCESSED),
+        ("poll", Poll.IDLE),
+        ("sweep", 1, SWEEP_BATCH),
+        ("poll", Poll.PROCESSED),
+        ("poll", Poll.IDLE),
+    ]
+    assert sleeps == []
+    assert (await _row(db_session_factory, first.id)).status is MediaStatus.FAILED
+    assert (await _row(db_session_factory, second.id)).status is MediaStatus.FAILED
+    assert (await _row(db_session_factory, row.id)).status is MediaStatus.DESTROYED
+    assert store.published == {}
+
+
+async def test_a_failing_sweep_is_logged_and_the_worker_keeps_polling(
+    db_session_factory, worker, monkeypatch, caplog
+):
+    # The poll's own rule, applied to the pass: a schema not there yet is a
+    # warning and a retry at the NEXT interval (never a hot loop on the
+    # next idle poll); a bug in the pass is logged with its traceback; and
+    # neither ends the worker, because a worker that dies takes every
+    # upload with it.
+    calls: list[int] = []
+
+    async def failing(db, now, *, limit):
+        calls.append(len(calls))
+        if len(calls) == 1:
+            raise ProgrammingError("SELECT", {}, Exception("relation media does not exist"))
+        raise RuntimeError("a bug in the pass")
+
+    monkeypatch.setattr(destruction, "sweep_expired_bin", failing)
+    clock = _Clock()
+    sleeps: list[float] = []
+    stop = asyncio.Event()
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+        clock.t += SWEEP_INTERVAL
+        if len(sleeps) == 3:
+            stop.set()
+
+    caplog.set_level(logging.WARNING, logger="covey-keep.worker")
+    assert await run(db_session_factory, worker, stop=stop, sleep=fake_sleep, sweep_enabled=True, clock=clock) == 0
+    assert len(calls) == 3 and len(sleeps) == 3  # one pass per interval, each followed by a sleep
+    messages = [rec.getMessage() for rec in caplog.records if rec.name == "covey-keep.worker"]
+    assert any("bin sweep failed (ProgrammingError)" in m for m in messages)
+    assert any("bin sweep raised unexpectedly" in m for m in messages)

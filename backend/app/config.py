@@ -3,7 +3,8 @@
 `Settings` is the WEB service's: what uvicorn, every router, alembic's
 env.py and the two scripts read. `WorkerSettings` is the INGEST WORKER's:
 DATABASE_URL, the R2 endpoint, the two bucket names, and the worker
-credential — six values, and exactly six (media pipeline record §8, §11.1).
+credential — six values, and exactly six, plus since CK-59 one optional
+boolean, the bin sweep's switch (media pipeline record §8, §11.1).
 Neither class has a field for the other's credential. That is the structural
 half of "neither service holds the other's powers": the worker cannot reach
 R2_UPLOAD_* or R2_SERVE_* even if they sit in its environment, because
@@ -130,7 +131,9 @@ class Settings(BaseSettings):
 
 
 class WorkerSettings(BaseSettings):
-    """The ingest worker's environment (CK-35) — six values, and exactly six.
+    """The ingest worker's environment (CK-35) — six values, and exactly six,
+    required; plus ONE optional boolean since CK-59 (`sweep_enabled`, below),
+    an amendment made deliberately and for a stated reason.
 
     Required with no default, the web Settings' own rule: nothing gates the
     worker, so an empty value can only mean misconfigured, and it should fail
@@ -146,6 +149,19 @@ class WorkerSettings(BaseSettings):
     must never grow a worker field. A test asserts both lists, so the worker
     cannot reach the web credentials even by mistake — the same spirit as the
     IAM guarantee the credential-split verifier proves against the buckets.
+
+    THE SEVENTH (CK-59): `sweep_enabled`, a boolean defaulting to OFF, so the
+    bin sweep — the first path in the product that destroys photographs
+    without a person asking — ships dark and is turned on as a deliberate
+    act in the worker service's dashboard, with no code deploy. This amends
+    the COUNT and not the credential rule above: that rule exists so this
+    process can never name the upload or serve credential ("adding one here
+    would give one process the powers the split keeps apart"), and a
+    boolean grants no powers. What it buys is an off-switch reachable from
+    the dashboard. The test that pins the field list now pins seven, still
+    asserts that no field names a credential or the session secret, and
+    asserts the default is False; the six-variable boot test is unchanged,
+    because a worker booted with exactly the six IS the dark sweep.
     """
 
     model_config = SettingsConfigDict(
@@ -165,6 +181,12 @@ class WorkerSettings(BaseSettings):
     # writes published, deletes originals. Held by this process and no other.
     r2_worker_access_key_id: str
     r2_worker_secret_access_key: str
+    # THE ONLY OPTIONAL FIELD, AND THE ONLY BOOLEAN (CK-59): the bin sweep's
+    # switch. False — the default, and the whole point of a default here —
+    # means the sweep never runs and the worker polls exactly as before;
+    # an unset dashboard is a dark sweep, never a live one. Turned on by
+    # SWEEP_ENABLED=true in the worker's dashboard, and nowhere else.
+    sweep_enabled: bool = False
 
     @field_validator("database_url")
     @classmethod

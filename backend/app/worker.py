@@ -5,7 +5,8 @@ photographs since CK-36.
     python -m app.worker --once     # drain what is claimable now, then exit
 
 This process holds the WORKER credential and nothing else (media pipeline
-record §8, §11.1): its configuration is `WorkerSettings` — six values — and
+record §8, §11.1): its configuration is `WorkerSettings` — seven values,
+six of them required and one boolean switch (CK-59, below) — and
 it never imports `app.db` or constructs the web `Settings`, so it boots with
 no SESSION_SECRET and neither web credential in its environment (pinned by
 test in a subprocess with exactly the six set). The web service, in turn,
@@ -35,9 +36,27 @@ handle_destroying: the three published objects are deleted FIRST and
 and for the mirror-image reason (a row claiming destruction while its
 bytes remain is the one promise this routine exists to keep). Nothing is
 deleted from quarantine afterwards: that original went at `ready`. The
-count moved when the API marked the row, never here. The scheduled 30-day
-sweep is Phase B; this worker destroys only what a person already chose to
-destroy.
+count moved when the API marked the row, never here.
+
+AND SINCE CK-59 IT SWEEPS THE BIN — DARK UNTIL SWITCHED ON. The bin has
+two clocks and only one of them moved (bin record §6.1): a removed
+photograph stops being visible to its uploader after REMOVED_BIN and
+went on occupying storage and charging the keeper forever, because
+nothing destroyed one on a clock. The sweep is what makes the two clocks
+coincide: from an IDLE poll, and only then — the queue always drains
+first — once per SWEEP_INTERVAL, it asks services/destruction.py::
+sweep_expired_bin to mark at most SWEEP_BATCH removed photographs whose
+window has closed, row by row through the ONE marking statement, and
+then drains the marks it made before it sleeps. IT MARKS; THE DESTROY
+STEP ABOVE DESTROYS, exactly as it does for a row a person marked — one
+destruction in the code, one decrement. It runs ONLY when
+`WorkerSettings.sweep_enabled` is on, and that defaults to OFF: the
+seventh worker variable, a boolean that grants no powers (the six-value
+rule keeps a credential out of this process, and is untouched), and
+buys an off-switch for the first automatic destruction path in the
+product, reachable from the dashboard without a code deploy. One INFO
+line per pass that marked anything, carrying the count and nothing
+else; a pass that marked nothing logs nothing.
 
 `publication_state` moves here only where the gathering resolves open
 (CK-41 — `pending → live` inside the ready transaction, the ladder in
@@ -78,8 +97,13 @@ never the reverse; on the destruction path the published objects are
 deleted before `destroyed` is committed, never the reverse. The two orders
 are opposite and both are deliberate (services/ingest.py says why each
 way round). Since CK-54 the photographs it destroys include photographs of
-children, and every one of them was chosen by a person through
-api/media.py — this process initiates nothing. Log lines carry media ids,
+children; until CK-59 every one of them was chosen by a person through
+api/media.py, and with the sweep switched on this process also marks, on
+a clock, the removed photographs whose retrieval window has closed — the
+first destruction in the product nobody asked for, which is why the
+switch ships off, why the sweep marks only (every destruction still
+passes through the one audited routine), and why its one log line is a
+count. Log lines carry media ids,
 outcomes and byte counts — a row id is not personal data and a key is a
 function of it. Never a URL, never a key id, never a person, never the
 contents of anything, and never a filename, caption or tag: a destroyed
@@ -105,13 +129,40 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.config import WorkerSettings
 from app.models import MediaStatus, PublicationState
-from app.services import ingest
+from app.services import destruction, ingest
 from app.services.storage import WorkerClient, worker_client
 
 # Five seconds when idle, jittered (record §6.2): a fleet of workers restarted
 # together must not poll in lockstep.
 IDLE_POLL = 5.0
 IDLE_JITTER = 1.0
+
+# THE SWEEP (CK-59; bin record §6) — off unless WorkerSettings.sweep_enabled,
+# and when on, run only from an IDLE poll so the queue always drains first.
+# The interval and the batch, and why each is what it is:
+#
+# SWEEP_INTERVAL. The clock being swept is thirty days, so the sweep's lag
+# is invisible at any interval measured in minutes — a row's window closes
+# at a known instant and nobody is waiting on the next quarter-hour. Fifteen
+# minutes is short enough that an operator who turns the switch on sees the
+# first INFO line at once (the first pass runs at the first idle poll after
+# boot, and the service restarts on the change) and a backlog is visibly
+# moving within the hour, and long enough that the pass is a rounding error
+# on the database: one SELECT per quarter-hour when there is nothing to do.
+#
+# SWEEP_BATCH. Every mark becomes a destroy job on the same claim queue, and
+# claim_next orders by created_at across BOTH ladders — a marked row is
+# older than any fresh upload, so a pass's marks are all claimed before the
+# next photograph someone adds. The batch therefore bounds the claim-to-ready
+# latency a pass adds to a fresh upload: at roughly 0.55 s per destruction
+# (the window CK-56 measured on the deploy), twenty is about 11 s, inside
+# record §6.3's 60 s p95 with margin. The throughput that buys — 80 an hour,
+# 1,920 a day — exceeds any plausible rate at which a bin ages out by orders
+# of magnitude; a backlog of ten thousand (someone binned ten thousand and
+# waited a month) drains in about five days, and the immediate path for
+# that case is the bin surface's empty-the-bin (Phase C), not this clock.
+SWEEP_INTERVAL = 15 * 60.0  # seconds, on the monotonic clock `run` is given
+SWEEP_BATCH = 20
 
 log = logging.getLogger("covey-keep.worker")
 
@@ -260,6 +311,39 @@ def _idle_delay() -> float:
     return random.uniform(IDLE_POLL - IDLE_JITTER, IDLE_POLL + IDLE_JITTER)
 
 
+async def _sweep(session_factory: async_sessionmaker[AsyncSession]) -> int:
+    """One pass of the bin sweep (CK-59), from an idle poll: at most
+    SWEEP_BATCH removed photographs past their retrieval window, marked for
+    destruction row by row through the one marking statement. Returns the
+    count marked — 0 on a failed pass, which is logged and retried at the
+    next interval and never kills the loop (the poll's own rule). One INFO
+    line when anything was marked, carrying the count and nothing else —
+    no id, no filename, no caption (media-pipeline §8's bans) — and
+    silence when nothing was: a line every interval forever is a log
+    nobody reads."""
+    try:
+        async with session_factory() as db:
+            marked = await destruction.sweep_expired_bin(
+                db, datetime.now(timezone.utc), limit=SWEEP_BATCH
+            )
+    except _NOT_READY_ERRORS as exc:
+        log.warning(
+            "bin sweep failed (%s): the database is unreachable or the schema is not "
+            "migrated yet; retrying after the sweep interval",
+            exc.__class__.__name__,
+        )
+        return 0
+    except Exception:  # noqa: BLE001 — the loop's rule: nothing kills the worker
+        log.exception("bin sweep raised unexpectedly; the worker keeps polling")
+        return 0
+    if marked:
+        log.info(
+            "bin sweep: %d photograph(s) marked for destruction; their retrieval window has closed",
+            marked,
+        )
+    return marked
+
+
 async def run(
     session_factory: async_sessionmaker[AsyncSession],
     client: WorkerClient,
@@ -267,11 +351,24 @@ async def run(
     stop: asyncio.Event,
     once: bool = False,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    sweep_enabled: bool = False,
+    clock: Callable[[], float] = time.monotonic,
 ) -> int:
     """The loop. Drains while work remains; sleeps when idle; never exits on
     a failed poll. With `once`, returns after the first non-PROCESSED poll —
     0 if the queue was drained to idle, 1 if the database or the credential
-    was not ready. `sleep` is injectable so tests drive it without waiting."""
+    was not ready. `sleep` is injectable so tests drive it without waiting.
+
+    THE SWEEP (CK-59) rides the same loop and is OFF unless `sweep_enabled`
+    — the seventh worker variable, defaulting to False at every layer. When
+    on: from an IDLE poll and never between drains, once per SWEEP_INTERVAL
+    on `clock` (monotonic; injectable for the same reason `sleep` is), the
+    first pass at the first idle poll after boot. A pass that marked
+    anything is followed by another poll, not a sleep, so the marks it
+    made are drained at once — which also means `--once` with the switch
+    on sweeps, drains the destructions, and exits at the next idle: the
+    operator's sweep from a shell."""
+    last_sweep: Optional[float] = None
     while not stop.is_set():
         try:
             outcome = await poll_once(session_factory, client)
@@ -280,6 +377,16 @@ async def run(
             outcome = Poll.NOT_READY
         if outcome is Poll.PROCESSED:
             continue
+        if (
+            outcome is Poll.IDLE
+            and sweep_enabled
+            and (last_sweep is None or clock() - last_sweep >= SWEEP_INTERVAL)
+        ):
+            # Stamped before the pass, so a slow or failed pass waits the
+            # whole interval rather than running again on the next idle poll.
+            last_sweep = clock()
+            if await _sweep(session_factory) > 0:
+                continue  # the marks are claimable now: drain them before sleeping
         if once:
             return 0 if outcome is Poll.IDLE else 1
         await sleep(_idle_delay())
@@ -300,13 +407,20 @@ async def _serve(settings: WorkerSettings, *, once: bool) -> int:
             # raises KeyboardInterrupt into asyncio.run.
             pass
     log.info(
-        "ingest worker starting: quarantine=%s published=%s once=%s",
+        "ingest worker starting: quarantine=%s published=%s once=%s sweep=%s",
         client.quarantine_bucket,
         client.published_bucket,
         once,
+        "on" if settings.sweep_enabled else "off",
     )
     try:
-        return await run(session_factory, client, stop=stop, once=once)
+        return await run(
+            session_factory,
+            client,
+            stop=stop,
+            once=once,
+            sweep_enabled=settings.sweep_enabled,
+        )
     finally:
         await engine.dispose()
         log.info("ingest worker stopped")

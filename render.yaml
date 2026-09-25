@@ -117,12 +117,16 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.1
-      # SIX application variables, and exactly six (WorkerSettings in
-      # config.py): the database, the endpoint, the two bucket names, and
+      # SIX application variables, and exactly six, REQUIRED (WorkerSettings
+      # in config.py): the database, the endpoint, the two bucket names, and
       # the WORKER credential (Object Read & Write on both buckets, record
       # §11.1). Not SESSION_SECRET, not R2_UPLOAD_*, not R2_SERVE_* — the
       # worker has no field for any of them and boots without them; adding
       # one here would give one process the powers the split keeps apart.
+      # Plus ONE optional boolean since CK-59 — SWEEP_ENABLED, the last
+      # entry below — which amends the count and not its reason: the rule
+      # keeps a credential out of this process, and a boolean grants no
+      # powers.
       # The two `sync: false` credential halves and the endpoint URL follow
       # the SESSION_SECRET / R2_ENDPOINT_URL rules above: the blueprint
       # declares the slots and creates no values. For a NEW service Render
@@ -145,6 +149,16 @@ services:
         sync: false
       - key: R2_WORKER_SECRET_ACCESS_KEY
         sync: false
+      # THE SEVENTH (CK-59): the bin sweep's switch — the first path in the
+      # product that destroys photographs without a person asking. OFF here
+      # AND in the code's default, so the sweep ships dark; it is turned on
+      # as a deliberate act in THIS service's dashboard (SWEEP_ENABLED=true),
+      # no code deploy, after bin record §8's capture is in hand. Declared
+      # explicitly rather than left to the default so the blueprint says
+      # what the worker is doing. A string, as every value here is; the
+      # settings class reads it as a boolean.
+      - key: SWEEP_ENABLED
+        value: "false"
 
 databases:
   - name: covey-keep-db-dev
