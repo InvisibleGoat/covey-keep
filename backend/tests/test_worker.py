@@ -68,6 +68,7 @@ from pathlib import Path
 
 import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
+from botocore.parsers import RestXMLParser
 from PIL import ExifTags, Image
 from pydantic import ValidationError
 from sqlalchemy import event, func, select, text, update
@@ -126,13 +127,16 @@ MB = 1_000_000
 GPS_PHOTO = (BACKEND_DIR / "tests" / "fixtures" / "media" / "gps-oriented.jpg").read_bytes()
 
 # The worker's six, and exactly six — on a reserved TLD, so nothing here
-# could ever reach a real endpoint.
+# could ever reach a real endpoint. The key id is 32 hex since CK-61 (the
+# shape config.py checks at boot — `test-worker-key-id` no longer boots) and
+# still a fake; the never-logged pins below name it through this constant.
+WORKER_KEY_ID = "7e5770b3e50000000000000000000003"
 WORKER_ENV = {
     "DATABASE_URL": TEST_DATABASE_URL,
     "R2_ENDPOINT_URL": "https://r2.invalid",
     "R2_BUCKET_QUARANTINE": "test-quarantine",
     "R2_BUCKET_PUBLISHED": "test-published",
-    "R2_WORKER_ACCESS_KEY_ID": "test-worker-key-id",
+    "R2_WORKER_ACCESS_KEY_ID": WORKER_KEY_ID,
     "R2_WORKER_SECRET_ACCESS_KEY": "test-worker-secret-never-deployed",
 }
 SIX = frozenset(name.lower() for name in WORKER_ENV)
@@ -279,10 +283,39 @@ class FakeStore:
 
 
 def _client_error(code: str, status: int) -> ClientError:
+    # A HAND-BUILT stub with a NAMED code. Every rejected-credential test
+    # before CK-61 was written with this, and it is why 451 green tests did
+    # not catch the defect: the ingest read path's first store call is a
+    # HEAD, a HEAD carries no XML body, and botocore never delivers a named
+    # code from it — so the stub encoded the same assumption as the code
+    # under test. Use _botocore_error below for anything that classifies an
+    # exception; keep this for stages where the code itself is the subject.
     return ClientError(
         {"Error": {"Code": code, "Message": "stub"}, "ResponseMetadata": {"HTTPStatusCode": status}},
         "HeadObject",
     )
+
+
+def _botocore_error(status: int, *, body: bytes = b"", operation: str = "HeadObject") -> ClientError:
+    """A ClientError in the shape botocore ACTUALLY raises (CK-61) — built by
+    running botocore's own REST-XML parser over a raw response, never by
+    hand. A bodiless response (every HEAD; any response without XML)
+    parses to `Error.Code` = the bare status as a string ('401', '404');
+    an XML body parses to its named <Code>. `ResponseMetadata.HTTPStatusCode`
+    rides both. This is what (gv) measured on the deploy against one
+    rejected credential: head_object -> '401', get_object -> 'Unauthorized'."""
+    parsed = RestXMLParser().parse(
+        {"status_code": status, "headers": {}, "body": body, "context": {}}, None
+    )
+    return ClientError(parsed, operation)
+
+
+def _xml_error(code: str) -> bytes:
+    """The body a GET/PUT/DELETE carries when the store names its error."""
+    return (
+        "<?xml version='1.0' encoding='UTF-8'?>"
+        f"<Error><Code>{code}</Code><Message>stub</Message></Error>"
+    ).encode()
 
 
 async def _row(db_session_factory, media_id) -> Media:
@@ -328,9 +361,59 @@ def test_worker_settings_expose_no_web_credential_and_settings_no_worker_credent
     assert not hasattr(built, "r2_upload_access_key_id")
     assert not hasattr(built, "r2_serve_access_key_id")
     assert not hasattr(built, "session_secret")
-    assert built.r2_worker_access_key_id == "test-worker-key-id"
+    assert built.r2_worker_access_key_id == WORKER_KEY_ID
     # Render's bare scheme is normalised exactly as the web settings do it.
     assert built.database_url.startswith("postgresql+asyncpg://")
+
+
+_HEX32 = "0123456789abcdef0123456789abcdef"
+
+
+@pytest.mark.parametrize(
+    "build, field",
+    [
+        (lambda **kw: Settings(_env_file=None, **kw), "r2_upload_access_key_id"),
+        (lambda **kw: Settings(_env_file=None, **kw), "r2_serve_access_key_id"),
+        (lambda **kw: WorkerSettings(_env_file=None, **kw), "r2_worker_access_key_id"),
+    ],
+    ids=["upload", "serve", "worker"],
+)
+def test_an_access_key_id_is_32_hex_at_boot_on_all_three_fields(monkeypatch, build, field):
+    """CK-61's other half. (gv)'s first run appended a character to the
+    worker's key id: R2 length-validates before it authenticates, so the
+    request was MALFORMED (InvalidArgument / 400) rather than the credential
+    WRONG, the classifier correctly did not fire, and the row climbed the
+    transient ladder toward the dead-letter the third class exists to
+    prevent. The wrong-length id is caught here instead — at boot, in front
+    of whoever deployed, on all three ids (the web pair mint presigned
+    URLs: a malformed one there fails a person's upload rather than the
+    queue). The secret's shape is unmeasured and deliberately unchecked."""
+    for name, value in WORKER_ENV.items():
+        monkeypatch.setenv(name, value)
+    # The shape, either case: constructs, the value kept as given.
+    assert getattr(build(**{field: _HEX32}), field) == _HEX32
+    assert getattr(build(**{field: _HEX32.upper()}), field) == _HEX32.upper()
+    # Not the shape: refused at construction, the field named, the shape and
+    # the length said, and the value never echoed (the CK-36 rider's rule,
+    # kept by the validator's own message as well as by hide_input_in_errors).
+    for bad, why in (
+        (_HEX32[:-1], "31 characters"),
+        (_HEX32 + "a", "33 characters"),
+        ("g" + _HEX32[1:], "32 characters, one of them not hexadecimal"),
+        (_HEX32[:-1] + " ", "a stray space: 32 characters, not all hexadecimal"),
+    ):
+        with pytest.raises(ValidationError) as excinfo:
+            build(**{field: bad})
+        assert [tuple(err["loc"]) for err in excinfo.value.errors()] == [(field,)], why
+        rendered = str(excinfo.value) + repr(excinfo.value)
+        assert field in rendered and "32 hexadecimal" in rendered, why
+        assert str(len(bad)) in rendered, why
+        assert bad not in rendered and "input_value" not in rendered, why
+    # The SECRET is not shape-checked — deliberately, and pinned so a later
+    # "consistency" edit cannot guess a constraint nothing has measured.
+    secret_field = field.replace("access_key_id", "secret_access_key")
+    built = build(**{secret_field: "not-hex-and-not-32-and-still-accepted"})
+    assert getattr(built, secret_field) == "not-hex-and-not-32-and-still-accepted"
 
 
 def test_worker_settings_are_required_with_no_default(monkeypatch):
@@ -413,7 +496,7 @@ def test_worker_boots_with_only_its_six_variables():
     assert "ingest worker stopped" in boot.stdout
     # Buckets are logged; the key id and the secret never are.
     assert "test-quarantine" in boot.stdout
-    for secret in ("test-worker-key-id", "test-worker-secret-never-deployed"):
+    for secret in (WORKER_KEY_ID, "test-worker-secret-never-deployed"):
         assert secret not in boot.stdout + boot.stderr
 
 
@@ -471,7 +554,7 @@ def test_worker_client_is_a_third_type_that_presigns_nothing(worker, worker_sett
     # The repr shows buckets and never a key id or the endpoint.
     shown = repr(worker)
     assert "test-quarantine" in shown and "test-published" in shown
-    assert "test-worker-key-id" not in shown and "r2.invalid" not in shown
+    assert WORKER_KEY_ID not in shown and "r2.invalid" not in shown
 
 
 def test_the_records_numbers_and_that_the_release_branch_is_gone():
@@ -685,7 +768,7 @@ async def test_a_missing_object_dead_letters_on_the_first_attempt(db_session_fac
         assert "quarantine object missing" in row.last_error
         assert "24-hour" in row.last_error
         # Operator terms only: no key id, no URL, no key.
-        for never in ("test-worker-key-id", "X-Amz", "uploads/"):
+        for never in (WORKER_KEY_ID, "X-Amz", "uploads/"):
             assert never not in row.last_error
         # Nothing else moved — processing is not publishing, and neither is
         # failing.
@@ -976,7 +1059,7 @@ async def test_an_undecodable_upload_dead_letters_on_the_first_attempt_and_its_o
     assert r.claimed_at is None
     assert "could not process the upload as a photograph" in r.last_error
     assert "UnidentifiedImageError" in r.last_error and "(permanent)" in r.last_error
-    for never in ("test-worker-key-id", "X-Amz", "uploads/", "ftyp"):
+    for never in (WORKER_KEY_ID, "X-Amz", "uploads/", "ftyp"):
         assert never not in r.last_error
     assert derivatives == [] and gathering.total_bytes == 0
     assert store.published == {}
@@ -1137,7 +1220,7 @@ async def test_a_transient_error_climbs_the_ladder_and_dead_letters_on_the_third
     status, attempts, _, claimed_at, last_error = await state()
     assert (status, attempts, claimed_at) == (MediaStatus.FAILED, MAX_ATTEMPTS, None)
     assert "after 3 attempts" in last_error
-    for never in ("test-worker-key-id", "X-Amz", "uploads/"):
+    for never in (WORKER_KEY_ID, "X-Amz", "uploads/"):
         assert never not in last_error
     assert await poll_once(db_session_factory, worker, t2 + timedelta(hours=1)) is Poll.IDLE
 
@@ -1174,8 +1257,135 @@ async def test_a_rejected_credential_releases_the_row_unpenalized_says_why_and_b
     # covered. Until then this read None, and a row waiting on the worker
     # said nothing (or, after a transient failure, something stale).
     assert r.last_error == ERROR_CREDENTIAL_REJECTED
-    for never in ("test-worker-key-id", "X-Amz", "uploads/", "AccessDenied"):
+    for never in (WORKER_KEY_ID, "X-Amz", "uploads/", "AccessDenied"):
         assert never not in r.last_error
+
+
+def test_the_credential_test_knows_botocores_two_shapes_and_keeps_400_out():
+    """(gv) measured, against one rejected credential in one process:
+    head_object -> '401', get_object -> 'Unauthorized'. botocore's own
+    parser reproduces that here — a bodiless response carries the bare
+    status, an XML body the named code — and the SHAPE is asserted before
+    the classification: if botocore ever changed it, that is a finding to
+    report, never a reason to move these assertions."""
+    head_401 = _botocore_error(401)
+    get_401 = _botocore_error(401, body=_xml_error("Unauthorized"), operation="GetObject")
+    assert ingest._error_code(head_401) == "401"  # the HEAD's shape: the bare status
+    assert ingest._error_code(get_401) == "Unauthorized"  # the GET's shape: the named code
+    assert head_401.response["ResponseMetadata"]["HTTPStatusCode"] == 401
+    # The set stays named-only; the numeric knowledge is the helper's alone.
+    assert not any(code.isdigit() for code in ingest.CREDENTIAL_REJECTED_CODES)
+    assert "Unauthorized" in ingest.CREDENTIAL_REJECTED_CODES  # what R2 named on the GET
+    # Both shapes, one answer — and 403 the same way.
+    assert ingest._is_credential_rejected(head_401)
+    assert ingest._is_credential_rejected(get_401)
+    assert ingest._is_credential_rejected(_botocore_error(403))
+    assert ingest._is_credential_rejected(
+        _botocore_error(403, body=_xml_error("AccessDenied"), operation="PutObject")
+    )
+    # 400 STAYS OUT, in either shape: a malformed request is not a
+    # credential fact — a wrong-LENGTH key id draws InvalidArgument / 400
+    # ((gv)'s first run), and config.py refuses that id at boot instead.
+    assert not ingest._is_credential_rejected(_botocore_error(400))
+    assert not ingest._is_credential_rejected(_botocore_error(400, body=_xml_error("InvalidArgument")))
+    # Nothing else moved: absence and a silent store classify as they did.
+    assert not ingest._is_credential_rejected(_botocore_error(404))
+    assert not ingest._is_credential_rejected(
+        _botocore_error(404, body=_xml_error("NoSuchKey"), operation="GetObject")
+    )
+    assert not ingest._is_credential_rejected(_botocore_error(500))
+    assert not ingest._is_credential_rejected(_botocore_error(500, body=_xml_error("InternalError")))
+    assert not ingest._is_credential_rejected(_botocore_error(503, body=_xml_error("SlowDown")))
+    # A ClientError carrying neither a named code nor a status is not a rejection.
+    assert not ingest._is_credential_rejected(ClientError({"Error": {"Code": "Whatever"}}, "HeadObject"))
+
+
+@pytest.mark.parametrize(
+    "status, body, shape",
+    [
+        (401, b"", "the HEAD's shape: Error.Code '401', no named code"),
+        (403, b"", "the HEAD's shape: Error.Code '403', no named code"),
+        (401, _xml_error("Unauthorized"), "the GET's shape: the named code R2 answered (gv)"),
+    ],
+    ids=["head-401", "head-403", "get-unauthorized"],
+)
+async def test_a_rejected_credential_in_the_shape_the_read_path_delivers_releases_the_row(
+    db_session_factory, worker, monkeypatch, status, body, shape
+):
+    """THE DEFECT CK-61 CLOSES. From CK-35 to CK-60 the test above stubbed a
+    NAMED code, so the branch was green on an input the ingest read path
+    can never deliver: its first store call is a HEAD, a HEAD has no XML
+    body, and botocore reports the bare status. Proved on the deploy twice
+    on 2026-09-25 — R2 answered 401, the release never fired, and the row
+    climbed the transient ladder ("attempt 1 of 3: storage did not answer
+    (read: ClientError (401))") toward the dead-letter the class exists to
+    prevent. Now both shapes release, through one helper, one path."""
+    _stub_head(monkeypatch, raises=_botocore_error(status, body=body))
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, available_at=t0)
+    assert await poll_once(db_session_factory, worker, t0) is Poll.BACKOFF, shape
+    r = await _row(db_session_factory, row.id)
+    assert (r.status, r.attempts, r.claimed_at, r.available_at) == (
+        MediaStatus.UPLOADED, 0, None, t0,
+    ), shape
+    assert r.last_error == ERROR_CREDENTIAL_REJECTED, shape
+    # Not the transient rung (gv) read: no attempt counted, no deferral, and
+    # neither the status nor the code in the reason.
+    for never in ("attempt 1 of", str(status), "Unauthorized", "storage did not answer", WORKER_KEY_ID):
+        assert never not in r.last_error
+
+
+@pytest.mark.parametrize(
+    "status, body, shape",
+    [
+        (400, b"", "a bodiless 400: Error.Code '400'"),
+        (400, _xml_error("InvalidArgument"), "InvalidArgument: a wrong-LENGTH key id, (gv)'s first run"),
+    ],
+    ids=["bare-400", "invalid-argument"],
+)
+async def test_a_malformed_request_is_transient_and_is_never_released(
+    db_session_factory, worker, monkeypatch, status, body, shape
+):
+    """THE PIN THAT KEEPS 400 OUT. R2 length-validates before it
+    authenticates, so a wrong-length key id draws InvalidArgument / 400 — a
+    malformed REQUEST, not a credential fact — and a classifier that read
+    400 as the worker's configuration would release every genuinely bad
+    request forever. Transient here, exactly as before CK-61; the
+    wrong-length id is caught at BOOT by config.py instead (the config
+    section's test)."""
+    _stub_head(monkeypatch, raises=_botocore_error(status, body=body))
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, available_at=t0)
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED, shape
+    r = await _row(db_session_factory, row.id)
+    assert (r.status, r.attempts, r.claimed_at, r.available_at) == (
+        MediaStatus.UPLOADED, 1, None, t0 + RETRY_BACKOFF[0],
+    ), shape
+    assert r.last_error != ERROR_CREDENTIAL_REJECTED
+    assert "attempt 1 of 3" in r.last_error and "ClientError" in r.last_error
+    assert ("InvalidArgument" if body else "400") in r.last_error
+
+
+async def test_a_rejected_credential_on_the_write_in_the_heads_shape_releases_the_row(
+    db_session_factory, worker, monkeypatch
+):
+    """The write branch's FIRST coverage on the numeric shape (CK-61). (gv)
+    could never reach it — the HEAD precedes the write, and the HEAD's own
+    misclassification took the row off the path — so until now the branch
+    was untested rather than working. A bodiless 401 on the PUT releases
+    exactly as the named code does (the test above), and nothing was
+    written or counted."""
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, size=len(GPS_PHOTO), available_at=t0)
+    store = FakeStore(monkeypatch, {quarantine_key(row.id): GPS_PHOTO})
+    store.raise_on["put"] = _botocore_error(401, operation="PutObject")
+    assert await poll_once(db_session_factory, worker, t0) is Poll.BACKOFF
+    r, derivatives, _ = await _ready_state(db_session_factory, row.id)
+    assert (r.status, r.attempts, r.claimed_at, r.available_at, r.last_error) == (
+        MediaStatus.UPLOADED, 0, None, t0, ERROR_CREDENTIAL_REJECTED,
+    )
+    assert derivatives == [] and quarantine_key(row.id) in store.quarantine
+    assert store.published == {}
 
 
 async def test_a_release_replaces_a_stale_reason_and_the_next_success_clears_it(

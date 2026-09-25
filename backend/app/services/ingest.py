@@ -94,6 +94,40 @@ STALE reason from an earlier transient failure that this release had
 silently superseded, with no way for an operator to tell which. Writing
 the reason is not a penalty; the penalty half is the two counters.
 
+AMENDED AT CK-61 (2026-09-25): THE PARAGRAPH ABOVE IS WHAT THE CLASS
+PROMISED, AND ON THE INGEST READ PATH IT NEVER HELD — from CK-35 to CK-60,
+not sometimes, always. Proved on the deploy twice (check (gv)): with a
+genuinely rejected credential — R2 answered 401, `Unauthorized`, a member
+of the set — the release never fired; the row climbed the transient ladder
+instead, attempts 1 then 2, the 1- and 5-minute rungs, `last_error`
+reading "attempt 1 of 3: storage did not answer (read: ClientError
+(401))". The mechanism: the first store call on an ingest claim is a HEAD,
+a HEAD response carries no XML body, and botocore therefore SYNTHESISES
+`Error.Code` from the bare HTTP status — `'401'`, never `Unauthorized`;
+`'403'`, never `AccessDenied` — so a set of NAMED codes could not match on
+that path, and the branch at the read site was unreachable. Measured in
+one process against one rejected credential: head_object -> '401',
+get_object -> 'Unauthorized', head_bucket -> '401', list_objects_v2 ->
+'Unauthorized'. This module had already written the fact down seventeen
+lines from the set and not applied it: `_ABSENT_CODES` carries both forms
+("on a HEAD the bare status, on a GET the S3 code") for exactly this
+reason. Two sets, one helper, two assumptions about one exception shape.
+The operational sentence: the guarantee this class was built for — that a
+mistyped dashboard value does not dead-letter the queue — did not hold; with
+rungs at 1, 5 and 15 minutes a mistyped key id dead-letters every queued
+row in about twenty-one minutes, and neither deploy run lost data only
+because the credential was restored in time. WHAT MAKES IT TRUE NOW: every
+site asks `_is_credential_rejected`, ONE helper that matches the named set
+OR an HTTP status of 401/403 — the one place that knows botocore's two
+shapes; the set stays named-only, and `'400'` stays out (a wrong-LENGTH key
+id draws InvalidArgument / 400, a malformed request and not a credential
+fact — the helper's docstring says why, and config.py's boot-time shape
+check on the access key ids is the half that catches it). The write and
+destroy branches below were never reached by any run — the HEAD precedes
+them — and were untested rather than working until CK-61's tests; the
+stubbed tests that were green from CK-35 built the exception with a named
+code, the input the read path can never deliver.
+
 WHAT `last_error` MEANS (CK-57), and it is NARROWER THAN THE COLUMN'S NAME:
 `last_error` is WHY THIS ROW IS NOT PROGRESSING RIGHT NOW — not the last
 thing that ever went wrong with it. A row waiting on a backoff says why
@@ -338,7 +372,13 @@ RETRY_BACKOFF = (timedelta(minutes=1), timedelta(minutes=5), timedelta(minutes=1
 
 # The store rejected the CREDENTIAL, not the request — the worker is
 # misconfigured, and no row is at fault (the verifier script's own
-# classification, CK-33).
+# classification, CK-33). NAMED FORMS ONLY, AND ON PURPOSE (CK-61): these are
+# what a response WITH an XML body carries. A HEAD's error has no body, and
+# botocore reports the bare status ('401', '403') in its place — that half
+# lives in _is_credential_rejected, the ONE place that knows both shapes.
+# Never add "401", "403" or any numeric token here: the sites call the
+# helper, not this set, and a numeric member would put the same knowledge
+# in two places for whoever writes a third classifier.
 CREDENTIAL_REJECTED_CODES = frozenset(
     {
         "AccessDenied",
@@ -356,6 +396,20 @@ CREDENTIAL_REJECTED_CODES = frozenset(
 
 # What botocore reports when the object is not there — on a HEAD the bare
 # status, on a GET the S3 code.
+#
+# THE MIXED SET IS THE SUPERSEDED FORM (CK-61) — left exactly as it is. It is
+# right, it works (storage.py tests its own copy on the HEAD, where a bare
+# '404' is exactly what arrives; this one is tested on the GET after it, where
+# the named NoSuchKey arrives — both forms in both places because the shape
+# is the CALL's, not the store's), and changing it would risk a regression
+# for no functional gain. But it is the older, ad-hoc way of handling the one
+# botocore behaviour that kept CREDENTIAL_REJECTED_CODES — named-only, against
+# the same _error_code helper — from ever matching a rejected credential on a
+# HEAD from CK-35 to CK-60: two sets, one helper, two assumptions, this one
+# right and the other not. Since CK-61 that knowledge lives in
+# _is_credential_rejected, which reads the HTTP status; a THIRD classifier
+# reads the status the same way and never copies this mixed set. Mixed sets
+# are not the house style; this one is history that still runs.
 _ABSENT_CODES = frozenset({"404", "NoSuchKey", "NotFound"})
 
 # last_error texts — operator terms, the outcome and never the file.
@@ -383,8 +437,9 @@ ERROR_DESTROY_FAILED = (
 # The release's one (CK-57), written on BOTH ladders by _release_misconfigured:
 # why a released row is waiting. No exception class and no S3 code — the
 # outcome is the same whichever of CREDENTIAL_REJECTED_CODES the store
-# answered with, none of them names the photograph, and what an operator
-# fixes is the dashboard, not the row.
+# answered with (or, on a HEAD, whichever bare 401/403 — CK-61), none of
+# them names the photograph, and what an operator fixes is the dashboard,
+# not the row.
 ERROR_CREDENTIAL_REJECTED = (
     "the store rejected the worker's credential: a fact about the worker's "
     "configuration, not about the photograph; the row is queued and untouched, "
@@ -575,6 +630,48 @@ def _error_code(exc: ClientError) -> Optional[str]:
     return exc.response.get("Error", {}).get("Code")
 
 
+def _is_credential_rejected(exc: ClientError) -> bool:
+    """The third class's one test (CK-61): is this the store refusing the
+    worker's CREDENTIAL — as opposed to the request, or the object?
+
+    True when the named code is in CREDENTIAL_REJECTED_CODES, OR when the
+    response's HTTP status is 401 or 403. Both halves are needed, and the
+    second one lives here and not in the set for a reason. botocore names
+    an S3 error from the XML body of the response, and a HEAD response HAS
+    NO BODY — so on a HEAD it synthesises `Error.Code` from the bare status
+    instead. Measured against one and the same rejected credential in one
+    process (check (gv), 2026-09-25): head_object -> '401', get_object ->
+    'Unauthorized', head_bucket -> '401', list_objects_v2 -> 'Unauthorized'.
+    The ingest ladder's FIRST store call is the HEAD, so from CK-35 to CK-60
+    a set of named codes could not match a rejected credential on the read
+    path — not sometimes, always — and the row climbed the transient ladder
+    toward the dead-letter this class was written to prevent.
+
+    ONE HELPER, NOT TWO MORE MEMBERS. The defect's shape was two sets
+    (`_ABSENT_CODES` mixed, the credential set named-only) making two
+    different assumptions about the one exception shape `_error_code`
+    reads. Adding "401" / "403" to the set would leave that shape standing
+    for whoever writes a third classifier — and a mixed set reads as the
+    house style. The numeric knowledge belongs in exactly one place, and
+    this is it: the set stays named-only, the status is read here, and a
+    third classifier calls this or reads the status the same way. Do not
+    "simplify" it back into the set.
+
+    400 STAYS OUT, DELIBERATELY. A key id of the wrong LENGTH draws
+    `InvalidArgument` / 400 — R2 length-validates before it authenticates
+    ((gv)'s first run) — and that is a MALFORMED REQUEST, not a credential
+    fact: admitting 400 here would classify every genuinely bad request as
+    the worker's configuration and release it, unpenalized, forever. The
+    wrong-length key id is caught where it belongs, at boot, by config.py's
+    shape check on the access key ids (CK-61's other half). 401 and 403 are
+    the two statuses whose meaning IS the credential, whatever the body said
+    or did not say."""
+    if _error_code(exc) in CREDENTIAL_REJECTED_CODES:
+        return True
+    status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    return status in (401, 403)
+
+
 async def handle_claimed(
     db: AsyncSession, client: WorkerClient, row: Media, now: datetime
 ) -> Outcome:
@@ -598,7 +695,7 @@ async def handle_claimed(
             raise
     except ClientError as exc:
         code = _error_code(exc)
-        if code in CREDENTIAL_REJECTED_CODES:
+        if _is_credential_rejected(exc):
             return await _release_misconfigured(db, row)
         return await _transient_failure(db, row, now, f"read: {exc.__class__.__name__} ({code})")
     except BotoCoreError as exc:
@@ -617,7 +714,7 @@ async def handle_claimed(
             await _put(client, published_key(row.id, rendition.layer), rendition)
     except ClientError as exc:
         code = _error_code(exc)
-        if code in CREDENTIAL_REJECTED_CODES:
+        if _is_credential_rejected(exc):
             return await _release_misconfigured(db, row)
         return await _transient_failure(db, row, now, f"write: {exc.__class__.__name__} ({code})")
     except BotoCoreError as exc:
@@ -785,7 +882,7 @@ async def handle_destroying(
             await _delete_published(client, key)
     except ClientError as exc:
         code = _error_code(exc)
-        if code in CREDENTIAL_REJECTED_CODES:
+        if _is_credential_rejected(exc):
             return await _release_misconfigured(db, row)
         return await _destroy_failure(db, row, now, f"delete: {exc.__class__.__name__} ({code})")
     except BotoCoreError as exc:

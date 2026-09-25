@@ -29,6 +29,7 @@ RE_ENDPOINT_URL catch ran through exactly this path). Only the worker no
 longer fails with it.
 """
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -38,6 +39,62 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Anchor the env file to backend/.env so imports work regardless of cwd
 # (uvicorn and alembic are both documented to run from backend/, but don't rely on it).
 BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+# An R2 access key id is exactly 32 hexadecimal characters (CK-61). The rule
+# is the SHAPE and nothing more: no stripping (a stray space from a dashboard
+# paste IS a mistyped value, and saying so at boot is the point), and either
+# case (nothing has measured that R2 mints lowercase only, and a rule that
+# rejected a valid credential would be worse than the defect it exists for).
+_R2_ACCESS_KEY_ID = re.compile(r"[0-9a-fA-F]{32}")
+
+
+def _r2_access_key_id_shape(value: str) -> str:
+    """32 hexadecimal characters, or a ValueError that names the shape and
+    the length — never the characters. CK-61's other half; one function for
+    all three access key ids (both classes' validators call it).
+
+    WHY AT BOOT. This module's own rule: a value fails in front of whoever
+    deployed rather than at the first claim. Check (gv)'s first run
+    (2026-09-25) is what a wrong-LENGTH key id does otherwise. R2
+    length-validates before it authenticates, so the request is refused as
+    MALFORMED — `InvalidArgument` / 400 — which is correctly NOT a
+    credential-rejection code; the worker classifies it transient, and
+    every queued photograph dead-letters at attempt 3, verbatim the outcome
+    CK-35's third class was written to prevent. Two halves, and neither
+    substitutes for the other: `ingest._is_credential_rejected` catches a
+    well-formed WRONG credential (401/403 — the store answered the
+    credential), this catches a MALFORMED one before the worker ever asks,
+    and '400' must never be admitted to the classifier to cover this case
+    — a 400 is a bad request, not a credential fact, and a classifier that
+    read it as the worker's configuration would release genuinely bad
+    requests forever.
+
+    ALL THREE IDS, not the worker's alone: the upload and serve credentials
+    mint presigned URLs, so a malformed one there fails a person's upload
+    rather than the queue — a different blast radius, and no less worth
+    catching at boot.
+
+    THE SECRET ACCESS KEYS ARE DELIBERATELY NOT SHAPE-CHECKED. Nothing here
+    has measured their format, and a guessed constraint that rejected a
+    valid credential would be worse than the defect. (gv)'s fingerprint
+    measured the worker's KEY ID at length 32, and R2's documented shape
+    for the id is 32 hex; the secret is a different object with no
+    measurement behind it. Pinned by test: a secret of any shape constructs.
+
+    The message says the length and never the value: hide_input_in_errors
+    keeps the input dict out of the rendered error, and this keeps the
+    characters out of the message that renders beside it."""
+    if _R2_ACCESS_KEY_ID.fullmatch(value) is not None:
+        return value
+    if len(value) != 32:
+        raise ValueError(
+            "an R2 access key id is exactly 32 hexadecimal characters; "
+            f"this value has {len(value)}"
+        )
+    raise ValueError(
+        "an R2 access key id is exactly 32 hexadecimal characters; "
+        "this value has 32, but not all of them are hexadecimal"
+    )
 
 
 class Settings(BaseSettings):
@@ -109,6 +166,8 @@ class Settings(BaseSettings):
     r2_endpoint_url: str
     r2_bucket_quarantine: str
     r2_bucket_published: str
+    # The two access key ids are shape-checked at boot since CK-61 (32 hex;
+    # the validator below); the two secrets are not, deliberately.
     r2_upload_access_key_id: str
     r2_upload_secret_access_key: str
     r2_serve_access_key_id: str
@@ -124,6 +183,14 @@ class Settings(BaseSettings):
             if value.startswith(prefix):
                 return "postgresql+asyncpg://" + value.removeprefix(prefix)
         return value
+
+    @field_validator("r2_upload_access_key_id", "r2_serve_access_key_id")
+    @classmethod
+    def _r2_access_key_id_is_32_hex(cls, value: str) -> str:
+        # CK-61's other half — the shape checked at boot, on both web ids.
+        # See _r2_access_key_id_shape for why here, why all three, and why
+        # the two secrets are left alone.
+        return _r2_access_key_id_shape(value)
 
     @property
     def allowed_origins_list(self) -> list[str]:
@@ -179,6 +246,8 @@ class WorkerSettings(BaseSettings):
     r2_bucket_published: str
     # Object Read & Write on BOTH buckets (record §11.1): reads quarantine,
     # writes published, deletes originals. Held by this process and no other.
+    # The id is shape-checked at boot since CK-61 (32 hex; the validator
+    # below); the secret is not, deliberately.
     r2_worker_access_key_id: str
     r2_worker_secret_access_key: str
     # THE ONLY OPTIONAL FIELD, AND THE ONLY BOOLEAN (CK-59): the bin sweep's
@@ -193,6 +262,14 @@ class WorkerSettings(BaseSettings):
     def _force_asyncpg_scheme(cls, value: str) -> str:
         # The one normalisation, reused rather than copied.
         return Settings._force_asyncpg_scheme(value)
+
+    @field_validator("r2_worker_access_key_id")
+    @classmethod
+    def _r2_access_key_id_is_32_hex(cls, value: str) -> str:
+        # The same shape check as the two web ids (CK-61), the same one
+        # function — a wrong-length key id fails HERE, at boot, and never
+        # reaches the worker's first claim as InvalidArgument / 400.
+        return _r2_access_key_id_shape(value)
 
 
 if TYPE_CHECKING:

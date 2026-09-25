@@ -32,9 +32,13 @@ os.environ["EMAIL_MODE"] = "console"
 os.environ["R2_ENDPOINT_URL"] = "https://r2.invalid"
 os.environ["R2_BUCKET_QUARANTINE"] = "test-quarantine"
 os.environ["R2_BUCKET_PUBLISHED"] = "test-published"
-os.environ["R2_UPLOAD_ACCESS_KEY_ID"] = "test-upload-key-id"
+# The two access key ids are 32 hexadecimal characters since CK-61 — the
+# shape config.py checks at boot — and still fakes: never minted, never
+# deployed, and unusable against the reserved TLD above. The secrets keep an
+# arbitrary shape on purpose: their format is unmeasured and unchecked.
+os.environ["R2_UPLOAD_ACCESS_KEY_ID"] = "7e57ab10ad0000000000000000000001"
 os.environ["R2_UPLOAD_SECRET_ACCESS_KEY"] = "test-upload-secret-never-deployed"
-os.environ["R2_SERVE_ACCESS_KEY_ID"] = "test-serve-key-id"
+os.environ["R2_SERVE_ACCESS_KEY_ID"] = "7e575e47e00000000000000000000002"
 os.environ["R2_SERVE_SECRET_ACCESS_KEY"] = "test-serve-secret-never-deployed"
 
 import asyncpg  # noqa: E402

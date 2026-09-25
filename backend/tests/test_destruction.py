@@ -81,7 +81,14 @@ from tests.test_media_reads import (
     _url,
 )
 from tests.conftest import TEST_DATABASE_URL
-from tests.test_worker import BACKEND_DIR, WORKER_ENV, FakeStore, _client_error, _media
+from tests.test_worker import (
+    BACKEND_DIR,
+    WORKER_ENV,
+    FakeStore,
+    _botocore_error,
+    _client_error,
+    _media,
+)
 
 LAYER_BYTES = sum(size for _, size, _ in LAYER_SPECS.values())
 
@@ -926,6 +933,38 @@ async def test_a_rejected_credential_releases_a_destruction_unpenalized_and_says
     assert row.last_error == ingest.ERROR_CREDENTIAL_REJECTED
     # Released, and claimable again once the credential is fixed.
     assert row.status is MediaStatus.DESTROYING
+    assert len(await _layer_keys(db_session_factory, doomed)) == 3
+
+
+async def test_a_rejected_credential_in_the_heads_shape_releases_a_destruction_too(
+    client, capsys, db_session_factory, worker, monkeypatch
+):
+    """The destroy branch's FIRST coverage on the numeric shape (CK-61): a
+    bodiless 403 on the delete — Error.Code '403', no named code, what
+    botocore reports for any response without an XML body — releases the
+    destruction exactly as the named code does (the test above). (gv) could
+    never reach this branch: the credential was tried on the ingest ladder,
+    whose HEAD precedes everything and misclassified first. Until now it was
+    untested rather than working. The same helper, the same one call, the
+    rung it came from."""
+    cast = await _cast(client, capsys, db_session_factory)
+    doomed = await _photograph(
+        db_session_factory, cast, publication_state=PublicationState.LIVE
+    )
+    await _resync_counts(db_session_factory, cast.gathering_id)
+    assert (await _destroy(client, cast.host, doomed)).status_code == 200
+    store = await _seeded_store(monkeypatch, db_session_factory, doomed)
+    store.raise_on["delete_published"] = _botocore_error(403, operation="DeleteObject")
+
+    assert await poll_once(db_session_factory, worker) is Poll.BACKOFF
+    row = await _row(db_session_factory, doomed)
+    assert (row.status, row.attempts, row.claimed_at) == (MediaStatus.DESTROYING, 0, None)
+    assert row.last_error == ingest.ERROR_CREDENTIAL_REJECTED
+    assert "403" not in row.last_error
+    # The first delete was refused and nothing after it was tried; the
+    # three layers are still described, and claimable once the credential
+    # is fixed.
+    assert store.stages() == ["delete_published"]
     assert len(await _layer_keys(db_session_factory, doomed)) == 3
 
 
