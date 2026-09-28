@@ -20,9 +20,10 @@ The load-bearing pins:
   that decremented, so the count and the sum both still match their rows;
 - the uploader destroys their own; THE KEEPER IS REFUSED with the media
   404, byte-identical to a missing id, and nothing moves;
-- `remove` sends a `live` photograph to the bin and destroys NOTHING: the
-  layers stay, the row stays `ready`, and it goes on counting (bin record
-  §3);
+- `remove` sends a `live` photograph to the bin — the REMOVER's bin since
+  CK-63 (two-bins §3): a host's removal is in the gathering's bin, which
+  no surface reads yet — and destroys NOTHING: the layers stay, the row
+  stays `ready`, and it goes on counting (bin record §3);
 - `destroy` reaches a `removed` row — the per-photograph "empty the bin" —
   and `remove` refuses one with `already_removed`;
 - `decline` is UNCHANGED: a `live` row still draws 409 `not_pending`;
@@ -70,6 +71,7 @@ from app.services.storage import (
 from app.worker import Poll, poll_once
 from tests.test_gatherings import _account_for
 from tests.test_keeping import _mk_gathering
+from tests.test_review import _host_person_id
 from tests.test_media_reads import (
     KEEPER,
     LAYER_SPECS,
@@ -568,12 +570,16 @@ async def test_remove_sends_a_live_photograph_to_the_bin_and_frees_nothing(
     row = await _row(db_session_factory, live)
     assert row.status is MediaStatus.READY
     assert row.removed_at is not None
+    assert row.removed_by_person_id == await _host_person_id(db_session_factory)  # who (CK-63)
     # Nothing destroyed, nothing freed.
     assert len(await _layer_keys(db_session_factory, live)) == 3
     assert await _counts(db_session_factory, cast.gathering_id) == before
     await _invariants_hold(db_session_factory, cast.gathering_id)
-    # The bin is the uploader's, and the host does not see it again.
-    assert live in _ids(await _list(client, cast.uploader, cast.gathering_id))
+    # The HOST removed it, so it is in the GATHERING's bin (two-bins §3,
+    # CK-63): the uploader does not see it again — until CK-63 this test
+    # pinned that they did — and neither does the host, because nothing
+    # reads that bin yet.
+    assert live not in _ids(await _list(client, cast.uploader, cast.gathering_id))
     assert live not in _ids(await _list(client, cast.host, cast.gathering_id))
 
 
@@ -588,6 +594,7 @@ async def test_removing_a_photograph_already_in_the_bin_refuses_rather_than_rest
         cast,
         publication_state=PublicationState.REMOVED,
         removed_at=_now() - timedelta(days=3),
+        removed_by_person_id=cast.uploader_person_id,  # their own bin (CK-63)
     )
     await _resync_counts(db_session_factory, cast.gathering_id)
     stamped_before = (await _row(db_session_factory, binned)).removed_at
@@ -598,35 +605,43 @@ async def test_removing_a_photograph_already_in_the_bin_refuses_rather_than_rest
     assert (await _row(db_session_factory, binned)).removed_at == stamped_before
 
 
-async def test_a_host_who_bins_a_photograph_cannot_then_destroy_it(
+async def test_a_photograph_the_host_binned_is_reachable_by_nobody_until_the_gatherings_bin_has_a_surface(
     client, capsys, db_session_factory
 ):
     # A CONSEQUENCE OF A DECIDED RULE, pinned so it is not discovered later
-    # and read as a bug. CK-37 settled that a `removed` photograph is
-    # visible to THE UPLOADER ALONE, the host excluded — "the bin's read
-    # window defined before removal exists", and explicitly not interim. So
-    # a host who chooses *Send to bin* has chosen the bin: they cannot then
-    # reach the row to destroy it, and this phase does NOT widen that
-    # audience to make the sequence work (widening a decided consent rule
-    # to smooth a flow is how consent rules are lost).
+    # and read as a bug. A removed row is in the bin of WHOEVER REMOVED IT
+    # (two-bins record §3, CK-63; until then CK-37's one bin was the
+    # uploader's). So a host who chooses *Send to bin* on someone else's
+    # photograph has sent it to the GATHERING's bin: they cannot then reach
+    # the row to destroy it (unchanged since CK-54 — a host never saw a
+    # removed row they did not upload), AND THE UPLOADER CANNOT EITHER
+    # (new at CK-63 — until then this test pinned that they could): from the
+    # uploader's side the photograph is gone from the gathering, and the
+    # gathering's bin has no reader yet, so nothing but the sweep reaches
+    # the row until the host's bin surface exists. This phase does NOT
+    # widen either audience to make the sequence work (widening a decided
+    # consent rule to smooth a flow is how consent rules are lost).
     #
     # It costs the host nothing they were promised: bin record §7.1 offers
     # the two choices AT THE POINT OF REMOVAL, and *Delete permanently* is
-    # reachable directly from a `live` row (the test above). What is NOT
-    # built is emptying an account-level bin — the keeper's affordance in
-    # the refusal copy — which is the bin surface's, with its own audience
-    # to decide (§4's account-level scope binds it).
+    # reachable directly from a `live` row (the test above). The uploader's
+    # OWN removal is in their own bin, and they still destroy it.
     cast = await _cast(client, capsys, db_session_factory)
     live = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
+    mine = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
     await _resync_counts(db_session_factory, cast.gathering_id)
 
     assert (await _remove(client, cast.host, live)).status_code == 200
-    missing = await _destroy(client, cast.host, MISSING_ID)
-    refused = await _destroy(client, cast.host, live)
-    assert refused.status_code == 404
-    assert refused.json() == missing.json()
-    # The uploader, whose bin it is, still can.
-    assert (await _destroy(client, cast.uploader, live)).status_code == 200
+    for headers in (cast.host, cast.uploader):
+        missing = await _destroy(client, headers, MISSING_ID)
+        refused = await _destroy(client, headers, live)
+        assert refused.status_code == 404
+        assert refused.json() == missing.json()
+    assert (await _row(db_session_factory, live)).status is MediaStatus.READY  # still stored, still charged
+    # The uploader's own removal: their bin, their destroy.
+    assert (await _remove(client, cast.uploader, mine)).status_code == 200
+    assert (await _destroy(client, cast.host, mine)).status_code == 404
+    assert (await _destroy(client, cast.uploader, mine)).status_code == 200
 
 
 async def test_destroy_reaches_a_binned_photograph_and_frees_it(
@@ -641,6 +656,7 @@ async def test_destroy_reaches_a_binned_photograph_and_frees_it(
         cast,
         publication_state=PublicationState.REMOVED,
         removed_at=_now() - timedelta(days=3),
+        removed_by_person_id=cast.uploader_person_id,  # their own bin (CK-63)
     )
     count_before, bytes_before = await _resync_counts(db_session_factory, cast.gathering_id)
     assert count_before == 1  # charged while binned — bin record §3
@@ -747,7 +763,11 @@ async def test_a_row_in_destruction_is_charged_to_nobody_and_sits_in_no_bin(
     assert MediaStatus.DESTROYED not in keeping.IN_FLIGHT_STATUSES
     cast = await _cast(client, capsys, db_session_factory)
     doomed = await _photograph(
-        db_session_factory, cast, publication_state=PublicationState.REMOVED, removed_at=_now()
+        db_session_factory,
+        cast,
+        publication_state=PublicationState.REMOVED,
+        removed_at=_now(),
+        removed_by_person_id=cast.uploader_person_id,  # their own bin (CK-63)
     )
     await _resync_counts(db_session_factory, cast.gathering_id)
     assert (await _destroy(client, cast.uploader, doomed)).status_code == 200
@@ -1088,24 +1108,26 @@ async def test_the_verifier_asserts_a_destroying_row_that_spent_an_attempt_and_i
 
     # Fires: an attempt spent, not held, no reason — the state no reachable
     # path leaves any more, and the one the verifier exists to catch.
+    # The tallies are the verifier's TOTAL, pinned as a number on purpose
+    # (CK-57: 191); CK-63 added six assertions (who removed it), so 197.
     await plant(1, False, None)
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (190, 1, 1), out
+    assert (passed, failed, code) == (196, 1, 1), out
     assert f"FAIL  {label}" in out and "1 destroying media row(s)" in out
 
     # Passes with the reason present — what the release now writes.
     await plant(1, False, ingest.ERROR_CREDENTIAL_REJECTED)
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (191, 0, 0), out
+    assert (passed, failed, code) == (197, 0, 0), out
     assert f"PASS  {label}" in out
 
     # Must NOT fire on a fresh mark (attempts 0, no reason: nothing is
     # wrong with it) ...
     await plant(0, False, None)
-    assert _verifier()[:3] == (191, 0, 0)
+    assert _verifier()[:3] == (197, 0, 0)
     # ... nor on a held row: the claim writes no reason, the outcome will.
     await plant(1, True, None)
-    assert _verifier()[:3] == (191, 0, 0)
+    assert _verifier()[:3] == (197, 0, 0)
 
 
 async def test_a_stalled_destruction_is_reclaimed_and_the_abandoned_attempt_counted(
@@ -1348,17 +1370,22 @@ async def test_what_the_sweep_takes_is_exactly_what_the_uploader_has_stopped_see
     # readers, no gap and no overlap — nothing is swept while someone could
     # still see it, and nothing sits invisible-and-still-charged.
     cast = await _cast(client, capsys, db_session_factory)
+    # Both in the uploader's OWN bin (CK-63: a removed row is visible to its
+    # uploader only when they removed it), so "stopped seeing" is the
+    # window's doing and not the remover's.
     still_visible = await _photograph(
         db_session_factory,
         cast,
         publication_state=PublicationState.REMOVED,
         removed_at=_now() - REMOVED_BIN + timedelta(minutes=1),
+        removed_by_person_id=cast.uploader_person_id,
     )
     gone = await _photograph(
         db_session_factory,
         cast,
         publication_state=PublicationState.REMOVED,
         removed_at=_now() - REMOVED_BIN - timedelta(minutes=1),
+        removed_by_person_id=cast.uploader_person_id,
     )
     listed = _ids(await _list(client, cast.uploader, cast.gathering_id))
     assert still_visible in listed and gone not in listed

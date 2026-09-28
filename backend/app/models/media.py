@@ -59,7 +59,9 @@ class Media(Base):
     machine's answer (the MediaStatus ladder) and `publication_state` is the
     host's — and since 0020 the host's gate is STAMPED when it opens
     (`published_at`, `published_by_person_id` — see the columns), as the
-    takedown has been since 0001 (`removed_at`). `status` has NO server default — a writer must state the rung:
+    takedown has been since 0001 (`removed_at`) — and since 0026 the
+    takedown also records WHO (`removed_by_person_id`), which is what puts
+    the photograph in the remover's bin and nobody else's (CK-63). `status` has NO server default — a writer must state the rung:
     a default of `processing` would let an omitted status be reclaimed by
     the worker fifteen minutes later against an object that was never
     uploaded.
@@ -146,6 +148,25 @@ class Media(Base):
     )
     removed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # WHO removed this photograph (0026, CK-63; decisions/2026-09-27-two-
+    # bins.md §3). There are two bins and a photograph is in exactly one —
+    # the bin of whoever removed it — and this column is the ONLY thing
+    # that decides which: equal to `uploader_person_id`, the uploader took
+    # it back and it sits in their own bin (they alone see it, restore it,
+    # destroy it); anyone else's id, the host (later a co-host) removed or
+    # declined it and it sits in the gathering's bin, which the uploader
+    # never sees again. Written by `remove` and `decline` in the SAME
+    # guarded statement as `removed_at`, cleared with it by `restore`, and
+    # left alone by `destroy` and the sweep — a destroyed row keeps its
+    # remover as provenance, which is what the removal log (§5) reads.
+    # NULL MEANS NO RECORDED REMOVER: every row removed before 0026 reads
+    # NULL forever (nothing is backfilled — the 0018/0020 precedent), and
+    # the read rule shows such a row to NOBODY rather than guess whether it
+    # was a self-removal or a decline. Provenance, never a subject: no
+    # delete rule, like `published_by_person_id`. Rides no response body.
+    removed_by_person_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("people.id"), nullable=True
     )
     # The publication stamp (0020, CK-43; decisions/2026-09-13-the-hosts-
     # review.md §7): WHO published this photograph, and WHEN. `published_at`

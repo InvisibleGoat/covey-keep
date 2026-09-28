@@ -116,7 +116,10 @@ import { FieldError, FormLevelErrors } from './FieldError'
 //    route), rendered through the same rows; its empty state is its own
 //    ("nothing is waiting"), never "no photos yet". Publish and decline
 //    switch on the server's stable codes, never its wording; decline is
-//    removal — the contributor's 30-day bin, nothing destroyed — and takes
+//    removal — into the GATHERING's bin since CK-63 (two-bins record §3:
+//    the uploader does not see a declined photograph again, and the
+//    host's bin surface is unbuilt, so the confirmation promises nobody a
+//    way back), nothing destroyed — and takes
 //    a deliberate second click. Bulk approve is the batch endpoint, refused
 //    whole on any bad item, the refusal landing on the row that caused it.
 //    A `ready` + `pending` row is terminal for `status`, so nothing here
@@ -1025,16 +1028,22 @@ export function GatheringMedia({
                   </div>
                 )}
                 {declining && (
-                  // Decline is removal (record §4): the gathering never sees
-                  // it, the uploader keeps it for the bin's window, nothing
-                  // is destroyed — said plainly, and taken on a deliberate
-                  // second click, with a do-nothing beside it.
+                  // Decline is removal (record §4) into the GATHERING's bin
+                  // (two-bins record §3, CK-63): the gathering never sees it,
+                  // and neither does its uploader — from their side it is gone
+                  // — nothing is destroyed, and NOTHING here promises a way
+                  // back to anyone, because the host's bin surface does not
+                  // exist yet. Said plainly, and taken on a deliberate second
+                  // click, with a do-nothing beside it. The host declining
+                  // THEIR OWN photograph is its remover and its uploader, so
+                  // that row stays in their own bin: the own-photo line is
+                  // true and stays.
                   <div className="media-review media-decline" role="group" aria-label={`Decline ${name}`}>
                     <p className="field-hint">
                       The gathering won't see this photo.{' '}
                       {item.is_own
                         ? `You can still see it yourself for ${REMOVED_BIN_DAYS} days.`
-                        : `${who} can still see it for ${REMOVED_BIN_DAYS} days; you won't see it again here.`}
+                        : `Neither will ${who}: nobody in this gathering will see it again.`}
                     </p>
                     <button type="button" onClick={() => void act(item, 'decline')}>
                       {actingId === item.id ? 'Declining…' : 'Decline it'}

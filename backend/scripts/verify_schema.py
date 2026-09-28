@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0025"
+EXPECTED_REVISION = "0026"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -1330,6 +1330,105 @@ async def verify(conn, ck: Checks) -> None:
             False,
             "media publication stamp integrity",
             "media table or its published_at / published_by_person_id columns missing",
+        )
+
+    print("\n-- media: who removed it (0026, CK-63) --")
+    # WHO removed a photograph (decisions/2026-09-27-two-bins.md §3). There
+    # are two bins and a photograph is in exactly one — the bin of whoever
+    # removed it — and this column is the only fact that decides which:
+    # the uploader's id puts the row in their own bin (they alone see it,
+    # restore it, destroy it); anyone else's puts it in the gathering's
+    # bin, which the uploader never sees again. Nullable, and NULL is
+    # meaningful: NO RECORDED REMOVER — every row removed before 0026,
+    # which nothing backfills, and which the read rule shows to nobody
+    # rather than guess. The publication stamp's shape (0020): a person
+    # FK with no delete rule, no default, never NOT NULL.
+    assert_columns(ck, columns, "media", nullable=("removed_by_person_id",))
+    remover_default = (
+        await conn.execute(
+            text(
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'media' "
+                "AND column_name = 'removed_by_person_id'"
+            )
+        )
+    ).scalar()
+    ck.check(
+        remover_default is None,
+        "media.removed_by_person_id has no server default (remove and decline write it, or nothing does)",
+        f"default is {remover_default!r}",
+    )
+    # Provenance, never a subject: the remover FK points at people with NO
+    # delete rule — account deletion is anonymization, and the record of
+    # who removed stays attributed to the anonymized person (the
+    # published_by_person_id shape).
+    remover_fk = await fk_rule(conn, "fk_media_removed_by_person_id")
+    ck.check(
+        remover_fk is not None and remover_fk[0] == "people",
+        "media.removed_by_person_id references people",
+        f"found {remover_fk!r}",
+    )
+    ck.check(
+        remover_fk is not None and remover_fk[1] == "a",
+        "media.removed_by_person_id has no delete rule (provenance; nothing cascades from a person)",
+        f"delete rule is {remover_fk[1] if remover_fk else None!r}",
+    )
+
+    print("\n-- media removal attribution integrity (CK-63) --")
+    # Guarded on the COLUMNS (the CK-43 lesson): a query over a column that
+    # is not there is a crash, not a FAIL.
+    if "media" in tables and {"removed_at", "removed_by_person_id"} <= set(columns["media"]):
+        # (1) A remover is always dated: `remove` and `decline` write the
+        # WHO and the WHEN in one statement, and `restore` clears both in
+        # one statement, so a remover with no removed_at means something
+        # wrote around all three. NULL remover with a removed_at is fine —
+        # that is every row removed before 0026.
+        undated_remover = await scalar(
+            conn,
+            "SELECT count(*) FROM media "
+            "WHERE removed_by_person_id IS NOT NULL AND removed_at IS NULL",
+        )
+        ck.check(
+            undated_remover == 0,
+            "every media row with a remover carries a removed_at",
+            f"{undated_remover} media row(s) with a remover and no removed_at",
+        )
+        # (2) A row that is not in the bin has no remover: restore clears
+        # it on the way to `live` or `pending`, and a row destroyed straight
+        # from `live` never had one. A remover on a `live` or `pending` row
+        # means a restore wrote around its own statement, or something
+        # moved publication_state without clearing the removal columns. A
+        # `destroyed`/`destroying` row that was in the bin KEEPS its
+        # remover as provenance (two-bins §5) and is `removed` — not
+        # caught here, by design.
+        remover_outside_bin = await scalar(
+            conn,
+            "SELECT count(*) FROM media "
+            "WHERE removed_by_person_id IS NOT NULL "
+            "AND publication_state IN ('live', 'pending')",
+        )
+        ck.check(
+            remover_outside_bin == 0,
+            "no live or pending media row carries a remover (restore clears it with removed_at)",
+            f"{remover_outside_bin} live/pending media row(s) carrying a remover",
+        )
+        # Recorded as a fact, never a failure: the removed rows with no
+        # recorded remover. Every one predates 0026 (nothing backfills,
+        # and every writer since stamps the pair), so this number can only
+        # ever shrink as the sweep takes them — a run that reads it LARGER
+        # than the last is the finding. The two 2026-09-14 declines are
+        # among them until 2026-10-14.
+        unattributed = await scalar(
+            conn,
+            "SELECT count(*) FROM media "
+            "WHERE removed_at IS NOT NULL AND removed_by_person_id IS NULL",
+        )
+        ck.info("removed media rows with no recorded remover (removed before 0026; must never grow)", unattributed)
+    else:
+        ck.check(
+            False,
+            "media removal attribution integrity",
+            "media table or its removed_at / removed_by_person_id columns missing",
         )
 
     print("\n-- media upload integrity (CK-34) --")

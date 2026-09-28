@@ -16,7 +16,9 @@ plus:
 - a `live` photograph is visible to the whole read audience (nothing is
   live today; the branch is pinned so the publication phase inherits it);
 - a `removed` one is visible to its uploader alone, for thirty days, then
-  to nobody; a removed row with no removed_at is visible to nobody;
+  to nobody — and, since CK-63, only when the uploader removed it (a row
+  with no recorded remover is visible to nobody); a removed row with no
+  removed_at is visible to nobody;
 - every rung appears in the list with its state, and only `ready` is ever
   issued a URL (409 `not_ready` otherwise, carrying the rung);
 - the archival layer is never issued a URL (422 on the query parameter),
@@ -145,12 +147,17 @@ async def _photograph(
     status: MediaStatus = MediaStatus.READY,
     publication_state: PublicationState = PublicationState.PENDING,
     removed_at: datetime | None = None,
+    removed_by_person_id: UUID | None = None,
     created_at: datetime | None = None,
     occurrence_id: str | None = None,
 ) -> str:
     """One media row by the uploader — `ready` and `pending` by default, the
     state every deployed row is in — with its three derivative rows when it
-    is ready (the worker's output, without the worker)."""
+    is ready (the worker's output, without the worker). A `removed` row
+    carries the remover ONLY when the test says so (CK-63): the default,
+    NULL, is the pre-0026 shape — no recorded remover, visible to nobody —
+    so a test that wants the uploader to SEE a binned row passes their own
+    person id, explicitly."""
     born = created_at or _now()
     async with db_session_factory() as db:
         row = Media(
@@ -162,6 +169,7 @@ async def _photograph(
             status=status,
             publication_state=publication_state,
             removed_at=removed_at,
+            removed_by_person_id=removed_by_person_id,
             created_at=born,
             uploaded_at=None if status == MediaStatus.PENDING_UPLOAD else born,
         )
@@ -271,29 +279,47 @@ async def test_a_live_photograph_is_visible_to_the_whole_read_audience(
 async def test_a_removed_photograph_is_visible_to_its_uploader_alone_for_thirty_days(
     client, capsys, db_session_factory
 ):
-    """The contributor-visible bin (keeper record §2.8): the uploader for
-    thirty days after removed_at, nobody else — the host included — ever.
-    A removed row with no removed_at is malformed and visible to nobody."""
+    """The uploader's OWN bin (keeper record §2.8; two-bins record §3 since
+    CK-63): the uploader, for thirty days after removed_at, WHEN THEY
+    REMOVED IT — nobody else, the host included, ever. A removed row with
+    no removed_at is malformed and visible to nobody; and since CK-63 a
+    removed row with NO RECORDED REMOVER (every removal before 0026) is
+    visible to nobody either — the plants below carry the uploader as
+    remover where they are meant to be seen (they carried none until
+    CK-63, when nothing recorded one). The host-removed case is
+    test_removal_attribution.py's."""
     cast = await _cast(client, capsys, db_session_factory)
     removed = PublicationState.REMOVED
+    me = cast.uploader_person_id
     in_bin = await _photograph(
-        db_session_factory, cast, publication_state=removed, removed_at=_now() - timedelta(days=29)
+        db_session_factory,
+        cast,
+        publication_state=removed,
+        removed_at=_now() - timedelta(days=29),
+        removed_by_person_id=me,
     )
     past_bin = await _photograph(
-        db_session_factory, cast, publication_state=removed, removed_at=_now() - timedelta(days=31)
+        db_session_factory,
+        cast,
+        publication_state=removed,
+        removed_at=_now() - timedelta(days=31),
+        removed_by_person_id=me,
     )
     malformed = await _photograph(db_session_factory, cast, publication_state=removed)
+    unattributed = await _photograph(
+        db_session_factory, cast, publication_state=removed, removed_at=_now() - timedelta(days=1)
+    )
 
     listed = await _list(client, cast.uploader, cast.gathering_id)
     assert _ids(listed) == [in_bin]
     assert listed.json()["media"][0]["removed_at"] is not None  # the bin's clock
     assert (await _url(client, cast.uploader, in_bin)).status_code == 200
-    for gone in (past_bin, malformed):
+    for gone in (past_bin, malformed, unattributed):
         assert (await _url(client, cast.uploader, gone)).status_code == 404
 
     for headers in (cast.host, cast.keeper, cast.bystander):
         assert _ids(await _list(client, headers, cast.gathering_id)) == []
-        for media_id in (in_bin, past_bin, malformed):
+        for media_id in (in_bin, past_bin, malformed, unattributed):
             assert (await _url(client, headers, media_id)).status_code == 404
 
 

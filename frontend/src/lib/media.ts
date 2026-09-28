@@ -127,7 +127,12 @@ export const PICKER_ACCEPT = [
 // a page with nothing in flight polls nothing at all.
 export const POLL_INTERVAL_MS = 3000
 
-// The bin's read window (api/media.py REMOVED_BIN) — stated in copy only.
+// The bin's read window (services/retention.py REMOVED_BIN) — stated in copy
+// only. Since CK-63 a removed photograph is in the bin of WHOEVER REMOVED IT
+// (two-bins record §3): an uploader only ever sees rows they removed
+// themselves, so the `removed` line below is read by exactly the person it
+// addresses; a photograph the host removed or declined is in the gathering's
+// bin, which no surface reads yet.
 export const REMOVED_BIN_DAYS = 30
 
 const TYPE_BY_EXTENSION: Record<string, string> = {
@@ -381,6 +386,10 @@ export function mediaStateMessage(
         : `${audience} Waiting for the host to publish or decline it.`
     }
     case 'removed':
+      // Since CK-63 the server lists a removed row to its uploader ONLY when
+      // the uploader removed it (your bin, not the gathering's), so this line
+      // is true of every removed row a person can see. The `is_own: false`
+      // branch is unreachable by the audience rule and kept defensive.
       return item.is_own
         ? `Removed. Only you can still see it, for ${REMOVED_BIN_DAYS} days after removal.`
         : 'Removed.'
@@ -424,7 +433,8 @@ export type ReviewOutcome =
   | { ok: true }
   // The 409's stable code (already_live | not_pending | not_ready) with the
   // state the server reports beside it, `not_found` for the 404 (the row
-  // moved out of the host's sight — the bin is the uploader's), or this
+  // moved out of the host's sight — a removed row is in its REMOVER's bin,
+  // two-bins record §3, and the gathering's bin has no reader yet), or this
   // module's own words for the rest. The server's `message` is NOT carried:
   // the codes are the contract, the strings are ours (record §3).
   | { ok: false; code: string; publication_state?: string; status?: string }
@@ -458,7 +468,9 @@ export async function reviewMedia(mediaId: string, act: ReviewAct): Promise<Revi
 // wording (record §3: the codes are the contract, the strings are ours), so
 // a reworded server message changes nothing here. Each line says what state
 // the photograph is actually in, and none claims anything was destroyed:
-// a declined photograph is in its uploader's bin for thirty days.
+// a declined photograph is in the GATHERING's bin (two-bins record §3,
+// CK-63) — out of its uploader's sight, and out of everyone's until the
+// host's bin surface exists — and none of these lines promises a way back.
 export function reviewRefusalMessage(
   act: ReviewAct,
   refusal: { code: string; publication_state?: string; status?: string },

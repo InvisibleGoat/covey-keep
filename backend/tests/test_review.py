@@ -17,14 +17,16 @@ The load-bearing pins:
   — on both acts, and nothing moves;
 - a `failed` row and an in-flight row refuse with `not_ready`;
 - a `removed` row is never resurrected by approval (404 for a host who
-  cannot see it; 409 `not_pending` for a host who uploaded it);
+  cannot see it; 409 `not_pending` for a host who uploaded AND removed it
+  — their own bin, CK-63);
 - an already-`live` row refuses with `already_live` and is NOT re-stamped;
 - the batch refuses whole on any bad item and leaves nothing changed;
 - the queue is the host's alone and runs inside `_visible_media` (a
   `removed` row is in nobody's queue; `q` composes);
-- a decline lands `removed` with `removed_at`, `published_at` stays NULL,
-  the uploader keeps the 30-day bin (CK-37, unchanged), and a `live` row
-  is refused;
+- a decline lands `removed` with `removed_at` and the HOST as remover,
+  `published_at` stays NULL, the row is in the GATHERING's bin — the
+  uploader does not see it again (CK-63; two-bins §3 — until then they
+  kept it for 30 days) — and a `live` row is refused;
 - the acts log nothing with the root logger at DEBUG.
 """
 
@@ -67,9 +69,12 @@ async def _hosts_own_photograph(
     *,
     publication_state: PublicationState = PublicationState.PENDING,
     removed_at: datetime | None = None,
+    removed_by_person_id: UUID | None = None,
 ) -> str:
     """A `ready` row the HOST uploaded — the one configuration in which a
-    host can see a `removed` row (the bin is the uploader's)."""
+    host can see a `removed` row (their own bin: since CK-63 a removed row
+    is in the bin of whoever removed it, so a test that wants the host to
+    see a binned one passes the host's own person id as the remover)."""
     async with db_session_factory() as db:
         row = Media(
             gathering_id=cast.gathering_id,
@@ -79,6 +84,7 @@ async def _hosts_own_photograph(
             status=MediaStatus.READY,
             publication_state=publication_state,
             removed_at=removed_at,
+            removed_by_person_id=removed_by_person_id,
             created_at=_now(),
             uploaded_at=_now(),
         )
@@ -287,11 +293,12 @@ async def test_a_failed_row_and_an_unprocessed_row_refuse_with_not_ready(
 async def test_a_removed_row_is_never_resurrected_by_approval(client, capsys, db_session_factory):
     """A takedown is not undone by a queue action — the worker's `CASE`
     (live only over pending) and the host's guard agree. Two shapes: a
-    removed row the host did not upload is INVISIBLE to the host (the bin
-    is the uploader's, CK-37) — 404, byte-identical to a missing id; a
-    removed row the host uploaded is visible to them and refuses with
-    `not_pending` carrying `removed`. Neither moves, and neither is
-    stamped."""
+    removed row the host did not upload is INVISIBLE to the host (a
+    removed row is in its remover's bin — CK-63; the uploader's, CK-37 —
+    and this one has no recorded remover besides) — 404, byte-identical to
+    a missing id; a removed row the host uploaded AND removed is visible to
+    them, in their own bin, and refuses with `not_pending` carrying
+    `removed`. Neither moves, and neither is stamped."""
     cast = await _cast(client, capsys, db_session_factory)
     theirs = await _photograph(
         db_session_factory,
@@ -309,8 +316,10 @@ async def test_a_removed_row_is_never_resurrected_by_approval(client, capsys, db
         cast,
         publication_state=PublicationState.REMOVED,
         removed_at=_now() - timedelta(days=1),
+        # Their own bin (CK-63): the host removed their own upload.
+        removed_by_person_id=await _host_person_id(db_session_factory),
     )
-    assert _ids(await _list(client, cast.host, cast.gathering_id)) == [own]  # visible, as its uploader
+    assert _ids(await _list(client, cast.host, cast.gathering_id)) == [own]  # visible, as its uploader and remover
     for act in (_publish, _decline):
         refused = await act(client, cast.host, own)
         assert refused.status_code == 409, refused.text
@@ -478,16 +487,20 @@ async def test_the_queue_is_the_hosts_alone_and_runs_inside_the_audience_rule(
 # --- decline --------------------------------------------------------------------
 
 
-async def test_a_decline_lands_removed_and_the_uploader_keeps_the_bin(
+async def test_a_decline_lands_removed_in_the_gatherings_bin_and_the_uploader_does_not_see_it_again(
     client, capsys, db_session_factory
 ):
     """The queue's bottom (record §4): decline IS `removed`, with
     `removed_at` stamped and `published_at` left NULL (a declined
     photograph was never published — the NULL is what will tell a declined
-    row from a taken-down one). The uploader keeps the contributor-visible
-    bin for thirty days (CK-37, unchanged); the host does not see it again;
-    nothing is destroyed. NOT a general removal: a `live` row is refused
-    with `not_pending` carrying `live`."""
+    row from a taken-down one). WHOSE BIN — CHANGED AT CK-63 (two-bins
+    record §3): the remover is the HOST, so the row is in the GATHERING's
+    bin — the uploader does NOT see it again (until CK-63 this test pinned
+    that they kept it for thirty days, which let a declined photograph be
+    seen by the person it was declined from), and nobody else does until
+    that bin has a surface; the host cannot act on it again; nothing is
+    destroyed. NOT a general removal: a `live` row is refused with
+    `not_pending` carrying `live`."""
     cast = await _cast(client, capsys, db_session_factory)
     media_id = await _photograph(db_session_factory, cast)
     # The worker's output, without the worker (the publish test's move):
@@ -512,21 +525,27 @@ async def test_a_decline_lands_removed_and_the_uploader_keeps_the_bin(
     status, state, published_at, publisher, removed_at = await _state(db_session_factory, media_id)
     assert (status, state, published_at, publisher) == (MediaStatus.READY, PublicationState.REMOVED, None, None)
     assert removed_at is not None
+    # Who removed it: the host (CK-63) — which is what puts the row in the
+    # gathering's bin rather than the uploader's.
+    async with db_session_factory() as db:
+        row = await db.get(Media, media_id)
+        assert row.removed_by_person_id == await _host_person_id(db_session_factory)
+        assert row.removed_by_person_id != cast.uploader_person_id
     # The layers still exist (nothing is destroyed); no byte moved.
     async with db_session_factory() as db:
         layers = (await db.execute(select(MediaDerivative).where(MediaDerivative.media_id == media_id))).scalars().all()
         assert len(layers) == 3
     assert await _bytes(db_session_factory, cast) == before
 
-    # The bin is the uploader's: listed, with the clock, and a URL mints.
-    listed = await _list(client, cast.uploader, cast.gathering_id)
-    assert _ids(listed) == [media_id]
-    assert listed.json()["media"][0]["removed_at"] is not None
-    assert (await _url(client, cast.uploader, media_id)).status_code == 200
-    # The host does not see it again — and cannot act on it again.
-    for headers in (cast.host, cast.keeper, cast.bystander):
+    # The gathering's bin, and it has no reader: the uploader does not see
+    # it again — absent from their list, the media 404 byte-identical to a
+    # missing id on the URL — and neither does anyone else.
+    missing = await _url(client, cast.uploader, MISSING_ID)
+    for headers in (cast.uploader, cast.host, cast.keeper, cast.bystander):
         assert _ids(await _list(client, headers, cast.gathering_id)) == []
-        assert (await _url(client, headers, media_id)).status_code == 404
+        refused = await _url(client, headers, media_id)
+        assert (refused.status_code, refused.json()) == (404, missing.json())
+    # The host cannot act on it again.
     assert (await _decline(client, cast.host, media_id)).status_code == 404
     assert (await _publish(client, cast.host, media_id)).status_code == 404
 

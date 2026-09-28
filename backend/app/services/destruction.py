@@ -158,7 +158,9 @@ async def sweep_expired_bin(db: AsyncSession, now: datetime, *, limit: int) -> i
 
     THE CLOCK IS `REMOVED_BIN`, THE SAME NUMBER `_visible_media` READS
     (retention.py — one number, two readers). A removed photograph is
-    visible to its uploader while `removed_at > now - REMOVED_BIN` and is
+    visible to its uploader (when the uploader removed it — CK-63; a
+    host's removal is in the gathering's bin, unseen until that bin has
+    a surface) while `removed_at > now - REMOVED_BIN` and is
     swept once `removed_at <= now - REMOVED_BIN`: the two clocks meet at
     one instant with no gap and no overlap, so a photograph is never swept
     while someone could still see it, and never sits invisible-and-still-
@@ -166,7 +168,10 @@ async def sweep_expired_bin(db: AsyncSession, now: datetime, *, limit: int) -> i
     reclaim until now). The candidates are `ready` (there are layers to
     destroy; every other rung has nothing stored or is already past the
     mark) AND `removed` AND stamped AND past the window, oldest
-    `removed_at` first, at most `limit` of them.
+    `removed_at` first, at most `limit` of them. WHO removed a row is not
+    read here (CK-63): both bins clear at the same window (two-bins §1.5),
+    and a row with no recorded remover — every removal before 0026, the
+    two 2026-09-14 declines among them — is swept exactly as before.
 
     ROW BY ROW, NEVER A BULK UPDATE — this is the concurrency safety, and
     it only works per row. A bulk `UPDATE … WHERE removed_at < cutoff` that

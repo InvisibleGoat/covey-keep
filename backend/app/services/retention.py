@@ -109,8 +109,13 @@ PURGE_GRACE = timedelta(hours=1)
 
 # THE CONTRIBUTOR'S RETRIEVAL WINDOW — one of the bin's TWO CLOCKS, and the
 # one this constant is (bin record §6.1): a removed photograph stays visible
-# to its UPLOADER for this long after `removed_at`, and to nobody else at
-# any point. The OTHER clock is the storage a removed row occupies, which
+# to its UPLOADER for this long after `removed_at` — WHEN THE UPLOADER
+# REMOVED IT (CK-63; two-bins record §3: a photograph is in the bin of
+# whoever removed it, and `media.removed_by_person_id` says who; a host's
+# removal or decline is in the gathering's bin, which no surface reads
+# yet, and a row with no recorded remover is shown to nobody) — and to
+# nobody else at any point. The window is the same length for both bins
+# (two-bins §1.5). The OTHER clock is the storage a removed row occupies, which
 # runs until the photograph is destroyed and carries no window at all —
 # which is why `keeping.account_bin_count` has no `removed_at` term and
 # must never grow one (a keeper full, with a bin reading empty, and nothing

@@ -543,7 +543,7 @@ test('publishing from the queue removes the row from it and its line becomes the
   expect(document.body.textContent).not.toMatch(/published (at|on)/i)
 })
 
-test('declining takes a second click, says what it is, and lands the row in the bin — out of the queue, with the bin line for its uploader', async () => {
+test("declining takes a second click, says what it is — nobody in the gathering sees it again, the uploader included (CK-63) — and lands the row in the gathering's bin, out of the queue; the host's own declined row stays in their own bin", async () => {
   const server = reviewServer([
     mediaRow({ id: 'm-mine' }),
     mediaRow({ id: 'm-theirs', is_own: false, uploader_display_name: 'grandma' }),
@@ -560,11 +560,18 @@ test('declining takes a second click, says what it is, and lands the row in the 
   // grandma's: the first click asks; nothing is sent.
   fireEvent.click(within(rows[1]).getByRole('button', { name: 'Decline' }))
   const confirm = within(rows[1]).getByRole('group', { name: /^Decline/ })
+  // THE SENTENCE CK-63 MADE TRUE (two-bins record §3): a declined photograph
+  // is in the GATHERING's bin — the uploader does not see it again (until
+  // CK-63 this read "grandma can still see it for 30 days; you won't see it
+  // again here", true only while a decline landed in the uploader's view)
+  // — and nothing here promises anyone a way back, because the host's bin
+  // surface does not exist yet.
   expect(confirm.textContent).toContain(
-    "The gathering won't see this photo. grandma can still see it for 30 days; you won't see it again here.",
+    "The gathering won't see this photo. Neither will grandma: nobody in this gathering will see it again.",
   )
-  // It reads as what it is — removal with the contributor's bin — never
-  // as a delete key, and never the word CK-30 keeps out of a warning.
+  expect(confirm.textContent).not.toMatch(/still see|30 days|restore|put back|recover|bin/i)
+  // It reads as what it is — removal, nothing destroyed — never as a
+  // delete key, and never the word CK-30 keeps out of a warning.
   expect(confirm.textContent).not.toMatch(/delet|destroy|cancel|permanent/i)
   expect(calls(mock, 'POST', () => true)).toHaveLength(0)
   // The do-nothing: back to the two acts, still nothing sent.
@@ -584,7 +591,9 @@ test('declining takes a second click, says what it is, and lands the row in the 
   expect(rows).toHaveLength(1)
   expect(server.rows.get('m-theirs')!.publication_state).toBe('removed')
 
-  // The host's own: the confirm addresses them as the one who keeps it.
+  // The host's own: the confirm addresses them as the one who keeps it — a
+  // host declining THEIR OWN photograph is its remover and its uploader, so
+  // that row is in their own bin (two-bins §3) and this line stays true.
   fireEvent.click(within(rows[0]).getByRole('button', { name: 'Decline' }))
   expect(within(rows[0]).getByRole('group', { name: /^Decline/ }).textContent).toContain(
     "The gathering won't see this photo. You can still see it yourself for 30 days.",
@@ -593,8 +602,10 @@ test('declining takes a second click, says what it is, and lands the row in the 
   expect(await screen.findByText('Nothing is waiting for your review.')).toBeTruthy()
 
   // In the full list: the host's own declined photograph reads the bin line
-  // (they uploaded it); grandma's is not in their list at all — the bin is
-  // the uploader's alone (CK-37), and the server's list says so.
+  // (they uploaded it AND removed it — their own bin); grandma's is not in
+  // their list at all — it is in the gathering's bin, which no surface
+  // reads yet (CK-63; until then the bin was the uploader's alone, CK-37),
+  // and the server's list says so.
   fireEvent.click(screen.getByRole('button', { name: 'Show all photos' }))
   rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
   expect(rows).toHaveLength(1)
