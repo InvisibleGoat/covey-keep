@@ -194,6 +194,40 @@ test("the bin's line: whose it is, and how long the way back stays open — and 
   }
 })
 
+// CK-64.1: `removed_at` is stamped by the SERVER's clock and `now` is read
+// from the DEVICE's. A device trailing the server by a second saw a
+// photograph binned a moment ago with the whole window plus that second left,
+// and rounding up told the person "31 more days" (check (he), on the deploy).
+// Every case above reads both instants from one clock, which is why none of
+// them could see it; these put `now` BEFORE the stamp, as a trailing device
+// does.
+test('a device clock that trails the server never promises more days than the window holds (CK-64.1)', () => {
+  const stamp = '2026-09-10T12:00:00+00:00'
+  const removed = Date.parse(stamp)
+  const behind = (ms: number) => new Date(removed - ms)
+  // One second behind: the case the deploy found.
+  expect(binDaysLeft(stamp, behind(1000))).toBe(30)
+  // An hour behind, and a whole day behind: still the window, never past it.
+  expect(binDaysLeft(stamp, behind(3_600_000))).toBe(30)
+  expect(binDaysLeft(stamp, behind(DAY))).toBe(REMOVED_BIN_DAYS)
+  // The cap takes nothing from rounding up below it: 29.9 days left is
+  // still told as 30.
+  expect(binDaysLeft(stamp, new Date(removed + 0.1 * DAY))).toBe(30)
+})
+
+test("the bin's line from a trailing device clock reads 30 more days, never 31 (CK-64.1)", () => {
+  const own = { status: 'ready', publication_state: 'removed', is_own: true, uploader_display_name: 'Steven' }
+  const stamp = '2026-09-10T12:00:00+00:00'
+  const removed = Date.parse(stamp)
+  for (const msBehind of [1000, 3_600_000]) {
+    for (const isHost of [true, false]) {
+      expect(
+        mediaStateMessage({ ...own, removed_at: stamp }, { isHost, now: new Date(removed - msBehind) }),
+      ).toBe('In your bin. Only you can see it, and you can put it back for 30 more days.')
+    }
+  }
+})
+
 test("the permanent delete's confirmation is the record's sentence, character for character, and names the product from brand.ts", () => {
   expect(DELETE_PERMANENTLY_CONFIRMATION).toBe(
     'Are you sure? This will permanently remove the photo from CoveyKeep and cannot be recovered.',

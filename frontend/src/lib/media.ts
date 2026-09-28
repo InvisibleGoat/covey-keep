@@ -153,10 +153,25 @@ const DAY_MS = 24 * 60 * 60 * 1000
 // How many more days the person can put a binned photograph back (CK-64):
 // the window's close (`removed_at` + REMOVED_BIN_DAYS) against `now`,
 // rounded UP to whole days, so a person is never told a smaller number than
-// the truth while a day is still partly theirs. 0 means LESS THAN A DAY is
-// left — the last day, or a row the server would already have stopped
-// listing — and it is never negative; null means the stamp could not be
-// read. `now` is a parameter so nothing here depends on the clock.
+// the truth while a day is still partly theirs — and CAPPED at
+// REMOVED_BIN_DAYS (CK-64.1). 0 means LESS THAN A DAY is left — the last
+// day, or a row the server would already have stopped listing — and it is
+// never negative; null means the stamp could not be read. `now` is a
+// parameter so nothing here depends on the clock.
+//
+// Two clocks meet here: `removed_at` is stamped by the SERVER's clock and
+// `now` is read from the DEVICE's. (Not a timezone question — the stamp
+// carries its offset.) When the device trails the server by even a second,
+// a photograph binned a moment ago has the whole window plus that second
+// left, and rounding up told the person "31 more days" (CK-64's check (he),
+// on the deploy). The cap is the whole fix: the copy never promises more
+// days than the server will honour. Below the cap a trailing clock only
+// delays each day's tick by the skew, as a page left open delays it anyway.
+// A device clock AHEAD of the server's errs the other way — near a day's
+// turn, and at the end, the count can read one day short — and that is the
+// acceptable direction, because it under-promises. Nothing here corrects
+// for skew and no server time is sent to do it: the server's audience rule
+// decides when the way back closes, whatever this number says.
 //
 // What the number is NOT: a countdown to deletion. At the window's close
 // the person stops seeing the photograph and can no longer put it back —
@@ -169,7 +184,7 @@ export function binDaysLeft(removedAt: string, now: Date): number | null {
   if (Number.isNaN(closes)) return null
   const remaining = closes - now.getTime()
   if (remaining < DAY_MS) return 0
-  return Math.ceil(remaining / DAY_MS)
+  return Math.min(REMOVED_BIN_DAYS, Math.ceil(remaining / DAY_MS))
 }
 
 // The phrase the bin's line ends with, from the number above: nothing when
