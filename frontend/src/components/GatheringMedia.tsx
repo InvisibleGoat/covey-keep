@@ -812,6 +812,18 @@ export function GatheringMedia({
   const allSelected = listed.length > 0 && listed.every((item) => selected.includes(item.id))
   const batchRefused = Object.keys(batchErrors.fields).length > 0
 
+  // "Fix the photo named above" only when a photo is named (CK-65.1): a
+  // refusal on a per-file field (`items.{index}.*`) renders against the file
+  // it names, and the line below the button may send the person to it. One
+  // on the batch-level `items` field alone — the quota's two forms, the
+  // memorial ceiling, the count bounds — names nothing about any photo, and
+  // the server's message above the button already says why. Decided by the
+  // error KEYS, never the message text: the fields are the contract, the
+  // strings are the server's.
+  const refusalNamesAFile = Object.keys(errors.fields).some((field) =>
+    /^items\.\d+\./.test(field),
+  )
+
   // The queue's own status line (CK-43.1): what is waiting, or that nothing
   // is — a state, never a blank area, and never "No photos yet", which
   // means something else.
@@ -874,7 +886,11 @@ export function GatheringMedia({
               : 'Upload'}
         </button>
         {Object.keys(errors.fields).length > 0 && (
-          <p className="field-hint">Nothing was uploaded — fix the photo named above and try again.</p>
+          <p className="field-hint">
+            {refusalNamesAFile
+              ? 'Nothing was uploaded — fix the photo named above and try again.'
+              : 'Nothing was uploaded.'}
+          </p>
         )}
         <FormLevelErrors errors={errors} />
       </form>

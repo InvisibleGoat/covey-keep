@@ -325,6 +325,114 @@ test("a video is refused with the server's message rendered against the file it 
   expect(JSON.parse(intentInit!.body as string).items[1].content_type).toBe('video/quicktime')
 })
 
+// CK-65.1: "fix the photo named above" only when a photo is named. A refusal
+// that lands on the batch-level `items` field — the quota's two forms, the
+// memorial ceiling, the count bounds — names nothing about any photo, so the
+// line beneath the button says nothing was uploaded and stops; the server's
+// message above it already says why. Derived from the error KEYS, never the
+// message text: the fields are the contract, the strings are the server's.
+test(`a quota refusal on the batch-level items field reads "Nothing was uploaded." with no photo blamed`, async () => {
+  const mock = stubRoutes([
+    { method: 'GET', match: endsWith('/gatherings/g-1/media'), response: () => json(200, { media: [] }) },
+    {
+      method: 'POST',
+      match: endsWith('/gatherings/g-1/media/intents'),
+      response: () =>
+        json(422, {
+          detail: [
+            // The non-keeper's withheld form (CK-65) — but any batch-level
+            // message behaves the same; only the loc decides.
+            { loc: ['body', 'items'], msg: "this space is full, so this photo can't be added" },
+          ],
+        }),
+    },
+  ])
+
+  renderMedia()
+  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  await screen.findByText('No photos yet.')
+
+  const still = new File([new Uint8Array([1])], 'IMG_0569.HEIC', { type: '' })
+  fireEvent.change(screen.getByLabelText(/add photos/i), { target: { files: [still] } })
+  fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+
+  // The server's message, capitalised by the mapper, on the batch-level field.
+  const message = await screen.findByText(/^This space is full, so this photo can't be added/)
+  expect(message.getAttribute('id')).toBe('error-items')
+  // The whole line, exactly: there is nothing about the photo to fix, so no
+  // sentence claims there is.
+  expect(screen.getByText('Nothing was uploaded.')).toBeTruthy()
+  expect(document.body.textContent).not.toContain('fix the photo')
+  // Batch refused whole, as ever: nothing went to R2.
+  expect(calls(mock, 'PUT', () => true)).toHaveLength(0)
+})
+
+test(`a memorial-ceiling refusal on the batch-level items field behaves the same`, async () => {
+  stubRoutes([
+    { method: 'GET', match: endsWith('/gatherings/g-1/media'), response: () => json(200, { media: [] }) },
+    {
+      method: 'POST',
+      match: endsWith('/gatherings/g-1/media/intents'),
+      response: () =>
+        json(422, {
+          detail: [
+            {
+              loc: ['body', 'items'],
+              msg: 'a memorial holds up to 5,000 photos, and this one would go past it',
+            },
+          ],
+        }),
+    },
+  ])
+
+  renderMedia()
+  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  await screen.findByText('No photos yet.')
+
+  const still = new File([new Uint8Array([1])], 'IMG_0569.HEIC', { type: '' })
+  fireEvent.change(screen.getByLabelText(/add photos/i), { target: { files: [still] } })
+  fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+
+  await screen.findByText(/^A memorial holds up to 5,000 photos/)
+  expect(screen.getByText('Nothing was uploaded.')).toBeTruthy()
+  expect(document.body.textContent).not.toContain('fix the photo')
+})
+
+test('a 422 carrying both a batch-level and a per-file error names the photo — the per-file sentence stands', async () => {
+  stubRoutes([
+    { method: 'GET', match: endsWith('/gatherings/g-1/media'), response: () => json(200, { media: [] }) },
+    {
+      method: 'POST',
+      match: endsWith('/gatherings/g-1/media/intents'),
+      response: () =>
+        json(422, {
+          detail: [
+            { loc: ['body', 'items'], msg: "this space is full, so these 2 photos can't be added" },
+            {
+              loc: ['body', 'items', 1, 'content_type'],
+              msg: "Value error, video isn't accepted yet — a Live Photo's video half is what this usually is; the still (HEIC or JPEG) can be added",
+            },
+          ],
+        }),
+    },
+  ])
+
+  renderMedia()
+  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  await screen.findByText('No photos yet.')
+
+  const still = new File([new Uint8Array([1])], 'IMG_0569.HEIC', { type: '' })
+  const video = new File([new Uint8Array([1, 2])], 'IMG_0569.MOV', { type: 'video/quicktime' })
+  fireEvent.change(screen.getByLabelText(/add photos/i), { target: { files: [still, video] } })
+  fireEvent.click(screen.getByRole('button', { name: /upload 2 photos/i }))
+
+  // A photo IS named — the per-file sentence, unchanged.
+  await screen.findByText(/Video isn't accepted yet/)
+  expect(
+    screen.getByText('Nothing was uploaded — fix the photo named above and try again.'),
+  ).toBeTruthy()
+})
+
 test('every rung renders its own line; the ready line is read from publication_state; a failed row offers exactly one affordance', async () => {
   stubRoutes([
     {
