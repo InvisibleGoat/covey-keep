@@ -28,23 +28,25 @@ The load-bearing pins:
   refusing once the group's keeper is gone;
 - CK-51b's own pins: 10,000 photographs admitted and the 10,001st refused
   whatever it weighs; a 24 MB photograph and a 40 KB one each costing
-  exactly 1, with the byte columns unread; THE TWO REFUSALS by their exact
-  copy — the bin empty (no bin named) and the bin not empty (the bin
-  named, emptying offered; bin record §5) — neither naming a usage figure,
-  whose storage it is, or a byte unit; `account_bin_count` reached from
-  the refusal path alone; no quota or ceiling refusal spelling GB or MB;
-- CK-51b.1's own pins — WHO IS ASKING (the currency record 2.6.0 §3, the
-  bin record 1.1.0 §5): CK-51b's two forms are THE KEEPER'S, asking about
-  their own space — the room left, and the bin where it is not empty,
-  disclosed because only they can act on either; everyone else reads ONE
-  withheld form, the limit and the batch — no room figure (usage in
-  disguise: CK-50's pin, restored), no bin count (a fact about another
-  person's deletions), no `host`, no `keeper`, no byte unit; the four
-  cases keeper / non-keeper × bin empty / bin not empty by exact copy; a
-  host who is not the keeper reads the withheld form in both bin states;
-  `account_bin_count` stubbed to raise and never reached on the
-  non-keeper refusal, the accepted path, the memorial refusal or the
-  keeperless refusal;
+  exactly 1, with the byte columns unread; no quota or ceiling refusal
+  spelling GB or MB;
+- the refusal copy since CK-65 (keeping-explained §5.2, §5.5; WHO IS
+  ASKING is CK-51b.1's): THE KEEPER, asking about their own space, reads
+  the room form in EVERY case — the allowance, the room left and the
+  batch — and NO refusal names a bin (the bin clause CK-51b built is
+  retired: the keeper empties no bin — the destroy audience is the host
+  and the uploader, never the keeper — so "Empty the bin to make room"
+  named an affordance they do not have); everyone else reads ONE withheld
+  form — the space is full and the batch can't be added — with no
+  allowance (once members are shown who keeps a gathering, that figure
+  discloses the keeper's plan), no room figure (usage in disguise:
+  CK-50's pin), no bin, no `host`, no `keeper`, no byte unit; singular
+  and plural agree; the four cases keeper / non-keeper × bin empty / bin
+  not empty by exact copy, the bin's state changing NOTHING; a host who
+  is not the keeper reads the withheld form in both bin states;
+  `account_bin_count` has no production caller — no module under app/api/
+  spells the call, and a stub that raises is never reached on ANY path,
+  both refusal forms included;
 - a memorial is exempt from the account quota and refused above its own
   ceiling — 5,000 photographs, one unit across every gathering type — with
   in-flight rows counting toward it;
@@ -498,17 +500,15 @@ async def test_an_uploader_may_be_over_their_own_quota(
 async def test_a_quota_refusal_never_discloses_usage_or_whose_storage_it_is(
     client, capsys, db_session_factory, monkeypatch
 ):
-    # CK-50's pin, RESTORED at CK-51b.1 for every caller who is not the
-    # keeper. CK-50 decided that a refusal names the limit and what would
-    # exceed it — never the host's usage — and called the room left "usage
-    # in disguise". CK-51b's kickoff specified copy naming the room to
-    # EVERY caller (the currency record §3 at 2.4.0: "something a person
-    # can act on"); the phase moved this pin deliberately and reported it,
-    # and the records were amended once the collision was seen (currency
-    # 2.6.0 §3, bin 1.1.0 §5): only the KEEPER can act on the room or the
-    # bin, so to anyone else both figures are unusable, and the room left
-    # is exactly the usage CK-50 withheld. The invitee here is in the
-    # upload audience and is not the keeper.
+    # CK-50's pin, RESTORED at CK-51b.1 and NARROWED FURTHER at CK-65
+    # (keeping-explained §5.2): the withheld form loses the allowance
+    # figure too. CK-50 decided a refusal never names the host's usage and
+    # called the room left "usage in disguise"; CK-51b.1 restored that for
+    # every caller who is not the keeper; and once members are shown who
+    # keeps a gathering ("Kept by Anne"), "it holds 10,000 photos" becomes
+    # a fact about the keeper's plan, so it goes the same way. The
+    # withheld form names the space and the batch, and NOTHING else. The
+    # invitee here is in the upload audience and is not the keeper.
     monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 50)
     _, headers_invitee, created = await _host_and_invitee(
         client, capsys, "host@example.com", "invitee@example.com"
@@ -519,17 +519,20 @@ async def test_a_quota_refusal_never_discloses_usage_or_whose_storage_it_is(
     assert refused.status_code == 422
     assert _locs(refused) == [["body", "items"]]
     message = refused.json()["detail"][0]["msg"]
-    # The allowance and the batch are stated, and nothing else: not the
-    # keeper's 43, not the 7 that would disclose it, not the bin.
-    assert message == "this space is full — it holds 50 photos, and you're adding 8"
+    # The batch is stated, and nothing else: not the allowance (50), not
+    # the keeper's 43, not the 7 that would disclose it, not the bin.
+    assert message == "this space is full, so these 8 photos can't be added"
+    assert "50" not in message  # the allowance — the keeper's plan (CK-65)
     assert "43" not in message  # the usage figure
     assert "7" not in message  # the room left — usage in disguise
     assert "room" not in message
     assert "bin" not in message
+    assert "holds" not in message
     _names_no_byte_unit(message)
     # And never WHOSE storage it is: the caller may be neither host nor
     # keeper, and "the keeper's storage is limited to X" tells a guest
-    # about someone else's account. Neither word appears, and no direction
+    # about someone else's account. Neither word appears — which also
+    # keeps the keeper's address (host@example.com) out — and no direction
     # ("ask the keeper to make room") names whose space it is either.
     assert "host" not in message
     assert "keeper" not in message
@@ -646,6 +649,9 @@ async def test_a_keeperless_gathering_refuses_uploads(client, capsys, db_session
         assert response.status_code == 422
         assert _locs(response) == [["path", "gathering_id"]]
         message = response.json()["detail"][0]["msg"]
+        # Byte-identical since CK-50, pinned exactly at CK-65 — which
+        # changed the two quota forms and must not have moved this one.
+        assert message == "nobody keeps this gathering, so photos can't be added to it"
         # The copy names keeping, not hosting — and describes no way to come
         # to keep it: the claim surface is unbuilt, so it says what is true
         # and stops.
@@ -851,18 +857,18 @@ async def test_a_photograph_costs_exactly_one_whatever_it_weighs_and_the_byte_co
         assert await _media_count(db) == 2
 
 
-async def test_the_refusal_when_the_bin_is_empty_names_no_bin(
+async def test_the_keeper_reads_the_room_form(
     client, capsys, db_session_factory, monkeypatch
 ):
-    # The ordinary refusal (currency record §3's copy): the allowance, the
-    # room left, what is being added — and no bin, because the bin is
-    # empty and copy must not name an affordance it cannot deliver (bin
-    # record §5; the CK-50 discipline). THE KEEPER'S form (CK-51b.1): the
-    # caller created the gathering and keeps it, so the room left is their
-    # own allowance — disclosed because it is the caller's own space and
-    # only they can act on it (currency 2.6.0 §3). Anyone else reads the
-    # withheld form, pinned in the disclosure test above and the matrix
-    # below.
+    # THE KEEPER'S refusal (currency record §3's copy, unchanged at
+    # CK-65): the allowance, the room left, what is being added — their
+    # own numbers, the ones they can act on. The caller created the
+    # gathering and keeps it. No bin is named — since CK-65 no refusal
+    # names one in ANY bin state (the non-empty case is the test below);
+    # anyone else reads the withheld form, pinned in the disclosure test
+    # above and the matrix below. (Until CK-65 this test was the
+    # bin-empty branch of a pair; the pair is gone, these pins did not
+    # move.)
     monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 10)
     headers = await _signed_in_headers(client, capsys, "nobin@example.com")
     created = await _create(client, headers)
@@ -913,80 +919,96 @@ async def _plant_bin(db, gathering_id: str, uploader_person_id, *, removed: int,
     await db.commit()
 
 
-async def test_the_refusal_when_the_bin_is_not_empty_names_it_and_offers_to_empty_it(
+async def test_a_keeper_with_a_non_empty_bin_reads_the_room_form_and_no_bin_clause(
     client, capsys, db_session_factory, monkeypatch
 ):
-    # Bin record §5, binding on this phase: where the space is full and
-    # some of what fills it is in the bin (removed and still stored,
-    # whatever its age — not the 30-day retrieval window; bin record
-    # §6.1), the refusal says so and
-    # offers the one thing a person can do about it. Charged, not visible:
-    # the two binned photographs still count (bin record §3, §4). THE
-    # KEEPER'S form (CK-51b.1): the bin is theirs to empty — the disclosure
-    # is permitted because it is the caller's own space and only they can
-    # act on it (bin 1.1.0 §5); anyone else reads the withheld form, with
-    # no bin named and none counted (the matrix below).
+    # THE CK-65 CRUX (keeping-explained §5.5), and the case the deploy
+    # hits today: the keeper's space is full and some of what fills it is
+    # in the bin. Until CK-65 this read "this space is full — 10 photos,
+    # and 2 of them are in the bin. Empty the bin to make room." — an
+    # affordance the keeper does not have: the destroy audience is the
+    # host and the uploader (CK-54), never the keeper, and since CK-63 a
+    # binned photograph is visible only to whoever removed it. The keeper
+    # now reads the ordinary room form, with no bin and no "Empty"
+    # anywhere in the message — and no "waiting to be cleared" line
+    # either: that is allowed only once the sweep is switched on, which
+    # the API cannot know. The two binned photographs still COUNT (bin
+    # record §3, §4 — charged, never visible), which is why the space is
+    # full at all.
     monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 10)
     address = "binned@example.com"
     headers = await _signed_in_headers(client, capsys, address)
     created = await _create(client, headers)
     async with db_session_factory() as db:
         person = (await db.execute(select(Person).where(Person.email == address))).scalars().one()
-        await _plant_bin(db, created["id"], person.id, removed=2, other=7)
-        await _set_photo_count(db, created["id"], 9)
+        await _plant_bin(db, created["id"], person.id, removed=2, other=8)
+        await _set_photo_count(db, created["id"], 10)
         account = await _account_for(db, address)
         assert (await db.get(Gathering, created["id"])).keeper_account_id == account.id
-        assert await keeping.account_usage(db, account) == 9
+        assert await keeping.account_usage(db, account) == 10
+        # The bin is genuinely not empty — the one definition of the
+        # charged count reads 2 — and the refusal still names none of it.
         assert await keeping.account_bin_count(db, account) == 2
     refused = await _intents(client, headers, created["id"], [_item(MB)] * 3)
     assert refused.status_code == 422
     assert _locs(refused) == [["body", "items"]]
     message = refused.json()["detail"][0]["msg"]
-    assert message == "this space is full — 10 photos, and 2 of them are in the bin. Empty the bin to make room."
-    assert "9" not in message  # the usage figure
+    assert message == "this space holds 10 photos and has no room left, and you're adding 3"
+    assert "bin" not in message and "Empty" not in message
+    assert "cleared" not in message  # the sweep-gated line is not this phase's
+    assert "2" not in message  # the bin count
     assert "host" not in message and "keeper" not in message
     _names_no_byte_unit(message)
     async with db_session_factory() as db:
-        assert await _media_count(db) == 9  # nothing added
+        assert await _media_count(db) == 10  # nothing added
 
 
-async def test_the_bin_clause_agrees_with_itself_at_one_photograph(
+async def test_the_non_keeper_refusal_agrees_with_itself_at_one_photograph(
     client, capsys, db_session_factory, monkeypatch
 ):
-    # CK-54's rider. The clause had no singular branch, so ONE binned
-    # photograph read "1 of them are in the bin" — the commonest small
-    # number, and the one a person is most likely to see, because it is
-    # what a single removal leaves behind. Both forms pinned so neither
-    # can drift away from the other.
+    # The withheld form's singular branch (CK-65; CK-54's rider taught
+    # the lesson on the old copy): ONE photo is the commonest case — it
+    # is what a single tap adds — and "so these 1 photos can't be added"
+    # is the shape that ships when nobody writes the branch. Both forms
+    # pinned exactly so neither can drift away from the other, with the
+    # withheld form's whole ban list on each: no allowance, no room, no
+    # bin, no owner word, no address, no byte unit.
     monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 10)
-    address = "onebinned@example.com"
-    headers = await _signed_in_headers(client, capsys, address)
-    created = await _create(client, headers)
-    async with db_session_factory() as db:
-        person = (await db.execute(select(Person).where(Person.email == address))).scalars().one()
-        await _plant_bin(db, created["id"], person.id, removed=1, other=9)
-        await _set_photo_count(db, created["id"], 10)
-        account = await _account_for(db, address)
-        assert await keeping.account_bin_count(db, account) == 1
-    refused = await _intents(client, headers, created["id"], [_item(MB)])
-    assert refused.status_code == 422
-    message = refused.json()["detail"][0]["msg"]
-    assert message == (
-        "this space is full — 10 photos, and 1 of them is in the bin. "
-        "Empty the bin to make room."
+    _, headers_invitee, created = await _host_and_invitee(
+        client, capsys, "keeper-of-one@example.com", "adder@example.com"
     )
-    assert "are in the bin" not in message
-    _names_no_byte_unit(message)
+    async with db_session_factory() as db:
+        await _set_photo_count(db, created["id"], 10)
+    one = await _intents(client, headers_invitee, created["id"], [_item(MB)])
+    assert one.status_code == 422
+    assert _locs(one) == [["body", "items"]]
+    singular = one.json()["detail"][0]["msg"]
+    assert singular == "this space is full, so this photo can't be added"
+    assert "these" not in singular and "photos" not in singular
+    several = await _intents(client, headers_invitee, created["id"], [_item(MB)] * 2)
+    assert several.status_code == 422
+    plural = several.json()["detail"][0]["msg"]
+    assert plural == "this space is full, so these 2 photos can't be added"
+    for message in (singular, plural):
+        assert "10" not in message  # the allowance — the keeper's plan
+        assert "room" not in message and "bin" not in message and "holds" not in message
+        # the owner words, which also keep keeper-of-one@example.com out
+        assert "host" not in message and "keeper" not in message
+        _names_no_byte_unit(message)
+    async with db_session_factory() as db:
+        assert await _media_count(db) == 0  # nothing added
 
 
 async def test_the_four_refusals_by_audience_and_bin_state(
     client, capsys, db_session_factory, monkeypatch
 ):
-    # THE MATRIX (CK-51b.1; currency 2.6.0 §3, bin 1.1.0 §5): keeper /
-    # non-keeper × bin empty / bin not empty, each by exact copy. Grandma
-    # created the gathering and keeps it; the cousin is an accepted invitee
-    # — in the upload audience, not the keeper. Same gathering, same
-    # headroom, same batch; only WHO IS ASKING differs.
+    # THE MATRIX (CK-51b.1 built it; CK-65 narrowed both sides —
+    # keeping-explained §5.2, §5.5): keeper / non-keeper × bin empty /
+    # bin not empty, each by exact copy — and since CK-65 the bin's state
+    # changes NOTHING for either seat. Grandma created the gathering and
+    # keeps it; the cousin is an accepted invitee — in the upload
+    # audience, not the keeper. Same gathering, same headroom, same
+    # batch; only WHO IS ASKING differs.
     monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 10)
     keeper_addr, cousin_addr = "grandma@example.com", "cousin@example.com"
     headers_keeper, headers_cousin, created = await _host_and_invitee(
@@ -1000,7 +1022,7 @@ async def test_the_four_refusals_by_audience_and_bin_state(
         await _set_photo_count(db, created["id"], 8)
         assert await keeping.account_bin_count(db, keeper) == 0
 
-    withheld = "this space is full — it holds 10 photos, and you're adding 3"
+    withheld = "this space is full, so these 3 photos can't be added"
 
     # Bin empty: the keeper reads the room left; the cousin reads the
     # withheld form.
@@ -1013,8 +1035,9 @@ async def test_the_four_refusals_by_audience_and_bin_state(
     )
     assert cousin_empty.json()["detail"][0]["msg"] == withheld
 
-    # Bin not empty: the keeper reads the bin clause; the cousin reads the
-    # SAME withheld form — the bin's state changes nothing for them.
+    # Bin not empty: since CK-65 it changes NOTHING — the keeper reads the
+    # room form (now with no room left), the cousin the SAME withheld
+    # form; nobody reads a bin.
     async with db_session_factory() as db:
         person = (await db.execute(select(Person).where(Person.email == keeper_addr))).scalars().one()
         await _plant_bin(db, created["id"], person.id, removed=2, other=8)
@@ -1024,19 +1047,22 @@ async def test_the_four_refusals_by_audience_and_bin_state(
     cousin_binned = await _intents(client, headers_cousin, created["id"], [_item(MB)] * 3)
     assert keeper_binned.status_code == cousin_binned.status_code == 422
     assert keeper_binned.json()["detail"][0]["msg"] == (
-        "this space is full — 10 photos, and 2 of them are in the bin. Empty the bin to make room."
+        "this space holds 10 photos and has no room left, and you're adding 3"
     )
     assert cousin_binned.json()["detail"][0]["msg"] == withheld
 
-    # Every form: no usage figure (the 8), no owner word, no byte unit. The
-    # withheld form: no room figure, no bin — not the word, not the 2.
+    # Every form: no usage figure (the 8), no owner word, no byte unit —
+    # and, since CK-65, no bin in ANY of the four. The withheld form: no
+    # allowance, no room figure, no bin count (not the word, not the 2).
     for response in (keeper_empty, cousin_empty, keeper_binned, cousin_binned):
         message = response.json()["detail"][0]["msg"]
         assert "8" not in message and "host" not in message and "keeper" not in message
+        assert "bin" not in message and "Empty" not in message
         _names_no_byte_unit(message)
     for response in (cousin_empty, cousin_binned):
         message = response.json()["detail"][0]["msg"]
-        assert "room" not in message and "bin" not in message and "2" not in message
+        assert "room" not in message and "holds" not in message
+        assert "10" not in message and "2" not in message
     async with db_session_factory() as db:
         assert await _media_count(db) == 10  # the planted rows; nothing added
 
@@ -1044,13 +1070,13 @@ async def test_the_four_refusals_by_audience_and_bin_state(
 async def test_a_host_who_is_not_the_keeper_reads_the_withheld_form(
     client, capsys, db_session_factory, monkeypatch
 ):
-    # The host is not special (currency 2.6.0 §3): a host who does not keep
-    # the gathering can neither free room nor empty the bin, so they read
-    # the withheld form in both bin states — while the keeper, uploading to
-    # the same gathering, reads their own room and their own bin. The
-    # sponsorship shape as CK-50's tests build it: grandma keeps the family
-    # home, her grandson hosts the barbecue; the column is MOVED because
-    # transfer has no surface.
+    # The host is not special (currency 2.6.0 §3; the forms CK-65's): a
+    # host who does not keep the gathering can free no room, so they read
+    # the withheld form in both bin states — while the keeper, uploading
+    # to the same gathering, reads their own room, and since CK-65 never
+    # a bin. The sponsorship shape as CK-50's tests build it: grandma
+    # keeps the family home, her grandson hosts the barbecue; the column
+    # is MOVED because transfer has no surface.
     monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 4)
     host_addr, keeper_addr = "grandson@example.com", "grandma@example.com"
     headers_host = await _signed_in_headers(client, capsys, host_addr)
@@ -1067,7 +1093,7 @@ async def test_a_host_who_is_not_the_keeper_reads_the_withheld_form(
         # The keeper is full through a gathering of their own; the bin empty.
         await _set_photo_count(db, keepers_own["id"], 3)
 
-    withheld = "this space is full — it holds 4 photos, and you're adding 2"
+    withheld = "this space is full, so these 2 photos can't be added"
     host_refused = await _intents(client, headers_host, barbecue["id"], [_item(MB)] * 2)
     keeper_refused = await _intents(client, headers_keeper, barbecue["id"], [_item(MB)] * 2)
     assert host_refused.status_code == keeper_refused.status_code == 422
@@ -1076,9 +1102,10 @@ async def test_a_host_who_is_not_the_keeper_reads_the_withheld_form(
         "this space holds 4 photos and has room for 1 more, and you're adding 2"
     )
 
-    # The bin fills — on the keeper's own gathering, because the bin is the
-    # account's, over every gathering that resolves to it: the keeper reads
-    # the bin clause; the host still reads the withheld form.
+    # The bin fills — on the keeper's own gathering, because the bin is
+    # the account's, over every gathering that resolves to it. Since
+    # CK-65 that changes nothing: the keeper reads the room form (no room
+    # left now), the host still the withheld form, and no bin is named.
     async with db_session_factory() as db:
         person = (await db.execute(select(Person).where(Person.email == keeper_addr))).scalars().one()
         await _plant_bin(db, keepers_own["id"], person.id, removed=2, other=2)
@@ -1088,43 +1115,55 @@ async def test_a_host_who_is_not_the_keeper_reads_the_withheld_form(
     assert host_binned.status_code == keeper_binned.status_code == 422
     assert host_binned.json()["detail"][0]["msg"] == withheld
     assert keeper_binned.json()["detail"][0]["msg"] == (
-        "this space is full — 4 photos, and 2 of them are in the bin. Empty the bin to make room."
+        "this space holds 4 photos and has no room left, and you're adding 2"
     )
+    for response in (host_refused, host_binned, keeper_refused, keeper_binned):
+        message = response.json()["detail"][0]["msg"]
+        assert "host" not in message and "keeper" not in message
+        assert "bin" not in message and "Empty" not in message
+        assert "3" not in message  # the usage figure
+        _names_no_byte_unit(message)
     for response in (host_refused, host_binned):
         message = response.json()["detail"][0]["msg"]
-        assert "host" not in message and "keeper" not in message and "bin" not in message
-        assert "room" not in message and "3" not in message  # no room figure, no usage
-        _names_no_byte_unit(message)
+        assert "room" not in message and "holds" not in message
+        assert "4" not in message  # the allowance — the keeper's plan
     async with db_session_factory() as db:
         assert await _media_count(db) == 4  # the planted rows; nothing added
 
 
-async def test_account_bin_count_is_reached_from_the_refusal_path_alone(
+async def test_account_bin_count_has_no_production_caller(
     client, capsys, db_session_factory, monkeypatch
 ):
-    # The hot path pays for the quota's one statement and nothing more: the
-    # bin is counted only once the quota has refused THE KEEPER (keeping.py
-    # says why it is not folded into account_usage; CK-51b.1 says why it is
-    # not run for anyone else — a query whose answer may not be shown is
-    # not run). Structurally — the name appears in the media router once,
-    # inside _enforce_limits, and nowhere else in the app but keeping.py
-    # itself — and behaviourally: a counting stub that raises is never
-    # reached by an accepted intent, by a memorial refusal (bin record
-    # §7.4 — no bin clause on a memorial), by a NON-KEEPER's refusal, or by
-    # the keeperless refusal.
-    source = inspect.getsource(media_api)
-    assert source.count("keeping.account_bin_count(") == 1
-    assert "keeping.account_bin_count(" in inspect.getsource(media_api._enforce_limits)
+    # CK-65 (keeping-explained §5.5): the quota refusal's bin clause — the
+    # one route caller account_bin_count ever had (CK-51b) — is retired,
+    # because the keeper may not empty any bin. The function STAYS in
+    # keeping.py as the one definition of the bin's charged count: four
+    # test files read it, and its next caller is a keeper usage surface
+    # that may say "waiting to be cleared" only once the sweep is on —
+    # never a refusal, which cannot know the switch. Until that phase, NO
+    # module under app/api/ calls it and no request path reaches it.
+    # Structurally: the call appears nowhere under app/ but keeping.py
+    # itself. Behaviourally: a counting stub that raises is never reached
+    # by an accepted intent, by a memorial refusal, by THE KEEPER'S
+    # refusal (the path that counted it until CK-65), by a NON-KEEPER's
+    # refusal, or by the keeperless refusal.
+    assert "account_bin_count(" not in inspect.getsource(media_api)
     app_dir = Path(media_api.__file__).resolve().parent.parent
+    api_callers = {
+        path.name
+        for path in (app_dir / "api").rglob("*.py")
+        if "account_bin_count(" in path.read_text(encoding="utf-8")
+    }
+    assert api_callers == set()  # docstrings may name it; nothing may call it
     callers = {
         path.relative_to(app_dir).as_posix()
         for path in app_dir.rglob("*.py")
         if "account_bin_count(" in path.read_text(encoding="utf-8")
     }
-    assert callers == {"api/media.py", "services/keeping.py"}
+    assert callers == {"services/keeping.py"}
 
     async def never(db, account):  # pragma: no cover — reaching it is the failure
-        raise AssertionError("account_bin_count was called on a path that is not the quota refusal")
+        raise AssertionError("account_bin_count was called on a production path")
 
     monkeypatch.setattr(keeping, "account_bin_count", never)
     monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 2)
@@ -1138,18 +1177,24 @@ async def test_account_bin_count_is_reached_from_the_refusal_path_alone(
     assert (await _intents(client, headers, memorial["id"], [_item(MB)])).status_code == 201
     over = await _intents(client, headers, memorial["id"], [_item(MB)])
     assert over.status_code == 422 and "memorial" in over.json()["detail"][0]["msg"]
-    # The NON-KEEPER's refusal (CK-51b.1): an accepted invitee, refused on
-    # the same gathering once it is full, reads the withheld form and the
-    # stub is never reached.
+    # THE KEEPER'S refusal — the path that counted the bin until CK-65 —
+    # reads the room form with the stub never reached.
+    async with db_session_factory() as db:
+        await _set_photo_count(db, created["id"], 2)
+    keeper_refused = await _intents(client, headers, created["id"], [_item(MB)])
+    assert keeper_refused.status_code == 422
+    assert keeper_refused.json()["detail"][0]["msg"] == (
+        "this space holds 2 photos and has no room left, and you're adding 1"
+    )
+    # The NON-KEEPER's refusal: an accepted invitee, refused on the same
+    # gathering, reads the withheld form and the stub is never reached.
     token = await _invite_token(client, capsys, headers, created["id"], "cousin@example.com")
     headers_cousin = await _signed_in_headers(client, capsys, "cousin@example.com")
     await _accept(client, headers_cousin, token)
-    async with db_session_factory() as db:
-        await _set_photo_count(db, created["id"], 2)
     cousin = await _intents(client, headers_cousin, created["id"], [_item(MB)])
     assert cousin.status_code == 422
     assert cousin.json()["detail"][0]["msg"] == (
-        "this space is full — it holds 2 photos, and you're adding 1"
+        "this space is full, so this photo can't be added"
     )
     async with db_session_factory() as db:
         await db.execute(update(Gathering).where(Gathering.id == created["id"]).values(keeper_account_id=None))

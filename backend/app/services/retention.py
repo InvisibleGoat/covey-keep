@@ -118,10 +118,13 @@ PURGE_GRACE = timedelta(hours=1)
 # (two-bins §1.5). The OTHER clock is the storage a removed row occupies, which
 # runs until the photograph is destroyed and carries no window at all —
 # which is why `keeping.account_bin_count` has no `removed_at` term and
-# must never grow one (a keeper full, with a bin reading empty, and nothing
-# to do about it). Past this window a removed photograph is invisible to
-# everyone and still charged; the 30-day SWEEP that makes the two clocks
-# coincide is Phase B. CK-54 built the destruction they both reach.
+# must never grow one: a windowed count would hide the older rows that
+# still consume the allowance (no route reads it since CK-65 — the
+# refusal's bin clause is retired — and its next reader, a sweep-gated
+# keeper surface, needs the same rule). Past this window a removed
+# photograph is invisible to everyone and still charged; the 30-day SWEEP
+# that makes the two clocks coincide is Phase B. CK-54 built the
+# destruction they both reach.
 #
 # ONE NUMBER, TWO READERS (CK-58; bin record §6 — the CK-34 discipline of
 # two mechanisms on one constant). `api/media.py::_visible_media` reads it

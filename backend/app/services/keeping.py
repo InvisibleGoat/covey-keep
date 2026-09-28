@@ -79,8 +79,9 @@ keeps_gathering), the account deletion path (profile.py) via
 lapse_kept_statuses, and the upload-intent endpoint (api/media.py, CK-34;
 its subject the resolved keeper since CK-50; counting photographs since
 CK-51b) via resolved_keeper_of / account_usage / account_quota /
-gathering_units — and, on its REFUSAL path alone, account_bin_count (the
-one caller it may ever have; see its docstring). Every function that
+gathering_units. account_bin_count has NO route caller since CK-65 — the
+refusal's bin clause, its one caller from CK-51b, is retired (the keeper
+empties no bin; see its docstring). Every function that
 writes leaves the commit to the caller, so the keeper write and its side
 effects (grace stamp, host relinquishment) land in the caller's transaction
 or not at all.
@@ -460,7 +461,7 @@ async def account_usage(db: AsyncSession, account: Account) -> int:
     quota's and the refusal's; a surface that shows it as "your photos" is
     the defect that section exists to prevent (charged = visible + in the
     bin, and only the first is a column). The bin's size is
-    `account_bin_count`, computed on the refusal path alone."""
+    `account_bin_count`, which no route calls since CK-65."""
     rows = (
         await db.execute(
             select(
@@ -521,22 +522,32 @@ async def account_bin_count(db: AsyncSession, account: Account) -> int:
     """How many of the photographs charged to this account are in the bin —
     `ready` AND `removed` — over the same gatherings account_usage counts
     (the ones that resolve to the account, memorials exempt: a memorial's
-    bin frees nothing on the account). CALLED ONLY FROM THE REFUSAL PATH
-    (api/media.py::_enforce_limits, after the quota has already refused),
-    so the refusal can say what a person can do about it — bin record §5:
-    where the space is full and the bin is not empty, the refusal names the
-    bin and offers to empty it; where the bin is empty it names no bin.
+    bin frees nothing on the account).
 
-    NOT FOLDED INTO account_usage, DELIBERATELY: account_usage is the hot
-    path — it runs inside every upload intent under the keeper's row lock —
-    and the bin is a per-gathering COUNT over `media` that only a refusal
-    needs; paying for it on every upload to answer a question the accepted
-    path never asks would be the wrong trade. Same candidate query, same
-    resolver loop, a different measure. NOT A QUOTA INPUT — nothing may add
-    it to, or subtract it from, usage (a binned photograph is charged; that
-    is bin record §3's whole point). Nothing else may call it — pinned by
-    test: the name appears in api/media.py exactly once, inside
-    _enforce_limits."""
+    NO ROUTE CALLS THIS since CK-65 (keeping-explained §5.5). Its one
+    caller from CK-51b was the quota refusal's bin clause — "Empty the bin
+    to make room." — and that clause is retired, because the keeper may
+    not empty any bin: the destroy audience has been the host and the
+    uploader since CK-54, never the keeper, and since CK-63 a binned
+    photograph is visible only to whoever removed it, so the sentence
+    offered the keeper an act they do not have (the CK-50 defect in the
+    keeper's own form). The function stays: the tests use it as the ONE
+    definition of the bin's charged count, and a future keeper usage
+    surface is its natural reader.
+
+    A BIN FIGURE MAY ONLY EVER BE SHOWN TO A KEEPER, AS "WAITING TO BE
+    CLEARED", AND ONLY ONCE THE SWEEP IS SWITCHED ON (keeping-explained
+    §5.5): until then nothing clears a bin and the sentence would be
+    false. That surface, in a phase with a way to know the switch, is
+    this function's next caller — never a refusal, which cannot know it.
+
+    NOT A QUOTA INPUT — nothing may add it to, or subtract it from, usage
+    (a binned photograph is charged; that is bin record §3's whole point).
+    Same candidate query, same resolver loop as account_usage, a different
+    measure; no `removed_at` term, ever (bin record §6.1: the charged bin
+    is every removed-and-still-stored row, whatever its age — a windowed
+    count would hide older rows that still consume the allowance). Pinned
+    by test: no module under app/api/ calls it."""
     binned = (
         select(func.count(Media.id))
         .where(
