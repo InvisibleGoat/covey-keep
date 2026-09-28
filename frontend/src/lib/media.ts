@@ -32,6 +32,19 @@
 // the host's queue renders while anything waits, whatever the switch says
 // (anyWaiting, the list-level half of the same predicate). Where review is
 // off and nothing waits, no line names a reviewer or what it waits on.
+//
+// YOUR OWN PHOTOGRAPHS (CK-64, the surface for CK-54's remove and destroy
+// and CK-63's restore; decisions/2026-09-27-two-bins.md §1, §2, §4): the
+// three acts on a row the caller uploaded are one function (binMedia), each
+// refused with a STABLE CODE the copy switches on (binRefusalMessage); the
+// bin's line says what the bin IS from the person's side — theirs alone,
+// and open to put back for the rest of the window (binDaysLeft) — and never
+// what happens at the window's end, because the automatic clear ships
+// switched off and until it is on nothing clears a bin; and the permanent
+// delete's confirmation is the bin record §7.1's sentence, verbatim, with
+// "from <the product>" kept because a photograph already in a printed book
+// is out of reach (DELETE_PERMANENTLY_CONFIRMATION).
+import { PRODUCT_NAME } from '../brand'
 import { authFetch } from './api'
 import { networkErrors } from './formErrors'
 
@@ -134,6 +147,40 @@ export const POLL_INTERVAL_MS = 3000
 // addresses; a photograph the host removed or declined is in the gathering's
 // bin, which no surface reads yet.
 export const REMOVED_BIN_DAYS = 30
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+// How many more days the person can put a binned photograph back (CK-64):
+// the window's close (`removed_at` + REMOVED_BIN_DAYS) against `now`,
+// rounded UP to whole days, so a person is never told a smaller number than
+// the truth while a day is still partly theirs. 0 means LESS THAN A DAY is
+// left — the last day, or a row the server would already have stopped
+// listing — and it is never negative; null means the stamp could not be
+// read. `now` is a parameter so nothing here depends on the clock.
+//
+// What the number is NOT: a countdown to deletion. At the window's close
+// the person stops seeing the photograph and can no longer put it back —
+// that is what the server's audience rule enforces today, and all of it.
+// The automatic clear (CK-59's sweep) ships switched off, and until it is
+// on nothing clears a bin; copy built on this number may claim only what
+// is enforced.
+export function binDaysLeft(removedAt: string, now: Date): number | null {
+  const closes = Date.parse(removedAt) + REMOVED_BIN_DAYS * DAY_MS
+  if (Number.isNaN(closes)) return null
+  const remaining = closes - now.getTime()
+  if (remaining < DAY_MS) return 0
+  return Math.ceil(remaining / DAY_MS)
+}
+
+// The phrase the bin's line ends with, from the number above: nothing when
+// there is no stamp to count from, the singular for one day, and "less
+// than a day" for the last one.
+function binWindowPhrase(days: number | null): string {
+  if (days === null) return ''
+  if (days === 0) return ' for less than a day'
+  if (days === 1) return ' for 1 more day'
+  return ` for ${days} more days`
+}
 
 const TYPE_BY_EXTENSION: Record<string, string> = {
   jpg: 'image/jpeg',
@@ -342,8 +389,14 @@ export function anyInFlight(items: Pick<MediaItem, 'status'>[]): boolean {
 // names the product as the reviewer: a host publishes or declines. Where
 // nothing waits there is no such row, and no line names a reviewer.
 export function mediaStateMessage(
-  item: Pick<MediaItem, 'status' | 'publication_state' | 'is_own' | 'uploader_display_name'>,
-  viewer: { isHost: boolean },
+  item: Pick<MediaItem, 'status' | 'publication_state' | 'is_own' | 'uploader_display_name'> & {
+    // The bin clock (CK-64), read on a removed row for the days-left phrase;
+    // optional so a caller that does not carry it still gets an honest line.
+    removed_at?: string | null
+  },
+  // `now` is injectable so the days-left phrase never depends on the clock
+  // in a test; the product passes nothing and reads the real one.
+  viewer: { isHost: boolean; now?: Date },
 ): string {
   switch (item.status) {
     case 'pending_upload':
@@ -385,14 +438,30 @@ export function mediaStateMessage(
         ? `${audience} Waiting for you to publish or decline it.`
         : `${audience} Waiting for the host to publish or decline it.`
     }
-    case 'removed':
+    case 'removed': {
       // Since CK-63 the server lists a removed row to its uploader ONLY when
       // the uploader removed it (your bin, not the gathering's), so this line
       // is true of every removed row a person can see. The `is_own: false`
       // branch is unreachable by the audience rule and kept defensive.
-      return item.is_own
-        ? `Removed. Only you can still see it, for ${REMOVED_BIN_DAYS} days after removal.`
-        : 'Removed.'
+      //
+      // Since CK-64 the person can put it back or delete it for good from
+      // this row, so the line says what the bin IS from their side: theirs
+      // alone, and open for the rest of the window. It says NOTHING about
+      // what happens at the window's end — not "deleted after", not
+      // "emptied", not "cleared" — because nothing is enforced there today:
+      // the automatic clear (CK-59's sweep) ships switched off, and until it
+      // is on nothing clears a bin. What IS enforced is that at the window's
+      // close the person stops seeing the photograph and can no longer put
+      // it back, and "you can put it back for N more days" claims exactly
+      // that and no more. (Until CK-64: "Removed. Only you can still see it,
+      // for 30 days after removal.")
+      if (!item.is_own) return 'Removed.'
+      const days =
+        item.removed_at === undefined || item.removed_at === null
+          ? null
+          : binDaysLeft(item.removed_at, viewer.now ?? new Date())
+      return `In your bin. Only you can see it, and you can put it back${binWindowPhrase(days)}.`
+    }
     default:
       return `Ready — ${item.publication_state}.`
   }
@@ -512,6 +581,94 @@ export function publishBatchErrorFields(count: number): string[] {
   for (let index = 0; index < count; index++) fields.push(`media_ids.${index}`)
   return fields
 }
+
+// ---------------------------------------------------------------------------
+// Your own photographs (CK-64; two-bins record §1, §2, §4). Three acts on a
+// row the caller uploaded — to the bin, back from it, and gone for good —
+// each an endpoint that already existed (CK-54's remove and destroy, CK-63's
+// restore) and none of which had a control until now. YOUR BIN IS YOURS:
+// only the uploader sees a self-removed photograph, puts it back, or deletes
+// it for good; the host, a co-host and the keeper cannot see or touch it,
+// and the component offers these on the caller's own rows and nowhere else.
+// ---------------------------------------------------------------------------
+
+export type BinAct = 'remove' | 'restore' | 'destroy'
+
+export type BinOutcome =
+  | { ok: true }
+  // The 409's stable code — `already_removed` (remove), `not_removed`
+  // (restore), `not_ready` (any act, carrying the rung), and `not_pending`,
+  // which is THE LOST RACE on all three acts (api-reference: the row moved
+  // between the read and the guarded write — the sweep marked it, or a
+  // second act landed first — and nothing changed), not a removal-specific
+  // code; `not_found` for the 404 (a row that is not the caller's to act on
+  // draws the 404 byte-identical to a missing id, so it is also what a row
+  // answers once the sweep has taken it); or this module's own words for
+  // the rest. The server's `message` is NOT carried: the codes are the
+  // contract, the strings are ours.
+  | { ok: false; code: string; publication_state?: string; status?: string }
+
+// One act on one of the caller's own photographs — `reviewMedia`'s shape,
+// deliberately: one POST with no body, a guarded update on the server that
+// refuses a moved row with its current state and changes nothing.
+export async function binMedia(mediaId: string, act: BinAct): Promise<BinOutcome> {
+  try {
+    const response = await authFetch(`/media/${mediaId}/${act}`, { method: 'POST' })
+    if (response.ok) return { ok: true }
+    if (response.status === 404) return { ok: false, code: 'not_found' }
+    if (response.status === 409) {
+      const body = (await response.json().catch(() => null)) as {
+        detail?: { code?: string; publication_state?: string; status?: string }
+      } | null
+      return {
+        ok: false,
+        code: body?.detail?.code ?? 'failed',
+        publication_state: body?.detail?.publication_state,
+        status: body?.detail?.status,
+      }
+    }
+    return { ok: false, code: 'failed' }
+  } catch {
+    return { ok: false, code: 'unreachable' }
+  }
+}
+
+// What a refused act tells the person — switched on the CODE and never the
+// wording, so a reworded server message changes nothing here. Each line says
+// what state the photograph is actually in, and none claims anything was
+// deleted or put back when it was not: a refusal changed nothing, and the
+// list re-read is the way to see what is true now.
+export function binRefusalMessage(refusal: { code: string; status?: string }): string {
+  switch (refusal.code) {
+    case 'not_found':
+      return "This photo isn't here any more — refresh the list to see what is."
+    case 'not_ready':
+      return refusal.status === 'failed'
+        ? "This photo couldn't be processed, so there's nothing stored to act on."
+        : "This photo isn't ready yet — it can't be sent to the bin, put back or deleted until it is."
+    case 'already_removed':
+      return 'This photo is already in your bin.'
+    case 'not_removed':
+      return "This photo isn't in your bin any more — refresh the list to see where it is."
+    case 'not_pending':
+      // The lost race, on any of the three: the row moved between the read
+      // and the write, and the server changed nothing.
+      return 'This photo changed while you were looking at it — refresh the list and try again.'
+    case 'unreachable':
+      return networkErrors().form[0]
+    default:
+      return 'Something went wrong. Nothing changed — try again.'
+  }
+}
+
+// The permanent delete's second step, verbatim from the bin record §7.1 and
+// binding through the two-bins record §4 — character for character, never
+// reworded. "From <the product>" is load-bearing: a photograph already in a
+// printed book is out of reach, so the sentence promises removal from the
+// product and not from the world. The name flows from brand.ts like every
+// user-visible brand string (CK-14), and the rendered sentence is pinned as
+// a literal.
+export const DELETE_PERMANENTLY_CONFIRMATION = `Are you sure? This will permanently remove the photo from ${PRODUCT_NAME} and cannot be recovered.`
 
 // ---------------------------------------------------------------------------
 // The two calls that spend a presigned URL. Nothing below returns one.

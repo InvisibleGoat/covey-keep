@@ -92,10 +92,17 @@ test('the message is read from publication_state: the same ready row says two di
       { isHost: true },
     ),
   ).toBe('Only grandma and you can see this. Waiting for you to publish or decline it.')
-  // The bin (nothing removes yet; the branch is derived, like CK-37's).
+  // The bin — since CK-64 the person can put it back from this row, so the
+  // line says whose it is and how long the way back stays open, with `now`
+  // injected so the count never depends on the clock. (Edited at CK-64:
+  // this pinned CK-38's "Removed. Only you can still see it, for 30 days
+  // after removal." — lib/media-bin.test.ts pins the new line's every form.)
   expect(
-    mediaStateMessage({ status: 'ready', publication_state: 'removed', ...own }, { isHost: false }),
-  ).toBe('Removed. Only you can still see it, for 30 days after removal.')
+    mediaStateMessage(
+      { status: 'ready', publication_state: 'removed', removed_at: '2026-09-10T12:00:00+00:00', ...own },
+      { isHost: false, now: new Date('2026-09-12T12:00:00+00:00') },
+    ),
+  ).toBe('In your bin. Only you can see it, and you can put it back for 28 more days.')
 })
 
 test('every in-flight rung has its own honest line, and failure names the outcome, never the file', () => {

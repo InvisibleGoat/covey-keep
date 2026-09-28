@@ -13,7 +13,10 @@ import {
   anyInFlight,
   anyWaiting,
   awaitingReview,
+  binMedia,
+  binRefusalMessage,
   confirmUpload,
+  DELETE_PERMANENTLY_CONFIRMATION,
   fetchLayerObjectUrl,
   intentErrorFields,
   intentItem,
@@ -31,6 +34,7 @@ import {
   reviewRefusalMessage,
   SEARCH_DEBOUNCE_MS,
   wordsErrorFields,
+  type BinAct,
   type IntentResponse,
   type MediaItem,
   type MediaList,
@@ -125,6 +129,31 @@ import { FieldError, FormLevelErrors } from './FieldError'
 //    A `ready` + `pending` row is terminal for `status`, so nothing here
 //    polls the queue: only the host's own act moves it. The publication
 //    stamp rides every body and is rendered nowhere (record §7).
+//
+// And, since CK-64, your own photographs (decisions/2026-09-27-two-bins.md
+// §1, §2, §4 — the surface for CK-54's remove and destroy and CK-63's
+// restore, none of which had a control until now):
+//
+// 7. YOUR BIN IS YOURS, AND THE THREE ACTS RENDER ON YOUR OWN ROWS ONLY.
+//    Send to bin, Put back and Delete permanently appear on a row the caller
+//    uploaded, at `ready`, and on no other — never on someone else's row,
+//    whoever the viewer is (the host's view of others' photographs gains
+//    nothing here: taking down another person's photograph and the
+//    gathering's bin are later phases), never on a failed or in-flight row,
+//    never on a row whose upload failed from this device. The server would
+//    refuse each of those, and a control the server would refuse is its own
+//    defect. Send to bin is one click, because it can be undone; Delete
+//    permanently takes a deliberate second step, inline, with the bin
+//    record §7.1's sentence verbatim and a do-nothing beside it — never a
+//    browser dialog; Put back lets the SERVER decide where the photograph
+//    goes (the gate, asked at restore time — never a parameter, never
+//    "back to what it was"), and a hint beside it says so where the
+//    gathering requires approval. Every act is optimistic-free and one at a
+//    time on the same guard as the review; a destroyed row is visible to
+//    nobody, so it leaves the list on the re-read and a status line says
+//    why. The bin's line counts the days the way back stays open and never
+//    says what happens at the window's end, because nothing is enforced
+//    there today (lib/media.ts::binDaysLeft).
 //
 // Collapsed by default (the CK-25/CK-27 pattern): the detail page stays one
 // request until the person opens this section.
@@ -427,6 +456,16 @@ export function GatheringMedia({
   const [rowErrors, setRowErrors] = useState<Record<string, FormErrors>>({})
   const [actingId, setActingId] = useState<string | null>(null)
   const [decliningId, setDecliningId] = useState<string | null>(null)
+  // WHICH act is in flight beside who is acting (CK-64): a row the host both
+  // reviews and owns carries Publish beside Send to bin, and a progress label
+  // keyed on the id alone would read "Publishing…" during a bin act.
+  const [actingAct, setActingAct] = useState<ReviewAct | BinAct | null>(null)
+  // Your own photographs (CK-64): the row whose permanent-delete step is open
+  // (never the editor's row at the same time — each closes the other), and
+  // the one line that explains a destroyed row's disappearance until the
+  // next act or the next re-read the person asks for.
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [batchErrors, setBatchErrors] = useState<FormErrors>(noErrors())
   // The ids the last batch sent, in order — a refusal lands on
   // `media_ids.N`, and N is this list's index for the row it names.
@@ -531,21 +570,33 @@ export function GatheringMedia({
     setDecliningId(null)
   }
 
+  // The bin's transient state (CK-64) — a delete step awaiting its second
+  // click and the "Photo deleted." line — goes the same way, on the next
+  // act or the next re-read the person asks for. A poll tick is neither:
+  // it must not take away a line the person has not read.
+  function clearBin() {
+    setDeletingId(null)
+    setNotice(null)
+  }
+
   function switchView(next: 'all' | 'queue') {
     if (next === view) return
     setView(next)
     setSelected([])
     clearBatch()
+    clearBin()
   }
 
   function showAll() {
     setSearchInput('')
     setTerm('')
+    clearBin()
     if (view !== 'all') switchView('all')
   }
 
   function refresh() {
     clearBatch()
+    clearBin()
     setRowErrors({})
     setReloadKey((key) => key + 1)
   }
@@ -560,7 +611,9 @@ export function GatheringMedia({
   async function act(item: MediaItem, which: ReviewAct) {
     if (actingId !== null) return
     setActingId(item.id)
+    setActingAct(which)
     setDecliningId(null)
+    clearBin()
     setRowErrors((prev) => {
       const { [item.id]: _dropped, ...rest } = prev
       return rest
@@ -568,6 +621,7 @@ export function GatheringMedia({
     const outcome = await reviewMedia(item.id, which)
     if (!alive.current) return
     setActingId(null)
+    setActingAct(null)
     if (outcome.ok) {
       setSelected((current) => current.filter((id) => id !== item.id))
       setReloadKey((key) => key + 1)
@@ -576,6 +630,48 @@ export function GatheringMedia({
     setRowErrors((prev) => ({
       ...prev,
       [item.id]: { fields: {}, form: [reviewRefusalMessage(which, outcome)] },
+    }))
+  }
+
+  // One of the three acts on one of the caller's own photographs (CK-64): to
+  // the bin, back from it, or gone for good. `act`'s shape and `act`'s guard
+  // (`actingId` — one act at a time, review or bin): optimistic-free, so a
+  // success re-reads the list and the server's body is what renders — a
+  // binned row's line becomes the bin's line, a restored row's the live or
+  // the waiting line (the SERVER decided which), and a destroyed row leaves
+  // the list, because a row in destruction is visible to nobody — which is
+  // why a destroy alone sets the "Photo deleted." line below: the re-read
+  // explains nothing on its own. A refusal is kept on the row, in this
+  // module's words for the server's code, with the list NOT re-read (the
+  // review's reason: a re-read could drop the row the message is about);
+  // the refresh control beside it is the way on. The delete step stays open
+  // while its request runs, so "Deleting…" shows where the person is
+  // looking, and closes with the outcome either way.
+  async function bin(item: MediaItem, which: BinAct) {
+    if (actingId !== null) return
+    setActingId(item.id)
+    setActingAct(which)
+    setDecliningId(null)
+    setDeletingId(which === 'destroy' ? item.id : null)
+    setNotice(null)
+    setRowErrors((prev) => {
+      const { [item.id]: _dropped, ...rest } = prev
+      return rest
+    })
+    const outcome = await binMedia(item.id, which)
+    if (!alive.current) return
+    setActingId(null)
+    setActingAct(null)
+    setDeletingId(null)
+    if (outcome.ok) {
+      if (which === 'destroy') setNotice('Photo deleted.')
+      setSelected((current) => current.filter((id) => id !== item.id))
+      setReloadKey((key) => key + 1)
+      return
+    }
+    setRowErrors((prev) => ({
+      ...prev,
+      [item.id]: { fields: {}, form: [binRefusalMessage(outcome)] },
     }))
   }
 
@@ -873,6 +969,16 @@ export function GatheringMedia({
         <p className="field-hint">No photos yet.</p>
       )}
 
+      {notice !== null && (
+        // What explains a row's disappearance (CK-64): a destroyed photograph
+        // is visible to nobody, so the re-read simply drops it, and this line
+        // — polite, cleared by the next act or the next re-read the person
+        // asks for — says why.
+        <p className="field-hint" role="status">
+          {notice}
+        </p>
+      )}
+
       {queueView && items !== null && !loadFailed && items.length > 0 && (
         // Bulk approve: the batch endpoint over the selected rows, refused
         // whole on any bad item. A refusal lands on the row it names (below,
@@ -952,6 +1058,21 @@ export function GatheringMedia({
             // the batch is built.
             const reviewable = reviewer && awaitingReview(item)
             const declining = reviewable && decliningId === item.id
+            // Your own photographs (CK-64): the three acts render on the
+            // caller's OWN ready rows and nowhere else — never on someone
+            // else's row, whoever the viewer is (the host's view of others'
+            // photographs gains nothing here), never on a failed or in-flight
+            // row, never on a row whose upload failed from this device. The
+            // server would refuse each of those, and the 404 on someone
+            // else's row is the audience rule, not a broken control. Which
+            // two of the three a row carries follows its state: to the bin
+            // or back from it, and delete permanently on both.
+            const ownReady = item.is_own && item.status === 'ready' && problem === undefined
+            const inBin = item.publication_state === 'removed'
+            const binnable =
+              ownReady &&
+              (inBin || item.publication_state === 'live' || item.publication_state === 'pending')
+            const deleting = binnable && deletingId === item.id
             const batchIndex = batchSent.indexOf(item.id)
             const batchField = batchIndex === -1 ? null : `media_ids.${batchIndex}`
             const rowError = rowErrors[item.id]
@@ -992,7 +1113,16 @@ export function GatheringMedia({
                   </button>
                 )}
                 {offerEdit && !editing && (
-                  <button type="button" className="link-button" onClick={() => setEditingId(item.id)}>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => {
+                      // The editor and the delete step never share the row
+                      // (CK-64): opening one closes the other.
+                      setDeletingId(null)
+                      setEditingId(item.id)
+                    }}
+                  >
                     Edit caption and tags
                   </button>
                 )}
@@ -1008,6 +1138,80 @@ export function GatheringMedia({
                     onClose={() => setEditingId(null)}
                   />
                 )}
+                {binnable && !deleting && (
+                  // Your own photographs (CK-64). To the bin is one click — it
+                  // can be undone. Back from it lets the server decide where the
+                  // photograph goes (the gate, at restore time); where the
+                  // gathering requires approval the hint says so, from the
+                  // reader's seat — the host is told it waits for THEM, never
+                  // for "the host", which would be themselves (the CK-43.1
+                  // rule). Delete permanently only OPENS the step below.
+                  <div className="media-review media-bin">
+                    {inBin ? (
+                      <button
+                        type="button"
+                        disabled={actingId !== null}
+                        onClick={() => void bin(item, 'restore')}
+                      >
+                        {actingId === item.id && actingAct === 'restore' ? 'Putting back…' : 'Put back'}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="link-button"
+                        disabled={actingId !== null}
+                        onClick={() => void bin(item, 'remove')}
+                      >
+                        {actingId === item.id && actingAct === 'remove' ? 'Sending to bin…' : 'Send to bin'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="link-button"
+                      disabled={actingId !== null}
+                      onClick={() => {
+                        setEditingId(null)
+                        setDeletingId(item.id)
+                      }}
+                    >
+                      Delete permanently
+                    </button>
+                    {inBin && requiresApproval && (
+                      <p className="field-hint">
+                        {isHost
+                          ? "It'll wait for you to publish or decline it before anyone else sees it."
+                          : 'The host will look at it again before anyone else sees it.'}
+                      </p>
+                    )}
+                  </div>
+                )}
+                {deleting && (
+                  // The permanent delete's second step (bin record §7.1; two-bins
+                  // §4): the sentence verbatim — "from <the product>" because a
+                  // photograph already in a printed book is out of reach — taken
+                  // on a deliberate second click, inline, with a do-nothing
+                  // beside it (the decline's shape; never a browser dialog). The
+                  // step stays open while the request runs and closes with its
+                  // outcome; the word "cancel" appears nowhere in it (CK-30).
+                  <div className="media-review media-decline" role="group" aria-label={`Delete ${name}`}>
+                    <p className="field-hint">{DELETE_PERMANENTLY_CONFIRMATION}</p>
+                    <button
+                      type="button"
+                      disabled={actingId !== null}
+                      onClick={() => void bin(item, 'destroy')}
+                    >
+                      {actingId === item.id ? 'Deleting…' : 'Delete permanently'}
+                    </button>
+                    <button
+                      type="button"
+                      className="link-button"
+                      disabled={actingId !== null}
+                      onClick={() => setDeletingId(null)}
+                    >
+                      Keep it
+                    </button>
+                  </div>
+                )}
                 {reviewable && !declining && (
                   <div className="media-review">
                     <button
@@ -1015,7 +1219,7 @@ export function GatheringMedia({
                       disabled={actingId !== null}
                       onClick={() => void act(item, 'publish')}
                     >
-                      {actingId === item.id ? 'Publishing…' : 'Publish'}
+                      {actingId === item.id && actingAct === 'publish' ? 'Publishing…' : 'Publish'}
                     </button>
                     <button
                       type="button"

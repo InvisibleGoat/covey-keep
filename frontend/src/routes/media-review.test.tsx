@@ -105,6 +105,16 @@ const listRequests = (mock: ReturnType<typeof vi.fn>) =>
 const STAMP = '2026-09-14T00:30:16+00:00'
 const SERVER_WORDING = 'SERVER WORDING XYZ — never rendered'
 
+// A removal stamp relative to now (CK-64): the bin's line counts the days
+// left in the window, so a fixed date would change the line as the calendar
+// moved and go stale at the window's close. Two days in reads 28; a row
+// declined just now reads 30. (Until CK-64 the line was CK-38's "Removed.
+// Only you can still see it, for 30 days after removal." and these
+// fixtures carried a fixed date.)
+const removedDaysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString()
+const BIN_LINE_28 = 'In your bin. Only you can see it, and you can put it back for 28 more days.'
+const BIN_LINE_30 = 'In your bin. Only you can see it, and you can put it back for 30 more days.'
+
 function reviewServer(initial: Row[]) {
   const rows = new Map(initial.map((row) => [row.id, { ...row }]))
   const refusal = (row: Row, act: 'publish' | 'decline') => {
@@ -151,7 +161,7 @@ function reviewServer(initial: Row[]) {
           row.published_at = STAMP
         } else {
           row.publication_state = 'removed'
-          row.removed_at = '2026-09-14T00:31:22+00:00'
+          row.removed_at = new Date().toISOString()
         }
         return json(200, row)
       },
@@ -249,7 +259,7 @@ const openGatheringRows = () => [
   mediaRow({ id: 'm-mine' }),
   mediaRow({ id: 'm-theirs', is_own: false, uploader_display_name: 'grandma' }),
   mediaRow({ id: 'm-live', publication_state: 'live', published_at: STAMP }),
-  mediaRow({ id: 'm-gone', publication_state: 'removed', removed_at: '2026-09-10T12:00:00+00:00' }),
+  mediaRow({ id: 'm-gone', publication_state: 'removed', removed_at: removedDaysAgo(2) }),
   mediaRow({ id: 'm-fail', status: 'failed' }),
 ]
 
@@ -257,7 +267,7 @@ const openGatheringRows = () => [
 // every state but the one that waits.
 const nothingWaitingRows = () => [
   mediaRow({ id: 'm-live', publication_state: 'live', published_at: STAMP }),
-  mediaRow({ id: 'm-gone', publication_state: 'removed', removed_at: '2026-09-10T12:00:00+00:00' }),
+  mediaRow({ id: 'm-gone', publication_state: 'removed', removed_at: removedDaysAgo(2) }),
   mediaRow({ id: 'm-fail', status: 'failed' }),
 ]
 
@@ -274,9 +284,10 @@ test('where review is off and nothing is waiting there is no queue and no review
   let rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
   expect(rows).toHaveLength(3)
   expectNoReviewSurface()
-  // Every line exactly as CK-38 wrote it — and nothing about waiting.
+  // Every line exactly as CK-38 wrote it — the bin's as CK-64 rewrote it —
+  // and nothing about waiting.
   expect(rows[0].textContent).toContain('Everyone in this gathering can see it.')
-  expect(rows[1].textContent).toContain('Removed. Only you can still see it, for 30 days after removal.')
+  expect(rows[1].textContent).toContain(BIN_LINE_28)
   expect(rows[2].textContent).toContain("We couldn't process this photo.")
   expect(document.body.textContent).not.toMatch(NOTHING_WAITING_BAN)
   // No request ever asked for the queue.
@@ -413,16 +424,18 @@ test('a non-host member of a gated gathering gets the waiting line and no contro
     'Only you and the host can see this. Waiting for the host to publish or decline it.',
   )
   expectNoReviewSurface()
-  // The row's own affordances are exactly CK-40's: open it, and edit the
-  // words — no act of any kind. (The thumbnail placeholder's own retry
-  // control, which arrives whenever the stubbed 409 lands, is not a row
-  // affordance and is left out of the count.)
+  // The row's own affordances are CK-40's — open it, and edit the words —
+  // and, since CK-64, the uploader's own two acts on it; no REVIEW act of
+  // any kind. (Edited at CK-64: until then the list ended at the editor.
+  // The thumbnail placeholder's own retry control, which arrives whenever
+  // the stubbed 409 lands, is not a row affordance and is left out of the
+  // count.)
   expect(
     within(rows[0])
       .getAllByRole('button')
       .map((button) => button.getAttribute('aria-label') ?? button.textContent)
       .filter((label) => label !== 'Retry'),
-  ).toEqual(['Open photo added by You', 'Edit caption and tags'])
+  ).toEqual(['Open photo added by You', 'Edit caption and tags', 'Send to bin', 'Delete permanently'])
   // The queue was never asked for — the server would answer 404 to this
   // caller, and the surface never invites that.
   expect(listRequests(mock).every(([url]) => !url.includes('awaiting_review'))).toBe(true)
@@ -445,9 +458,10 @@ test('the host of a gated gathering gets the queue: the same list with the flag,
   expect(rows[1].textContent).toContain(
     'Only grandma and you can see this. Waiting for you to publish or decline it.',
   )
-  // The other states read exactly as CK-38 wrote them, gate or no gate.
+  // The other states read exactly as CK-38 wrote them (the bin's as CK-64
+  // rewrote it), gate or no gate.
   expect(rows[2].textContent).toContain('Everyone in this gathering can see it.')
-  expect(rows[3].textContent).toContain('Removed. Only you can still see it, for 30 days after removal.')
+  expect(rows[3].textContent).toContain(BIN_LINE_28)
   expect(rows[4].textContent).toContain("We couldn't process this photo.")
   // The acts sit on the two rows the server would accept them on, and on
   // no other: not the live row, not the removed one, not the failed one.
@@ -474,7 +488,7 @@ test('the host of a gated gathering gets the queue: the same list with the flag,
   // The live row and the removed row are gone from the queue, and so is
   // the failed one: only what the host can decide on.
   expect(screen.queryByText('Everyone in this gathering can see it.')).toBeNull()
-  expect(screen.queryByText(/Removed\./)).toBeNull()
+  expect(screen.queryByText(/In your bin\./)).toBeNull()
   expect(screen.queryByText(/couldn't process/)).toBeNull()
   expect(screen.getAllByRole('checkbox')).toHaveLength(2)
   expect(screen.getByRole('button', { name: 'Awaiting your review' }).getAttribute('aria-pressed')).toBe('true')
@@ -495,7 +509,7 @@ test('the queue\'s empty state is its own — "nothing is waiting", never "no ph
   stubRoutes(
     reviewServer([
       mediaRow({ id: 'm-live', publication_state: 'live', published_at: STAMP }),
-      mediaRow({ id: 'm-gone', publication_state: 'removed', removed_at: '2026-09-10T12:00:00+00:00' }),
+      mediaRow({ id: 'm-gone', publication_state: 'removed', removed_at: removedDaysAgo(2) }),
     ]).routes,
   )
 
@@ -609,7 +623,7 @@ test("declining takes a second click, says what it is — nobody in the gatherin
   fireEvent.click(screen.getByRole('button', { name: 'Show all photos' }))
   rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
   expect(rows).toHaveLength(1)
-  expect(rows[0].textContent).toContain('Removed. Only you can still see it, for 30 days after removal.')
+  expect(rows[0].textContent).toContain(BIN_LINE_30)
   expect(within(rows[0]).queryByRole('button', { name: /^publish|^decline/i })).toBeNull()
 })
 
