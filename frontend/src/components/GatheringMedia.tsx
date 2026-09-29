@@ -1448,21 +1448,23 @@ export function GatheringMedia({
                   // Decline is removal (record §4) into the GATHERING's bin
                   // (two-bins record §3, CK-63): the gathering never sees it,
                   // and neither does its uploader — from their side it is gone
-                  // — nothing is destroyed, and NOTHING here promises a way
-                  // back to anyone: the way back that exists (the host's own
-                  // Removed view, CK-67) is the host's alone, and the
-                  // confirmation states what the uploader loses rather than
-                  // advertising it. Said plainly, and taken on a deliberate
-                  // second click, with a do-nothing beside it. The host
-                  // declining THEIR OWN photograph is its remover and its
-                  // uploader, so that row stays in their own bin: the
-                  // own-photo line is true and stays.
+                  // — and nothing is destroyed. Since CK-66/CK-67 the host HAS
+                  // a way back — the Removed view, Put back for 30 days — so
+                  // the confirmation names it to the one person who holds it,
+                  // in the Remove step's words (CK-67.1; from CK-63 it said
+                  // nobody would see it again, true only while the gathering's
+                  // bin had no reader). It promises the uploader nothing. Said
+                  // plainly, and taken on a deliberate second click, with a
+                  // do-nothing beside it. The host declining THEIR OWN
+                  // photograph is its remover and its uploader, so that row
+                  // stays in their own bin: the own-photo line is true and
+                  // stays.
                   <div className="media-review media-decline" role="group" aria-label={`Decline ${name}`}>
                     <p className="field-hint">
-                      The gathering won't see this photo.{' '}
+                      The gathering won't see this photo
                       {item.is_own
-                        ? `You can still see it yourself for ${REMOVED_BIN_DAYS} days.`
-                        : `Neither will ${who}: nobody in this gathering will see it again.`}
+                        ? `. You can still see it yourself for ${REMOVED_BIN_DAYS} days.`
+                        : `, and neither will ${who}. You can put it back for ${REMOVED_BIN_DAYS} days.`}
                     </p>
                     <button type="button" onClick={() => void act(item, 'decline')}>
                       {actingId === item.id ? 'Declining…' : 'Decline it'}

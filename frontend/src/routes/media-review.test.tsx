@@ -593,17 +593,26 @@ test("declining takes a second click, says what it is — nobody in the gatherin
   // grandma's: the first click asks; nothing is sent.
   fireEvent.click(within(rows[1]).getByRole('button', { name: 'Decline' }))
   const confirm = within(rows[1]).getByRole('group', { name: /^Decline/ })
-  // THE SENTENCE CK-63 MADE TRUE (two-bins record §3): a declined photograph
-  // is in the GATHERING's bin — the uploader does not see it again (until
-  // CK-63 this read "grandma can still see it for 30 days; you won't see it
-  // again here", true only while a decline landed in the uploader's view)
-  // — and nothing here promises anyone a way back: the confirmation states
-  // what the uploader loses, and stays silent about the host's own Removed
-  // view (CK-67), whose way back is the host's alone.
+  // THE SENTENCE CK-67.1 MADE TRUE (two-bins record §3–§4): a declined
+  // photograph is in the GATHERING's bin — the uploader does not see it
+  // again — and since CK-66/CK-67 the host reads that bin in the Removed
+  // view and can Put back from it for 30 days, so the confirmation names
+  // the host's own way back, in the Remove step's words. (Until CK-63 this
+  // read "grandma can still see it for 30 days; you won't see it again
+  // here"; from CK-63 to CK-67.1 "Neither will grandma: nobody in this
+  // gathering will see it again." — true at CK-63, when the host had no
+  // way back, and false from CK-66, when the host did.)
   expect(confirm.textContent).toContain(
-    "The gathering won't see this photo. Neither will grandma: nobody in this gathering will see it again.",
+    "The gathering won't see this photo, and neither will grandma. You can put it back for 30 days.",
   )
-  expect(confirm.textContent).not.toMatch(/still see|30 days|restore|put back|recover|bin/i)
+  // CK-63's ban list, moved at CK-67.1: "30 days" and "put back" leave it —
+  // the sentence says both on purpose, because the host has a way back now.
+  // The rest stay: the uploader is still promised nothing, and the word
+  // "bin" still appears nowhere in the host's copy.
+  expect(confirm.textContent).not.toMatch(/still see|restore|recover|bin/i)
+  // The host is told what THEY can do — never that the uploader keeps
+  // sight of it (the CK-43.1 line this sentence descends from said so).
+  expect(confirm.textContent).not.toMatch(/still see/i)
   // It reads as what it is — removal, nothing destroyed — never as a
   // delete key, and never the word CK-30 keeps out of a warning.
   expect(confirm.textContent).not.toMatch(/delet|destroy|cancel|permanent/i)
