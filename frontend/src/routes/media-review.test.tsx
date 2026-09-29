@@ -232,8 +232,15 @@ function nameOf(row: HTMLElement): string | undefined {
 const NOTHING_WAITING_BAN = /approv|review|queue|publish|declin|waiting for/i
 
 function expectNoReviewSurface() {
-  expect(screen.queryByRole('group', { name: 'Show' })).toBeNull()
-  expect(screen.queryByRole('button', { name: /awaiting your review|all photos/i })).toBeNull()
+  // CHANGED at CK-67 (its reason): this helper also asserted the whole
+  // view-switch group absent — right while the queue was the only view a
+  // host could have. The host now carries the switch WHENEVER they are
+  // host, because the gathering's bin (the Removed view) rides it whatever
+  // the review switch says; what must still never render without the
+  // review is the REVIEW — the queue button, the acts, the checkboxes and
+  // the batch. A non-host still gets no switch at all, asserted at each
+  // non-host call site.
+  expect(screen.queryByRole('button', { name: 'Awaiting your review' })).toBeNull()
   expect(screen.queryByRole('button', { name: /^publish|^decline/i })).toBeNull()
   expect(screen.queryByRole('checkbox')).toBeNull()
   expect(screen.queryByRole('form', { name: /publish selected/i })).toBeNull()
@@ -284,6 +291,9 @@ test('where review is off and nothing is waiting there is no queue and no review
   let rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
   expect(rows).toHaveLength(3)
   expectNoReviewSurface()
+  // What the host DOES keep (CK-67) is the view switch, for the Removed
+  // view's sake — with no queue button on it while nothing waits.
+  expect(screen.getByRole('button', { name: 'Removed from this gathering' })).toBeTruthy()
   // Every line exactly as CK-38 wrote it — the bin's as CK-64 rewrote it —
   // and nothing about waiting.
   expect(rows[0].textContent).toContain('Everyone in this gathering can see it.')
@@ -293,13 +303,15 @@ test('where review is off and nothing is waiting there is no queue and no review
   // No request ever asked for the queue.
   expect(listRequests(mock).every(([url]) => !url.includes('awaiting_review'))).toBe(true)
 
-  // A non-host member, uploader of the same rows.
+  // A non-host member, uploader of the same rows: no switch at all — the
+  // Removed view is the host's (CK-67), and the review is nobody's here.
   cleanup()
   renderMedia({ isHost: false, requiresApproval: false })
   await openPhotos()
   rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
   expect(rows).toHaveLength(3)
   expectNoReviewSurface()
+  expect(screen.queryByRole('group', { name: 'Show' })).toBeNull()
   expect(document.body.textContent).not.toMatch(NOTHING_WAITING_BAN)
   expect(listRequests(mock).every(([url]) => !url.includes('awaiting_review'))).toBe(true)
 })
@@ -355,10 +367,12 @@ test('THE STRAND, fixed: with review off and rows waiting, the host still gets t
   expect(server.rows.get('m-theirs')!.publication_state).toBe('removed')
 
   // Nothing waits any more, and review is off: the review closes by itself
-  // — back to the full list (grandma's declined row is in her bin, not the
-  // host's list), no switch, no act, no checkbox, no "nothing is waiting",
-  // and no line naming what a photograph waits on. Nothing was published
-  // by the switch: the two rows moved by the host's own acts alone.
+  // — back to the full list (grandma's declined row is in the GATHERING's
+  // bin, CK-63, excluded from the default list), no queue button, no act,
+  // no checkbox, no "nothing is waiting", and no line naming what a
+  // photograph waits on. Nothing was published by the switch: the two rows
+  // moved by the host's own acts alone. (The view switch itself stays —
+  // the host's Removed view rides it since CK-67.)
   await waitFor(() => {
     expect(photoRows(screen.getByRole('list', { name: 'Photos' }))).toHaveLength(4)
   })
@@ -381,6 +395,8 @@ test("a non-host uploader whose row waits on a gathering with review off reads t
     'Only you and the host can see this. Waiting for the host to publish or decline it.',
   )
   expectNoReviewSurface()
+  // A non-host: no switch at all (the Removed view is the host's — CK-67).
+  expect(screen.queryByRole('group', { name: 'Show' })).toBeNull()
   expect(listRequests(mock).every(([url]) => !url.includes('awaiting_review'))).toBe(true)
   expect(document.body.textContent).not.toMatch(/approv|shared|screen/i)
 })
@@ -399,11 +415,14 @@ test("the switch, from the section's side: turning review on makes the queue app
   fireEvent.click(screen.getByRole('button', { name: 'Awaiting your review' }))
   expect(await screen.findByText('Nothing is waiting for your review.')).toBeTruthy()
 
-  // And off again, with nothing waiting: everything goes, and the view
-  // falls back to the full list on its own.
+  // And off again, with nothing waiting: the review goes — the queue
+  // button among it — and the view falls back to the full list on its own.
+  // (CHANGED at CK-67, its reason: this waited on the whole group leaving;
+  // the group stays for the host now, carrying the Removed view, and what
+  // leaves with the review is the queue button and the acts.)
   view.rerender(mediaElement({ isHost: true, requiresApproval: false }))
   await waitFor(() => {
-    expect(screen.queryByRole('group', { name: 'Show' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Awaiting your review' })).toBeNull()
   })
   expect(screen.queryByText('Nothing is waiting for your review.')).toBeNull()
   expect(photoRows(await screen.findByRole('list', { name: 'Photos' }))).toHaveLength(3)
@@ -578,8 +597,9 @@ test("declining takes a second click, says what it is — nobody in the gatherin
   // is in the GATHERING's bin — the uploader does not see it again (until
   // CK-63 this read "grandma can still see it for 30 days; you won't see it
   // again here", true only while a decline landed in the uploader's view)
-  // — and nothing here promises anyone a way back, because the host's bin
-  // surface does not exist yet.
+  // — and nothing here promises anyone a way back: the confirmation states
+  // what the uploader loses, and stays silent about the host's own Removed
+  // view (CK-67), whose way back is the host's alone.
   expect(confirm.textContent).toContain(
     "The gathering won't see this photo. Neither will grandma: nobody in this gathering will see it again.",
   )
@@ -617,9 +637,9 @@ test("declining takes a second click, says what it is — nobody in the gatherin
 
   // In the full list: the host's own declined photograph reads the bin line
   // (they uploaded it AND removed it — their own bin); grandma's is not in
-  // their list at all — it is in the gathering's bin, which no surface
-  // reads yet (CK-63; until then the bin was the uploader's alone, CK-37),
-  // and the server's list says so.
+  // their DEFAULT list at all — it is in the gathering's bin, which since
+  // CK-67 the host reads through the Removed view, never mixed into this
+  // one (CK-66: the default list excludes gathering-bin rows).
   fireEvent.click(screen.getByRole('button', { name: 'Show all photos' }))
   rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
   expect(rows).toHaveLength(1)

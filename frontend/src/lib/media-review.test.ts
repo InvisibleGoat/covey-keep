@@ -127,8 +127,12 @@ test("a refused act's copy switches on the code and never the wording — the sa
   expect(reviewRefusalMessage('decline', { code: 'not_pending', publication_state: 'removed', status: 'ready' })).toBe(
     'This photo was already declined or removed.',
   )
+  // CHANGED at CK-67 (its reason): the line pinned here read "…taking a
+  // published photo down isn't possible here yet." — true while the
+  // takedown had no surface, and false the moment Remove from gathering
+  // shipped. The refusal now names the control that does it.
   expect(reviewRefusalMessage('decline', { code: 'not_pending', publication_state: 'live', status: 'ready' })).toBe(
-    "This photo is already published, and taking a published photo down isn't possible here yet.",
+    'This photo is already published — to take it down, use Remove from gathering.',
   )
   // not_ready carries the rung: failed has nothing to publish, ever.
   expect(reviewRefusalMessage('publish', { code: 'not_ready', publication_state: 'pending', status: 'failed' })).toBe(

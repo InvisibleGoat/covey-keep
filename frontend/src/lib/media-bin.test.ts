@@ -10,7 +10,9 @@
 // end (the automatic clear ships switched off, so nothing is enforced
 // there); and the permanent delete's confirmation, the bin record §7.1's
 // sentence character for character, with "from CoveyKeep" kept because a
-// printed book is out of reach.
+// printed book is out of reach. Since CK-67 the gathering-bin helpers are
+// pinned here too: the host's line for a row someone else uploaded, and
+// the `removed=true` list path that never travels with the queue's flag.
 import { afterEach, expect, test, vi } from 'vitest'
 import { PRODUCT_NAME } from '../brand'
 import { networkErrors } from './formErrors'
@@ -19,6 +21,7 @@ import {
   binMedia,
   binRefusalMessage,
   DELETE_PERMANENTLY_CONFIRMATION,
+  mediaListPath,
   mediaStateMessage,
   REMOVED_BIN_DAYS,
 } from './media'
@@ -178,8 +181,16 @@ test("the bin's line: whose it is, and how long the way back stays open — and 
   expect(mediaStateMessage(own, { isHost: false })).toBe(
     'In your bin. Only you can see it, and you can put it back.',
   )
-  // The branch the audience rule makes unreachable, kept defensive.
+  // CHANGED at CK-67 (its reason): until CK-66 no audience rule could show
+  // a non-own removed row to anyone, and this pinned the whole branch as
+  // the defensive "Removed.". The HOST now reads exactly that row — the
+  // gathering's bin — so their seat gets the bin's other line (pinned in
+  // full in the CK-67 test below); the branch stays "Removed." only for a
+  // non-host, whom the audience rule still never shows one.
   expect(mediaStateMessage({ ...own, is_own: false, removed_at: stamp }, { isHost: true, now: at(0) })).toBe(
+    'Removed from this gathering. Only you can see it, and you can put it back for 30 more days.',
+  )
+  expect(mediaStateMessage({ ...own, is_own: false, removed_at: stamp }, { isHost: false, now: at(0) })).toBe(
     'Removed.',
   )
   // Nothing promises deletion on a date, an emptying, or a safety: the
@@ -226,6 +237,73 @@ test("the bin's line from a trailing device clock reads 30 more days, never 31 (
       ).toBe('In your bin. Only you can see it, and you can put it back for 30 more days.')
     }
   }
+})
+
+// CK-67: the gathering's bin has a surface, and the host's line for a row
+// in it follows the personal line's every rule — binDaysLeft (the CK-64.1
+// clamp included), the same singular / last-day / no-stamp forms, and the
+// same silence about the window's end.
+test("the host's line for a gathering-bin row: whose sight it left, how long the way back stays open, and nothing about the window's end (CK-67)", () => {
+  const theirs = {
+    status: 'ready',
+    publication_state: 'removed',
+    is_own: false,
+    uploader_display_name: 'grandma',
+  }
+  const stamp = '2026-09-10T12:00:00+00:00'
+  const at = (days: number) => new Date(Date.parse(stamp) + days * DAY)
+  const host = (now: Date) => mediaStateMessage({ ...theirs, removed_at: stamp }, { isHost: true, now })
+  expect(host(at(0))).toBe(
+    'Removed from this gathering. Only you can see it, and you can put it back for 30 more days.',
+  )
+  expect(host(at(2))).toBe(
+    'Removed from this gathering. Only you can see it, and you can put it back for 28 more days.',
+  )
+  expect(host(at(29))).toBe(
+    'Removed from this gathering. Only you can see it, and you can put it back for 1 more day.',
+  )
+  expect(host(at(29.5))).toBe(
+    'Removed from this gathering. Only you can see it, and you can put it back for less than a day.',
+  )
+  // The CK-64.1 clamp holds here too: a device clock trailing the server
+  // never promises a 31st day.
+  expect(host(new Date(Date.parse(stamp) - 1000))).toBe(
+    'Removed from this gathering. Only you can see it, and you can put it back for 30 more days.',
+  )
+  // A row with no readable stamp still gets an honest line, no count invented.
+  expect(mediaStateMessage({ ...theirs, removed_at: null }, { isHost: true, now: at(0) })).toBe(
+    'Removed from this gathering. Only you can see it, and you can put it back.',
+  )
+  expect(mediaStateMessage(theirs, { isHost: true })).toBe(
+    'Removed from this gathering. Only you can see it, and you can put it back.',
+  )
+  // A non-host is never shown such a row; the branch stays defensive.
+  expect(mediaStateMessage({ ...theirs, removed_at: stamp }, { isHost: false, now: at(0) })).toBe('Removed.')
+  // The ban list holds on every form: nothing promises deletion on a date,
+  // an emptying, or a safety — the sweep still ships switched off.
+  for (const days of [0, 2, 29, 29.5, 31]) {
+    const line = host(at(days))
+    expect(line).not.toMatch(BIN_BAN)
+    expect(line).not.toMatch(/delet|destroy|30 days after/i)
+  }
+})
+
+// CK-67: the bin view is the same list path with `removed=true`, the
+// queue's shape — and the two view flags never travel together (the server
+// draws a 422 at the pair).
+test('the gathering-bin view is the list path with removed=true, composing with q, never removed=false, and never both flags (CK-67)', () => {
+  expect(mediaListPath('g-1', '', { removed: true })).toBe('/gatherings/g-1/media?removed=true')
+  expect(mediaListPath('g-1', ' yard ', { removed: true })).toBe(
+    '/gatherings/g-1/media?removed=true&q=yard',
+  )
+  // Not the bin: no `removed` at all, never `=false`.
+  expect(mediaListPath('g-1', '', { removed: false })).toBe('/gatherings/g-1/media')
+  expect(mediaListPath('g-1', '', {})).toBe('/gatherings/g-1/media')
+  // Both flags is a caller bug the function refuses to forward: one flag
+  // goes, never two.
+  expect(mediaListPath('g-1', '', { awaitingReview: true, removed: true })).toBe(
+    '/gatherings/g-1/media?awaiting_review=true',
+  )
 })
 
 test("the permanent delete's confirmation is the record's sentence, character for character, and names the product from brand.ts", () => {

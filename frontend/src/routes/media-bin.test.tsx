@@ -1,8 +1,11 @@
 // CK-64 pins on the personal bin's surface (decisions/2026-09-27-two-bins.md
 // §1, §2, §4). The value under test: Send to bin, Put back and Delete
 // permanently render on the caller's OWN ready rows and nowhere else — not
-// on someone else's row, the host included (the host's view of others'
-// photographs gains nothing), not on a failed or in-flight row; Send to bin
+// on someone else's row, the host included (the host gains none of these
+// three personal acts on anyone else's row, ever; their own controls there
+// are CK-67's, pinned in media-gathering-bin.test.tsx, and binActsOn below
+// checks exactly the three names so those pins hold either way), not on a
+// failed or in-flight row; Send to bin
 // is one click that posts once and re-reads, with no confirmation; Delete
 // permanently posts NOTHING on the first click, shows the bin record §7.1's
 // sentence verbatim, posts once on the second, and "Keep it" posts nothing;

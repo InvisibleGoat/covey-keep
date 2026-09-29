@@ -44,6 +44,16 @@
 // delete's confirmation is the bin record §7.1's sentence, verbatim, with
 // "from <the product>" kept because a photograph already in a printed book
 // is out of reach (DELETE_PERMANENTLY_CONFIRMATION).
+//
+// THE HOST'S SIDE (CK-67, the surface for CK-66's backend; two-bins §1–§4):
+// the gathering's bin is the same list asked for with `removed=true`
+// (mediaListPath — the rows someone other than the uploader removed, which
+// the server shows to the host alone), never both view flags at once; the
+// host's Remove from gathering and the bin's Put back and Delete permanently
+// go through binMedia like the uploader's own acts; and the bin row's line
+// (mediaStateMessage's removed branch, the host reading someone else's)
+// says whose sight it left and how long the way back stays open — under the
+// same ban as the personal line: nothing about the window's end.
 import { PRODUCT_NAME } from '../brand'
 import { authFetch } from './api'
 import { networkErrors } from './formErrors'
@@ -143,9 +153,9 @@ export const POLL_INTERVAL_MS = 3000
 // The bin's read window (services/retention.py REMOVED_BIN) — stated in copy
 // only. Since CK-63 a removed photograph is in the bin of WHOEVER REMOVED IT
 // (two-bins record §3): an uploader only ever sees rows they removed
-// themselves, so the `removed` line below is read by exactly the person it
-// addresses; a photograph the host removed or declined is in the gathering's
-// bin, which no surface reads yet.
+// themselves; a photograph the host removed or declined is in the
+// gathering's bin, which the HOST reads (CK-66's `removed=true` view, with
+// its surface since CK-67) and the uploader never sees again.
 export const REMOVED_BIN_DAYS = 30
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -285,13 +295,23 @@ export const SEARCH_DEBOUNCE_MS = 300
 // (record §10), so the surface has one list shape; it composes with `q`
 // on the server, inside the audience rule. The flag goes only when the
 // queue is what is wanted — never `awaiting_review=false`.
+//
+// The gathering's bin (CK-67, on CK-66's backend) is the same shape again:
+// `removed=true` asks for the rows someone other than the uploader removed,
+// which the server lists to the host alone (a non-host reads an empty list,
+// never a refusal that confirms the bin exists). The two flags together are
+// the server's 422 — a photograph cannot be awaiting review and in the bin
+// at once — so this function NEVER emits both: the views are exclusive by
+// construction in the component, and a caller that passes both gets the
+// queue alone. Never `removed=false`.
 export function mediaListPath(
   gatheringId: string,
   term: string,
-  options: { awaitingReview?: boolean } = {},
+  options: { awaitingReview?: boolean; removed?: boolean } = {},
 ): string {
   const params: string[] = []
   if (options.awaitingReview) params.push('awaiting_review=true')
+  else if (options.removed) params.push('removed=true')
   const trimmed = term.trim()
   if (trimmed !== '') params.push(`q=${encodeURIComponent(trimmed)}`)
   const base = `/gatherings/${gatheringId}/media`
@@ -455,26 +475,36 @@ export function mediaStateMessage(
     }
     case 'removed': {
       // Since CK-63 the server lists a removed row to its uploader ONLY when
-      // the uploader removed it (your bin, not the gathering's), so this line
-      // is true of every removed row a person can see. The `is_own: false`
-      // branch is unreachable by the audience rule and kept defensive.
+      // the uploader removed it (your bin, not the gathering's), and since
+      // CK-66 to the HOST when someone other than the uploader removed it
+      // (the gathering's bin, whose view is CK-67's `removed=true`). So a
+      // removed row a person can see is either their own — the personal
+      // line — or, for the host, someone else's in the gathering's bin. A
+      // NON-host reading someone else's removed row is unreachable by the
+      // audience rule; that branch stays "Removed.", defensive.
       //
-      // Since CK-64 the person can put it back or delete it for good from
-      // this row, so the line says what the bin IS from their side: theirs
-      // alone, and open for the rest of the window. It says NOTHING about
-      // what happens at the window's end — not "deleted after", not
-      // "emptied", not "cleared" — because nothing is enforced there today:
-      // the automatic clear (CK-59's sweep) ships switched off, and until it
-      // is on nothing clears a bin. What IS enforced is that at the window's
-      // close the person stops seeing the photograph and can no longer put
-      // it back, and "you can put it back for N more days" claims exactly
-      // that and no more. (Until CK-64: "Removed. Only you can still see it,
-      // for 30 days after removal.")
-      if (!item.is_own) return 'Removed.'
+      // Since CK-64 the person can put a row of theirs back or delete it
+      // for good, so each line says what the bin IS from the reader's side:
+      // theirs alone (or, in the gathering's bin, the host's alone — with
+      // co-hosts unbuilt, only the host sees it), and open for the rest of
+      // the window. Neither says ANYTHING about what happens at the
+      // window's end — not "deleted after", not "emptied", not "cleared" —
+      // because nothing is enforced there today: the automatic clear
+      // (CK-59's sweep) ships switched off, and until it is on nothing
+      // clears a bin. What IS enforced is that at the window's close the
+      // reader stops seeing the photograph and can no longer put it back,
+      // and "you can put it back for N more days" claims exactly that and
+      // no more. (Until CK-64: "Removed. Only you can still see it, for 30
+      // days after removal."; until CK-67 the non-own branch was
+      // "Removed." for every viewer, the bin having had no reader.)
       const days =
         item.removed_at === undefined || item.removed_at === null
           ? null
           : binDaysLeft(item.removed_at, viewer.now ?? new Date())
+      if (!item.is_own) {
+        if (!viewer.isHost) return 'Removed.'
+        return `Removed from this gathering. Only you can see it, and you can put it back${binWindowPhrase(days)}.`
+      }
       return `In your bin. Only you can see it, and you can put it back${binWindowPhrase(days)}.`
     }
     default:
@@ -518,9 +548,10 @@ export type ReviewOutcome =
   // The 409's stable code (already_live | not_pending | not_ready) with the
   // state the server reports beside it, `not_found` for the 404 (the row
   // moved out of the host's sight — a removed row is in its REMOVER's bin,
-  // two-bins record §3, and the gathering's bin has no reader yet), or this
-  // module's own words for the rest. The server's `message` is NOT carried:
-  // the codes are the contract, the strings are ours (record §3).
+  // two-bins record §3; one someone else removed is in the gathering's bin,
+  // the host's Removed view since CK-67), or this module's own words for
+  // the rest. The server's `message` is NOT carried: the codes are the
+  // contract, the strings are ours (record §3).
   | { ok: false; code: string; publication_state?: string; status?: string }
 
 // One act on one photograph. A guarded update on the server: a row that
@@ -553,8 +584,9 @@ export async function reviewMedia(mediaId: string, act: ReviewAct): Promise<Revi
 // a reworded server message changes nothing here. Each line says what state
 // the photograph is actually in, and none claims anything was destroyed:
 // a declined photograph is in the GATHERING's bin (two-bins record §3,
-// CK-63) — out of its uploader's sight, and out of everyone's until the
-// host's bin surface exists — and none of these lines promises a way back.
+// CK-63) — out of its uploader's sight for good, and readable by the host
+// in the Removed view since CK-67 — and none of these lines promises the
+// UPLOADER a way back.
 export function reviewRefusalMessage(
   act: ReviewAct,
   refusal: { code: string; publication_state?: string; status?: string },
@@ -564,11 +596,15 @@ export function reviewRefusalMessage(
       return 'This photo is already published — everyone in this gathering can see it.'
     case 'not_pending':
       if (refusal.publication_state === 'live') {
-        // Decline on a published photograph: the takedown is unbuilt
-        // (record §11), and the copy says so rather than pretending.
+        // Decline on a published photograph: decline is the review's act
+        // and stops at publication, but since CK-67 the host CAN take a
+        // published photograph down — Remove from gathering, on the row —
+        // so the line names the control instead of a dead end. (Until
+        // CK-67: "…taking a published photo down isn't possible here
+        // yet.", true while the takedown had no surface.)
         return act === 'publish'
           ? 'This photo is already published — everyone in this gathering can see it.'
-          : "This photo is already published, and taking a published photo down isn't possible here yet."
+          : 'This photo is already published — to take it down, use Remove from gathering.'
       }
       return act === 'publish'
         ? "This photo was declined or removed, so it can't be published."
