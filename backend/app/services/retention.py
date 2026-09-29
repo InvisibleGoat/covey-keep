@@ -107,14 +107,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # module); the relation is pinned by test instead.
 PURGE_GRACE = timedelta(hours=1)
 
-# THE CONTRIBUTOR'S RETRIEVAL WINDOW — one of the bin's TWO CLOCKS, and the
+# THE REMOVER'S RETRIEVAL WINDOW — one of the bin's TWO CLOCKS, and the
 # one this constant is (bin record §6.1): a removed photograph stays visible
-# to its UPLOADER for this long after `removed_at` — WHEN THE UPLOADER
-# REMOVED IT (CK-63; two-bins record §3: a photograph is in the bin of
-# whoever removed it, and `media.removed_by_person_id` says who; a host's
-# removal or decline is in the gathering's bin, which no surface reads
-# yet, and a row with no recorded remover is shown to nobody) — and to
-# nobody else at any point. The window is the same length for both bins
+# for this long after `removed_at`, to whoever's bin it is in — its
+# UPLOADER when the uploader removed it (CK-63; two-bins record §3: a
+# photograph is in the bin of whoever removed it, and
+# `media.removed_by_person_id` says who), the HOST when someone other than
+# the uploader removed or declined it (the gathering's bin, which the host
+# reads since CK-66), and a row with no recorded remover is shown to
+# nobody — and to nobody else at any point. The window is the same length for both bins
 # (two-bins §1.5). The OTHER clock is the storage a removed row occupies, which
 # runs until the photograph is destroyed and carries no window at all —
 # which is why `keeping.account_bin_count` has no `removed_at` term and

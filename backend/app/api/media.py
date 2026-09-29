@@ -154,14 +154,17 @@ which only one is the gathering's ordinary read audience:
            photographs of children to an entire gathering — the precise
            failure the consent architecture exists to prevent, arriving as
            an omission rather than a decision.
-  removed  THE BIN OF WHOEVER REMOVED IT (two-bins record §1–§3, CK-63):
-           the uploader, for REMOVED_BIN after `removed_at`, WHEN THE
-           UPLOADER REMOVED IT — `removed_by_person_id` names them; a
-           photograph the host removed or declined is in the GATHERING's
-           bin, which has no reader yet, so it is visible to nobody; a
-           row with no recorded remover (removed before 0026) is visible
-           to nobody. Until CK-63 this read "the uploader, nobody else,
-           ever" and a host's decline sat in the uploader's view.
+  removed  THE BIN OF WHOEVER REMOVED IT (two-bins record §1–§3, CK-63;
+           the gathering's bin readable since CK-66): for REMOVED_BIN
+           after `removed_at` — the uploader, WHEN THE UPLOADER REMOVED
+           IT (`removed_by_person_id` names them); and THE HOST, when the
+           recorded remover is someone OTHER than the uploader — a
+           moderation removal or a decline, the GATHERING's bin. The
+           uploader of a host-removed photograph still sees nothing, ever;
+           a row with no recorded remover (removed before 0026) is visible
+           to nobody, the host included. Until CK-63 this read "the
+           uploader, nobody else, ever" and a host's decline sat in the
+           uploader's view; until CK-66 the gathering's bin had no reader.
 
 404-not-403 throughout. A photograph the caller may not see draws the
 media 404 byte-identical to a missing id, on every per-object path and
@@ -228,11 +231,13 @@ the row to be visible to the caller before anything else is asked.
   what       a `ready` row that is `pending`. `failed` has nothing to
              publish; an in-flight row has nothing to look at (no URL
              exists for it); a `removed` row is NEVER resurrected by
-             approval — the worker's `CASE` and the host's guard agree —
-             and the host cannot even find one they did not remove
-             THEMSELVES from their own uploads (a removed row is in its
-             remover's bin, and the gathering's bin has no reader yet —
-             CK-63). Stable codes: `not_ready` (the rung),
+             approval — the worker's `CASE` and the host's guard agree.
+             A removed row is in its remover's bin (CK-63), and since
+             CK-66 the host reads the GATHERING's bin, so publish and
+             decline on a row they removed or declined draw the 409
+             (`not_pending` carrying `removed`) rather than the 404 an
+             invisible row drew; the way back is `restore`, never a
+             queue act. Stable codes: `not_ready` (the rung),
              `already_live`, `not_pending` (the state).
   how        GUARDED UPDATES (the worker's `_settle` precedent): `WHERE
              status = 'ready' AND publication_state = 'pending'` — a row
@@ -297,47 +302,65 @@ box are CK-40.
             it stays so; cross-gathering search is a later decision with
             its own audience question.
 
-WHO REMOVED IT, AND RESTORE (CK-63; decisions/2026-09-27-two-bins.md
-§1–§4, migration 0026). Two bins, and a photograph is in exactly one — the
-bin of WHOEVER REMOVED IT. `media.removed_by_person_id` is the one fact
-that decides which, written by `remove` and `decline` in the same guarded
-statement as `removed_at`.
+WHO REMOVED IT, AND RESTORE (CK-63; the gathering's bin readable since
+CK-66; decisions/2026-09-27-two-bins.md §1–§4, migration 0026). Two bins,
+and a photograph is in exactly one — the bin of WHOEVER REMOVED IT.
+`media.removed_by_person_id` is the one fact that decides which, written
+by `remove` and `decline` in the same guarded statement as `removed_at`.
 
   your bin       you removed your own upload. Only you see it (the
                  `removed` branch of `_visible_media` requires the
                  remover to be the caller), only you restore it
-                 (`POST /media/{id}/restore`), only you destroy it.
+                 (`POST /media/{id}/restore`), only you destroy it. The
+                 host and everyone else stay out — Steven's rule, the
+                 record's §2: nobody may undo your taking it back.
   the gathering's bin
-                 the host removed or declined someone's upload. The
-                 uploader NEVER sees it again — from their side it is
-                 gone from the gathering — and nobody else does yet: the
-                 host's view of it, host restore and co-hosts are later
-                 phases. A host removing THEIR OWN upload is its uploader,
-                 so that row is in their own bin. Correct under the record.
-  no remover     a row removed before 0026 — visible to NOBODY. We cannot
-                 tell a self-removal from a decline after the fact, and
-                 showing a declined photograph to its uploader is the harm
-                 the record exists to prevent, so the unknown case is
-                 hidden rather than guessed at. Nothing is backfilled.
-  restore        the uploader, on their own self-removed photograph,
-                 within REMOVED_BIN — everyone else draws the media 404
-                 byte-identical to a missing id, the host and the
-                 uploader of a host-removed row included. WHERE IT GOES,
-                 THE GATE DECIDES AND THE RESTORER DOES NOT: the
-                 gathering's setting and the host account's kind are read
-                 exactly as the worker's publish step reads them and
-                 `publication.resolve_gathering` answers — gated →
-                 `pending` (the host's queue, both publication stamps
-                 cleared), open → `live` (an existing `published_at`
-                 kept; a never-published row stamped now with a NULL
-                 publisher, the worker's convention). A restore never
-                 bypasses the host's review (two-bins §4). NO COUNT MOVES:
-                 a binned photograph was never uncounted (bin record §3),
-                 so restoring cannot push an account over its allowance.
-                 ONE guarded UPDATE, keyed on the row still being `ready`,
-                 `removed` and removed BY THIS CALLER; a rowcount of 0 is
-                 the lost race (the sweep may have marked it a moment
-                 earlier) and is refused, never half-applied.
+                 the host removed or declined someone's upload — the
+                 recorded remover is someone OTHER than the uploader. The
+                 uploader NEVER sees it again: from their side it is gone
+                 from the gathering. THE HOST READS IT (CK-66): it opens
+                 for them (`/url`), lists under `removed=true` (never in
+                 the default list), restores (`live`, below), and
+                 destroys — emptying the gathering's bin, one photograph
+                 at a time. The role test is `_moderates`, ONE place, so
+                 co-hosts (who may read and restore, never empty —
+                 co-hosts §4 as amended) widen exactly it. A host
+                 removing THEIR OWN upload is its uploader, so that row
+                 is in their own bin. Correct under the record.
+  no remover     a row removed before 0026 — visible to NOBODY, the host
+                 included. We cannot tell a self-removal from a decline
+                 after the fact, and showing a declined photograph to its
+                 uploader is the harm the record exists to prevent, so the
+                 unknown case is hidden rather than guessed at. Nothing is
+                 backfilled.
+  restore        two ways back, decided by whose bin the row is in.
+                 THE UPLOADER, on their own self-removed photograph,
+                 within REMOVED_BIN: WHERE IT GOES, THE GATE DECIDES AND
+                 THE RESTORER DOES NOT — the gathering's setting and the
+                 host account's kind are read exactly as the worker's
+                 publish step reads them and `publication.resolve_gathering`
+                 answers — gated → `pending` (the host's queue, both
+                 publication stamps cleared), open → `live` (an existing
+                 `published_at` kept; a never-published row stamped now
+                 with a NULL publisher, the worker's convention). A
+                 restore by anyone but the host never bypasses the host's
+                 review (two-bins §4). THE HOST, on a gathering-bin row
+                 (CK-66): `live`, WHATEVER the gate says — review is the
+                 host's, so the host putting a photograph back IS the
+                 host approving it; an existing publication stamp is
+                 kept whole (a rule-published row keeps its NULL
+                 publisher), and a never-published row — a declined one —
+                 is stamped now with THE HOST's person id, because a
+                 person published it, not the rule. Everyone else draws
+                 the media 404 byte-identical to a missing id, the
+                 uploader of a host-removed row included. NO COUNT MOVES
+                 on either path: a binned photograph was never uncounted
+                 (bin record §3). ONE guarded UPDATE, keyed on the row
+                 still being `ready`, `removed` and in THIS CALLER's
+                 reach (their own removal, or the gathering's bin); a
+                 rowcount of 0 is the lost race (the sweep may have
+                 marked it a moment earlier) and is refused, never
+                 half-applied.
 
 DATA-HANDLING: the first bytes into the bucket that will hold photographs
 of children move through URLs this router mints. A PRESIGNED URL IS A
@@ -372,13 +395,18 @@ consent evidence and never telemetry, and the publisher's person id rides
 no body. Nothing on the deploy is gated, and nothing here can gate
 anything (CK-44); the only gated subject is planted by hand. Since CK-63
 this module decides WHO CAN SEE A REMOVED PHOTOGRAPH, photographs of
-children included, and the rule is stricter than before: a photograph the
-host removed or declined leaves its uploader's view at once; a row whose
-remover is unknown is hidden from everyone rather than guessed at; restore
-is the uploader's alone, on their own self-removed photograph, and passes
-back through the host's review gate wherever the gathering has one. No
-new person gains sight of any photograph, nothing is destroyed, no count
-moves, and the remover's person id rides no body — like the publisher's.
+children included: a photograph the host removed or declined leaves its
+uploader's view at once; a row whose remover is unknown is hidden from
+everyone rather than guessed at; the uploader's restore is theirs alone,
+on their own self-removed photograph, and passes back through the host's
+review gate wherever the gathering has one. Since CK-66 the HOST reads
+the gathering's bin — photographs THEY removed or declined, which they
+could already see before removing, so the audience does not grow; it
+persists for the retrieval window so a mistaken removal can be undone.
+A host restore publishes, and the host is the one person whose approval
+publishing needs (CK-15 §4's controller). The uploader, the keeper and
+every invitee gain nothing; no count moves on any of it, and the
+remover's person id rides no body — like the publisher's.
 """
 
 import asyncio
@@ -389,7 +417,7 @@ from uuid import UUID
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import and_, delete, exists, func, literal_column, or_, select, update
+from sqlalchemy import and_, case, delete, exists, func, literal_column, not_, or_, select, update
 from sqlalchemy.dialects.postgresql import aggregate_order_by, array_agg
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -480,7 +508,7 @@ ALREADY_REMOVED = "already_removed"
 # Restore's one code of its own (CK-63): `restore` on a row that is not in
 # the bin — `live` or `pending`. Nothing to put back. `not_ready` is reused
 # for a row with nothing stored (a `failed` row is visible to its uploader
-# and has no layers to restore).
+# and the host, and has no layers to restore).
 NOT_REMOVED = "not_removed"
 
 # The lost-race 409 for a removal, a destruction or a restore (CK-54;
@@ -1015,6 +1043,42 @@ async def confirm_upload(
 # --- reading back (CK-37) ----------------------------------------------------
 
 
+def _moderates(account_id: UUID):
+    """WHO MAY READ THE GATHERING'S BIN AND RESTORE FROM IT, as one SQL
+    criterion against the joined `Gathering` (CK-66; two-bins record §1.3).
+    THE HOST, and nobody else today. When co-hosts ship (co-hosts record
+    §4, as amended by two-bins: a co-host may send to the gathering's bin
+    and restore from it, NEVER empty it), they widen HERE and nowhere
+    else — this expression gates the bin's read (`_visible_media`'s
+    gathering-bin branch, and so `/url` and the `removed=true` view) and
+    the restore (`_restorable_row`). EMPTYING never reads it: `destroy`
+    stays behind `_may_remove` (the host, or the uploader for their own),
+    so widening this widens nothing irreversible. A NULL `host_account_id`
+    (the claimable state) matches nobody."""
+    return Gathering.host_account_id == account_id
+
+
+def _in_gathering_bin():
+    """A row that is IN THE GATHERING'S BIN, by shape alone (two-bins
+    record §1.3; CK-66): `removed`, with a RECORDED remover who is someone
+    other than the uploader — a moderation removal or a decline. A
+    self-removal has remover = uploader (the personal bin); a NULL remover
+    is NO recorded remover, nobody's bin. `IS DISTINCT FROM`, never `!=`:
+    a guest upload has a NULL `uploader_person_id`, and `removed_by !=
+    NULL` is NULL, which would silently drop the guest's removed
+    photograph out of the host's bin. WHO may look at such a row is
+    `_moderates`' question, asked beside this in `_visible_media`; this
+    expression only says WHICH bin the row is in, so `list_media` can
+    show the bin view (visibility AND this) and keep the default list
+    clean (visibility AND NOT this) without a second spelling of the
+    criterion."""
+    return and_(
+        Media.publication_state == PublicationState.REMOVED,
+        Media.removed_by_person_id.is_not(None),
+        Media.removed_by_person_id.is_distinct_from(Media.uploader_person_id),
+    )
+
+
 def _visible_media(ctx: AuthContext, now: datetime):
     """WHO MAY SEE THIS PHOTOGRAPH — the decision record's rule as ONE SQL
     criterion over `Media` joined to its `Gathering` (the join is the
@@ -1031,23 +1095,33 @@ def _visible_media(ctx: AuthContext, now: datetime):
       - `pending` → the UPLOADER or the HOST, and nobody else. A keeper is
                     not an approver; an invitation is visibility of the
                     gathering, not of unreviewed media.
-      - `removed` → the uploader alone, within REMOVED_BIN of `removed_at`,
-                    AND ONLY WHEN THE UPLOADER REMOVED IT — `removed_by_person_id`
-                    equal to the caller (CK-63; two-bins record §3). Four
-                    consequences, each intended: a photograph the HOST
-                    removed or declined is visible to NOBODY (it is in the
-                    gathering's bin, which has no reader yet — the host's
-                    view, host restore and co-hosts are later phases); a
-                    row with a NULL remover (removed before 0026) is
-                    visible to NOBODY — conservative on purpose, because a
-                    self-removal and a decline cannot be told apart after
-                    the fact and showing a declined photograph to its
-                    uploader is the harm the record exists to prevent; a
-                    host who removes THEIR OWN photograph is its uploader
-                    and its remover, so it stays in their own bin; and
-                    `_removable_row` reads through this criterion, so an
-                    uploader can no longer `destroy` a photograph the host
-                    removed — it is not in their bin. A removed row with no
+      - `removed` → the bin of whoever removed it, within REMOVED_BIN of
+                    `removed_at` (CK-63; the gathering's bin readable
+                    since CK-66 — two-bins record §1–§3). Two branches:
+                    (a) THE UPLOADER, when the remover is the caller —
+                    their own bin; (b) THE HOST (`_moderates` — the one
+                    place co-hosts will widen), when the remover is
+                    RECORDED and is someone OTHER than the uploader —
+                    the gathering's bin (`_in_gathering_bin`, which
+                    spells why it is `IS DISTINCT FROM` and never `!=`).
+                    The consequences, each intended: the uploader of a
+                    host-removed photograph still sees NOTHING — (b) is
+                    the host's alone, and §2 of the record forbids the
+                    uploader a way back to a moderation removal; a row
+                    with a NULL remover (removed before 0026) is visible
+                    to NOBODY, the host included — conservative on
+                    purpose, because a self-removal and a decline cannot
+                    be told apart after the fact and showing a declined
+                    photograph to its uploader is the harm the record
+                    exists to prevent; a host who removes THEIR OWN
+                    photograph is its uploader and its remover, so it
+                    stays in their own bin and never appears in the
+                    gathering's; an uploader still cannot reach a
+                    photograph the host removed (`_removable_row` and
+                    `_restorable_row` read through this criterion), while
+                    the host can now OPEN a gathering-bin photograph (to
+                    decide), RESTORE it, and DESTROY it — emptying, one
+                    photograph at a time. A removed row with no
                     `removed_at` is malformed and is visible to nobody
                     (the strict direction).
 
@@ -1089,12 +1163,20 @@ def _visible_media(ctx: AuthContext, now: datetime):
             and_(Media.publication_state == PublicationState.PENDING, or_(is_uploader, is_host)),
             and_(
                 Media.publication_state == PublicationState.REMOVED,
-                is_uploader,
-                # Your bin, not the gathering's (CK-63): the remover must
-                # be the caller. A NULL remover fails this on purpose.
-                Media.removed_by_person_id == person_id,
                 Media.removed_at.is_not(None),
                 Media.removed_at > now - REMOVED_BIN,
+                or_(
+                    # (a) Your bin (CK-63): your own upload, removed by
+                    # YOU. A NULL remover fails this on purpose.
+                    and_(is_uploader, Media.removed_by_person_id == person_id),
+                    # (b) The gathering's bin (CK-66): the host, where
+                    # someone other than the uploader removed it — a
+                    # moderation removal or a decline. `_in_gathering_bin`
+                    # carries the IS DISTINCT FROM (a guest upload has a
+                    # NULL uploader) and the IS NOT NULL (a pre-0026 row
+                    # is in nobody's bin).
+                    and_(_moderates(account_id), _in_gathering_bin()),
+                ),
             ),
         ),
     )
@@ -1162,6 +1244,7 @@ async def list_media(
     gathering_id: UUID,
     q: Optional[str] = Query(default=None, max_length=MAX_SEARCH_LENGTH),
     awaiting_review: bool = Query(default=False),
+    removed: bool = Query(default=False),
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -1184,14 +1267,43 @@ async def list_media(
     `q`, never a second criterion beside it. HOST-ONLY: a non-host draws
     the media 404 (never an empty list — an empty list would say there is
     a queue and it is empty, a fact only the host holds). Composes with
-    `q`."""
+    `q`.
+
+    `removed=true` (CK-66) is the GATHERING'S BIN — the rows someone other
+    than the uploader removed (`_in_gathering_bin`), a filter on
+    `_visible_media` exactly like the queue's, composing with `q`. The
+    host alone can see such rows, so for anyone else the view is an EMPTY
+    LIST, never a refusal — deliberately not the queue's 404: nothing in
+    the answer confirms the bin exists, and no host test is written here
+    at all (the criterion composed with visibility IS the host test). THE
+    DEFAULT LIST EXCLUDES gathering-bin rows in the same breath, so the
+    host's ordinary list never mixes removed photographs in with live
+    ones; the uploader's own personal-bin rows keep appearing in the
+    default list exactly as before (CK-64's surface depends on that). The
+    two flags together are a 422: a photograph cannot be awaiting review
+    and in the bin at once, and a combined view would have to invent
+    which criterion wins."""
     gathering = await _gathering_for_read(db, ctx, gathering_id)
+    if removed and awaiting_review:
+        raise _field_422(
+            "removed",
+            "the bin and the review queue are separate views — ask for one at a time",
+            where="query",
+        )
     now = datetime.now(timezone.utc)
     criteria = [Media.gathering_id == gathering.id, _visible_media(ctx, now)]
     if awaiting_review:
         if not _is_host(gathering, ctx):
             raise _media_not_found()
         criteria.append(_awaiting_review())
+    if removed:
+        criteria.append(_in_gathering_bin())
+    else:
+        # The gathering's bin is a VIEW, not a mixture: its rows stay out
+        # of the default list (and, vacuously, out of the queue — a
+        # removed row is never `pending`). Personal-bin rows are not "in
+        # the gathering's bin" and are untouched by this.
+        criteria.append(not_(_in_gathering_bin()))
     term = q.strip() if q else ""
     if term:
         criteria.append(_matches(term))
@@ -1563,9 +1675,11 @@ async def decline_media(
     a decline is moderation, so the uploader does NOT see the photograph
     again (until CK-63 they kept it in their view for REMOVED_BIN, which
     let a declined photograph be seen by the person it was declined from),
-    the host does not see it again either (the gathering's bin has no
-    reader yet), and nothing is destroyed — the layers stay, the row stays
-    `ready`, the photograph goes on counting. NOT a general removal: a
+    and nothing is destroyed — the layers stay, the row stays `ready`, the
+    photograph goes on counting. THE HOST reads it in the gathering's bin
+    (CK-66, `removed=true` on the list) and can put it back — a host
+    restore is the host approving, so it goes `live` — or destroy it;
+    until CK-66 that bin had no reader. NOT a general removal: a
     `live` row is refused (409 `not_pending` carrying `live`) — the
     takedown is `remove` (CK-54). `published_at` is untouched (a declined
     photograph was never published; that NULL is what tells a declined row
@@ -1735,14 +1849,16 @@ async def publish_media_batch(
 # TWO BINS, AND THE AUDIENCE RULE DECIDES WHICH ONE A ROW IS IN (CK-63;
 # until then this comment said "the bin is the UPLOADER's"): a removed row
 # is in the bin of WHOEVER REMOVED IT, and `_visible_media`'s `removed`
-# branch admits the uploader only when the remover is them. So a host who
-# bins someone else's photograph cannot then reach it (unchanged), AND the
-# uploader cannot either (new) — a host-removed row is in the gathering's
-# bin, which no surface reads yet, so until the host's bin surface exists
-# nothing but the sweep can reach it. A host who bins their OWN photograph
-# is its uploader and its remover, so it stays in their own bin and they
-# can still destroy or restore it. Emptying a bin is the bin surface's
-# question (Phase C), with its own audience to decide.
+# branch admits the uploader only when the remover is them, and the HOST
+# where the remover is someone other than the uploader (CK-66). So a
+# host-removed row is the HOST's to reach again — open, restore, destroy;
+# destroying a gathering-bin row IS emptying that bin, one photograph at
+# a time — and the UPLOADER's to reach never: from their side it is gone
+# from the gathering (until CK-66 neither could reach it, because the
+# gathering's bin had no reader). A host who bins their OWN photograph is
+# its uploader and its remover, so it stays in their own bin — theirs to
+# destroy or restore, and never in the gathering's bin view. A bulk
+# "empty the gathering's bin" is deliberately not built.
 #
 # THE DECREMENT RIDES THE MARKING STATEMENT, and that is the whole reason
 # the API marks rather than the worker. `photo_count` and `total_bytes`
@@ -1853,8 +1969,9 @@ async def remove_media(
     someone else's sends it to the GATHERING's bin: the uploader does not
     see it again (until CK-63 they did — this docstring said "the uploader
     keeps it for REMOVED_BIN; nobody else sees it again", true only when
-    the uploader removed it), and nobody else does until that bin has a
-    surface.
+    the uploader removed it), and THE HOST reads it there (CK-66,
+    `removed=true` on the list; until then that bin had no reader) — to
+    put back, or to destroy.
 
     The host, or the uploader for their own; everyone else draws the media
     404. 409 `not_ready` for a row with nothing stored, `already_removed`
@@ -1953,33 +2070,38 @@ async def destroy_media(
     return _media_body(row)
 
 
-# --- restore (CK-63) ---------------------------------------------------------
-# decisions/2026-09-27-two-bins.md §4. The way back from YOUR OWN bin — and
-# only from it. The uploader, on a photograph they removed themselves,
-# within REMOVED_BIN; the gate decides where it goes; no count moves.
+# --- restore (CK-63; the host's, CK-66) --------------------------------------
+# decisions/2026-09-27-two-bins.md §4. The way back from EACH bin, for the
+# one person that bin belongs to. The uploader, on a photograph they
+# removed themselves, within REMOVED_BIN — the gate decides where it goes.
+# The host, on a gathering-bin row (CK-66) — `live`, whatever the gate
+# says, because review is the host's and putting it back IS approving it.
+# No count moves on either path.
 #
 # WHY RESTORE WAITED ON ATTRIBUTION, stated so nobody shortcuts it: without
 # `removed_by_person_id` a restore endpoint would let an uploader restore a
 # photograph the host declined — "I removed it" would become "I asked the
 # host not to show it" in the other direction — which the record forbids
-# outright (§2). The host's restore from the gathering's bin, and a
-# co-host's, are later phases with the same column as their fact.
+# outright (§2). A co-host's restore is a later phase with the same column
+# as its fact; it widens `_moderates` and lands on the gate's answer, not
+# `live` (two-bins §4: only a restore by the host is the host's approval).
 
 
 async def _restorable_row(
     db: AsyncSession, ctx: AuthContext, media_id: UUID, now: datetime
 ) -> tuple[Media, Gathering]:
     """The row a restore may touch: visible to the caller under the read
-    rule — which, for a `removed` row, already means their own upload,
-    removed BY THEM, within REMOVED_BIN — AND the caller is its uploader
-    (stated again rather than inferred from the branch: a `live` or
-    `pending` row is visible to more people than its uploader, and the
-    refusal for those must still be the uploader's alone to draw). Anyone
-    else — the host, a keeper, an accepted invitee, a stranger, and the
-    uploader of a row the HOST removed — draws the media 404 byte-identical
-    to a missing id (404-not-403). A row past the window is a 404 too: the
-    bin has closed. Locked for the act. Returns the gathering beside the
-    row because the gate is resolved from it."""
+    rule — which, for a `removed` row, already means their own removal or
+    the gathering's bin they moderate, within REMOVED_BIN — AND the caller
+    is its uploader or the host (stated again rather than inferred from
+    the branch: a `live` or `pending` row is visible to more people than
+    those two, and the 409s below must still be theirs alone to draw).
+    Anyone else — a keeper, an accepted invitee, a stranger, and the
+    uploader of a row the HOST removed — draws the media 404
+    byte-identical to a missing id (404-not-403). A row past the window is
+    a 404 too: the bin has closed. Locked for the act. Returns the
+    gathering beside the row because the uploader's path resolves the gate
+    from it."""
     found = (
         await db.execute(
             select(Media, Gathering)
@@ -1987,7 +2109,10 @@ async def _restorable_row(
             .where(
                 Media.id == media_id,
                 _visible_media(ctx, now),
-                Media.uploader_person_id == ctx.person.id,
+                or_(
+                    Media.uploader_person_id == ctx.person.id,
+                    _moderates(ctx.person.account_id),
+                ),
             )
             .with_for_update(of=Media)
         )
@@ -2001,9 +2126,10 @@ async def _restorable_row(
 def _restore_refusal(row: Media) -> Optional[dict]:
     """Why this photograph cannot be put back right now, as the stable-code
     detail of a 409 — or None when it can. The rung first (a `failed` row
-    is visible to its uploader and has nothing stored to restore), then
-    the state (`live` and `pending` are not in the bin). A `destroying` row
-    never reaches here: `_visible_media` excludes it, so it draws the 404."""
+    is visible to its uploader and the host, and has nothing stored to
+    restore), then the state (`live` and `pending` are not in the bin). A
+    `destroying` row never reaches here: `_visible_media` excludes it, so
+    it draws the 404."""
     if row.status != MediaStatus.READY:
         return {
             "code": NOT_READY,
@@ -2029,46 +2155,62 @@ async def restore_media(
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """PUT A PHOTOGRAPH BACK FROM YOUR OWN BIN — `ready` + `removed` →
-    `live` or `pending`, clearing `removed_at` and `removed_by_person_id`
-    (two-bins record §4). THE UPLOADER, on a photograph THEY removed,
-    within REMOVED_BIN — and nobody else: the host, a keeper, a stranger
-    and the uploader of a row the host removed each draw the media 404
-    byte-identical to a missing id. There is no way back from the
-    gathering's bin here; that is the host's, in a later phase.
+    """PUT A PHOTOGRAPH BACK FROM THE BIN — `ready` + `removed` → `live`
+    or `pending`, clearing `removed_at` and `removed_by_person_id`
+    (two-bins record §4). Two restorers, one per bin: THE UPLOADER, on a
+    photograph THEY removed, within REMOVED_BIN; and THE HOST (CK-66), on
+    a gathering-bin row — one someone other than the uploader removed.
+    Nobody else: a keeper, a stranger, and the uploader of a row the host
+    removed each draw the media 404 byte-identical to a missing id — the
+    uploader still cannot restore a moderation removal (two-bins §2).
 
-    WHERE IT GOES, THE GATE DECIDES — THE RESTORER DOES NOT, and no
-    parameter may. The gathering's own setting and the host account's kind
-    are read exactly as the worker's publish step reads them
-    (services/ingest.py step 4; `_host_kind` is the gatherings router's
-    reader of the same fact) and `publication.resolve_gathering` answers.
-    GATED → `pending`: the photograph waits for the host again, in the
-    queue, and BOTH publication stamps are cleared — "no pending row
-    carries a published_at" is a verifier invariant, and the host's publish
-    stamps the pair afresh. A restore never bypasses the host's review,
-    even of a photograph that was published, removed and put back. OPEN →
-    `live`: an existing `published_at` (and publisher) is kept — the
-    photograph was published, and going to the bin and back does not
-    re-date that; a never-published row (waiting when the host turned
-    review off, then removed) is stamped with the transaction's now() and
-    a NULL publisher — the rule published it, the worker's convention.
-    Not "back to what it was": a photograph removed while `live` from a
-    gathering that has since turned review on waits for the host.
+    THE UPLOADER'S RESTORE: WHERE IT GOES, THE GATE DECIDES — THE
+    RESTORER DOES NOT, and no parameter may. The gathering's own setting
+    and the host account's kind are read exactly as the worker's publish
+    step reads them (services/ingest.py step 4; `_host_kind` is the
+    gatherings router's reader of the same fact) and
+    `publication.resolve_gathering` answers. GATED → `pending`: the
+    photograph waits for the host again, in the queue, and BOTH
+    publication stamps are cleared — "no pending row carries a
+    published_at" is a verifier invariant, and the host's publish stamps
+    the pair afresh. A restore never bypasses the host's review, even of
+    a photograph that was published, removed and put back. OPEN → `live`:
+    an existing `published_at` (and publisher) is kept — the photograph
+    was published, and going to the bin and back does not re-date that; a
+    never-published row (waiting when the host turned review off, then
+    removed) is stamped with the transaction's now() and a NULL publisher
+    — the rule published it, the worker's convention. Not "back to what
+    it was": a photograph removed while `live` from a gathering that has
+    since turned review on waits for the host.
 
-    NO COUNT MOVES. `photo_count` and `total_bytes` are untouched: a binned
-    photograph was never uncounted (bin record §3 — it was still stored),
-    so restoring cannot push an account over its allowance; the room it
-    occupies is the room it always occupied. `account_bin_count` — which
-    no route reads since CK-65 — drops by one because the row leaves
-    `removed`, not because anything here counts.
+    THE HOST'S RESTORE: `live`, WHATEVER THE GATE SAYS (two-bins §4 —
+    only a restore by someone OTHER than the host passes back through the
+    gate). Review is the host's, so the host putting a photograph back IS
+    the host approving it; sending it to their own queue would hand them
+    the same decision twice. The publication pair is kept whole where
+    `published_at` is set — a rule-published row keeps its NULL publisher,
+    which is a recorded fact ("the rule published this"), never an
+    absence to fill in — and a never-published row (a DECLINED one, the
+    case that matters) is stamped with the transaction's now() and THE
+    HOST's person id, because a person published it, not the rule.
 
-    ONE GUARDED UPDATE — `WHERE id AND status = 'ready' AND
-    publication_state = 'removed' AND removed_by_person_id = <the caller>`.
-    A rowcount of 0 is the lost race: the sweep may have marked the row
-    `destroying` between the read and the write (the sweep's SELECT takes
-    no lock; at the window's own instant both can select the row), or a
-    second restore landed first. Rolled back and refused with the lost-race
-    409 — never half-applied. Refusals before it: 404 (the rule), 409
+    NO COUNT MOVES, on either path. `photo_count` and `total_bytes` are
+    untouched: a binned photograph was never uncounted (bin record §3 —
+    it was still stored), so restoring cannot push an account over its
+    allowance; the room it occupies is the room it always occupied.
+    `account_bin_count` — which no route reads since CK-65 — drops by one
+    because the row leaves `removed`, not because anything here counts.
+
+    ONE GUARDED UPDATE either way — `WHERE id AND status = 'ready' AND
+    publication_state = 'removed'` AND whichever restorer condition
+    applies: removed BY THIS CALLER (the uploader's), or removed by
+    someone other than the uploader (the host's — the gathering-bin
+    shape, `IS DISTINCT FROM` for the guest-upload case). A rowcount of 0
+    is the lost race: the sweep may have marked the row `destroying`
+    between the read and the write (the sweep's SELECT takes no lock; at
+    the window's own instant both can select the row), or a second
+    restore landed first. Rolled back and refused with the lost-race 409
+    — never half-applied. Refusals before it: 404 (the rule), 409
     `not_ready` carrying the rung for a row with nothing stored, 409
     `not_removed` for a row not in the bin."""
     now = datetime.now(timezone.utc)
@@ -2076,31 +2218,63 @@ async def restore_media(
     refusal = _restore_refusal(row)
     if refusal is not None:
         raise HTTPException(409, detail=refusal)
-    # The gate, resolved now — at restore time, never from what the row was
-    # before it was removed, never from a parameter (CK-41's rule applied
-    # to the second act that publishes).
-    gate = publication.resolve_gathering(
-        host_setting=gathering.requires_approval,
-        host_kind=await _host_kind(db, gathering),
+    # Whose bin this row is in decides the path — the same fact that
+    # admitted the caller: a visible `removed` row is either the caller's
+    # own removal (uploader AND remover) or the gathering's bin read by
+    # its host; the two cannot overlap, because the gathering-bin shape
+    # requires the remover to differ from the uploader.
+    own_restore = (
+        row.uploader_person_id == ctx.person.id
+        and row.removed_by_person_id == ctx.person.id
     )
-    if gate.requires_approval:
-        # Back to the host's queue, both stamps cleared: a pending row
-        # carries no published_at (the verifier's invariant), and the
-        # host's publish writes the pair again.
-        destination: dict = dict(
-            publication_state=PublicationState.PENDING,
-            published_at=None,
-            published_by_person_id=None,
+    if own_restore:
+        # The gate, resolved now — at restore time, never from what the
+        # row was before it was removed, never from a parameter (CK-41's
+        # rule applied to the second act that publishes).
+        gate = publication.resolve_gathering(
+            host_setting=gathering.requires_approval,
+            host_kind=await _host_kind(db, gathering),
         )
+        if gate.requires_approval:
+            # Back to the host's queue, both stamps cleared: a pending row
+            # carries no published_at (the verifier's invariant), and the
+            # host's publish writes the pair again.
+            destination: dict = dict(
+                publication_state=PublicationState.PENDING,
+                published_at=None,
+                published_by_person_id=None,
+            )
+        else:
+            # Live again. An existing stamp is kept; a never-published row
+            # is stamped now with a NULL publisher — the rule published
+            # it, the worker's convention. `published_by_person_id` is not
+            # written: where `published_at` was NULL the publisher already
+            # was (a publisher is always dated — the verifier's other
+            # invariant).
+            destination = dict(
+                publication_state=PublicationState.LIVE,
+                published_at=func.coalesce(Media.published_at, func.now()),
+            )
+        restorer = (Media.removed_by_person_id == ctx.person.id,)
     else:
-        # Live again. An existing stamp is kept; a never-published row is
-        # stamped now with a NULL publisher — the rule published it, the
-        # worker's convention. `published_by_person_id` is not written:
-        # where `published_at` was NULL the publisher already was (a
-        # publisher is always dated — the verifier's other invariant).
+        # The host, from the gathering's bin (CK-66): live, the gate not
+        # consulted — this act IS the approval the gate exists to get.
+        # The pair moves together or not at all: where `published_at` is
+        # set the publisher is left exactly as it was (NULL means the
+        # rule published it — a fact, not a blank); where it is NULL the
+        # publisher was too (the verifier's invariant), and both are
+        # stamped — the date now, the publisher this host.
         destination = dict(
             publication_state=PublicationState.LIVE,
             published_at=func.coalesce(Media.published_at, func.now()),
+            published_by_person_id=case(
+                (Media.published_at.is_(None), ctx.person.id),
+                else_=Media.published_by_person_id,
+            ),
+        )
+        restorer = (
+            Media.removed_by_person_id.is_not(None),
+            Media.removed_by_person_id.is_distinct_from(Media.uploader_person_id),
         )
     result = await db.execute(
         update(Media)
@@ -2108,7 +2282,7 @@ async def restore_media(
             Media.id == row.id,
             Media.status == MediaStatus.READY,
             Media.publication_state == PublicationState.REMOVED,
-            Media.removed_by_person_id == ctx.person.id,
+            *restorer,
         )
         # The destination and the two removal columns cleared, in ONE
         # statement: a remover never survives a restore (the verifier

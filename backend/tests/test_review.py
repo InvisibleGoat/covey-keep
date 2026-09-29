@@ -497,10 +497,12 @@ async def test_a_decline_lands_removed_in_the_gatherings_bin_and_the_uploader_do
     record §3): the remover is the HOST, so the row is in the GATHERING's
     bin — the uploader does NOT see it again (until CK-63 this test pinned
     that they kept it for thirty days, which let a declined photograph be
-    seen by the person it was declined from), and nobody else does until
-    that bin has a surface; the host cannot act on it again; nothing is
-    destroyed. NOT a general removal: a `live` row is refused with
-    `not_pending` carrying `live`."""
+    seen by the person it was declined from), and a keeper and a second
+    invitee never do; the HOST reads it there since CK-66 — the bin is a
+    view, so their default list stays clean — and review cannot act on it
+    again (the 409, now that the host can see the row; until CK-66 the
+    404, because they could not); nothing is destroyed. NOT a general
+    removal: a `live` row is refused with `not_pending` carrying `live`."""
     cast = await _cast(client, capsys, db_session_factory)
     media_id = await _photograph(db_session_factory, cast)
     # The worker's output, without the worker (the publish test's move):
@@ -537,17 +539,30 @@ async def test_a_decline_lands_removed_in_the_gatherings_bin_and_the_uploader_do
         assert len(layers) == 3
     assert await _bytes(db_session_factory, cast) == before
 
-    # The gathering's bin, and it has no reader: the uploader does not see
-    # it again — absent from their list, the media 404 byte-identical to a
-    # missing id on the URL — and neither does anyone else.
+    # The gathering's bin: the uploader does not see it again — absent
+    # from their list, the media 404 byte-identical to a missing id on the
+    # URL — and neither do a keeper or a second invitee.
     missing = await _url(client, cast.uploader, MISSING_ID)
-    for headers in (cast.uploader, cast.host, cast.keeper, cast.bystander):
+    for headers in (cast.uploader, cast.keeper, cast.bystander):
         assert _ids(await _list(client, headers, cast.gathering_id)) == []
         refused = await _url(client, headers, media_id)
         assert (refused.status_code, refused.json()) == (404, missing.json())
-    # The host cannot act on it again.
-    assert (await _decline(client, cast.host, media_id)).status_code == 404
-    assert (await _publish(client, cast.host, media_id)).status_code == 404
+    # The HOST reads that bin since CK-66: the default list stays clean
+    # (the bin is a view — test_gathering_bin.py) and the row opens for
+    # them (CHANGED: until CK-66 the host drew the 404 too).
+    assert _ids(await _list(client, cast.host, cast.gathering_id)) == []
+    assert (await _url(client, cast.host, media_id)).status_code == 200
+    # Review cannot act on it again: a declined row is a decision already
+    # made, and since CK-66 the host can SEE it, so both acts draw the 409
+    # `not_pending` carrying `removed` (CHANGED: until CK-66 both drew the
+    # 404, because the row was invisible to them). The way back is
+    # `restore`, never a queue act.
+    for act in (_decline, _publish):
+        refused = await act(client, cast.host, media_id)
+        assert refused.status_code == 409, refused.text
+        detail = refused.json()["detail"]
+        assert detail["code"] == NOT_PENDING
+        assert detail["publication_state"] == "removed"
 
     # A `live` photograph is not declined: the takedown is unbuilt.
     live = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)

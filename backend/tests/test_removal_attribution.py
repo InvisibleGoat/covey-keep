@@ -13,7 +13,8 @@ The load-bearing pins:
 - the uploader lists and opens a photograph THEY removed; the uploader of a
   photograph the HOST removed, and of one the host DECLINED, gets it absent
   from the list and a 404 byte-identical to a missing id on `/url`,
-  `/restore` and `/destroy` — the gathering's bin has no reader yet;
+  `/restore` and `/destroy` — the gathering's bin is the HOST's to read
+  (CK-66; test_gathering_bin.py), never the uploader's;
 - a removed row with NO recorded remover (every removal before 0026) is
   invisible to its uploader — and the sweep still takes it at the window;
 - restore in an OPEN gathering → `live`, an existing publication stamp
@@ -196,8 +197,12 @@ async def test_the_uploader_sees_what_they_removed_and_nothing_the_host_removed_
     removed, and one the host declined, are in the GATHERING's bin — the
     uploader gets them absent from the list and the media 404
     byte-identical to a missing id on `/url`, `/restore` and `/destroy`;
-    and because that bin has no reader yet, the host, a keeper and an
-    accepted invitee get exactly the same nothing."""
+    a keeper and an accepted invitee get exactly the same nothing. THE
+    HOST reads that bin since CK-66 (until then they got the same nothing
+    too): the two rows they removed open for them, while their DEFAULT
+    list stays clean — the bin is a view (`removed=true`,
+    test_gathering_bin.py), not a mixture — and the uploader's own bin is
+    still not theirs to see into."""
     cast = await _cast(client, capsys, db_session_factory)
     mine = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
     host_removed = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
@@ -221,11 +226,18 @@ async def test_the_uploader_sees_what_they_removed_and_nothing_the_host_removed_
             refused = await act(client, cast.uploader, media_id)
             missing = await act(client, cast.uploader, MISSING_ID)
             assert (refused.status_code, refused.json()) == (404, missing.json()), act.__name__
-    # And from everyone else's: nothing reads that bin yet, the host included.
-    for headers in (cast.host, cast.keeper, cast.bystander):
+    # And from a keeper's and a second invitee's: neither bin admits them.
+    for headers in (cast.keeper, cast.bystander):
         assert _ids(await _list(client, headers, cast.gathering_id)) == []
         for media_id in (mine, host_removed, declined):
             assert (await _url(client, headers, media_id)).status_code == 404
+    # The HOST (CHANGED at CK-66 — until then this loop included them):
+    # their default list stays clean, the uploader's own bin is still not
+    # theirs, and the two gathering-bin rows open for them.
+    assert _ids(await _list(client, cast.host, cast.gathering_id)) == []
+    assert (await _url(client, cast.host, mine)).status_code == 404
+    for media_id in (host_removed, declined):
+        assert (await _url(client, cast.host, media_id)).status_code == 200
     # Nothing moved: all three still `ready` and `removed`, layers intact.
     for media_id in (mine, host_removed, declined):
         status, state, removed_at, *_ = await _state(db_session_factory, media_id)
@@ -392,13 +404,17 @@ async def test_restore_in_a_gated_gathering_goes_pending_with_both_stamps_cleare
 
 
 async def test_restore_is_the_uploaders_alone_on_their_own_removal(client, capsys, db_session_factory):
-    """WHO MAY PUT IT BACK: the uploader, on a photograph they removed
-    themselves. The host, a keeper, an accepted invitee and a stranger each
-    draw the media 404 byte-identical to a missing id on the uploader's
-    own removal, and nothing moves; the uploader of a photograph the HOST
-    removed draws the same 404 — it is in the gathering's bin, not theirs.
-    The host removing THEIR OWN upload is its remover and its uploader, so
-    that row is in the host's own bin and the host restores it."""
+    """WHO MAY PUT IT BACK from the PERSONAL bin: the uploader, on a
+    photograph they removed themselves. The host, a keeper, an accepted
+    invitee and a stranger each draw the media 404 byte-identical to a
+    missing id on the uploader's own removal, and nothing moves; the
+    uploader of a photograph the HOST removed draws the same 404 — it is
+    in the gathering's bin, not theirs. The host removing THEIR OWN upload
+    is its remover and its uploader, so that row is in the host's own bin
+    and the host restores it. The HOST's restore of a gathering-bin row
+    succeeds since CK-66 (until then it drew the 404 — nothing read that
+    bin); its semantics are test_gathering_bin.py's, and the pin kept here
+    is that the uploader's monopoly is on THEIR bin, not the gathering's."""
     cast = await _cast(client, capsys, db_session_factory)
     mine = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
     host_removed = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
@@ -417,16 +433,20 @@ async def test_restore_is_the_uploaders_alone_on_their_own_removal(client, capsy
     # The uploader of a host-removed photograph: not their bin.
     refused = await _restore(client, cast.uploader, host_removed)
     assert (refused.status_code, refused.json()) == (404, (await _restore(client, cast.uploader, MISSING_ID)).json())
-    # Nor the host's — the gathering's bin has no reader yet.
-    assert (await _restore(client, cast.host, host_removed)).status_code == 404
-    assert (await _state(db_session_factory, host_removed))[1] is PublicationState.REMOVED
-    # The host's own removal of their own upload: their bin, their restore.
+    # The host's own removal of their own upload: their bin, their restore
+    # — and never the gathering's bin, so it sits in their DEFAULT list.
     assert _ids(await _list(client, cast.host, cast.gathering_id)) == [hosts_own]
     restored = await _restore(client, cast.host, hosts_own)
     assert restored.status_code == 200, restored.text
     assert (await _state(db_session_factory, hosts_own))[1] is PublicationState.LIVE
     # And the uploader's own is still theirs to put back.
     assert (await _restore(client, cast.uploader, mine)).status_code == 200
+    # The HOST's restore of the row THEY removed succeeds since CK-66 —
+    # the gathering's bin is theirs to put back from (CHANGED: until
+    # CK-66 this drew the 404 and the row stayed removed, because nothing
+    # read that bin). The destination and stamps are test_gathering_bin's.
+    assert (await _restore(client, cast.host, host_removed)).status_code == 200
+    assert (await _state(db_session_factory, host_removed))[1] is PublicationState.LIVE
 
 
 async def test_restore_refuses_a_row_not_in_the_bin_and_a_bin_past_its_window_is_gone(
@@ -579,7 +599,10 @@ async def test_restore_logs_nothing_at_debug(client, capsys, db_session_factory,
     with caplog.at_level(logging.DEBUG):
         assert (await _restore(client, cast.uploader, media_id)).status_code == 200
         assert (await _restore(client, cast.uploader, live)).status_code == 409  # not_removed
-        assert (await _restore(client, cast.host, media_id)).status_code == 404  # not the uploader
+        # 409, not the 404 it was until CK-66: the host is a restorer now,
+        # so on a row that is live again they reach the not_removed
+        # refusal — a live row is one they can already see and remove.
+        assert (await _restore(client, cast.host, media_id)).status_code == 409
         assert (await _restore(client, cast.keeper, live)).status_code == 404
     assert host_person not in caplog.text
     assert str(cast.uploader_person_id) not in caplog.text

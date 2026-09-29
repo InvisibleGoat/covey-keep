@@ -159,8 +159,8 @@ async def sweep_expired_bin(db: AsyncSession, now: datetime, *, limit: int) -> i
     THE CLOCK IS `REMOVED_BIN`, THE SAME NUMBER `_visible_media` READS
     (retention.py — one number, two readers). A removed photograph is
     visible to its uploader (when the uploader removed it — CK-63; a
-    host's removal is in the gathering's bin, unseen until that bin has
-    a surface) while `removed_at > now - REMOVED_BIN` and is
+    host's removal is in the gathering's bin, which the HOST reads since
+    CK-66) while `removed_at > now - REMOVED_BIN` and is
     swept once `removed_at <= now - REMOVED_BIN`: the two clocks meet at
     one instant with no gap and no overlap, so a photograph is never swept
     while someone could still see it, and never sits invisible-and-still-

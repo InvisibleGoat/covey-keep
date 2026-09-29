@@ -22,8 +22,9 @@ The load-bearing pins:
   404, byte-identical to a missing id, and nothing moves;
 - `remove` sends a `live` photograph to the bin — the REMOVER's bin since
   CK-63 (two-bins §3): a host's removal is in the gathering's bin, which
-  no surface reads yet — and destroys NOTHING: the layers stay, the row
-  stays `ready`, and it goes on counting (bin record §3);
+  the HOST reads since CK-66 (test_gathering_bin.py) — and destroys
+  NOTHING: the layers stay, the row stays `ready`, and it goes on
+  counting (bin record §3);
 - `destroy` reaches a `removed` row — the per-photograph "empty the bin" —
   and `remove` refuses one with `already_removed`;
 - `decline` is UNCHANGED: a `live` row still draws 409 `not_pending`;
@@ -577,10 +578,17 @@ async def test_remove_sends_a_live_photograph_to_the_bin_and_frees_nothing(
     await _invariants_hold(db_session_factory, cast.gathering_id)
     # The HOST removed it, so it is in the GATHERING's bin (two-bins §3,
     # CK-63): the uploader does not see it again — until CK-63 this test
-    # pinned that they did — and neither does the host, because nothing
-    # reads that bin yet.
+    # pinned that they did — and the host's DEFAULT list stays clean too,
+    # because since CK-66 the bin is a VIEW (`removed=true`), never a
+    # mixture; until CK-66 the same assertion held because nothing read
+    # that bin at all. The view itself is test_gathering_bin.py's; the
+    # one line here pins that the row is in it and not lost.
     assert live not in _ids(await _list(client, cast.uploader, cast.gathering_id))
     assert live not in _ids(await _list(client, cast.host, cast.gathering_id))
+    binned = await client.get(
+        f"/gatherings/{cast.gathering_id}/media", params={"removed": "true"}, headers=cast.host
+    )
+    assert _ids(binned) == [live]
 
 
 async def test_removing_a_photograph_already_in_the_bin_refuses_rather_than_restamping(
@@ -605,40 +613,42 @@ async def test_removing_a_photograph_already_in_the_bin_refuses_rather_than_rest
     assert (await _row(db_session_factory, binned)).removed_at == stamped_before
 
 
-async def test_a_photograph_the_host_binned_is_reachable_by_nobody_until_the_gatherings_bin_has_a_surface(
+async def test_a_photograph_the_host_binned_is_the_hosts_to_reach_and_never_the_uploaders(
     client, capsys, db_session_factory
 ):
-    # A CONSEQUENCE OF A DECIDED RULE, pinned so it is not discovered later
-    # and read as a bug. A removed row is in the bin of WHOEVER REMOVED IT
-    # (two-bins record §3, CK-63; until then CK-37's one bin was the
-    # uploader's). So a host who chooses *Send to bin* on someone else's
-    # photograph has sent it to the GATHERING's bin: they cannot then reach
-    # the row to destroy it (unchanged since CK-54 — a host never saw a
-    # removed row they did not upload), AND THE UPLOADER CANNOT EITHER
-    # (new at CK-63 — until then this test pinned that they could): from the
-    # uploader's side the photograph is gone from the gathering, and the
-    # gathering's bin has no reader yet, so nothing but the sweep reaches
-    # the row until the host's bin surface exists. This phase does NOT
-    # widen either audience to make the sequence work (widening a decided
-    # consent rule to smooth a flow is how consent rules are lost).
-    #
-    # It costs the host nothing they were promised: bin record §7.1 offers
-    # the two choices AT THE POINT OF REMOVAL, and *Delete permanently* is
-    # reachable directly from a `live` row (the test above). The uploader's
-    # OWN removal is in their own bin, and they still destroy it.
+    # A DECIDED RULE, HALF-INVERTED AT CK-66. A removed row is in the bin
+    # of WHOEVER REMOVED IT (two-bins record §3, CK-63; until then CK-37's
+    # one bin was the uploader's), and since CK-66 the gathering's bin HAS
+    # a reader — the host. So a host who chooses *Send to bin* on someone
+    # else's photograph can reach the row again: open it, put it back, or
+    # destroy it — emptying the gathering's bin, one photograph at a time
+    # (CHANGED: until CK-66 this test pinned the host's 404 here, because
+    # nothing read that bin and only the sweep could reach the row). THE
+    # UPLOADER'S SIDE IS UNCHANGED AND STAYS PINNED: from their side the
+    # photograph is gone from the gathering — the media 404, byte-identical
+    # to a missing id — and this phase widens nothing for them (two-bins
+    # §2: the uploader must not see, restore or destroy a moderation
+    # removal). The personal bin is untouched in both directions: the
+    # uploader's own removal is theirs alone to destroy, never the host's.
     cast = await _cast(client, capsys, db_session_factory)
     live = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
     mine = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
     await _resync_counts(db_session_factory, cast.gathering_id)
 
     assert (await _remove(client, cast.host, live)).status_code == 200
-    for headers in (cast.host, cast.uploader):
-        missing = await _destroy(client, headers, MISSING_ID)
-        refused = await _destroy(client, headers, live)
-        assert refused.status_code == 404
-        assert refused.json() == missing.json()
+    # The uploader cannot reach it, exactly as at CK-63.
+    missing = await _destroy(client, cast.uploader, MISSING_ID)
+    refused = await _destroy(client, cast.uploader, live)
+    assert refused.status_code == 404
+    assert refused.json() == missing.json()
     assert (await _row(db_session_factory, live)).status is MediaStatus.READY  # still stored, still charged
-    # The uploader's own removal: their bin, their destroy.
+    # The host can (CHANGED at CK-66): destroy from the gathering's bin IS
+    # the empty, one photograph at a time.
+    assert (await _destroy(client, cast.host, live)).status_code == 200
+    assert (await _row(db_session_factory, live)).status is MediaStatus.DESTROYING
+    await _invariants_hold(db_session_factory, cast.gathering_id)
+    # The uploader's own removal: their bin, their destroy — never the
+    # host's, even now that the host reads the OTHER bin.
     assert (await _remove(client, cast.uploader, mine)).status_code == 200
     assert (await _destroy(client, cast.host, mine)).status_code == 404
     assert (await _destroy(client, cast.uploader, mine)).status_code == 200
