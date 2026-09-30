@@ -1,6 +1,6 @@
 """Person-targeted invitations (CK-25) — the first multiplayer surface.
 
-The shape: an admin invites a DESTINATION (channel + destination — email
+The shape: a host or co-host invites a DESTINATION (channel + destination — email
 today, SMS when A2P registration unblocks it), which writes an ephemeral
 pending row holding only the token's SHA-256 hash. The invitee opens the
 link, signs in through the UNMODIFIED magic-link path — /auth/verify is the
@@ -33,8 +33,12 @@ invited destination already has an account — creation never looks the
 destination up in people at all, the 201 is uniform, and the admin's list
 shows only what the admin themselves typed plus the display names of people
 who accepted (an account email is a credential and is never auto-exposed to
-an admin). Authorization is the gatherings posture: admin-only management,
-404-never-403, byte-identical to a missing id.
+an organiser). Authorization is the gatherings posture: management is the
+ORGANISERS' — the host or a co-host, the delegable set since CK-68
+(`_gathering_for_organiser` / `may_administer`; co-hosts §4: "invite and
+revoke invitations"), the host alone until then — 404-never-403,
+byte-identical to a missing id. Acceptance widens reads only; it never
+makes anyone an organiser.
 
 requires_approval is deliberately NOT touched by this phase: the recorded
 relaxation is a GROUP-TYPE rule (ON for TEAM/CONGREGATION-sourced invites,
@@ -63,7 +67,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import RATE_WINDOW
 from app.api.deps import AuthContext, get_auth_context, get_db, normalize_email
-from app.api.gatherings import _field_422, _gathering_for_admin
+from app.api.gatherings import _field_422, _gathering_for_organiser, may_administer
 from app.brand import PRODUCT_NAME
 from app.config import settings
 from app.models import (
@@ -174,7 +178,7 @@ async def create_invitation(
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    gathering = await _gathering_for_admin(db, ctx, gathering_id)
+    gathering = await _gathering_for_organiser(db, ctx, gathering_id)
     now = datetime.now(timezone.utc)
 
     if body.channel is InvitationChannel.SMS:
@@ -269,13 +273,16 @@ async def list_invitations(
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Admin only — an invitee sees the gathering, never its invitation
-    roster (who else was invited is not theirs to read, and a pending
-    destination is a third party's address). `pending` shows live rows,
-    expired-but-unconsumed included (the admin needs the expiry to know when
-    to re-invite); `accepted` shows display names ONLY — an account email is
-    a credential and is never auto-exposed to an admin."""
-    gathering = await _gathering_for_admin(db, ctx, gathering_id)
+    """The organisers' — the host or a co-host (CK-68) — and never an
+    invitee's: an invitee sees the gathering, never its invitation roster
+    (who else was invited is not theirs to read, and a pending destination
+    is a third party's address). `pending` shows live rows,
+    expired-but-unconsumed included (an organiser needs the expiry to know
+    when to re-invite); `accepted` shows display names ONLY — an account
+    email is a credential and is never auto-exposed to an organiser — beside
+    the invitation id, which is the handle api/co_hosts.py takes to make an
+    accepted invitee a co-host."""
+    gathering = await _gathering_for_organiser(db, ctx, gathering_id)
     pending = (
         await db.scalars(
             select(GatheringInvitationPending)
@@ -327,7 +334,8 @@ async def revoke_invitation(
     if row is None or row.consumed_at is not None:
         raise _not_found()
     gathering = await db.get(Gathering, row.gathering_id)
-    if gathering is None or gathering.host_account_id != ctx.person.account_id:
+    # The organisers' act (CK-68 — revoking is delegable, co-hosts §4).
+    if gathering is None or not await may_administer(db, gathering, ctx):
         raise _not_found()
     if row.revoked_at is None:
         row.revoked_at = now

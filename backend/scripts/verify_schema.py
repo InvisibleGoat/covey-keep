@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0026"
+EXPECTED_REVISION = "0027"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -245,6 +245,25 @@ async def fk_rule(conn, conname: str):
             {"c": conname},
         )
     ).first()
+
+
+async def pk_columns(conn, conname: str):
+    """The columns of a named PRIMARY KEY constraint, in key order, or None
+    when no such constraint exists — read with .all() and collapsed to
+    None on empty, so a missing constraint FAILs the assertion that reads
+    it rather than passing vacuously (CK-68)."""
+    rows = (
+        await conn.execute(
+            text(
+                "SELECT a.attname FROM pg_constraint c "
+                "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey) "
+                "WHERE c.conname = :n AND c.contype = 'p' "
+                "ORDER BY array_position(c.conkey, a.attnum)"
+            ),
+            {"n": conname},
+        )
+    ).all()
+    return [row[0] for row in rows] or None
 
 
 async def column_type_and_default(conn, table: str, column: str):
@@ -1431,6 +1450,84 @@ async def verify(conn, ck: Checks) -> None:
             "media table or its removed_at / removed_by_person_id columns missing",
         )
 
+    print("\n-- gathering co-hosts (0027, CK-68) --")
+    # THE RELATION BESIDE THE HOST (decisions/2026-09-03-co-hosts.md §1,
+    # §4): one row per (gathering, account) — a co-host — keyed on the
+    # ACCOUNT as `host_account_id` is, so `is_host` and `may_administer`
+    # compare one spine; the composite PK is the uniqueness; the index on
+    # account_id answers "what does this account co-host" (the deletion
+    # leg's reader); three FKs with NO delete rule — nothing cascades from
+    # an account or a gathering (decision 15), and the deletion leg DELETES
+    # an anonymized account's rows explicitly while `added_by_account_id`
+    # stays as provenance. No capability column, ever: one flag and a
+    # reserved list, never a permission matrix. Every line here is the
+    # 0027 shape read back from the catalog — the 0022 idiom.
+    ck.check("gathering_co_hosts" in tables, "table gathering_co_hosts exists", "table missing")
+    assert_columns(
+        ck,
+        columns,
+        "gathering_co_hosts",
+        not_null=("gathering_id", "account_id", "added_by_account_id", "created_at"),
+    )
+    co_host_pk = await pk_columns(conn, "pk_gathering_co_hosts")
+    ck.check(
+        co_host_pk == ["gathering_id", "account_id"],
+        "gathering_co_hosts primary key is (gathering_id, account_id) — an account co-hosts a gathering once",
+        f"found {co_host_pk!r}",
+    )
+    for column, target, conname in (
+        ("gathering_id", "gatherings", "fk_gathering_co_hosts_gathering_id"),
+        ("account_id", "accounts", "fk_gathering_co_hosts_account_id"),
+        ("added_by_account_id", "accounts", "fk_gathering_co_hosts_added_by_account_id"),
+    ):
+        fk = await fk_rule(conn, conname)
+        ck.check(
+            fk is not None and fk[0] == target,
+            f"gathering_co_hosts.{column} references {target}",
+            f"found {fk!r}",
+        )
+        ck.check(
+            fk is not None and fk[1] == "a",
+            f"gathering_co_hosts.{column} has no delete rule (nothing cascades from an account or a gathering)",
+            f"delete rule is {fk[1] if fk else None!r}",
+        )
+    co_host_index = await index_shape(conn, "ix_gathering_co_hosts_account_id")
+    ck.check(
+        co_host_index is not None
+        and co_host_index[0] == "gathering_co_hosts"
+        and "(account_id)" in co_host_index[1],
+        "index ix_gathering_co_hosts_account_id exists on gathering_co_hosts.account_id",
+        "index missing" if co_host_index is None else f"found on {co_host_index[0]!r}: {co_host_index[1]}",
+    )
+
+    print("\n-- gathering co-host integrity (CK-68) --")
+    # Guarded on the TABLES (the CK-43 lesson): at 0026 a query over the
+    # relation is a crash, not a FAIL.
+    if "gathering_co_hosts" in tables and "gatherings" in tables:
+        # HOST AND CO-HOST ARE EXCLUSIVE: `POST /gatherings/{id}/co-hosts`
+        # refuses the host (`is_host`, a 422), and a host is never listed
+        # among their own co-hosts. The failing state is a row written
+        # around the endpoint — or a host TRANSFER (no surface yet) that
+        # did not clear the recipient's co-host row first, which is the
+        # case this line will catch when that surface exists.
+        host_as_co_host = await scalar(
+            conn,
+            "SELECT count(*) FROM gathering_co_hosts c "
+            "JOIN gatherings g ON g.id = c.gathering_id "
+            "WHERE g.host_account_id = c.account_id",
+        )
+        ck.check(
+            host_as_co_host == 0,
+            "no co-host row names its gathering's own host (host and co-host are exclusive)",
+            f"{host_as_co_host} co-host row(s) naming the gathering's host",
+        )
+    else:
+        ck.check(
+            False,
+            "gathering co-host integrity",
+            "gathering_co_hosts or gatherings table missing",
+        )
+
     print("\n-- media upload integrity (CK-34) --")
     if "media" in tables:
         # Properties of whatever rows exist — never a count (pending rows
@@ -1733,6 +1830,8 @@ async def verify(conn, ck: Checks) -> None:
     # `groups` and `memberships` join at CK-45, the phase that first writes
     # them (the tables have existed since 0001): a count above zero is the
     # baseline to record, never a failure.
+    # `gathering_co_hosts` joins at CK-68 (0027): a count is the baseline
+    # to record — zero on the deploy until (hx) makes the first co-host.
     for table in (
         "people",
         "accounts",
@@ -1740,6 +1839,7 @@ async def verify(conn, ck: Checks) -> None:
         "media",
         "groups",
         "memberships",
+        "gathering_co_hosts",
     ):
         if table in tables:
             ck.info(f"{table} rows", await scalar(conn, f"SELECT count(*) FROM {table}"))

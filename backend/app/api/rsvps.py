@@ -45,13 +45,17 @@ notifies nobody.
 
 The list is filtered by the gathering's rsvp_list_visibility — the host's
 setting (CK-27, requires_approval's shape). Two rules hold in every mode:
-the HOST always sees the full list (every mode includes the host; a
-narrower setting must never show the host less than HOST_ONLY does), and
+the HOST — and since CK-68 a co-host: the full RSVP list is the delegable
+set's (co-hosts §4 — "see the RSVP list; set its visibility"), answered
+through `may_administer` — always sees the full list (every mode includes
+the organisers; a narrower setting must never show them less than
+HOST_ONLY does), and
 the CALLER always sees their own RSVP via `own` (no one is locked out of
 their own answer). List rows carry display names, companion names, and the
 computed total — an email address appears in no response body (the CK-25
 roster rule, with more force here because more people read this list).
-Under ATTENDEES, companion names are withheld from non-host callers
+Under ATTENDEES, companion names are withheld from callers who are neither
+host nor co-host
 (CK-30, decided 2026-09-06): the gate was written when the roster held
 integers, and after CK-29 it held names — the roster and the computed
 totals stay ("three going" is what the mode exists to give), the names of
@@ -90,7 +94,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, get_auth_context, get_db
-from app.api.gatherings import _gathering_for_read, _not_found
+from app.api.gatherings import _gathering_for_read, _not_found, may_administer
 from app.models import (
     Gathering,
     Occurrence,
@@ -356,12 +360,15 @@ async def list_rsvps(
         companions_by_rsvp.setdefault(companion.rsvp_id, []).append(companion.name)
 
     own_row = next((row for row, _ in rows if row.person_id == ctx.person.id), None)
-    is_host = gathering.host_account_id == ctx.person.account_id
+    # The organisers — the host, or a co-host since CK-68 (the full list is
+    # delegable, co-hosts §4): `may_administer`, the same question every
+    # organiser-gated route asks.
+    organises = await may_administer(db, gathering, ctx)
     visibility = gathering.rsvp_list_visibility
-    # The host sees the list in EVERY mode: HOST_ONLY is the floor, and a
-    # narrower setting must never show the host less than it does.
+    # The organisers see the list in EVERY mode: HOST_ONLY is the floor,
+    # and a narrower setting must never show them less than it does.
     may_see_list = (
-        is_host
+        organises
         or visibility == RSVPListVisibility.INVITEES
         or (
             visibility == RSVPListVisibility.ATTENDEES
@@ -374,10 +381,10 @@ async def list_rsvps(
     # second-order disclosure nobody opted into under a setting written when
     # the field held integers. Decided 2026-09-06 (CK-30): under ATTENDEES
     # the roster keeps who answered and the computed totals, and companion
-    # NAMES are withheld from non-host callers. The host's floor is
-    # untouched (full list in every mode), and `own` below is deliberately
-    # ungated — the caller typed those names.
-    include_companions = is_host or visibility != RSVPListVisibility.ATTENDEES
+    # NAMES are withheld from callers who are not organisers. The
+    # organisers' floor is untouched (full list in every mode), and `own`
+    # below is deliberately ungated — the caller typed those names.
+    include_companions = organises or visibility != RSVPListVisibility.ATTENDEES
     return {
         "visibility": visibility.value,
         "own": (

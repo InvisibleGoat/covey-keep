@@ -127,8 +127,9 @@ BOTH_INDEXES = {"ix_gatherings_keeper_account_id", "ix_groups_keeper_account_id"
 # to name the real head rather than the revision under test. (0025,
 # CK-54, adds two enum labels and touches neither column, so passing
 # through it changes nothing here; 0026, CK-63, adds one nullable column
-# on media — `removed_by_person_id` — and likewise touches neither.)
-HEAD = "0026"
+# on media — `removed_by_person_id` — and likewise touches neither; 0027,
+# CK-68, creates `gathering_co_hosts` and touches neither.)
+HEAD = "0027"
 
 
 async def test_0024_round_trip_backfills_the_count_and_the_downgrade_is_genuine(db_session_factory, capsys):

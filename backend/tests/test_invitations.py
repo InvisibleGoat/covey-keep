@@ -369,11 +369,18 @@ async def test_accept_as_existing_person_widens_reads_and_nothing_else(
     assert result["status"] == "accepted"
 
     # The invitee reads the SAME detail body the admin reads — occurrences,
-    # times, places: the point of inviting them.
+    # times, places: the point of inviting them. Since CK-68 the body
+    # carries ONE caller-relative field, `caller_role` — `host` for the
+    # host, null for an invitee who is not a co-host — so the two bodies
+    # are compared with it set aside and the roles asserted beside them:
+    # the gathering's facts are identical, and the one difference is what
+    # the caller IS, never why they may read (the pin's meaning stands).
     admin_view = await client.get(f"/gatherings/{gathering_id}", headers=headers_admin)
     guest_view = await client.get(f"/gatherings/{gathering_id}", headers=headers_guest)
     assert guest_view.status_code == 200
-    assert guest_view.json() == admin_view.json()
+    admin_body, guest_body = admin_view.json(), guest_view.json()
+    assert (admin_body.pop("caller_role"), guest_body.pop("caller_role")) == ("host", None)
+    assert guest_body == admin_body
 
     # The gathering appears on the invitee's list (without it, the emailed
     # link would be their only way back, forever).

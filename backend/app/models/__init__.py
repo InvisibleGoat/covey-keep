@@ -27,6 +27,7 @@ from app.models.enums import (
 )
 from app.models.gathering import (
     Gathering,
+    GatheringCoHost,
     GatheringInvitation,
     GatheringInvitationPending,
     Occurrence,
@@ -50,6 +51,7 @@ __all__ = [
     "ConsentRecord",
     "EmailChangeRequest",
     "Gathering",
+    "GatheringCoHost",
     "GatheringInvitation",
     "GatheringInvitationPending",
     "GatheringType",

@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.auth import router as auth_router
+from app.api.co_hosts import router as co_hosts_router
 from app.api.gatherings import router as gatherings_router
 from app.api.groups import router as groups_router
 from app.api.invitations import router as invitations_router
@@ -24,6 +25,7 @@ app.include_router(invitations_router)
 app.include_router(rsvps_router)
 app.include_router(media_router)
 app.include_router(groups_router)
+app.include_router(co_hosts_router)
 
 app.add_middleware(
     CORSMiddleware,

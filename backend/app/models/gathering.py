@@ -88,6 +88,10 @@ class Gathering(Base):
     # "needs a host" condition, mirroring how the nullable admin fields on
     # groups encode "needs an admin". Reverting from keeper to observer
     # relinquishes this (services/keeping.py); the claim flow is a later phase.
+    # A CO-HOST IS A ROW BESIDE THIS COLUMN (GatheringCoHost, 0027, CK-68),
+    # never a second value in it: the host stays singular and stays the
+    # consent controller (co-hosts §1–§2), and this column's five singular
+    # dependants (§2) are untouched by co-hosting.
     host_account_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("accounts.id"), nullable=True
     )
@@ -352,5 +356,55 @@ class GatheringInvitationPending(Base):
     # Provenance — carried onto the GatheringInvitation row at acceptance.
     invited_by_person_id: Mapped[UUID] = mapped_column(
         ForeignKey("people.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = created_at_col()
+
+
+class GatheringCoHost(Base):
+    """A co-host of a gathering (CK-68; decisions/2026-09-03-co-hosts.md §1,
+    §4; amended by two-bins §4) — ONE ROW PER (gathering, account), an
+    additive relation BESIDE `gatherings.host_account_id` and never a
+    replacement for it: the host stays singular and stays the consent
+    controller, and a co-host gets the DELEGABLE set (edit the gathering
+    and its occurrences, invite and revoke, the full RSVP list, take a
+    published photograph down, read the gathering's bin and restore from
+    it — through the gate) and none of the RESERVED one (anything about an
+    unapproved photograph, destroying someone else's, adding or removing
+    co-hosts). One flag, and a reserved list — never a permission matrix:
+    there is deliberately no capability column on this row, and adding one
+    would be the switch §4 refuses.
+
+    Keyed on the ACCOUNT, as `host_account_id` is, so `is_host` and
+    `may_administer` (api/gatherings.py) compare the same spine; the
+    composite primary key IS the uniqueness (an account co-hosts a gathering
+    once), and the index on `account_id` answers "what does this account
+    co-host" — the deletion leg's reader. `added_by_account_id` is
+    provenance — who made them a co-host — with no delete rule, the
+    `published_by_person_id` shape: account deletion is anonymization, the
+    accounts row is retained, and nothing cascades from it. No delete rule
+    from `accounts` on `account_id` either: services/keeping.py's deletion
+    leg DELETES an anonymized account's co-host rows explicitly, in the
+    transaction that relinquishes host — a row here IS the role, and there
+    is no "needs a co-host" state to leave behind. A co-host row on a
+    HOSTLESS gathering persists and still grants the delegable set
+    (co-hosts §7's first item, answered provisionally at CK-68). Not built:
+    a co-host removing another co-host (§7's second item, open — the answer
+    built is no), any GROUP's co-hosts (the group-roles phase;
+    `groups.admin_person_id` is untouched), and the managed-profile
+    exclusion (no account kind for a managed profile exists in code, so
+    there is nothing yet to exclude)."""
+
+    __tablename__ = "gathering_co_hosts"
+
+    gathering_id: Mapped[UUID] = mapped_column(
+        ForeignKey("gatherings.id"), primary_key=True
+    )
+    account_id: Mapped[UUID] = mapped_column(
+        ForeignKey("accounts.id"), primary_key=True, index=True
+    )
+    # Provenance, never a subject: the host who made them a co-host (the
+    # add is reserved, so it is always the host at the time).
+    added_by_account_id: Mapped[UUID] = mapped_column(
+        ForeignKey("accounts.id"), nullable=False
     )
     created_at: Mapped[datetime] = created_at_col()

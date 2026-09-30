@@ -76,7 +76,9 @@ creator becomes keeper in the same transaction that births the gathering —
 the read audience (api/gatherings.py::_gathering_for_read via
 resolved_keeper_of; the list statement and api/media.py::_visible_media via
 keeps_gathering), the account deletion path (profile.py) via
-lapse_kept_statuses, and the upload-intent endpoint (api/media.py, CK-34;
+lapse_kept_statuses — which since CK-68 also ends the account's CO-HOSTING
+(its `gathering_co_hosts` rows deleted in the same transaction that
+relinquishes host; co-hosts §8), and the upload-intent endpoint (api/media.py, CK-34;
 its subject the resolved keeper since CK-50; counting photographs since
 CK-51b) via resolved_keeper_of / account_usage / account_quota /
 gathering_units. account_bin_count has NO route caller since CK-65 — the
@@ -93,13 +95,14 @@ from enum import Enum
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import exists, func, or_, select, update
+from sqlalchemy import delete, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.models import (
     Account,
     Gathering,
+    GatheringCoHost,
     GatheringType,
     Group,
     Media,
@@ -599,7 +602,8 @@ async def lapse_kept_statuses(
     forever. Called from the account deletion transaction (profile.py); the
     caller commits.
 
-    Three writes, each guarded on the column and never on a relation:
+    Four writes, each guarded on the column — or, for the fourth, on the
+    co-host relation's own key — and never on a keeper relation:
     (1) host relinquished on every gathering this account hosted, kept or
     not — a deleted account left as host would block the claimable state
     forever; (2) `gatherings.keeper_account_id` NULLed and, on every
@@ -611,7 +615,14 @@ async def lapse_kept_statuses(
     written on a group — where a group's lapse stamp lives is v2 §12 item
     9's group half, handed to Arc B, because no gathering resolves through
     a group until Arc B writes `owning_group_id`, so nothing can lose a
-    keeper by this write today and there is no row to reason about."""
+    keeper by this write today and there is no row to reason about; (4)
+    every `gathering_co_hosts` row this account holds is DELETED (CK-68;
+    co-hosts §8's DATA-HANDLING: an anonymized account's co-hosting ends
+    with its deletion) — deleted, not relinquished, because a row here IS
+    the role and there is no "needs a co-host" state to leave behind, in
+    contrast to host (1), whose NULL is the claimable state. Rows this
+    account ADDED stay: `added_by_account_id` is provenance, the accounts
+    row is retained at anonymization, and nothing cascades from it."""
     await db.execute(
         update(Gathering)
         .where(Gathering.host_account_id == account_id)
@@ -638,4 +649,11 @@ async def lapse_kept_statuses(
         update(Group)
         .where(Group.keeper_account_id == account_id)
         .values(keeper_account_id=None)
+    )
+    # (4) Co-hosting ends with the account (CK-68). Keyed on the account,
+    # the same spine as host above; the co-host row is the role, so it is
+    # deleted outright. api/co_hosts.py refuses to make an anonymized
+    # person a co-host again, so this cannot be undone by a later add.
+    await db.execute(
+        delete(GatheringCoHost).where(GatheringCoHost.account_id == account_id)
     )

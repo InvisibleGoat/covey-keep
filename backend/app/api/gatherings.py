@@ -6,9 +6,17 @@ occurrences, and the creator written as its keeper are born TOGETHER
 never exist with zero keepers, not even transiently within the request, so
 creation routes through services/keeping.py::keep and commits once.
 
-Authorization, applied uniformly: mutations require the caller's account to
-be the host (`host_account_id` — the admin column renamed at CK-28, ahead
-of co-hosts); reads require the caller's account to keep the
+Authorization, applied uniformly: mutations require the caller to ORGANISE
+the gathering — the host (`host_account_id`, the admin column renamed at
+CK-28 ahead of co-hosts) OR, since CK-68, a co-host: a row in
+`gathering_co_hosts` BESIDE that column, never a second value in it
+(decisions/2026-09-03-co-hosts.md §1–§2; the two helpers below — `is_host`
+for the reserved set, `may_administer` for the delegable one — and the
+audit that classified every check in the backend as one or the other,
+§5). The one exception on this router is the review switch,
+`requires_approval_override`, which stays the host's: a co-host sending it
+draws a field-level 422, never a silent drop. Reads require the caller's
+account to keep the
 gathering, OR the caller's person to hold an accepted invitation
 (a person-targeted gathering_invitations row — CK-25, the first widening of
 the read audience), OR host. The checks are written against the
@@ -78,6 +86,7 @@ from app.models import (
     Account,
     AccountKind,
     Gathering,
+    GatheringCoHost,
     GatheringInvitation,
     GatheringType,
     Occurrence,
@@ -109,6 +118,14 @@ SEASON_MAX_SPAN = timedelta(days=365)
 # on that endpoint (the last-occurrence rule, a 422) is not confirmable, and
 # the two must stay machine-distinguishable.
 CONFIRMATION_REQUIRED = "confirmation_required"
+
+# The caller-relative role on every gathering body (CK-68): what THE CALLER
+# is to this gathering — `host`, `co_host`, or null — so the frontend renders
+# the widened controls without re-deriving the rule from account ids it
+# mostly cannot see. Never the co-host LIST on the body: that is
+# api/co_hosts.py's, readable by the host and the co-hosts alone.
+ROLE_HOST = "host"
+ROLE_CO_HOST = "co_host"
 
 
 def _not_found() -> HTTPException:
@@ -419,6 +436,7 @@ def _gathering_body(
     occurrences: Optional[list[Occurrence]] = None,
     *,
     host_kind: Optional[AccountKind],
+    caller_role: Optional[str],
 ) -> dict:
     # The gate, resolved for this body (CK-41): `requires_approval` is the
     # EFFECTIVE value — a plain boolean, the same field every consumer has
@@ -450,6 +468,12 @@ def _gathering_body(
         "host_account_id": (
             str(gathering.host_account_id) if gathering.host_account_id else None
         ),
+        # What the caller IS to this gathering (CK-68): `host`, `co_host`,
+        # or null — a fact about the caller, decided by `is_host` and the
+        # co-host row, never re-derived by a consumer from the ids above
+        # (a co-host's account id appears in no body). The co-host LIST is
+        # not here: it is api/co_hosts.py's, readable by the organisers.
+        "caller_role": caller_role,
         "created_at": gathering.created_at.isoformat(),
         "updated_at": gathering.updated_at.isoformat() if gathering.updated_at else None,
     }
@@ -464,12 +488,15 @@ def _list_item(
     occurrence_id: Optional[UUID],
     starts_at: Optional[datetime],
     occurrence_count: Optional[int],
+    caller_role: Optional[str],
 ) -> dict:
     """A GET /gatherings item: the gathering body plus the occurrence summary.
     The LIST's own shape, deliberately — the detail body carries full
     occurrences, and overloading one builder with both would couple the two
-    surfaces (CK-20). The host's kind rides the list's one statement."""
-    item = _gathering_body(gathering, host_kind=host_kind)
+    surfaces (CK-20). The host's kind rides the list's one statement, and so
+    does the caller's co-host fact (CK-68): the role is computed from the
+    row and that one boolean, never from a second query."""
+    item = _gathering_body(gathering, host_kind=host_kind, caller_role=caller_role)
     item["next_occurrence"] = (
         {"id": str(occurrence_id), "starts_at": starts_at.isoformat()}
         if occurrence_id is not None and starts_at is not None
@@ -477,6 +504,134 @@ def _list_item(
     )
     item["occurrence_count"] = occurrence_count if occurrence_count is not None else 0
     return item
+
+
+# --- the two helpers, named for what they decide (CK-68; co-hosts §5) --------
+#
+# THE HOST IS SINGULAR AND STAYS THE CONSENT CONTROLLER: `host_account_id`,
+# one nullable FK (decisions/2026-09-03-co-hosts.md §1–§2; CK-15 §4). A
+# co-host is a ROW BESIDE it — `gathering_co_hosts`, migration 0027 — and
+# never a second value in it: replacing the column with a join table would
+# have re-opened every decision that rests on the column being singular
+# (§2 lists five). Two helpers, and every check in the backend is
+# consciously one or the other — the audit §5 called the real work, done at
+# CK-68 and listed, one line per check, in reference/backend/api-reference.md:
+#
+#   is_host          THE RESERVED SET (§4, as amended by two-bins §4):
+#                    publication approval in every form — seeing a
+#                    `pending` photograph, the queue, publish, decline, the
+#                    batch, the review switch — destroying someone else's
+#                    photograph (emptying the gathering's bin included), and
+#                    adding or removing co-hosts. Never a toggle: a switch
+#                    reading "co-host may approve" makes the responsible
+#                    party unidentifiable afterwards, which is the one thing
+#                    the gate exists to keep.
+#   may_administer   THE DELEGABLE SET: the host OR a co-host — editing the
+#                    gathering and its occurrences, inviting and revoking,
+#                    the full RSVP list and its visibility, taking a
+#                    published photograph down, and reading the gathering's
+#                    bin and restoring from it (a co-host's restore passes
+#                    back through the gate — two-bins §4).
+#
+# A NULL `host_account_id` — the claimable state (CK-13) — is nobody:
+# `is_host` is false for everyone, so nothing reserved can happen on a
+# hostless gathering (no queue, no publish, no switch, no co-host
+# management). A CO-HOST ROW ON A HOSTLESS GATHERING STILL GRANTS
+# `may_administer`: co-hosts §7's first open item, answered provisionally
+# here — co-hosts persist when the host relinquishes, because a co-host is
+# the likeliest person to want to claim it; the claim flow itself is
+# untouched and decides the rest when it is built. §7's second item (may a
+# co-host remove another co-host) stays open; the answer built is no
+# (api/co_hosts.py).
+#
+# No bare "admin" in this module (§5): the loaders below are named for the
+# set they check — `_gathering_for_organiser` and `_occurrence_for_organiser`
+# for the delegable set, `_gathering_for_host` for the reserved one — and
+# every route reaches for one or the other on purpose. The SQL forms
+# (`co_hosts_gathering`, `administers_gathering`) exist for the WHERE
+# clauses that decide which rows are fetched at all (`keeps_gathering`'s
+# reason); api/media.py::_moderates IS `administers_gathering` — CK-66's one
+# named place, widened exactly as its docstring promised.
+
+
+def is_host(gathering: Gathering, ctx: AuthContext) -> bool:
+    """The reserved set's one question: is the caller THE host? False for
+    everyone on a hostless gathering — NULL is the claimable state and
+    matches nobody, which is also the fact the publication ladder resolves
+    such a gathering open on (nobody could ever approve)."""
+    return (
+        gathering.host_account_id is not None
+        and gathering.host_account_id == ctx.person.account_id
+    )
+
+
+async def is_co_host(db: AsyncSession, gathering_id: UUID, account_id: UUID) -> bool:
+    """One lookup on the relation's primary key. Keyed on the ACCOUNT, as
+    `host_account_id` is, so the two halves of `may_administer` compare the
+    same spine."""
+    found = await db.scalar(
+        select(GatheringCoHost.gathering_id).where(
+            GatheringCoHost.gathering_id == gathering_id,
+            GatheringCoHost.account_id == account_id,
+        )
+    )
+    return found is not None
+
+
+async def may_administer(db: AsyncSession, gathering: Gathering, ctx: AuthContext) -> bool:
+    """The delegable set's one question: the host, or a co-host. The host
+    half is answered from the loaded row; the co-host half is one lookup,
+    made only when the host half is false."""
+    return is_host(gathering, ctx) or await is_co_host(db, gathering.id, ctx.person.account_id)
+
+
+def co_hosts_gathering(account_id: UUID, gathering_id):
+    """The co-host half as ONE SQL criterion — TRUE when a co-host row
+    names `account_id` on the gathering whose id is `gathering_id` (a
+    column expression: `Gathering.id` in the list statement and, through
+    `administers_gathering`, the joined `Gathering.id` in the media
+    audience). An EXISTS over the relation's primary key: one index probe
+    per candidate row."""
+    return exists(
+        select(GatheringCoHost.gathering_id).where(
+            GatheringCoHost.gathering_id == gathering_id,
+            GatheringCoHost.account_id == account_id,
+        )
+    )
+
+
+def administers_gathering(account_id: UUID):
+    """`may_administer` as ONE SQL criterion against the JOINED `Gathering`
+    (the caller's FROM has it — api/media.py joins it to `Media`): the
+    host, or a co-host row. The host half reads the joined row's own
+    column, so a NULL host matches nobody there exactly as `is_host` does;
+    the co-host half is `co_hosts_gathering` correlated on `Gathering.id`.
+    Pinned to agree with `may_administer` on every shape it can take."""
+    return or_(
+        Gathering.host_account_id == account_id,
+        co_hosts_gathering(account_id, Gathering.id),
+    )
+
+
+def _role_from_facts(gathering: Gathering, ctx: AuthContext, *, co_host: bool) -> Optional[str]:
+    """`caller_role` from the two facts: the row's host column and the
+    caller's co-host fact (already fetched — in the list's one statement).
+    The host outranks: a host is never listed as a co-host of their own
+    gathering (the relation's invariant — the verifier asserts it and the
+    add refuses it), so the order here is a statement, not a tie-break."""
+    if is_host(gathering, ctx):
+        return ROLE_HOST
+    if co_host:
+        return ROLE_CO_HOST
+    return None
+
+
+async def _role_of(db: AsyncSession, gathering: Gathering, ctx: AuthContext) -> Optional[str]:
+    """`caller_role` for a loaded row — the detail's reader: the host from
+    the row, else one lookup for the co-host row."""
+    if is_host(gathering, ctx):
+        return ROLE_HOST
+    return ROLE_CO_HOST if await is_co_host(db, gathering.id, ctx.person.account_id) else None
 
 
 async def _gathering_for_read(
@@ -511,24 +666,46 @@ async def _gathering_for_read(
     return gathering
 
 
-async def _gathering_for_admin(
+async def _gathering_for_organiser(
     db: AsyncSession, ctx: AuthContext, gathering_id: UUID
 ) -> Gathering:
-    """Mutations require the caller's account to be the host."""
+    """THE DELEGABLE SET (CK-68): the host or a co-host — `may_administer`.
+    Everyone else — an invitee, a keeper, a stranger — draws the gathering
+    404 byte-identical to a missing id. Until CK-68 this was
+    `_gathering_for_admin`, the host alone; every call site was moved here
+    or to `_gathering_for_host` on purpose, and the name says which."""
     gathering = await db.get(Gathering, gathering_id)
-    if gathering is None or gathering.host_account_id != ctx.person.account_id:
+    if gathering is None or not await may_administer(db, gathering, ctx):
         raise _not_found()
     return gathering
 
 
-async def _occurrence_for_admin(
+async def _gathering_for_host(
+    db: AsyncSession, ctx: AuthContext, gathering_id: UUID
+) -> Gathering:
+    """THE RESERVED SET (CK-68): the host alone — `is_host`. A co-host
+    draws the same 404 a stranger draws: the route hides, it does not
+    refuse (the 404-not-403 posture applied to a person who can READ the
+    gathering, exactly as the media 404 is applied to an uploader who can
+    see a photograph and may not publish it). api/co_hosts.py's management
+    routes use it; the review acts are api/media.py's and test the same
+    fact in SQL."""
+    gathering = await db.get(Gathering, gathering_id)
+    if gathering is None or not is_host(gathering, ctx):
+        raise _not_found()
+    return gathering
+
+
+async def _occurrence_for_organiser(
     db: AsyncSession, ctx: AuthContext, occurrence_id: UUID
 ) -> tuple[Occurrence, Gathering]:
+    """The delegable set, reached through a date — managing occurrences is
+    a co-host's (co-hosts §4)."""
     occurrence = await db.get(Occurrence, occurrence_id)
     if occurrence is None:
         raise _not_found()
     gathering = await db.get(Gathering, occurrence.gathering_id)
-    if gathering is None or gathering.host_account_id != ctx.person.account_id:
+    if gathering is None or not await may_administer(db, gathering, ctx):
         raise _not_found()
     return occurrence, gathering
 
@@ -612,7 +789,9 @@ async def create_gathering(
     await db.commit()
 
     occurrences.sort(key=lambda o: o.starts_at)
-    return _gathering_body(gathering, occurrences, host_kind=account.kind)
+    return _gathering_body(
+        gathering, occurrences, host_kind=account.kind, caller_role=ROLE_HOST
+    )
 
 
 @router.get("/gatherings")
@@ -661,6 +840,10 @@ async def list_gatherings(
     # caller's account — through its group's keeper, else its own. Still an
     # EXISTS inside the one statement (the statement-count pin holds).
     kept_by_caller = keeps_gathering(ctx.person.account_id, Gathering.id)
+    # The caller's co-host fact, as a column of the same one statement
+    # (CK-68): `caller_role` on every item with no second query — the host
+    # half is the row's own `host_account_id`, already fetched.
+    co_hosted = co_hosts_gathering(ctx.person.account_id, Gathering.id)
     invited_person = exists(
         select(GatheringInvitation.id).where(
             GatheringInvitation.person_id == ctx.person.id,
@@ -675,6 +858,7 @@ async def list_gatherings(
                 lead.c.occurrence_id,
                 lead.c.starts_at,
                 lead.c.occurrence_count,
+                co_hosted.label("co_host"),
             )
             # Outer join is defensive only: creation requires an occurrence and
             # the last one is undeletable, so a NULL next_occurrence should not
@@ -689,8 +873,15 @@ async def list_gatherings(
     ).all()
     return {
         "gatherings": [
-            _list_item(gathering, host_kind, occurrence_id, starts_at, occurrence_count)
-            for gathering, host_kind, occurrence_id, starts_at, occurrence_count in rows
+            _list_item(
+                gathering,
+                host_kind,
+                occurrence_id,
+                starts_at,
+                occurrence_count,
+                _role_from_facts(gathering, ctx, co_host=co_host),
+            )
+            for gathering, host_kind, occurrence_id, starts_at, occurrence_count, co_host in rows
         ]
     }
 
@@ -709,7 +900,12 @@ async def get_gathering(
             .order_by(Occurrence.starts_at, Occurrence.id)
         )
     ).all()
-    return _gathering_body(gathering, list(occurrences), host_kind=await _host_kind(db, gathering))
+    return _gathering_body(
+        gathering,
+        list(occurrences),
+        host_kind=await _host_kind(db, gathering),
+        caller_role=await _role_of(db, gathering, ctx),
+    )
 
 
 @router.patch("/gatherings/{gathering_id}")
@@ -719,18 +915,33 @@ async def patch_gathering(
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    gathering = await _gathering_for_admin(db, ctx, gathering_id)
+    gathering = await _gathering_for_organiser(db, ctx, gathering_id)
     # Merge patch (CK-22): a field applies iff it was PRESENT in the body.
     # None of the three text/enum fields is clearable (the model refuses
     # explicit null), so a provided value is always non-None for them; the
     # override is the exception, and None there IS the request.
     provided = body.model_fields_set
+    if "requires_approval_override" in provided and not is_host(gathering, ctx):
+        # THE PATCH IS FIELD-LEVEL (CK-68): every other field on this model
+        # is delegable and a co-host's value applies; the review switch is
+        # the consent gate's (co-hosts §4 — reserved, never a toggle), and
+        # a co-host sending it draws a 422 ON THAT FIELD, never a silent
+        # drop — and the whole request is refused, nothing else in the
+        # body applied (the CK-34 batch precedent: a partial apply the
+        # caller cannot see is worse than a refusal). On a HOSTLESS
+        # gathering nobody is host, so nobody may flip it.
+        raise _field_422(
+            "requires_approval_override",
+            "only the host decides whether photos are reviewed before they're "
+            "published — a co-host can't change it",
+        )
     if "requires_approval_override" in provided:
         # The host's switch (CK-44): rung 1 of the publication ladder,
         # written by a person for the first time in the column's life.
-        # True gates, False opens, None clears to inherit. Host-gated like
-        # everything else here — `_gathering_for_admin` already drew the
-        # 404 for anyone else. Nothing here touches a media row: turning
+        # True gates, False opens, None clears to inherit. THE HOST'S
+        # ALONE — the one reserved field on this surface (CK-68), checked
+        # just above; `_gathering_for_organiser` admitted a co-host to the
+        # rest. Nothing here touches a media row: turning
         # review off publishes nothing that was waiting (the-hosts-review
         # §13), and the worker reads this column at publish time, never
         # from a snapshot, so the next `ready` sees the new answer.
@@ -747,12 +958,19 @@ async def patch_gathering(
     if "title" in provided:
         gathering.title = body.title
     if "rsvp_list_visibility" in provided:
-        # The host's list-visibility choice (CK-27). Host-gated like every
-        # other field here; the model already refused an explicit null.
+        # The host's list-visibility choice (CK-27) — delegable since CK-68
+        # ("set its visibility", co-hosts §4), like every field here but the
+        # switch above; the model already refused an explicit null.
         gathering.rsvp_list_visibility = body.rsvp_list_visibility
     gathering.updated_at = datetime.now(timezone.utc)
     await db.commit()
-    return _gathering_body(gathering, host_kind=await _host_kind(db, gathering))
+    return _gathering_body(
+        gathering,
+        host_kind=await _host_kind(db, gathering),
+        # The organiser loader admitted the caller: the host, or else a
+        # co-host — no second lookup.
+        caller_role=ROLE_HOST if is_host(gathering, ctx) else ROLE_CO_HOST,
+    )
 
 
 @router.post("/gatherings/{gathering_id}/occurrences", status_code=201)
@@ -762,7 +980,7 @@ async def add_occurrence(
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    gathering = await _gathering_for_admin(db, ctx, gathering_id)
+    gathering = await _gathering_for_organiser(db, ctx, gathering_id)
     starts = await _sibling_starts(db, gathering.id)
     _enforce_season_span(gathering, starts, body.starts_at)
     occurrence = Occurrence(
@@ -784,7 +1002,7 @@ async def patch_occurrence(
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    occurrence, gathering = await _occurrence_for_admin(db, ctx, occurrence_id)
+    occurrence, gathering = await _occurrence_for_organiser(db, ctx, occurrence_id)
     # Merge patch (CK-22): a field applies iff it was PRESENT in the body —
     # an absent field leaves the stored value alone, and an explicit null on
     # ends_at/location/map_url clears it (writes NULL, never ""; the blank
@@ -834,7 +1052,7 @@ async def delete_occurrence(
       their companions) go with the date via the 0015 FK. A date with no
       answers needs no confirmation and deletes as it always has.
     """
-    occurrence, gathering = await _occurrence_for_admin(db, ctx, occurrence_id)
+    occurrence, gathering = await _occurrence_for_organiser(db, ctx, occurrence_id)
     remaining = await _sibling_starts(db, gathering.id, excluding=occurrence.id)
     if not remaining:
         # A gathering with no dates is not a state this product has.
@@ -850,8 +1068,9 @@ async def delete_occurrence(
     ).scalar_one()
     if rsvp_count and not confirm:
         # The count is people, not rows, to the reader: one row per answerer.
-        # Disclosed to the host only (the auth gate above), who always sees
-        # the full RSVP list in every visibility mode anyway.
+        # Disclosed to the organisers only — the host or a co-host, the auth
+        # gate above — who always see the full RSVP list in every visibility
+        # mode anyway (CK-68).
         noun = "person has" if rsvp_count == 1 else "people have"
         raise HTTPException(
             409,
