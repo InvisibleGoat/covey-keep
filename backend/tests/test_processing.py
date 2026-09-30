@@ -27,6 +27,15 @@ Pinned:
   thumbnail, because each layer is derived from the one above it and
   `_fit` never upscales — an archival target at or below the web target
   would hand the web layer archival-sized pixels with nothing failing;
+- AN MPO IS A PHOTOGRAPH (CK-70): `gps-mpo.jpg` — the same primary frame
+  as the JPEG fixture with a second, solid-green image appended through the
+  Multi-Picture Format, the shape phones write for HDR gain maps and
+  portrait depth maps, which Pillow names MPO — is first shown to be what
+  it claims (MPO, two frames, GPS and orientation 6 in the primary), then
+  renders three single-frame layers with no GPS, no EXIF container, no MPF
+  marker, the orientation applied, not one green pixel, and BYTE-IDENTICAL
+  to the JPEG fixture's layers: frame 0 is what rendered, and draft, load
+  and exif_transpose treated it exactly as a JPEG; the module never seeks;
 - the real format comes from the bytes: GIF, BMP and TIFF are refused as
   unsupported, a renamed .mov and random bytes as undecodable, a truncated
   JPEG as undecodable — every one Undecodable (permanent), reason in
@@ -38,6 +47,7 @@ Pinned:
   converted in pixel space and not embedded; a garbage profile is ignored.
 """
 
+import inspect
 import io
 from pathlib import Path
 
@@ -64,6 +74,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "media"
 
 RED = (255, 0, 0)
 BLUE = (0, 0, 255)
+GREEN = (0, 255, 0)  # the MPO fixture's second image, and nothing in its first
 
 
 def _fixture(name: str) -> bytes:
@@ -96,10 +107,30 @@ def _encoded(image: Image.Image, fmt: str, **options) -> bytes:
     return buffer.getvalue()
 
 
+def _has_mpf_marker(data: bytes) -> bool:
+    """A raw-bytes scan for the Multi-Picture Format's APP2 identifier — the
+    header that makes Pillow name a JPEG `MPO`."""
+    return b"MPF\x00" in data
+
+
+def _pixels(data: bytes) -> list[tuple[int, int, int]]:
+    """Every pixel of an encoded image as RGB triples (via tobytes, which is
+    stable across Pillow versions where getdata is not)."""
+    raw = Image.open(io.BytesIO(data)).convert("RGB").tobytes()
+    return [tuple(raw[i : i + 3]) for i in range(0, len(raw), 3)]
+
+
+def _mpo(second: Image.Image | None = None, **options) -> bytes:
+    """A generated two-image MPO: a solid green primary, a second image
+    appended through Pillow's MPF writer."""
+    primary = Image.new("RGB", (64, 48), "green")
+    return _encoded(primary, "MPO", save_all=True, append_images=[second or Image.new("RGB", (16, 16), "red")], **options)
+
+
 # --- the test that matters most --------------------------------------------------
 
 
-@pytest.mark.parametrize("name", ["gps-oriented.jpg", "gps.png", "gps.heic"])
+@pytest.mark.parametrize("name", ["gps-oriented.jpg", "gps.png", "gps.heic", "gps-mpo.jpg"])
 def test_gps_and_every_other_byte_of_metadata_is_absent_from_all_three_layers(name):
     data = _fixture(name)
     # The subject really carries GPS — otherwise the assertions below would
@@ -152,6 +183,70 @@ def test_an_unoriented_subject_keeps_its_layout():
             assert image.size == (96, 64), (name, rendition.layer)
             assert _near(image.getpixel((0, 0)), RED), (name, rendition.layer)
             assert _near(image.getpixel((image.width - 1, 0)), BLUE), (name, rendition.layer)
+
+
+def test_a_jpeg_carrying_a_second_image_renders_its_primary_frame_and_nothing_of_the_second():
+    """CK-70: an ordinary phone JPEG dead-lettered on the deploy because its
+    file carried a second image (the Multi-Picture Format phones write for
+    an HDR gain map or a portrait depth map) and Pillow names that file MPO,
+    which DECODABLE_FORMATS did not list. The fixture is that shape with a
+    real GPS IFD and orientation 6 in the primary frame, and a solid-green
+    second image whose colour the primary cannot produce.
+
+    Pinned: frame 0 is the photograph and the ONLY thing rendered — every
+    layer is single-frame, carries no MPF marker, no EXIF container and no
+    GPS, is upright, holds not one green pixel, and is BYTE-IDENTICAL to the
+    layer the same frame yields as a plain JPEG (gps-oriented.jpg), which is
+    how draft, load and exif_transpose are shown to treat an MPO exactly as
+    a JPEG rather than asserted to. And the module never seeks."""
+    data = _fixture("gps-mpo.jpg")
+
+    # The fixture really is what it claims — otherwise everything below is
+    # over nothing. (This test seeks to prove the second image is there; the
+    # module under test never does, pinned at the end.)
+    stored = Image.open(io.BytesIO(data))
+    assert stored.format == "MPO"
+    assert stored.n_frames == 2
+    assert stored.size == (96, 64)
+    assert _near(stored.getpixel((0, 0)), RED)
+    tags, gps = _exif(data)
+    assert tags[ExifTags.Base.Orientation] == 6
+    assert gps[ExifTags.GPS.GPSLatitude] == (41.0, 52.0, 58.0)
+    assert _has_mpf_marker(data)
+    stored.seek(1)
+    assert stored.size == (32, 32)
+    assert _near(stored.getpixel((0, 0)), GREEN)
+    assert _near(stored.getpixel((31, 31)), GREEN)
+
+    layers = render_layers(data)
+    assert [r.layer for r in layers] == [MediaLayer.ARCHIVAL, MediaLayer.WEB, MediaLayer.THUMBNAIL]
+    for rendition in layers:
+        image = Image.open(io.BytesIO(rendition.data))
+        # Single-frame, and the format is the LAYER's, never MPO.
+        assert image.format in ("JPEG", "WEBP"), rendition.layer
+        assert getattr(image, "n_frames", 1) == 1, rendition.layer
+        assert not _has_mpf_marker(rendition.data), rendition.layer
+        # GPS and every other byte of metadata absent, both ways.
+        out_tags, out_gps = _exif(rendition.data)
+        assert out_gps == {} and out_tags == {}, rendition.layer
+        assert not _has_exif_container(rendition.data), rendition.layer
+        # Orientation applied to the primary frame, pixel by pixel.
+        assert image.size == (64, 96), rendition.layer
+        assert (rendition.width, rendition.height) == (64, 96)
+        assert _near(image.getpixel((image.width - 1, 0)), RED), rendition.layer
+        assert _near(image.getpixel((0, 0)), BLUE), rendition.layer
+        assert _near(image.getpixel((0, image.height - 1)), BLUE), rendition.layer
+        # Not one pixel of the second image's colour, anywhere in the layer.
+        assert not any(_near(pixel, GREEN) for pixel in _pixels(rendition.data)), rendition.layer
+
+    # The same frame as a plain JPEG renders the same bytes: frame 0 is what
+    # rendered, and the MPO path added nothing and took nothing away.
+    assert [r.data for r in layers] == [r.data for r in render_layers(_fixture("gps-oriented.jpg"))]
+
+    # Nothing in the module reaches for another frame (comments excluded —
+    # they say the word to explain the rule).
+    code_lines = [line.strip() for line in inspect.getsource(processing).splitlines()]
+    assert not any(".seek(" in line for line in code_lines if not line.startswith("#"))
 
 
 # --- the three layers -----------------------------------------------------------
@@ -253,11 +348,26 @@ def test_a_decodable_but_unsupported_format_is_refused_permanently(fmt):
 
 
 def test_the_decodable_formats_are_exactly_the_allowlists_real_counterpart():
-    # image/jpeg, png, webp, heic, heif at the intent endpoint; pillow-heif
-    # reports HEIC and HEIF alike as HEIF.
-    assert DECODABLE_FORMATS == {"JPEG", "PNG", "WEBP", "HEIF"}
-    for fmt in ("JPEG", "PNG", "WEBP"):
-        assert len(render_layers(_encoded(Image.new("RGB", (64, 48), "green"), fmt))) == 3
+    # image/jpeg, png, webp, heic, heif at the intent endpoint — and the set
+    # lists every REAL NAME an admitted type can arrive as, not the types'
+    # own names: image/jpeg is JPEG, or MPO when the file carries a second
+    # image (CK-70 — an ordinary phone JPEG dead-lettered on the deploy
+    # because this set listed the names alone); pillow-heif reports HEIC
+    # and HEIF alike as HEIF. Enumerated from the installed Pillow and
+    # pillow-heif at CK-70; do not widen from memory.
+    assert DECODABLE_FORMATS == {"JPEG", "MPO", "PNG", "WEBP", "HEIF"}
+    samples = {
+        "JPEG": _encoded(Image.new("RGB", (64, 48), "green"), "JPEG"),
+        "MPO": _mpo(),
+        "PNG": _encoded(Image.new("RGB", (64, 48), "green"), "PNG"),
+        "WEBP": _encoded(Image.new("RGB", (64, 48), "green"), "WEBP"),
+        "HEIF": _fixture("gps.heic"),
+    }
+    assert set(samples) == DECODABLE_FORMATS
+    for fmt, data in samples.items():
+        # The sample really carries the name it stands for, and it decodes.
+        assert Image.open(io.BytesIO(data)).format == fmt
+        assert len(render_layers(data)) == 3, fmt
 
 
 @pytest.mark.parametrize(

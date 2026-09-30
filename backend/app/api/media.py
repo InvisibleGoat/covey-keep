@@ -30,7 +30,10 @@ Everything here is part of the accept/refuse decision:
 - THE DECLARED CONTENT TYPE — advisory here, enforced later. A `.mov`
   renamed `.jpg` passes any intent-time allowlist; the worker verifies the
   real type from the bytes (CK-36 — processing.DECODABLE_FORMATS is this
-  list's real-bytes counterpart, and the two may never disagree). The allowlist is still worth having: it
+  list's real-bytes counterpart, and the two may never disagree; since
+  CK-70 that counterpart lists every real name an admitted type can
+  arrive as — `image/jpeg` is `JPEG` or, when the file carries a second
+  image, `MPO`). The allowlist is still worth having: it
   stops the honest mistake at the cheapest point and gives the file picker
   something to mirror (`accept`). Video is refused EXPLICITLY (record
   §6.4) — never accepted-then-failed — and the case that makes this the
@@ -493,7 +496,14 @@ MAX_INTENTS_PER_REQUEST = 50
 # matter of course (launch shape: phone-first); GIF, TIFF and BMP are not —
 # none is a photograph a family takes, and every type admitted is a decoder
 # path the worker must carry. Widening it is one line here plus one in
-# processing.DECODABLE_FORMATS (the two may never disagree — pinned). Video is REFUSED — `video/quicktime` is the MOV half of
+# processing.DECODABLE_FORMATS (the two may never disagree — pinned), and
+# ONE CONTENT TYPE CAN ARRIVE AS MORE THAN ONE REAL FORMAT NAME: `image/jpeg`
+# arrives as `JPEG` or, when the file carries a second image (an HDR gain
+# map, a portrait depth map), as `MPO` — CK-70, found on the deploy when an
+# ordinary phone photograph passed this list and dead-lettered at the
+# decoder. So the decoder's set lists every real name an admitted type can
+# produce, and the pin proves each of them decodes — never the names alone.
+# Video is REFUSED — `video/quicktime` is the MOV half of
 # a Live Photo, and it draws the 422 below rather than a dead-lettered job.
 IMAGE_CONTENT_TYPES = frozenset(
     {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}

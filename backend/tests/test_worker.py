@@ -37,7 +37,11 @@ The load-bearing pins (the kickoff's list, and what fell out of building it):
   publish time, never snapshotted at intent; a failed row stays pending);
   the reservation releases at `ready` through the one quota path; and the
   original is deleted ONLY AFTER that commit — observed from a second
-  session at the moment of the delete;
+  session at the moment of the delete; and (CK-70) a JPEG that carries a
+  second image — an MPO, the shape phones write for HDR gain maps and
+  depth maps, which dead-lettered on the deploy — publishes exactly the
+  same way from its primary frame alone, every stored layer single-frame
+  and GPS-free;
 - a re-processed row does not trip the derivative unique constraint; a
   delete of an absent original is a success; a delete that fails after the
   commit leaves the row `ready`; a claim lost to a reclaim writes nothing;
@@ -134,6 +138,9 @@ MB = 1_000_000
 # A real photograph carrying EXIF GPS and an orientation tag (see
 # tests/fixtures/media/make_fixtures.py for its provenance).
 GPS_PHOTO = (BACKEND_DIR / "tests" / "fixtures" / "media" / "gps-oriented.jpg").read_bytes()
+# The same primary frame with a second image appended — a Multi-Picture
+# Format JPEG, which Pillow names MPO (CK-70; provenance in the same script).
+MPO_PHOTO = (BACKEND_DIR / "tests" / "fixtures" / "media" / "gps-mpo.jpg").read_bytes()
 
 # The worker's six, and exactly six — on a reserved TLD, so nothing here
 # could ever reach a real endpoint. The key id is 32 hex since CK-61 (the
@@ -871,6 +878,51 @@ async def test_a_present_photograph_is_processed_and_published_in_one_transactio
     assert gathering.photo_count == 1
     # A ready row is never claimed again.
     assert await poll_once(db_session_factory, worker, t0 + timedelta(hours=1)) is Poll.IDLE
+
+
+async def test_a_jpeg_carrying_a_second_image_is_published_from_its_primary_frame_alone(
+    db_session_factory, worker, monkeypatch
+):
+    """CK-70 — the deploy finding, end to end: an ordinary phone JPEG whose
+    file carries a second image (an HDR gain map, a portrait depth map —
+    Pillow names the file MPO) dead-lettered as an unsupported format. The
+    MPO fixture goes through the real decoder exactly as the JPEG fixture
+    does above: the row reaches `ready` with three derivative rows, and
+    every stored layer is single-frame, carries no MPF marker and no GPS,
+    and is upright. Nothing of the second image is stored."""
+    t0 = _now()
+    row = await _uploaded_row(db_session_factory, size=len(MPO_PHOTO), available_at=t0)
+    store = FakeStore(monkeypatch, {quarantine_key(row.id): MPO_PHOTO})
+    subject = Image.open(io.BytesIO(MPO_PHOTO))
+    assert subject.format == "MPO" and subject.n_frames == 2  # the subject is the deploy's shape
+    assert dict(subject.getexif().get_ifd(ExifTags.IFD.GPSInfo))  # and it has GPS
+
+    assert await poll_once(db_session_factory, worker, t0) is Poll.PROCESSED
+
+    keys = {layer: published_key(row.id, layer) for layer in MediaLayer}
+    assert set(store.published) == set(keys.values())
+    assert store.quarantine == {}
+    assert store.stages() == ["head", "read", "put", "put", "put", "delete"]
+    for data, _, _ in store.published.values():
+        image = Image.open(io.BytesIO(data))
+        assert image.format in ("JPEG", "WEBP")  # the layer's format, never MPO
+        assert getattr(image, "n_frames", 1) == 1
+        assert b"MPF\x00" not in data
+        assert dict(image.getexif()) == {}  # no GPS, no orientation, nothing
+        assert image.size == (64, 96)  # upright: the primary frame's orientation was applied
+        assert b"Exif\x00\x00" not in data and b"EXIF" not in data
+
+    row, derivatives, gathering = await _ready_state(db_session_factory, row.id)
+    assert row.status == MediaStatus.READY
+    assert row.attempts == 1
+    assert row.last_error is None
+    assert row.available_at is None
+    assert row.publication_state == PublicationState.LIVE
+    assert [d.layer for d in derivatives] == [MediaLayer.ARCHIVAL, MediaLayer.WEB, MediaLayer.THUMBNAIL]
+    for derivative in derivatives:
+        assert derivative.size_bytes == len(store.published[derivative.storage_key][0])
+    assert gathering.total_bytes == sum(d.size_bytes for d in derivatives) > 0
+    assert gathering.photo_count == 1
 
 
 async def test_the_original_is_deleted_only_after_the_ready_transaction_has_committed(

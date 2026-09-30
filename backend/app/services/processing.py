@@ -112,11 +112,40 @@ Image.MAX_IMAGE_PIXELS = MAX_PIXELS
 
 # What the worker will decode — the real-bytes counterpart of the intent
 # endpoint's advisory allowlist (image/jpeg, png, webp, heic, heif). Pillow
-# names the format from the bytes; pillow-heif reports HEIC and HEIF alike
-# as "HEIF". Anything else is a permanent failure, by design: every format
-# admitted is a decoder path this worker must carry, and none of GIF, TIFF
-# or BMP is a photograph a family takes.
-DECODABLE_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "HEIF"})
+# names the format from the bytes, and ONE CONTENT TYPE CAN ARRIVE AS MORE
+# THAN ONE REAL NAME — so this set lists the names a phone actually writes
+# under each admitted type, never the types' own names. CK-70 found the gap
+# on the deploy: an ordinary iPhone JPEG dead-lettered as "MPO is not a
+# supported photograph format".
+#
+#   image/jpeg       -> JPEG, or MPO. An MPO is a JPEG whose file carries
+#                       further images after the first — the Multi-Picture
+#                       Format (MPF, CIPA DC-007), which phones write to
+#                       embed an HDR gain map or a portrait depth map behind
+#                       the photograph. Pillow names such a file MPO. The
+#                       primary frame is an ordinary JPEG and is the
+#                       photograph the person took: ONLY FRAME 0 IS EVER
+#                       DECODED (Image.open's default — nothing in this
+#                       module may seek to another frame), and every other
+#                       image in the file is dropped by the same rule that
+#                       drops every other embedded byte, because the layers
+#                       are re-encoded from frame 0's pixels. An HDR gain
+#                       map is therefore not applied: the layers are the
+#                       standard-range base image. (An Android Ultra HDR
+#                       JPEG carries its gain map through the same MPF and
+#                       the installed Pillow reports it as plain JPEG, base
+#                       image only; a later Pillow that names it MPO lands
+#                       in this set with the same outcome.)
+#   image/png        -> PNG (an APNG included — frame 0).
+#   image/webp       -> WEBP (an animation included — frame 0).
+#   image/heic, heif -> HEIF (pillow-heif reports HEIC and HEIF alike).
+#
+# Enumerated from the INSTALLED Pillow and pillow-heif at CK-70, not from
+# memory, and pinned: test_processing.py decodes a real file of every name
+# and shows the set is exactly these five. Anything else is a permanent
+# failure, by design: every format admitted is a decoder path this worker
+# must carry, and none of GIF, TIFF or BMP is a photograph a family takes.
+DECODABLE_FORMATS = frozenset({"JPEG", "MPO", "PNG", "WEBP", "HEIF"})
 
 # The layer targets (media-layers record §1, 1.2.0) — long edge in pixels;
 # never exceeded, never reached by upscaling. THE ORDER IS LOAD-BEARING:
@@ -249,6 +278,9 @@ def _open(data: bytes) -> Image.Image:
     fmt = image.format or "unknown"
     if fmt not in DECODABLE_FORMATS:
         raise Undecodable(f"{fmt} is not a supported photograph format")
+    # The guard reads frame 0's dimensions — for an MPO the primary frame's,
+    # which is the image that gets decoded; the file's other images are
+    # never opened, so they are never measured either.
     if image.width * image.height > MAX_PIXELS:
         raise Undecodable(f"larger than the {MAX_PIXELS // 1_000_000} megapixel limit")
     return image
@@ -260,6 +292,11 @@ def render_layers(data: bytes) -> tuple[Rendition, Rendition, Rendition]:
     for anything that is not a photograph this pipeline processes."""
     image = _open(data)
 
+    # For an MPO this is frame 0 and stays frame 0: nothing below seeks, so
+    # draft, load and exif_transpose act on the primary frame exactly as on
+    # a plain JPEG (MpoImageFile subclasses JpegImageFile) — pinned by
+    # rendering the same frame both ways and comparing the layers' bytes,
+    # not by this sentence.
     # A JPEG can be decoded straight to a reduced size by the DCT (draft):
     # a 48-megapixel original bound for the archival layer's long edge never
     # has to exist at full size in memory (and the smaller that target, the
