@@ -27,10 +27,11 @@ export interface RsvpListRow {
   display_name: string
   response: string
   stay_included: boolean
-  // Under ATTENDEES a non-host caller gets null (CK-30): the names are
-  // withheld — a second-order disclosure nobody opted into — while `total`
-  // still counts the real party. Null, never [], so "not shown" can never
-  // read as "brought nobody". The caller's own names always ride `own`.
+  // Under ATTENDEES a caller who is not an organiser — the host or, since
+  // CK-68, a co-host — gets null (CK-30): the names are withheld — a
+  // second-order disclosure nobody opted into — while `total` still counts
+  // the real party. Null, never [], so "not shown" can never read as
+  // "brought nobody". The caller's own names always ride `own`.
   companions: string[] | null
   // Computed server-side at read time — the row's person plus their
   // companions. Never stored, never typed by anyone.
@@ -57,20 +58,24 @@ export function rsvpResponseLabel(value: string): string {
   return RSVP_RESPONSES.find((r) => r.value === value)?.label ?? value
 }
 
-// The host's RSVP-list visibility choices (gatherings.rsvp_list_visibility),
-// in the order the selector offers them — the default first.
+// The RSVP-list visibility choices (gatherings.rsvp_list_visibility) — the
+// gathering's setting, written by an organiser (the host or, since CK-68, a
+// co-host) — in the order the selector offers them, the default first. The
+// narrowest option names the organisers, never "me": the selector renders
+// for a co-host too, and a host with co-hosts is not the only reader
+// (CK-69; until then it read "Only me").
 export const RSVP_LIST_VISIBILITIES: { value: string; label: string }[] = [
   { value: 'INVITEES', label: 'Everyone invited' },
   { value: 'ATTENDEES', label: 'People who are going' },
-  { value: 'HOST_ONLY', label: 'Only me' },
+  { value: 'HOST_ONLY', label: 'Only the host and co-hosts' },
 ]
 
 export function rsvpListVisibilityLabel(value: string): string {
   return RSVP_LIST_VISIBILITIES.find((v) => v.value === value)?.label ?? value
 }
 
-// "Store who, compute how many" (CK-29): the headline number the host reads
-// is derived from the named people on the "Going" rows — each row's `total`
+// "Store who, compute how many" (CK-29): the headline number an organiser
+// reads is derived from the named people on the "Going" rows — each row's `total`
 // is computed server-side from its names, and this sums them. A count nobody
 // typed cannot disagree with the list of names beside it.
 export function totalGoing(rows: RsvpListRow[]): number {

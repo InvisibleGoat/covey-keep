@@ -576,7 +576,7 @@ test('publishing from the queue removes the row from it and its line becomes the
   expect(document.body.textContent).not.toMatch(/published (at|on)/i)
 })
 
-test("declining takes a second click, says what it is — nobody in the gathering sees it again, the uploader included (CK-63) — and lands the row in the gathering's bin, out of the queue; the host's own declined row stays in their own bin", async () => {
+test("declining takes a second click, says what it is — only the organisers will still see it, the uploader not among them (CK-63; CK-69) — and lands the row in the gathering's bin, out of the queue; the host's own declined row stays in their own bin", async () => {
   const server = reviewServer([
     mediaRow({ id: 'm-mine' }),
     mediaRow({ id: 'm-theirs', is_own: false, uploader_display_name: 'grandma' }),
@@ -593,23 +593,29 @@ test("declining takes a second click, says what it is — nobody in the gatherin
   // grandma's: the first click asks; nothing is sent.
   fireEvent.click(within(rows[1]).getByRole('button', { name: 'Decline' }))
   const confirm = within(rows[1]).getByRole('group', { name: /^Decline/ })
-  // THE SENTENCE CK-67.1 MADE TRUE (two-bins record §3–§4): a declined
-  // photograph is in the GATHERING's bin — the uploader does not see it
-  // again — and since CK-66/CK-67 the host reads that bin in the Removed
-  // view and can Put back from it for 30 days, so the confirmation names
-  // the host's own way back, in the Remove step's words. (Until CK-63 this
-  // read "grandma can still see it for 30 days; you won't see it again
-  // here"; from CK-63 to CK-67.1 "Neither will grandma: nobody in this
-  // gathering will see it again." — true at CK-63, when the host had no
-  // way back, and false from CK-66, when the host did.)
+  // THE SENTENCE, MOVED AT CK-69 (its reason): a declined photograph is in
+  // the GATHERING's bin — the uploader does not see it again — which the
+  // ORGANISERS read in the Removed view (the host since CK-66/CK-67, a
+  // co-host since CK-68/CK-69) and can Put back from for 30 days. So the
+  // confirmation says who will still see it — "you and any co-hosts", true
+  // whether or not co-hosts exist — and the host's way back, in the Remove
+  // step's host form exactly (CK-67.1's rule), and it stopped naming the
+  // uploader: "neither will grandma" was false where grandma is a co-host.
+  // (Until CK-63 this read "grandma can still see it for 30 days; you won't
+  // see it again here"; from CK-63 to CK-67.1 "Neither will grandma: nobody
+  // in this gathering will see it again."; from CK-67.1 to CK-69 "The
+  // gathering won't see this photo, and neither will grandma. You can put
+  // it back for 30 days.")
   expect(confirm.textContent).toContain(
-    "The gathering won't see this photo, and neither will grandma. You can put it back for 30 days.",
+    'Only you and any co-hosts will be able to see this photo. You can put it back for 30 days.',
   )
   // CK-63's ban list, moved at CK-67.1: "30 days" and "put back" leave it —
   // the sentence says both on purpose, because the host has a way back now.
   // The rest stay: the uploader is still promised nothing, and the word
   // "bin" still appears nowhere in the host's copy.
   expect(confirm.textContent).not.toMatch(/still see|restore|recover|bin/i)
+  // It never claims nobody will see it: the organisers will.
+  expect(confirm.textContent).not.toMatch(/nobody/i)
   // The host is told what THEY can do — never that the uploader keeps
   // sight of it (the CK-43.1 line this sentence descends from said so).
   expect(confirm.textContent).not.toMatch(/still see/i)

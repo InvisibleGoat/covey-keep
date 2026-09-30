@@ -44,6 +44,10 @@ function json(status: number, body: unknown): Response {
 }
 
 function detailBody(over: Record<string, unknown> = {}) {
+  // The caller's role (CK-68's body field; read by the page since CK-69 —
+  // a shape change): 'host' where the host's account is the signed-in one,
+  // null where it is not; an override may set it explicitly.
+  const hostAccountId = 'host_account_id' in over ? over.host_account_id : 'acct-1'
   return {
     id: 'g-1',
     gathering_type: 'potluck',
@@ -54,6 +58,7 @@ function detailBody(over: Record<string, unknown> = {}) {
     publication_state: 'live',
     created_by_account_id: 'acct-1',
     host_account_id: 'acct-1',
+    caller_role: hostAccountId === 'acct-1' ? 'host' : null,
     created_at: '2026-08-25T12:00:00+00:00',
     updated_at: null,
     occurrences: [
@@ -260,7 +265,10 @@ test('HOST_ONLY as a non-admin: the caller still sees their own answer, no roste
   // Their own answer is theirs whatever the setting says.
   expect(((await screen.findByLabelText("Can't make it")) as HTMLInputElement).checked).toBe(true)
   expect(screen.queryByText("Who's coming")).toBeNull()
-  expect(screen.getByText('Only the host sees the full list of answers.')).toBeTruthy()
+  // CHANGED at CK-69 (its reason): the hint read "Only the host sees the
+  // full list of answers." — false the day a co-host exists, because the
+  // server shows the full list to every organiser (CK-68).
+  expect(screen.getByText('Only the host and co-hosts see the full list of answers.')).toBeTruthy()
 })
 
 test("the roster renders each person's companions beneath them, and the host sees the total computed from the names", async () => {

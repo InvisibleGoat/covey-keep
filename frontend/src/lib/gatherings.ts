@@ -24,17 +24,50 @@ export interface Gathering {
   // API's third value, produced by nothing until a group default exists).
   requires_approval: boolean
   requires_approval_override: boolean | null
-  // Who may read the occurrence RSVP lists (CK-27) — the host's setting:
+  // Who may read the occurrence RSVP lists (CK-27) — the gathering's
+  // setting, written by an organiser (the host or, since CK-68, a co-host):
   // HOST_ONLY | INVITEES | ATTENDEES. Labels live in lib/rsvps.ts.
   rsvp_list_visibility: string
   publication_state: string
   created_by_account_id: string
   // The host's account (CK-28: the admin column renamed — the product says
   // host; a group has an admin, a gathering has a host). Null is the
-  // claimable state.
+  // claimable state. Since CK-69 it GATES NOTHING on the page: the caller's
+  // role comes from `caller_role` below, and no surface decides a role by
+  // comparing account ids (a co-host's account is not this one, and the
+  // server would let them do most of what the host does).
   host_account_id: string | null
+  // What the CALLER is to this gathering (CK-68, on every gathering body):
+  // the host, a co-host, or neither — an invitee, a keeper, a former host.
+  // The one source of the role on the surface (CK-69); read through
+  // `roleFlags` below, never compared by hand, so anything unknown gates
+  // closed in one place.
+  caller_role: CallerRole
   created_at: string
   updated_at: string | null
+}
+
+export type CallerRole = 'host' | 'co_host' | null
+
+// The two flags every gated control reads (CK-69; the classification is
+// CK-68's, one line per check in the api-reference's Co-hosts router):
+// `isHost` for the RESERVED set — the review switch, the queue, publish and
+// decline, the batch, deleting someone else's photograph permanently,
+// making and removing co-hosts — and `organises` (the host OR a co-host)
+// for the DELEGABLE set — editing the gathering and its dates, invitations,
+// the full RSVP list, taking a published photograph down, the Removed view
+// and putting back from it. Anything but the two known roles — null, a
+// missing field, a value this build does not know — gates CLOSED: a
+// control that cannot succeed teaches a person the product does something
+// it does not, and the server would 404 it.
+export interface RoleFlags {
+  isHost: boolean
+  organises: boolean
+}
+
+export function roleFlags(role: unknown): RoleFlags {
+  const isHost = role === 'host'
+  return { isHost, organises: isHost || role === 'co_host' }
 }
 
 export interface GatheringWithOccurrences extends Gathering {

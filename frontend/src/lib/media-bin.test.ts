@@ -13,6 +13,11 @@
 // printed book is out of reach. Since CK-67 the gathering-bin helpers are
 // pinned here too: the host's line for a row someone else uploaded, and
 // the `removed=true` list path that never travels with the queue's flag.
+// Since CK-69 (co-hosts on the surface): the gathering-bin line names its
+// readers from each organiser's seat, an own row read in the Removed view
+// is the gathering's, the takedown sentence follows the seat and the gate,
+// a refusal names the bin the act was on, and the Put back hints are one
+// constant each.
 import { afterEach, expect, test, vi } from 'vitest'
 import { PRODUCT_NAME } from '../brand'
 import { networkErrors } from './formErrors'
@@ -24,6 +29,10 @@ import {
   mediaListPath,
   mediaStateMessage,
   REMOVED_BIN_DAYS,
+  RESTORE_HINT_EVERYONE,
+  RESTORE_HINT_HOST_LOOKS,
+  RESTORE_HINT_WAITS_FOR_YOU,
+  takedownSentence,
 } from './media'
 
 afterEach(() => {
@@ -186,9 +195,13 @@ test("the bin's line: whose it is, and how long the way back stays open — and 
   // the defensive "Removed.". The HOST now reads exactly that row — the
   // gathering's bin — so their seat gets the bin's other line (pinned in
   // full in the CK-67 test below); the branch stays "Removed." only for a
-  // non-host, whom the audience rule still never shows one.
+  // non-organiser, whom the audience rule still never shows one. CHANGED
+  // AGAIN at CK-69 (its reason): "Only you can see it" was true while the
+  // host was the one organiser; co-hosts read the gathering's bin too, so
+  // the host's line names them — "you and any co-hosts", true whether or
+  // not any exist.
   expect(mediaStateMessage({ ...own, is_own: false, removed_at: stamp }, { isHost: true, now: at(0) })).toBe(
-    'Removed from this gathering. Only you can see it, and you can put it back for 30 more days.',
+    'Removed from this gathering. Only you and any co-hosts can see it, and you can put it back for 30 more days.',
   )
   expect(mediaStateMessage({ ...own, is_own: false, removed_at: stamp }, { isHost: false, now: at(0) })).toBe(
     'Removed.',
@@ -242,8 +255,12 @@ test("the bin's line from a trailing device clock reads 30 more days, never 31 (
 // CK-67: the gathering's bin has a surface, and the host's line for a row
 // in it follows the personal line's every rule — binDaysLeft (the CK-64.1
 // clamp included), the same singular / last-day / no-stamp forms, and the
-// same silence about the window's end.
-test("the host's line for a gathering-bin row: whose sight it left, how long the way back stays open, and nothing about the window's end (CK-67)", () => {
+// same silence about the window's end. CHANGED at CK-69 (its reason): every
+// literal here read "Only you can see it" — true while the host was the one
+// organiser; co-hosts read the gathering's bin since CK-68, so the host's
+// line names them ("you and any co-hosts"), and the co-host's own line is
+// pinned in the CK-69 test below.
+test("the host's line for a gathering-bin row: whose sight it left, how long the way back stays open, and nothing about the window's end (CK-67; the readers named since CK-69)", () => {
   const theirs = {
     status: 'ready',
     publication_state: 'removed',
@@ -254,30 +271,30 @@ test("the host's line for a gathering-bin row: whose sight it left, how long the
   const at = (days: number) => new Date(Date.parse(stamp) + days * DAY)
   const host = (now: Date) => mediaStateMessage({ ...theirs, removed_at: stamp }, { isHost: true, now })
   expect(host(at(0))).toBe(
-    'Removed from this gathering. Only you can see it, and you can put it back for 30 more days.',
+    'Removed from this gathering. Only you and any co-hosts can see it, and you can put it back for 30 more days.',
   )
   expect(host(at(2))).toBe(
-    'Removed from this gathering. Only you can see it, and you can put it back for 28 more days.',
+    'Removed from this gathering. Only you and any co-hosts can see it, and you can put it back for 28 more days.',
   )
   expect(host(at(29))).toBe(
-    'Removed from this gathering. Only you can see it, and you can put it back for 1 more day.',
+    'Removed from this gathering. Only you and any co-hosts can see it, and you can put it back for 1 more day.',
   )
   expect(host(at(29.5))).toBe(
-    'Removed from this gathering. Only you can see it, and you can put it back for less than a day.',
+    'Removed from this gathering. Only you and any co-hosts can see it, and you can put it back for less than a day.',
   )
   // The CK-64.1 clamp holds here too: a device clock trailing the server
   // never promises a 31st day.
   expect(host(new Date(Date.parse(stamp) - 1000))).toBe(
-    'Removed from this gathering. Only you can see it, and you can put it back for 30 more days.',
+    'Removed from this gathering. Only you and any co-hosts can see it, and you can put it back for 30 more days.',
   )
   // A row with no readable stamp still gets an honest line, no count invented.
   expect(mediaStateMessage({ ...theirs, removed_at: null }, { isHost: true, now: at(0) })).toBe(
-    'Removed from this gathering. Only you can see it, and you can put it back.',
+    'Removed from this gathering. Only you and any co-hosts can see it, and you can put it back.',
   )
   expect(mediaStateMessage(theirs, { isHost: true })).toBe(
-    'Removed from this gathering. Only you can see it, and you can put it back.',
+    'Removed from this gathering. Only you and any co-hosts can see it, and you can put it back.',
   )
-  // A non-host is never shown such a row; the branch stays defensive.
+  // A non-organiser is never shown such a row; the branch stays defensive.
   expect(mediaStateMessage({ ...theirs, removed_at: stamp }, { isHost: false, now: at(0) })).toBe('Removed.')
   // The ban list holds on every form: nothing promises deletion on a date,
   // an emptying, or a safety — the sweep still ships switched off.
@@ -312,4 +329,150 @@ test("the permanent delete's confirmation is the record's sentence, character fo
   )
   expect(DELETE_PERMANENTLY_CONFIRMATION).toContain(`from ${PRODUCT_NAME} and`)
   expect(DELETE_PERMANENTLY_CONFIRMATION).not.toMatch(BIN_BAN)
+})
+
+// ---- CK-69: co-hosts on the surface ----
+
+// The gathering's bin has two kinds of reader now, and the line says who
+// they are from each seat: the host reads "you and any co-hosts" (true
+// whether or not any exist), a co-host reads "the host and co-hosts". A row
+// read IN the Removed view is a gathering-bin row whoever uploaded it —
+// the server lists gathering-bin rows there and nothing else — so an
+// organiser's own photograph that another organiser removed takes the
+// organiser's line, never "In your bin"; outside that view an own removed
+// row is the personal bin, whoever reads it.
+test("the co-host's line for a gathering-bin row, the own row read in the Removed view, and the personal line untouched (CK-69)", () => {
+  const theirs = {
+    status: 'ready',
+    publication_state: 'removed',
+    is_own: false,
+    uploader_display_name: 'grandma',
+  }
+  const own = { ...theirs, is_own: true, uploader_display_name: 'peter' }
+  const stamp = '2026-09-10T12:00:00+00:00'
+  const at = (days: number) => new Date(Date.parse(stamp) + days * DAY)
+  const coHost = (now: Date) =>
+    mediaStateMessage({ ...theirs, removed_at: stamp }, { isHost: false, organises: true, now })
+  expect(coHost(at(0))).toBe(
+    'Removed from this gathering. Only the host and co-hosts can see it, and you can put it back for 30 more days.',
+  )
+  expect(coHost(at(2))).toBe(
+    'Removed from this gathering. Only the host and co-hosts can see it, and you can put it back for 28 more days.',
+  )
+  expect(coHost(at(29))).toBe(
+    'Removed from this gathering. Only the host and co-hosts can see it, and you can put it back for 1 more day.',
+  )
+  expect(coHost(at(29.5))).toBe(
+    'Removed from this gathering. Only the host and co-hosts can see it, and you can put it back for less than a day.',
+  )
+  // The CK-64.1 clamp, and the no-stamp form, hold for this seat too.
+  expect(coHost(new Date(Date.parse(stamp) - 1000))).toBe(
+    'Removed from this gathering. Only the host and co-hosts can see it, and you can put it back for 30 more days.',
+  )
+  expect(mediaStateMessage({ ...theirs, removed_at: null }, { isHost: false, organises: true, now: at(0) })).toBe(
+    'Removed from this gathering. Only the host and co-hosts can see it, and you can put it back.',
+  )
+  // An own row read in the Removed view: the organiser's line for that seat.
+  expect(
+    mediaStateMessage({ ...own, removed_at: stamp }, { isHost: true, organises: true, gatheringBin: true, now: at(0) }),
+  ).toBe(
+    'Removed from this gathering. Only you and any co-hosts can see it, and you can put it back for 30 more days.',
+  )
+  expect(
+    mediaStateMessage({ ...own, removed_at: stamp }, { isHost: false, organises: true, gatheringBin: true, now: at(0) }),
+  ).toBe(
+    'Removed from this gathering. Only the host and co-hosts can see it, and you can put it back for 30 more days.',
+  )
+  // Outside the Removed view an own removed row is the personal bin, for a
+  // co-host and for the host alike — CK-64's line, byte for byte.
+  expect(mediaStateMessage({ ...own, removed_at: stamp }, { isHost: false, organises: true, now: at(0) })).toBe(
+    'In your bin. Only you can see it, and you can put it back for 30 more days.',
+  )
+  expect(
+    mediaStateMessage({ ...own, removed_at: stamp }, { isHost: true, organises: true, gatheringBin: false, now: at(0) }),
+  ).toBe('In your bin. Only you can see it, and you can put it back for 30 more days.')
+  // A non-organiser never reads a gathering-bin row; the branch stays
+  // defensive even with the view flag set (unreachable by the audience rule).
+  expect(
+    mediaStateMessage({ ...theirs, removed_at: stamp }, { isHost: false, organises: false, gatheringBin: true, now: at(0) }),
+  ).toBe('Removed.')
+  // The ban list holds on every form of the co-host's line, and the line
+  // never claims the co-host is the only reader.
+  for (const days of [0, 2, 29, 29.5, 31]) {
+    const line = coHost(at(days))
+    expect(line).not.toMatch(BIN_BAN)
+    expect(line).not.toMatch(/delet|destroy|30 days after|only you\b/i)
+  }
+})
+
+test('the takedown sentence by seat and gate: the host names "you and any co-hosts" whatever the gate says, a co-host names "the host and co-hosts", and only the gated co-host form says the host will look again (CK-69)', () => {
+  const HOST = 'Only you and any co-hosts will be able to see this photo. You can put it back for 30 days.'
+  expect(takedownSentence({ isHost: true, requiresApproval: false })).toBe(HOST)
+  // A host restore goes live whatever the gate says (CK-66), so the host's
+  // form does not change with it.
+  expect(takedownSentence({ isHost: true, requiresApproval: true })).toBe(HOST)
+  expect(takedownSentence({ isHost: false, requiresApproval: false })).toBe(
+    'Only the host and co-hosts will be able to see this photo. You can put it back for 30 days.',
+  )
+  expect(takedownSentence({ isHost: false, requiresApproval: true })).toBe(
+    'Only the host and co-hosts will be able to see this photo. If you put it back within 30 days, the host will look at it again before anyone else sees it.',
+  )
+  for (const isHost of [true, false]) {
+    for (const requiresApproval of [true, false]) {
+      const sentence = takedownSentence({ isHost, requiresApproval })
+      // The days come from the one constant; nothing names the uploader,
+      // claims nobody will see it, or promises anything at the window's end.
+      expect(sentence).toContain(`${REMOVED_BIN_DAYS} days`)
+      expect(sentence).not.toMatch(BIN_BAN)
+      expect(sentence).not.toMatch(/nobody|included|approv|shared|screen|delet|destroy/i)
+    }
+  }
+})
+
+test("a refusal names the bin the act was on: the takedown and the Removed view say the gathering's, a personal act keeps CK-64's lines, and every other code reads the same in both (CK-69)", () => {
+  expect(binRefusalMessage({ code: 'already_removed' }, { bin: 'gathering' })).toBe(
+    'This photo has already been removed — refresh the list to see where it is.',
+  )
+  expect(binRefusalMessage({ code: 'not_removed' }, { bin: 'gathering' })).toBe(
+    "This photo isn't in the gathering's bin any more — refresh the list to see where it is.",
+  )
+  // Personal, said explicitly and by default: CK-64's lines, byte for byte.
+  expect(binRefusalMessage({ code: 'already_removed' }, { bin: 'personal' })).toBe(
+    'This photo is already in your bin.',
+  )
+  expect(binRefusalMessage({ code: 'not_removed' }, { bin: 'personal' })).toBe(
+    "This photo isn't in your bin any more — refresh the list to see where it is.",
+  )
+  expect(binRefusalMessage({ code: 'already_removed' })).toBe('This photo is already in your bin.')
+  expect(binRefusalMessage({ code: 'not_removed' })).toBe(
+    "This photo isn't in your bin any more — refresh the list to see where it is.",
+  )
+  // The other codes do not read the context at all.
+  for (const code of ['not_found', 'not_ready', 'not_pending', 'unreachable', 'someday_code']) {
+    for (const status of ['failed', 'processing', undefined]) {
+      expect(binRefusalMessage({ code, status }, { bin: 'gathering' })).toBe(
+        binRefusalMessage({ code, status }, { bin: 'personal' }),
+      )
+    }
+  }
+  // Neither gathering line claims anything was deleted or put back, and
+  // neither says "your bin".
+  for (const code of ['already_removed', 'not_removed']) {
+    const line = binRefusalMessage({ code }, { bin: 'gathering' })
+    expect(line).not.toMatch(/\b(was|has been|is now|got) (deleted|destroyed|put back|restored|recovered)/i)
+    expect(line).not.toMatch(BIN_BAN)
+    expect(line).not.toMatch(/your bin/i)
+  }
+})
+
+test('the three Put back hints are one constant each, as literals (CK-64; CK-67; reused at CK-69)', () => {
+  expect(RESTORE_HINT_EVERYONE).toBe('Everyone in this gathering will see it again.')
+  expect(RESTORE_HINT_HOST_LOOKS).toBe('The host will look at it again before anyone else sees it.')
+  expect(RESTORE_HINT_WAITS_FOR_YOU).toBe(
+    "It'll wait for you to publish or decline it before anyone else sees it.",
+  )
+  for (const hint of [RESTORE_HINT_EVERYONE, RESTORE_HINT_HOST_LOOKS, RESTORE_HINT_WAITS_FOR_YOU]) {
+    expect(hint).not.toMatch(BIN_BAN)
+    expect(hint).not.toMatch(/approv|shared|screen/i)
+  }
 })

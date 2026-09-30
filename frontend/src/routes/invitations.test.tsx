@@ -157,6 +157,9 @@ const detailBody = {
   publication_state: 'live',
   created_by_account_id: 'acct-1',
   host_account_id: 'acct-1',
+  // The caller's role (CK-68's body field; read by the page since CK-69 —
+  // a shape change): the signed-in person is the host here.
+  caller_role: 'host',
   created_at: '2026-08-25T12:00:00+00:00',
   updated_at: null,
   occurrences: [
@@ -332,11 +335,13 @@ test('revoke calls DELETE on the pending invitation', async () => {
 })
 
 test('a non-admin viewer has no invitation affordance at all', async () => {
+  // An invitee's body: someone else hosts, and the caller holds no role
+  // (`caller_role` null — the field the page reads since CK-69).
   stubRoutes([
     {
       method: 'GET',
       path: '/gatherings/g-1',
-      response: () => json(200, { ...detailBody, host_account_id: 'acct-2' }),
+      response: () => json(200, { ...detailBody, host_account_id: 'acct-2', caller_role: null }),
     },
   ])
   renderDetail()

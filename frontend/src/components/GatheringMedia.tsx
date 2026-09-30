@@ -30,9 +30,13 @@ import {
   publishBatchErrorFields,
   putUpload,
   REMOVED_BIN_DAYS,
+  RESTORE_HINT_EVERYONE,
+  RESTORE_HINT_HOST_LOOKS,
+  RESTORE_HINT_WAITS_FOR_YOU,
   reviewMedia,
   reviewRefusalMessage,
   SEARCH_DEBOUNCE_MS,
+  takedownSentence,
   wordsErrorFields,
   type BinAct,
   type IntentResponse,
@@ -121,10 +125,11 @@ import { FieldError, FormLevelErrors } from './FieldError'
 //    ("nothing is waiting"), never "no photos yet". Publish and decline
 //    switch on the server's stable codes, never its wording; decline is
 //    removal — into the GATHERING's bin since CK-63 (two-bins record §3:
-//    the uploader does not see a declined photograph again; the host reads
-//    that bin in the Removed view since CK-67, and the confirmation still
-//    promises nobody a way back — it states what the uploader loses, and
-//    the kickoff kept its copy), nothing destroyed — and takes
+//    the uploader does not see a declined photograph again; the organisers
+//    read that bin in the Removed view — the host since CK-67, a co-host
+//    since CK-69 — and since CK-67.1 the confirmation names the host's own
+//    way back, in the Remove step's words, while promising the uploader
+//    nothing), nothing destroyed — and takes
 //    a deliberate second click. Bulk approve is the batch endpoint, refused
 //    whole on any bad item, the refusal landing on the row that caused it.
 //    A `ready` + `pending` row is terminal for `status`, so nothing here
@@ -138,8 +143,8 @@ import { FieldError, FormLevelErrors } from './FieldError'
 // 7. YOUR BIN IS YOURS, AND THE THREE ACTS RENDER ON YOUR OWN ROWS ONLY.
 //    Send to bin, Put back and Delete permanently appear on a row the caller
 //    uploaded, at `ready`, and on no other — never on someone else's row,
-//    whoever the viewer is (the host's controls on someone else's row are
-//    point 8's, and different acts), never on a failed or in-flight row,
+//    whoever the viewer is (an organiser's controls on someone else's row
+//    are point 8's, and different acts), never on a failed or in-flight row,
 //    never on a row whose upload failed from this device. The server would
 //    refuse each of those, and a control the server would refuse is its own
 //    defect. Send to bin is one click, because it can be undone; Delete
@@ -158,32 +163,68 @@ import { FieldError, FormLevelErrors } from './FieldError'
 // And, since CK-67, the host's side (decisions/2026-09-27-two-bins.md §1–§4
 // — the surface for CK-66's backend):
 //
-// 8. THE GATHERING'S BIN IS THE HOST'S, AND SO IS THE TAKEDOWN. Remove from
-//    gathering renders for the host on someone ELSE's `live`, `ready` row
-//    and on no other: not on a pending row, which keeps Decline (same
-//    result, one act per state), not on the host's own rows, which keep
-//    point 7's controls, and never for anyone but the host. It takes a
+// 8. THE GATHERING'S BIN IS THE ORGANISERS', AND SO IS THE TAKEDOWN. Remove
+//    from gathering renders for an organiser — the host or, since CK-69, a
+//    co-host — on someone ELSE's `live`, `ready` row and on no other: not
+//    on a pending row, which keeps Decline (same result, one act per state;
+//    the host's alone), not on the caller's own rows, which keep point 7's
+//    controls, and never for anyone but an organiser. It takes a
 //    deliberate second step — the uploader loses sight of the photograph
-//    at once — that says exactly that, with a do-nothing beside it, and
-//    posts CK-54's `remove`; the server records the host as the remover,
-//    which is what puts the row in the GATHERING's bin (two-bins §3). That
-//    bin is a third view on the same list (`removed=true` — the rows
-//    someone other than the uploader removed, which the server shows to
-//    the host alone; a non-host would read an empty list), beside the all
-//    and queue views, rendered for the host only. In it: Put back — one
-//    click, no confirmation, and since CK-66 a host restore always goes
-//    `live`, so the hint says everyone will see it again — and Delete
-//    permanently, point 7's step with the same constant and the same
-//    sentence, one photograph at a time; no bulk empty, no multi-select.
-//    The uploader is told nothing (two-bins §8, open): the photograph
-//    simply leaves their list. Co-hosts do not exist; the host only.
+//    at once — that says who will still see it and what the way back is
+//    (lib/media.ts::takedownSentence, from the reader's seat and the gate),
+//    with a do-nothing beside it, and posts CK-54's `remove`; the server
+//    records the caller as the remover, which is what puts the row in the
+//    GATHERING's bin (two-bins §3). That bin is a third view on the same
+//    list (`removed=true` — the rows someone other than the uploader
+//    removed, which the server shows to the organisers; anyone else would
+//    read an empty list), beside the all and queue views, rendered for
+//    organisers only. In it: Put back — one click, no confirmation; a host
+//    restore always goes `live` (CK-66), so the host's hint says everyone
+//    will see it again, and a co-host's passes THROUGH THE GATE (two-bins
+//    §4, CK-68), so where the gathering requires approval the co-host's
+//    hint says the host will look at it again — and Delete permanently,
+//    point 7's step with the same constant and the same sentence, one
+//    photograph at a time, FOR THE HOST OR THE UPLOADER and never a co-host
+//    on someone else's (the server's `_may_destroy`); no bulk empty, no
+//    multi-select. The uploader is told nothing (two-bins §8, open): the
+//    photograph simply leaves their list.
+//
+// And, since CK-69, co-hosts on the surface (co-hosts §4 as amended by
+// two-bins §4; the classification is CK-68's):
+//
+// 9. TWO FLAGS, AND EVERY CONTROL READS ONE OF THEM ON PURPOSE. `isHost` is
+//    the RESERVED set — the review (the queue, Publish and Decline, the
+//    batch; `pending` visibility is the server's), and Delete permanently on
+//    someone else's photograph — and `organises` (the host or a co-host) is
+//    the DELEGABLE set — the view switch and the Removed view, the takedown,
+//    and Put back from the gathering's bin. Both come from the gathering
+//    body's `caller_role` (the detail page reads it through
+//    lib/gatherings.ts::roleFlags); nothing here compares account ids. A
+//    row in the Removed view is a gathering-bin row WHOEVER uploaded it —
+//    the server lists gathering-bin rows there and nothing else — so an
+//    organiser's own photograph that another organiser removed renders the
+//    gathering-bin line and the gathering-bin controls there, never "In
+//    your bin" and never the personal controls (which, outside that view,
+//    are exactly as point 7 says). `mediaStateMessage` keeps `isHost`
+//    meaning the host alone for the pending lines — a co-host's own
+//    waiting photograph reads "Only you and the host can see this", which
+//    is right — and reads the role for the removed branch.
 //
 // Collapsed by default (the CK-25/CK-27 pattern): the detail page stays one
 // request until the person opens this section.
 
 interface Props {
   gatheringId: string
+  // The RESERVED set's flag: the caller is THE HOST (`caller_role ===
+  // 'host'`). Never derived from an account id here or on the page.
   isHost: boolean
+  // The DELEGABLE set's flag (CK-69): the caller is the host OR a co-host.
+  // Optional, defaulting to `isHost`, because a host always organises and a
+  // caller that passes `isHost` alone (every pre-CK-69 site, and every test
+  // written for the host's or a member's seat) means exactly that; a
+  // co-host's seat is `isHost={false} organises={true}`, which the detail
+  // page passes from the same `roleFlags` read.
+  organises?: boolean
   // The gathering's effective `requires_approval` (CK-41): true means a
   // ready photograph waits for the host. Read, never written here — the
   // host's own switch lives on the gathering's edit surface (CK-44) — and
@@ -435,12 +476,15 @@ function MediaWordsEditor({
 export function GatheringMedia({
   gatheringId,
   isHost,
+  organises: organisesProp,
   requiresApproval,
   occurrences,
   zone,
   pollIntervalMs = POLL_INTERVAL_MS,
   searchDebounceMs = SEARCH_DEBOUNCE_MS,
 }: Props) {
+  // The delegable flag (point 9): a host organises by definition.
+  const organises = organisesProp ?? isHost
   const [open, setOpen] = useState(false)
   const [items, setItems] = useState<MediaItem[] | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
@@ -470,11 +514,12 @@ export function GatheringMedia({
   const reviewer = isHost && (requiresApproval || anyWaiting(items ?? []))
   const [view, setView] = useState<'all' | 'queue' | 'bin'>('all')
   const queueView = reviewer && view === 'queue'
-  // The gathering's bin (CK-67): a third view on the same list, reached
-  // only through the host-only control below, so `view === 'bin'` implies
-  // the caller is the host — and if a non-host somehow reached it, the
-  // server would answer the empty list (CK-66: never a refusal that
-  // confirms the bin exists).
+  // The gathering's bin (CK-67; a co-host's too since CK-69): a third view
+  // on the same list, reached only through the organisers' control below,
+  // so `view === 'bin'` implies the caller organises — and if anyone else
+  // somehow reached it, the server would answer the empty list (CK-66:
+  // never a refusal that confirms the bin exists). Every row listed in it
+  // is a gathering-bin row, whoever uploaded it (point 9).
   const binView = view === 'bin'
   // The full list's own lines (the filtered state, "No photos yet.") key on
   // the VIEW, not on `!queueView`: in the one render between the review
@@ -494,10 +539,10 @@ export function GatheringMedia({
   // the one line that explains a destroyed row's disappearance until the
   // next act or the next re-read the person asks for.
   const [deletingId, setDeletingId] = useState<string | null>(null)
-  // The host's side (CK-67): the row whose Remove-from-gathering step is
-  // open — a step that shares a row with nothing else: opening it closes
-  // the editor, the delete step and the decline step, and each of those
-  // closes it.
+  // The organisers' side (CK-67; a co-host's since CK-69): the row whose
+  // Remove-from-gathering step is open — a step that shares a row with
+  // nothing else: opening it closes the editor, the delete step and the
+  // decline step, and each of those closes it.
   const [removingId, setRemovingId] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [batchErrors, setBatchErrors] = useState<FormErrors>(noErrors())
@@ -522,8 +567,8 @@ export function GatheringMedia({
 
   // The list loads only once the section is opened, and re-reads after every
   // upload step, on each poll tick, when the search term settles, and when
-  // the host switches between all photos, the queue and the gathering's
-  // bin. The term rides the request as `q`, the queue as
+  // an organiser switches between all photos, the queue (the host's) and
+  // the gathering's bin. The term rides the request as `q`, the queue as
   // `awaiting_review=true` and the bin as `removed=true` — never both flags
   // (mediaListPath refuses to emit two, and the views are exclusive here);
   // the server decides what the caller may see and narrows within that —
@@ -583,8 +628,8 @@ export function GatheringMedia({
   // nothing waiting — the QUEUE view falls back to the full list and the
   // queue's transient state goes with it; the load effect above re-reads
   // without the flag the moment `queueView` flips. The bin view never falls
-  // back: it is the host's whatever the switch says (CK-67), and `reviewer`
-  // is not its condition.
+  // back: it is the organisers' whatever the switch says (CK-67; a
+  // co-host's since CK-69), and `reviewer` is not its condition.
   useEffect(() => {
     if (view !== 'queue' || reviewer) return
     setView('all')
@@ -674,9 +719,9 @@ export function GatheringMedia({
   }
 
   // One of the three acts on a photograph (CK-64 the caller's own; CK-67
-  // also the host's, on someone else's — the takedown, and the gathering's
-  // bin's Put back and Delete permanently): to the bin, back from it, or
-  // gone for good. `act`'s shape and `act`'s guard
+  // also an organiser's, on someone else's — the takedown, and the
+  // gathering's bin's Put back and Delete permanently): to the bin, back
+  // from it, or gone for good. `act`'s shape and `act`'s guard
   // (`actingId` — one act at a time, review or bin): optimistic-free, so a
   // success re-reads the list and the server's body is what renders — a
   // binned row's line becomes the bin's line, a restored row's the live or
@@ -684,20 +729,22 @@ export function GatheringMedia({
   // the list, because a row in destruction is visible to nobody — which is
   // why a destroy alone sets the "Photo deleted." line below: the re-read
   // explains nothing on its own. A refusal is kept on the row, in this
-  // module's words for the server's code, with the list NOT re-read (the
-  // review's reason: a re-read could drop the row the message is about);
-  // the refresh control beside it is the way on. The delete step stays open
-  // while its request runs, so "Deleting…" shows where the person is
-  // looking, and closes with the outcome either way.
-  async function bin(item: MediaItem, which: BinAct) {
+  // module's words for the server's code — and for the act's CONTEXT
+  // (CK-69): which bin the act was on decides whether a refusal says "your
+  // bin" or the gathering's — with the list NOT re-read (the review's
+  // reason: a re-read could drop the row the message is about); the refresh
+  // control beside it is the way on. The delete step stays open while its
+  // request runs, so "Deleting…" shows where the person is looking, and
+  // closes with the outcome either way.
+  async function bin(item: MediaItem, which: BinAct, context: 'personal' | 'gathering' = 'personal') {
     if (actingId !== null) return
     setActingId(item.id)
     setActingAct(which)
     setDecliningId(null)
     setDeletingId(which === 'destroy' ? item.id : null)
     // The Remove-from-gathering step (CK-67) stays open while ITS request
-    // runs — the delete step's shape, so "Removing…" shows where the host
-    // is looking — and any other act closes it.
+    // runs — the delete step's shape, so "Removing…" shows where the
+    // organiser is looking — and any other act closes it.
     setRemovingId((current) => (which === 'remove' && current === item.id ? current : null))
     setNotice(null)
     setRowErrors((prev) => {
@@ -718,7 +765,7 @@ export function GatheringMedia({
     }
     setRowErrors((prev) => ({
       ...prev,
-      [item.id]: { fields: {}, form: [binRefusalMessage(outcome)] },
+      [item.id]: { fields: {}, form: [binRefusalMessage(outcome, { bin: context })] },
     }))
   }
 
@@ -971,16 +1018,17 @@ export function GatheringMedia({
         </p>
       </div>
 
-      {/* The view switch — the host's alone, in every part. The queue
-          (CK-43.1; CK-44) is a view of this same list asked for with
-          `awaiting_review=true`, and its button exists while review is on
-          or anything waits; where review is off and nothing waits, no
-          review string reaches the page. The gathering's bin (CK-67) is a
-          view of the same list asked for with `removed=true`, and its
-          button exists for the host always — an empty bin is a state the
-          view itself reports, not a reason to hide the way in. A non-host
-          gets no switch at all. */}
-      {isHost && (
+      {/* The view switch — the organisers' (the host's alone until CK-69).
+          The queue (CK-43.1; CK-44) is a view of this same list asked for
+          with `awaiting_review=true`, and its button exists for the HOST
+          while review is on or anything waits — reserved, so a co-host
+          never sees it; where review is off and nothing waits, no review
+          string reaches the page. The gathering's bin (CK-67) is a view of
+          the same list asked for with `removed=true`, and its button exists
+          for every organiser always — an empty bin is a state the view
+          itself reports, not a reason to hide the way in. Anyone else gets
+          no switch at all. */}
+      {organises && (
         <div className="media-view" role="group" aria-label="Show">
           <button
             type="button"
@@ -1136,13 +1184,15 @@ export function GatheringMedia({
             // whose upload never landed FROM HERE; otherwise the row's own
             // state decides, through the one message function — which says
             // what a ready + pending row waits on (the host, who can act on
-            // it — the same predicate `reviewable` below reads).
+            // it — the same predicate `reviewable` below reads), and, on a
+            // removed row, whose bin it is in: the Removed view lists
+            // gathering-bin rows only, so `gatheringBin` says so (point 9).
             const message =
               problem === 'upload_failed'
                 ? "This upload didn't finish."
                 : problem === 'confirm_failed'
                   ? "This upload couldn't be confirmed."
-                  : mediaStateMessage(item, { isHost })
+                  : mediaStateMessage(item, { isHost, organises, gatheringBin: binView })
             const offerRetry = item.status === 'failed' || problem !== undefined
             // The editor: the caller's own rows only (the server reserves
             // the edit to the uploader — no affordance that cannot succeed),
@@ -1160,36 +1210,49 @@ export function GatheringMedia({
             const declining = reviewable && decliningId === item.id
             // Your own photographs (CK-64): the three PERSONAL acts render
             // on the caller's OWN ready rows and nowhere else — never on
-            // someone else's row, whoever the viewer is (the host's
+            // someone else's row, whoever the viewer is (an organiser's
             // controls on someone else's row are the CK-67 blocks below,
             // and different acts), never on a failed or in-flight row,
-            // never on a row whose upload failed from this device. The
-            // server would refuse each of those, and the 404 on someone
-            // else's row is the audience rule, not a broken control. Which
-            // two of the three a row carries follows its state: to the bin
-            // or back from it, and delete permanently on both.
+            // never on a row whose upload failed from this device, and
+            // never in the Removed view, where an own row is a
+            // gathering-bin row (point 9). The server would refuse each of
+            // those, and the 404 on someone else's row is the audience
+            // rule, not a broken control. Which two of the three a row
+            // carries follows its state: to the bin or back from it, and
+            // delete permanently on both.
             const ownReady = item.is_own && item.status === 'ready' && problem === undefined
             const inBin = item.publication_state === 'removed'
             const binnable =
               ownReady &&
+              !binView &&
               (inBin || item.publication_state === 'live' || item.publication_state === 'pending')
-            // The host's side (CK-67): Remove from gathering on someone
-            // ELSE's live, ready row and no other — not on a pending row,
-            // which keeps Decline (same result, one act per state), not on
-            // the host's own rows, which keep the personal controls above,
-            // and never for a non-host. And the gathering-bin controls on
-            // someone else's removed, ready row — a row only the host is
-            // ever shown (CK-66's audience rule; the Removed view is where
-            // such a row appears).
+            // The organisers' side (CK-67; a co-host's too since CK-69):
+            // Remove from gathering on someone ELSE's live, ready row and
+            // no other — not on a pending row, which keeps Decline (same
+            // result, one act per state; reserved to the host), not on the
+            // caller's own rows, which keep the personal controls above,
+            // and never for a non-organiser. And the gathering-bin controls
+            // on a gathering-bin row — someone else's removed, ready row,
+            // which only an organiser is ever shown (CK-66's audience
+            // rule), or ANY removed row in the Removed view, the caller's
+            // own included (the view lists gathering-bin rows and nothing
+            // else).
             const removable =
-              isHost && !item.is_own && item.status === 'ready' && item.publication_state === 'live'
+              organises && !item.is_own && item.status === 'ready' && item.publication_state === 'live'
             const removing = removable && removingId === item.id
             const inGatheringBin =
-              isHost && !item.is_own && item.status === 'ready' && item.publication_state === 'removed'
-            // The permanent-delete step serves both bins (CK-64 the
-            // caller's own; CK-67 the gathering's): one step, one constant,
-            // one sentence.
-            const deleting = (binnable || inGatheringBin) && deletingId === item.id
+              organises &&
+              item.status === 'ready' &&
+              item.publication_state === 'removed' &&
+              (binView || !item.is_own)
+            // Delete permanently in the gathering's bin is the host's, or
+            // the uploader's on their own — never a co-host's on someone
+            // else's photograph (co-hosts §4 as amended by two-bins §4; the
+            // server's `_may_destroy`). The step serves both bins (CK-64
+            // the caller's own; CK-67 the gathering's): one step, one
+            // constant, one sentence.
+            const destroyable = inGatheringBin && (isHost || item.is_own)
+            const deleting = (binnable || destroyable) && deletingId === item.id
             const batchIndex = batchSent.indexOf(item.id)
             const batchField = batchIndex === -1 ? null : `media_ids.${batchIndex}`
             const rowError = rowErrors[item.id]
@@ -1298,9 +1361,7 @@ export function GatheringMedia({
                     </button>
                     {inBin && requiresApproval && (
                       <p className="field-hint">
-                        {isHost
-                          ? "It'll wait for you to publish or decline it before anyone else sees it."
-                          : 'The host will look at it again before anyone else sees it.'}
+                        {isHost ? RESTORE_HINT_WAITS_FOR_YOU : RESTORE_HINT_HOST_LOOKS}
                       </p>
                     )}
                   </div>
@@ -1333,11 +1394,11 @@ export function GatheringMedia({
                   </div>
                 )}
                 {removable && !removing && (
-                  // The host's takedown (CK-67; two-bins §1): only OPENS
-                  // the step below — the uploader loses sight of the
-                  // photograph at once, so the act takes a deliberate
-                  // second click, like decline. Opening it closes every
-                  // other row step.
+                  // The organiser's takedown (CK-67; two-bins §1; a
+                  // co-host's since CK-69): only OPENS the step below —
+                  // the uploader loses sight of the photograph at once, so
+                  // the act takes a deliberate second click, like decline.
+                  // Opening it closes every other row step.
                   <div className="media-review media-bin">
                     <button
                       type="button"
@@ -1355,27 +1416,27 @@ export function GatheringMedia({
                   </div>
                 )}
                 {removing && (
-                  // The remove step (CK-67): what happens, said plainly —
-                  // nobody in the gathering sees it, the uploader included
-                  // (two-bins §2: from their side it is gone; no notice
-                  // exists, §8 open) — and the way back the host is being
-                  // promised, which CK-63's REMOVED_BIN window enforces
-                  // today. "Remove it" acts; "Leave it" does nothing; the
-                  // step stays open while its request runs and closes with
-                  // the outcome.
+                  // The remove step (CK-67; its sentence by seat and gate
+                  // since CK-69): who will still see it — the organisers,
+                  // named from the reader's seat, and nobody else: the
+                  // uploader loses sight of it at once (two-bins §2: from
+                  // their side it is gone; no notice exists, §8 open) — and
+                  // the way back, which CK-63's REMOVED_BIN window enforces
+                  // today; a co-host's way back passes through the gate,
+                  // and their sentence says so where the gathering requires
+                  // approval (lib/media.ts::takedownSentence). "Remove it"
+                  // acts; "Leave it" does nothing; the step stays open while
+                  // its request runs and closes with the outcome.
                   <div
                     className="media-review media-decline"
                     role="group"
                     aria-label={`Remove ${name} from this gathering`}
                   >
-                    <p className="field-hint">
-                      Nobody in this gathering will see this photo, {who} included. You can put
-                      it back for {REMOVED_BIN_DAYS} days.
-                    </p>
+                    <p className="field-hint">{takedownSentence({ isHost, requiresApproval })}</p>
                     <button
                       type="button"
                       disabled={actingId !== null}
-                      onClick={() => void bin(item, 'remove')}
+                      onClick={() => void bin(item, 'remove', 'gathering')}
                     >
                       {actingId === item.id && actingAct === 'remove' ? 'Removing…' : 'Remove it'}
                     </button>
@@ -1390,34 +1451,44 @@ export function GatheringMedia({
                   </div>
                 )}
                 {inGatheringBin && !deleting && (
-                  // The gathering's bin row (CK-67, on CK-66's backend):
-                  // Put back is one click — it can be undone — and a host
-                  // restore always goes `live`, whatever the gate says
-                  // (two-bins §4: the host putting it back IS the host
-                  // approving it), so the hint says exactly that. Delete
-                  // permanently only OPENS the shared step above — the
-                  // per-photograph empty; no bulk empty exists.
+                  // The gathering's bin row (CK-67, on CK-66's backend; a
+                  // co-host's since CK-69): Put back is one click — it can
+                  // be undone. A host restore always goes `live`, whatever
+                  // the gate says (two-bins §4: the host putting it back IS
+                  // the host approving it), and so does any restore in an
+                  // open gathering, so the hint says everyone will see it
+                  // again; a co-host's restore in a gated gathering passes
+                  // through the gate (CK-68), so their hint says the host
+                  // will look at it again — the personal bin's constant,
+                  // never a second copy. Delete permanently only OPENS the
+                  // shared step above — the per-photograph empty, the
+                  // host's or the uploader's own, never a co-host's on
+                  // someone else's; no bulk empty exists.
                   <div className="media-review media-bin">
                     <button
                       type="button"
                       disabled={actingId !== null}
-                      onClick={() => void bin(item, 'restore')}
+                      onClick={() => void bin(item, 'restore', 'gathering')}
                     >
                       {actingId === item.id && actingAct === 'restore' ? 'Putting back…' : 'Put back'}
                     </button>
-                    <p className="field-hint">Everyone in this gathering will see it again.</p>
-                    <button
-                      type="button"
-                      className="link-button"
-                      disabled={actingId !== null}
-                      onClick={() => {
-                        setEditingId(null)
-                        setRemovingId(null)
-                        setDeletingId(item.id)
-                      }}
-                    >
-                      Delete permanently
-                    </button>
+                    <p className="field-hint">
+                      {isHost || !requiresApproval ? RESTORE_HINT_EVERYONE : RESTORE_HINT_HOST_LOOKS}
+                    </p>
+                    {destroyable && (
+                      <button
+                        type="button"
+                        className="link-button"
+                        disabled={actingId !== null}
+                        onClick={() => {
+                          setEditingId(null)
+                          setRemovingId(null)
+                          setDeletingId(item.id)
+                        }}
+                      >
+                        Delete permanently
+                      </button>
+                    )}
                   </div>
                 )}
                 {reviewable && !declining && (
@@ -1450,21 +1521,25 @@ export function GatheringMedia({
                   // and neither does its uploader — from their side it is gone
                   // — and nothing is destroyed. Since CK-66/CK-67 the host HAS
                   // a way back — the Removed view, Put back for 30 days — so
-                  // the confirmation names it to the one person who holds it,
-                  // in the Remove step's words (CK-67.1; from CK-63 it said
-                  // nobody would see it again, true only while the gathering's
-                  // bin had no reader). It promises the uploader nothing. Said
-                  // plainly, and taken on a deliberate second click, with a
-                  // do-nothing beside it. The host declining THEIR OWN
-                  // photograph is its remover and its uploader, so that row
-                  // stays in their own bin: the own-photo line is true and
-                  // stays.
+                  // the confirmation names it in the Remove step's words
+                  // (CK-67.1; from CK-63 it said nobody would see it again,
+                  // true only while the gathering's bin had no reader), and
+                  // since CK-69 THE REMOVE STEP'S HOST FORM EXACTLY: who will
+                  // still see it — "you and any co-hosts", true whether or
+                  // not co-hosts exist — and the way back; the decline is
+                  // reserved, so the reader is always the host. It stopped
+                  // naming the uploader, because "neither will {who}" was
+                  // false where {who} is a co-host. It promises the uploader
+                  // nothing. Said plainly, and taken on a deliberate second
+                  // click, with a do-nothing beside it. The host declining
+                  // THEIR OWN photograph is its remover and its uploader, so
+                  // that row stays in their own bin: the own-photo line is
+                  // true and stays.
                   <div className="media-review media-decline" role="group" aria-label={`Decline ${name}`}>
                     <p className="field-hint">
-                      The gathering won't see this photo
                       {item.is_own
-                        ? `. You can still see it yourself for ${REMOVED_BIN_DAYS} days.`
-                        : `, and neither will ${who}. You can put it back for ${REMOVED_BIN_DAYS} days.`}
+                        ? `The gathering won't see this photo. You can still see it yourself for ${REMOVED_BIN_DAYS} days.`
+                        : takedownSentence({ isHost: true, requiresApproval })}
                     </p>
                     <button type="button" onClick={() => void act(item, 'decline')}>
                       {actingId === item.id ? 'Declining…' : 'Decline it'}
@@ -1509,7 +1584,7 @@ export function GatheringMedia({
           </p>
           <TagList tags={opened.tags} label={`Tags on ${mediaName(opened)}`} />
           <p className="field-hint">
-            {mediaStateMessage(opened, { isHost })}
+            {mediaStateMessage(opened, { isHost, organises, gatheringBin: binView })}
           </p>
           <button type="button" onClick={() => setOpenedId(null)}>
             Close

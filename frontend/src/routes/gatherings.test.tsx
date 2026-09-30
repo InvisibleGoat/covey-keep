@@ -181,6 +181,8 @@ test('the list renders each date from the list response alone — one request, n
               publication_state: 'live',
               created_by_account_id: 'acct-1',
               host_account_id: 'acct-1',
+              // The caller's role (CK-68's body field; a shape change).
+              caller_role: 'host',
               created_at: '2026-08-25T12:00:00+00:00',
               updated_at: null,
               next_occurrence: { id: 'occ-1', starts_at: startsAt },
@@ -210,6 +212,11 @@ function json(status: number, body: unknown): Response {
 const startsInstant = wallClockToInstant('2026-09-01T18:00', profileZone)
 
 function detailBody(over: Record<string, unknown> = {}) {
+  // The caller's role (CK-68's body field; the page reads it since CK-69 —
+  // added to this fixture then, a shape change): 'host' where the host's
+  // account is the signed-in one (acct-1), null where it is not. An
+  // override may still set it explicitly (the co-host case).
+  const hostAccountId = 'host_account_id' in over ? over.host_account_id : 'acct-1'
   return {
     id: 'g-1',
     gathering_type: 'potluck',
@@ -223,6 +230,7 @@ function detailBody(over: Record<string, unknown> = {}) {
     publication_state: 'live',
     created_by_account_id: 'acct-1',
     host_account_id: 'acct-1',
+    caller_role: hostAccountId === 'acct-1' ? 'host' : null,
     created_at: '2026-08-25T12:00:00+00:00',
     updated_at: null,
     occurrences: [
@@ -277,9 +285,11 @@ const seasonCap422 = () =>
   })
 
 test('a non-admin viewer sees the read-only page with no edit controls at all', async () => {
-  // host_account_id null is the claimable state — no one's account matches,
-  // so the gate (the caller's account_id against the admin fact, CK-20)
-  // renders no edit affordance.
+  // host_account_id null is the claimable state — nobody is host, and the
+  // body's `caller_role` is null, so no edit affordance renders. (Until
+  // CK-69 the gate was the caller's account_id against the host fact,
+  // CK-20; since CK-69 the body's role decides — the fixture derives the
+  // same null from the same claimable state.)
   stubFetchRoutes([
     { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody({ host_account_id: null })) },
   ])
@@ -291,12 +301,14 @@ test('a non-admin viewer sees the read-only page with no edit controls at all', 
   expect(screen.queryByRole('button', { name: /add another date/i })).toBeNull()
 })
 
-test("a gathering administered by someone ELSE renders no edit controls — the caller's account is compared, not just non-null", async () => {
-  // The case CK-18's interim gate (`host_account_id !== null`) could not
-  // express: an admin exists and it is not the caller. Exact today only
-  // because every reader of an admin-held gathering is its admin; the moment
-  // invitations/keep/claim widen the audience, this comparison is what keeps
-  // a keeper-non-admin from probing edit controls that 404.
+test("a gathering hosted by someone ELSE, where the caller holds no role, renders no edit controls — caller_role null gates closed", async () => {
+  // (Retitled at CK-69, its reason: this was "the caller's account is
+  // compared, not just non-null" — the case CK-18's interim not-null gate
+  // could not express. Since CK-69 nothing on the page compares account
+  // ids: the body's `caller_role` — null here, an invitee's — is what gates
+  // closed, and routes/co-hosts.test.tsx's role matrix proves it decides,
+  // with the account ids deliberately disagreeing. The assertions are
+  // byte-identical.)
   stubFetchRoutes([
     { method: 'GET', path: '/gatherings/g-1', response: () => json(200, detailBody({ host_account_id: 'acct-2' })) },
   ])

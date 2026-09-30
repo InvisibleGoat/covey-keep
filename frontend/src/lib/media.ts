@@ -48,12 +48,25 @@
 // THE HOST'S SIDE (CK-67, the surface for CK-66's backend; two-bins §1–§4):
 // the gathering's bin is the same list asked for with `removed=true`
 // (mediaListPath — the rows someone other than the uploader removed, which
-// the server shows to the host alone), never both view flags at once; the
-// host's Remove from gathering and the bin's Put back and Delete permanently
-// go through binMedia like the uploader's own acts; and the bin row's line
-// (mediaStateMessage's removed branch, the host reading someone else's)
-// says whose sight it left and how long the way back stays open — under the
-// same ban as the personal line: nothing about the window's end.
+// the server shows to the organisers), never both view flags at once; the
+// takedown — Remove from gathering — and the bin's Put back and Delete
+// permanently go through binMedia like the uploader's own acts; and the bin
+// row's line (mediaStateMessage's removed branch, read in the gathering's
+// bin) says whose sight it left and how long the way back stays open —
+// under the same ban as the personal line: nothing about the window's end.
+//
+// CO-HOSTS (CK-69, the surface for CK-68's backend; co-hosts §4 as amended
+// by two-bins §4): a co-host takes a published photograph down, reads the
+// gathering's bin and puts back from it — THROUGH THE GATE, so where the
+// gathering requires approval a co-host's Put back lands the photograph in
+// the host's queue and out of the co-host's own sight — and never deletes
+// someone else's photograph permanently, never sees a waiting one, never
+// reviews. So the copy that says who can see a removed photograph names the
+// organisers — "you and any co-hosts" from the host's seat, "the host and
+// co-hosts" from a co-host's (takedownSentence; mediaStateMessage's removed
+// branch) — where until CK-69 it said "only you", true only while the host
+// was the one organiser. The pending lines keep `isHost` meaning the host
+// alone: `pending` is still the host's and the uploader's.
 import { PRODUCT_NAME } from '../brand'
 import { authFetch } from './api'
 import { networkErrors } from './formErrors'
@@ -153,10 +166,48 @@ export const POLL_INTERVAL_MS = 3000
 // The bin's read window (services/retention.py REMOVED_BIN) — stated in copy
 // only. Since CK-63 a removed photograph is in the bin of WHOEVER REMOVED IT
 // (two-bins record §3): an uploader only ever sees rows they removed
-// themselves; a photograph the host removed or declined is in the
-// gathering's bin, which the HOST reads (CK-66's `removed=true` view, with
-// its surface since CK-67) and the uploader never sees again.
+// themselves; a photograph an organiser removed or the host declined is in
+// the gathering's bin, which the ORGANISERS — the host and any co-hosts —
+// read (CK-66's `removed=true` view, its surface since CK-67, co-hosts in
+// it since CK-68/CK-69) and the uploader never sees again.
 export const REMOVED_BIN_DAYS = 30
+
+// The takedown's second step (CK-67; the seat and the gate since CK-69),
+// and — in its host form — the decline confirmation's non-own branch
+// (CK-67.1's rule: the decline names the host's way back in the Remove
+// step's words). It says WHO will still see the photograph and what the
+// way back is, and stops naming the uploader: "nobody will see it, {who}
+// included" was true only while the host was the one organiser, and false
+// once the uploader could be an organiser themselves. From the host's seat
+// the readers are "you and any co-hosts" — true whether or not co-hosts
+// exist; from a co-host's, "the host and co-hosts". A co-host's Put back
+// passes through the gate (two-bins §4), so where the gathering requires
+// approval their sentence says what putting it back does: the host looks
+// at it again before anyone else sees it. Nothing here promises anything
+// at the window's end.
+export function takedownSentence(viewer: { isHost: boolean; requiresApproval: boolean }): string {
+  if (viewer.isHost) {
+    return `Only you and any co-hosts will be able to see this photo. You can put it back for ${REMOVED_BIN_DAYS} days.`
+  }
+  if (viewer.requiresApproval) {
+    return `Only the host and co-hosts will be able to see this photo. If you put it back within ${REMOVED_BIN_DAYS} days, the host will look at it again before anyone else sees it.`
+  }
+  return `Only the host and co-hosts will be able to see this photo. You can put it back for ${REMOVED_BIN_DAYS} days.`
+}
+
+// The three hints beside Put back — ONE constant each, never a second copy
+// (CK-64 wrote the first two on the personal bin; CK-67 the third on the
+// gathering's; CK-69 reuses them). Where the photograph goes is the
+// SERVER's decision (the gate at restore time — never a parameter), and the
+// hint only says what that decision will be from the reader's seat: the
+// host's own restore, and any restore in an open gathering, goes live; an
+// uploader's or a co-host's restore in a gated gathering waits for the
+// host — told to the host as waiting for THEM, never as a person waiting
+// on "the host", which would be themselves (the CK-43.1 seat rule).
+export const RESTORE_HINT_EVERYONE = 'Everyone in this gathering will see it again.'
+export const RESTORE_HINT_HOST_LOOKS = 'The host will look at it again before anyone else sees it.'
+export const RESTORE_HINT_WAITS_FOR_YOU =
+  "It'll wait for you to publish or decline it before anyone else sees it."
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -298,8 +349,9 @@ export const SEARCH_DEBOUNCE_MS = 300
 //
 // The gathering's bin (CK-67, on CK-66's backend) is the same shape again:
 // `removed=true` asks for the rows someone other than the uploader removed,
-// which the server lists to the host alone (a non-host reads an empty list,
-// never a refusal that confirms the bin exists). The two flags together are
+// which the server lists to the organisers — the host and, since CK-68, a
+// co-host (anyone else reads an empty list, never a refusal that confirms
+// the bin exists). The two flags together are
 // the server's 422 — a photograph cannot be awaiting review and in the bin
 // at once — so this function NEVER emits both: the views are exclusive by
 // construction in the component, and a caller that passes both gets the
@@ -429,9 +481,18 @@ export function mediaStateMessage(
     // optional so a caller that does not carry it still gets an honest line.
     removed_at?: string | null
   },
-  // `now` is injectable so the days-left phrase never depends on the clock
-  // in a test; the product passes nothing and reads the real one.
-  viewer: { isHost: boolean; now?: Date },
+  // The reader's seat. `isHost` means THE HOST ALONE on every line: the
+  // pending lines stay true with it (`pending` is the host's and the
+  // uploader's — a co-host's own waiting photograph rightly reads "Only you
+  // and the host can see this"), and the removed branch reads it beside
+  // `organises` (the host or a co-host, CK-69) to say who can see a row in
+  // the gathering's bin. `gatheringBin` says the row is being read IN the
+  // Removed view, which lists gathering-bin rows only (CK-66) — so an
+  // organiser's OWN photograph that another organiser removed is read as
+  // the gathering's, never as "in your bin". `now` is injectable so the
+  // days-left phrase never depends on the clock in a test; the product
+  // passes nothing and reads the real one.
+  viewer: { isHost: boolean; organises?: boolean; gatheringBin?: boolean; now?: Date },
 ): string {
   switch (item.status) {
     case 'pending_upload':
@@ -476,34 +537,44 @@ export function mediaStateMessage(
     case 'removed': {
       // Since CK-63 the server lists a removed row to its uploader ONLY when
       // the uploader removed it (your bin, not the gathering's), and since
-      // CK-66 to the HOST when someone other than the uploader removed it
-      // (the gathering's bin, whose view is CK-67's `removed=true`). So a
-      // removed row a person can see is either their own — the personal
-      // line — or, for the host, someone else's in the gathering's bin. A
-      // NON-host reading someone else's removed row is unreachable by the
-      // audience rule; that branch stays "Removed.", defensive.
+      // CK-66 to the ORGANISERS — the host, and since CK-68 a co-host —
+      // when someone other than the uploader removed it (the gathering's
+      // bin, whose view is CK-67's `removed=true`). So a removed row a
+      // person can see is either their own — the personal line — or, for
+      // an organiser, one in the gathering's bin: someone else's, or (in
+      // the Removed view, which lists gathering-bin rows only) their OWN
+      // that another organiser removed. A non-organiser reading someone
+      // else's removed row is unreachable by the audience rule; that branch
+      // stays "Removed.", defensive.
       //
       // Since CK-64 the person can put a row of theirs back or delete it
       // for good, so each line says what the bin IS from the reader's side:
-      // theirs alone (or, in the gathering's bin, the host's alone — with
-      // co-hosts unbuilt, only the host sees it), and open for the rest of
-      // the window. Neither says ANYTHING about what happens at the
-      // window's end — not "deleted after", not "emptied", not "cleared" —
-      // because nothing is enforced there today: the automatic clear
-      // (CK-59's sweep) ships switched off, and until it is on nothing
-      // clears a bin. What IS enforced is that at the window's close the
-      // reader stops seeing the photograph and can no longer put it back,
-      // and "you can put it back for N more days" claims exactly that and
-      // no more. (Until CK-64: "Removed. Only you can still see it, for 30
-      // days after removal."; until CK-67 the non-own branch was
-      // "Removed." for every viewer, the bin having had no reader.)
+      // theirs alone, or — in the gathering's bin — the organisers': "you
+      // and any co-hosts" from the host's seat (true whether or not co-hosts
+      // exist), "the host and co-hosts" from a co-host's. Neither says
+      // ANYTHING about what happens at the window's end — not "deleted
+      // after", not "emptied", not "cleared" — because nothing is enforced
+      // there today: the automatic clear (CK-59's sweep) ships switched
+      // off, and until it is on nothing clears a bin. What IS enforced is
+      // that at the window's close the reader stops seeing the photograph
+      // and can no longer put it back, and "you can put it back for N more
+      // days" claims exactly that and no more. (Until CK-64: "Removed.
+      // Only you can still see it, for 30 days after removal."; until CK-67
+      // the non-own branch was "Removed." for every viewer, the bin having
+      // had no reader; until CK-69 the host's line said "Only you can see
+      // it", true while the host was the one organiser.)
       const days =
         item.removed_at === undefined || item.removed_at === null
           ? null
           : binDaysLeft(item.removed_at, viewer.now ?? new Date())
-      if (!item.is_own) {
-        if (!viewer.isHost) return 'Removed.'
-        return `Removed from this gathering. Only you can see it, and you can put it back${binWindowPhrase(days)}.`
+      if (viewer.gatheringBin === true || !item.is_own) {
+        if (viewer.isHost) {
+          return `Removed from this gathering. Only you and any co-hosts can see it, and you can put it back${binWindowPhrase(days)}.`
+        }
+        if (viewer.organises === true) {
+          return `Removed from this gathering. Only the host and co-hosts can see it, and you can put it back${binWindowPhrase(days)}.`
+        }
+        return 'Removed.'
       }
       return `In your bin. Only you can see it, and you can put it back${binWindowPhrase(days)}.`
     }
@@ -549,9 +620,10 @@ export type ReviewOutcome =
   // state the server reports beside it, `not_found` for the 404 (the row
   // moved out of the host's sight — a removed row is in its REMOVER's bin,
   // two-bins record §3; one someone else removed is in the gathering's bin,
-  // the host's Removed view since CK-67), or this module's own words for
-  // the rest. The server's `message` is NOT carried: the codes are the
-  // contract, the strings are ours (record §3).
+  // the organisers' Removed view — the host's since CK-67, a co-host's too
+  // since CK-69), or this module's own words for the rest. The server's
+  // `message` is NOT carried: the codes are the contract, the strings are
+  // ours (record §3).
   | { ok: false; code: string; publication_state?: string; status?: string }
 
 // One act on one photograph. A guarded update on the server: a row that
@@ -584,9 +656,9 @@ export async function reviewMedia(mediaId: string, act: ReviewAct): Promise<Revi
 // a reworded server message changes nothing here. Each line says what state
 // the photograph is actually in, and none claims anything was destroyed:
 // a declined photograph is in the GATHERING's bin (two-bins record §3,
-// CK-63) — out of its uploader's sight for good, and readable by the host
-// in the Removed view since CK-67 — and none of these lines promises the
-// UPLOADER a way back.
+// CK-63) — out of its uploader's sight for good, and readable by the
+// organisers in the Removed view (the host since CK-67, a co-host since
+// CK-69) — and none of these lines promises the UPLOADER a way back.
 export function reviewRefusalMessage(
   act: ReviewAct,
   refusal: { code: string; publication_state?: string; status?: string },
@@ -689,7 +761,18 @@ export async function binMedia(mediaId: string, act: BinAct): Promise<BinOutcome
 // what state the photograph is actually in, and none claims anything was
 // deleted or put back when it was not: a refusal changed nothing, and the
 // list re-read is the way to see what is true now.
-export function binRefusalMessage(refusal: { code: string; status?: string }): string {
+//
+// The act's CONTEXT decides whose bin the two bin-specific lines name
+// (CK-69): a personal act — on the caller's own row — says "your bin"
+// (CK-64's lines, unchanged); the takedown and the acts in the Removed view
+// are on the GATHERING's bin, where "your bin" is false and where, with
+// several organisers, the races behind these codes are real — another
+// organiser removed it first, or put it back first.
+export function binRefusalMessage(
+  refusal: { code: string; status?: string },
+  context: { bin?: 'personal' | 'gathering' } = {},
+): string {
+  const gathering = context.bin === 'gathering'
   switch (refusal.code) {
     case 'not_found':
       return "This photo isn't here any more — refresh the list to see what is."
@@ -698,9 +781,13 @@ export function binRefusalMessage(refusal: { code: string; status?: string }): s
         ? "This photo couldn't be processed, so there's nothing stored to act on."
         : "This photo isn't ready yet — it can't be sent to the bin, put back or deleted until it is."
     case 'already_removed':
-      return 'This photo is already in your bin.'
+      return gathering
+        ? 'This photo has already been removed — refresh the list to see where it is.'
+        : 'This photo is already in your bin.'
     case 'not_removed':
-      return "This photo isn't in your bin any more — refresh the list to see where it is."
+      return gathering
+        ? "This photo isn't in the gathering's bin any more — refresh the list to see where it is."
+        : "This photo isn't in your bin any more — refresh the list to see where it is."
     case 'not_pending':
       // The lost race, on any of the three: the row moved between the read
       // and the write, and the server changed nothing.

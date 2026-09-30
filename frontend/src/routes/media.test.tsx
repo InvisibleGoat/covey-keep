@@ -49,6 +49,9 @@ function detailBody(over: Record<string, unknown> = {}) {
     publication_state: 'live',
     created_by_account_id: 'acct-1',
     host_account_id: 'acct-1',
+    // The caller's role (CK-68's body field; read by the page since CK-69 —
+    // a shape change): the signed-in person is the host here.
+    caller_role: 'host',
     created_at: '2026-08-25T12:00:00+00:00',
     updated_at: null,
     occurrences: [

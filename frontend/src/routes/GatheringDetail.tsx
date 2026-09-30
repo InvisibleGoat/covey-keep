@@ -11,6 +11,16 @@ import {
   instantToWallClock,
   wallClockToInstant,
 } from '../lib/datetime'
+import {
+  addCoHost,
+  CO_HOST_HINT,
+  coHostRefusalMessage,
+  removeCoHost,
+  removeCoHostSentence,
+  STEP_DOWN_SENTENCE,
+  type CoHost,
+  type CoHostList,
+} from '../lib/coHosts'
 import { type InvitationLists } from '../lib/invitations'
 import {
   describedBy,
@@ -21,6 +31,7 @@ import {
 } from '../lib/formErrors'
 import {
   gatheringTypeLabel,
+  roleFlags,
   type GatheringWithOccurrences,
   type Occurrence,
 } from '../lib/gatherings'
@@ -91,9 +102,17 @@ function occurrenceToForm(occurrence: Occurrence, zone: string): OccurrenceForm 
 // and would ask a host for a preference about a future they have not met;
 // the API accepts it, the surface produces it with nothing until rung 2
 // exists (consent-gate-defaults 2.3.0 §8).
+//
+// THE SWITCH IS THE HOST'S ALONE (CK-69; co-hosts §4 — the review is
+// reserved): a co-host's PATCH may carry every other field and NEVER
+// `requires_approval_override` — the server refuses a co-host's WHOLE body
+// on that key with a field-level 422, nothing else applied — so the key is
+// written only when the caller is the host. The form never renders the
+// switch to a co-host either; this is the second lock on the same door.
 function gatheringPatch(
   form: GatheringForm,
   gathering: GatheringWithOccurrences,
+  viewer: { isHost: boolean },
 ): Record<string, string | boolean | null> {
   const patch: Record<string, string | boolean | null> = {}
   const title = form.title.trim()
@@ -107,7 +126,7 @@ function gatheringPatch(
   if (form.rsvpListVisibility !== gathering.rsvp_list_visibility) {
     patch.rsvp_list_visibility = form.rsvpListVisibility
   }
-  if (form.reviewPhotos !== reviewIsOn(gathering)) {
+  if (viewer.isHost && form.reviewPhotos !== reviewIsOn(gathering)) {
     patch.requires_approval_override = form.reviewPhotos ? true : null
   }
   return patch
@@ -236,16 +255,19 @@ function rsvpDirty(form: RsvpFormState, own: OwnRsvp | null): boolean {
 // when opened — the CK-25 invitations pattern, which keeps the detail page one
 // request and keeps a many-date season from fanning out per-row fetches on
 // load (the CK-17 N+1 shape). Renders for everyone in the read audience; the
-// roster is filtered server-side by the host's visibility setting, and the
-// mirror check here only chooses the explanatory hint.
+// roster is filtered server-side by the gathering's visibility setting, and
+// the mirror check here only chooses the explanatory hint. `organises` is
+// the delegable flag (CK-69): the full list in every mode, the companion
+// names and the computed total are the organisers' — the host's or a
+// co-host's — as the server's `may_administer` decides (CK-68).
 function OccurrenceRsvp({
   occurrenceId,
   zone,
-  isHost,
+  organises,
 }: {
   occurrenceId: string
   zone: string
-  isHost: boolean
+  organises: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState<RsvpLists | null>(null)
@@ -336,10 +358,11 @@ function OccurrenceRsvp({
   }
 
   // The server enforces visibility; this mirror only picks the hint text.
-  // The host sees the list in every mode, and the caller always has `own`.
+  // An organiser sees the list in every mode, and the caller always has
+  // `own`.
   const maySeeList =
     data !== null &&
-    (isHost ||
+    (organises ||
       data.visibility === 'INVITEES' ||
       (data.visibility === 'ATTENDEES' && data.own?.response === 'yes'))
 
@@ -489,8 +512,9 @@ function OccurrenceRsvp({
               ) : (
                 <>
                   {/* The computed total (CK-29): derived from the named
-                      people on the "Going" rows, never typed by anyone. */}
-                  {isHost && (
+                      people on the "Going" rows, never typed by anyone —
+                      the organisers' number (CK-69). */}
+                  {organises && (
                     <p className="field-hint">
                       Total going: {totalGoing(data.rsvps)}{' '}
                       {totalGoing(data.rsvps) === 1 ? 'person' : 'people'} — counted
@@ -530,8 +554,11 @@ function OccurrenceRsvp({
             </>
           ) : (
             <p className="field-hint">
+              {/* The narrowest setting names the organisers (CK-69): the
+                  server shows the full list to the host AND any co-hosts,
+                  so "only the host" would be false the day one exists. */}
               {data.visibility === 'HOST_ONLY'
-                ? 'Only the host sees the full list of answers.'
+                ? 'Only the host and co-hosts see the full list of answers.'
                 : 'The list of answers is shown to people who are going.'}
             </p>
           )}
@@ -550,6 +577,21 @@ function OccurrenceRsvp({
 // switch on the edit form writes since CK-44 (true, or null for inherit).
 // The gathering type is not editable — the backend's patchable surface is
 // title + decedent name + RSVP-list visibility + the switch.
+//
+// WHO THE CALLER IS COMES FROM THE BODY (CK-69): `caller_role` — host,
+// co-host, or neither — read through lib/gatherings.ts::roleFlags into two
+// flags, and every gated control on this page reads one of them on purpose
+// (CK-68's classification, one line per check in the api-reference's
+// Co-hosts router). `organises` — the host or a co-host — gates the
+// DELEGABLE set: the edit form (title, decedent name, the RSVP-list
+// visibility), the date controls, the Invitations section, the full RSVP
+// list and its total, and the Photos section's takedown and Removed view.
+// `isHost` gates the RESERVED set: the review switch inside that same form,
+// the review inside the Photos section, and making or removing co-hosts.
+// Nothing here compares account ids to decide a role — the page did until
+// CK-69 (`host_account_id === person.account_id`), and a co-host was shown
+// an invitee's page while the server would let them do most of what the
+// host does. Anything but the two known roles gates closed.
 export function GatheringDetail() {
   const { id } = useParams()
   const { person } = useAuth()
@@ -595,9 +637,10 @@ export function GatheringDetail() {
     rsvpCount: number
   } | null>(null)
 
-  // The invitations section (CK-25, admin only) is COLLAPSED by default and
-  // its list loads only when opened — the detail page stays one request for
-  // everyone, and a non-admin never has the section at all.
+  // The invitations section (CK-25; the organisers' — the host's or a
+  // co-host's — since CK-69) is COLLAPSED by default and its lists load
+  // only when opened — the detail page stays one request for everyone, and
+  // anyone who does not organise never has the section at all.
   const [invitationsOpen, setInvitationsOpen] = useState(false)
   const [invitations, setInvitations] = useState<InvitationLists | null>(null)
   const [invitationsFailed, setInvitationsFailed] = useState(false)
@@ -605,6 +648,24 @@ export function GatheringDetail() {
   const [inviteDestination, setInviteDestination] = useState('')
   const [inviteErrors, setInviteErrors] = useState<FormErrors>(noErrors())
   const [inviteSubmitting, setInviteSubmitting] = useState(false)
+
+  // Co-host management (CK-69), inside the Invitations section: the co-host
+  // list loads with the invitations when the section opens (only an
+  // organiser ever requests it) and re-loads after every make or remove;
+  // a refusal lands on the row it names — an Accepted row for a make, a
+  // co-host row for a remove or a step-down — in this surface's words for
+  // the server's code; a remove and a step-down each take a deliberate
+  // second step (the person loses their controls at once), held here as
+  // the row whose step is open; one act at a time.
+  const [coHosts, setCoHosts] = useState<CoHost[] | null>(null)
+  const [coHostsFailed, setCoHostsFailed] = useState(false)
+  const [coHostsReloadKey, setCoHostsReloadKey] = useState(0)
+  const [coHostError, setCoHostError] = useState<{
+    invitationId: string
+    errors: FormErrors
+  } | null>(null)
+  const [coHostActing, setCoHostActing] = useState<string | null>(null)
+  const [confirmUnmake, setConfirmUnmake] = useState<string | null>(null)
 
   // Cancel-on-unmount for mutation handlers (the CK-19 convention covers
   // every in-flight request, not just the load effect below).
@@ -616,7 +677,7 @@ export function GatheringDetail() {
     }
   }, [])
 
-  // Loads only once the admin opens the section; re-fetched after every
+  // Loads only once an organiser opens the section; re-fetched after every
   // successful send or revoke (optimistic-free, like everything else here).
   useEffect(() => {
     if (!invitationsOpen) return
@@ -641,6 +702,33 @@ export function GatheringDetail() {
       cancelled = true
     }
   }, [id, invitationsOpen, invitationsReloadKey])
+
+  // The co-host list (CK-69), beside the invitations: the same trigger,
+  // its own reload key (a make or a remove changes this list and not the
+  // invitations), and a failed load says so where the list would be.
+  useEffect(() => {
+    if (!invitationsOpen) return
+    let cancelled = false
+    async function load() {
+      try {
+        const response = await authFetch(`/gatherings/${id}/co-hosts`)
+        if (cancelled) return
+        if (response.ok) {
+          const body = (await response.json()) as Partial<CoHostList>
+          setCoHosts(body.co_hosts ?? [])
+          setCoHostsFailed(false)
+        } else {
+          setCoHostsFailed(true)
+        }
+      } catch {
+        if (!cancelled) setCoHostsFailed(true)
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [id, invitationsOpen, coHostsReloadKey])
 
   useEffect(() => {
     let cancelled = false
@@ -702,21 +790,24 @@ export function GatheringDetail() {
   const { gathering } = state
   const isMemorial = gathering.gathering_type === 'memorial'
 
-  // Edit affordances render only for the host — a non-host sees the
-  // read-only page with no edit controls at all, so no one can probe an edit
-  // control to distinguish "not yours" from "does not exist" (the 404-not-403
-  // posture). The real comparison since CK-20: /auth/me carries the caller's
-  // account_id, so the gate is the host fact itself — it holds however wide
-  // later phases (invitations, keep/unkeep, claim) open the read audience,
-  // where CK-18's interim not-null gate would have shown a keeper-non-host
-  // edit controls that 404. A profile that failed to load (person null)
-  // gates closed, not open.
-  const canEdit = person !== null && gathering.host_account_id === person.account_id
+  // The two role flags (CK-69), from the body's `caller_role` and nothing
+  // else. Edit affordances render only for an organiser — anyone else sees
+  // the read-only page with no edit controls at all, so no one can probe an
+  // edit control to distinguish "not yours" from "does not exist" (the
+  // 404-not-403 posture) — and the reserved controls for the host alone.
+  // The server's own answer decides, so the flags hold however wide later
+  // phases open the read audience, and a body with no role — or a role
+  // this build does not know — gates closed, not open. (From CK-20 to
+  // CK-69 the gate was `host_account_id === person.account_id`: right while
+  // the host was the one organiser, and blind to a co-host.)
+  const { isHost, organises } = roleFlags(gathering.caller_role)
 
-  const gatheringDirty = Object.keys(gatheringPatch(gatheringForm, gathering)).length > 0
+  const gatheringDirty =
+    Object.keys(gatheringPatch(gatheringForm, gathering, { isHost })).length > 0
   // The turning-off path, and only that path: review was on when the form
-  // opened and the box is now unchecked. Re-checking withdraws it.
-  const turningReviewOff = reviewIsOn(gathering) && !gatheringForm.reviewPhotos
+  // opened and the box is now unchecked. Re-checking withdraws it. The
+  // host's alone, like the switch it explains.
+  const turningReviewOff = isHost && reviewIsOn(gathering) && !gatheringForm.reviewPhotos
   const editedOccurrence =
     editingOccurrenceId === null
       ? null
@@ -745,7 +836,7 @@ export function GatheringDetail() {
 
   async function saveGathering(event: FormEvent) {
     event.preventDefault()
-    const patch = gatheringPatch(gatheringForm, gathering)
+    const patch = gatheringPatch(gatheringForm, gathering, { isHost })
     setGatheringSubmitting(true)
     setGatheringErrors(noErrors())
     try {
@@ -871,6 +962,59 @@ export function GatheringDetail() {
     }
   }
 
+  // The name a co-host management line calls a person by: their display
+  // name, as the roster and the media rows do; never an email or an id.
+  function coHostName(displayName: string | null): string {
+    return displayName ?? 'Someone'
+  }
+
+  // The host makes a co-host (CK-69; reserved): one click, no confirmation
+  // — the host can undo it — posting the accepted invitation's id, the one
+  // handle the host already reads here. A success re-reads the co-host
+  // list (optimistic-free); a refusal lands on the Accepted row, from its
+  // code.
+  async function makeCoHost(accepted: { id: string; display_name: string | null }) {
+    if (coHostActing !== null) return
+    setCoHostActing(accepted.id)
+    setCoHostError(null)
+    setConfirmUnmake(null)
+    const outcome = await addCoHost(gathering.id, accepted.id)
+    if (!alive.current) return
+    setCoHostActing(null)
+    if (outcome.ok) {
+      setCoHostsReloadKey((key) => key + 1)
+      return
+    }
+    setCoHostError({
+      invitationId: accepted.id,
+      errors: { fields: {}, form: [coHostRefusalMessage(outcome.code, coHostName(accepted.display_name))] },
+    })
+  }
+
+  // The host removes a co-host, or a co-host steps down — the same DELETE,
+  // taken on the second, deliberate click of a step this row opened. On
+  // success the host re-reads the co-host list; a co-host who stepped down
+  // re-reads THE GATHERING, because their `caller_role` is null now and the
+  // page re-renders as an invitee's — every organiser control goes with it.
+  async function unmakeCoHost(row: CoHost, steppingDown: boolean) {
+    if (coHostActing !== null) return
+    setCoHostActing(row.invitation_id)
+    setCoHostError(null)
+    const outcome = await removeCoHost(gathering.id, row.invitation_id)
+    if (!alive.current) return
+    setCoHostActing(null)
+    setConfirmUnmake(null)
+    if (outcome.ok) {
+      if (steppingDown) setReloadKey((key) => key + 1)
+      else setCoHostsReloadKey((key) => key + 1)
+      return
+    }
+    setCoHostError({
+      invitationId: row.invitation_id,
+      errors: { fields: {}, form: [coHostRefusalMessage(outcome.code, coHostName(row.display_name))] },
+    })
+  }
+
   // Deliberately not disabled when one date remains: the server owns the
   // last-occurrence rule, refuses with a 422, and its reason renders beside
   // this control — which is why the refusal surface waited for this phase.
@@ -921,12 +1065,12 @@ export function GatheringDetail() {
         <p>In memory of {gathering.memorial_decedent_name}</p>
       )}
 
-      {canEdit && !editingGathering && (
+      {organises && !editingGathering && (
         <button type="button" className="link-button" onClick={openGatheringEdit}>
           Edit gathering
         </button>
       )}
-      {canEdit && editingGathering && (
+      {organises && editingGathering && (
         <form
           className="auth-card gathering-form"
           aria-labelledby="edit-gathering-heading"
@@ -986,40 +1130,48 @@ export function GatheringDetail() {
               </option>
             ))}
           </select>
-          {/* Adult and child counts disclose household composition — this
+          {/* Companion names disclose household composition — this
               setting is who gets to see them. Everyone always sees their own
-              answer, whatever it says. */}
+              answer, whatever it says; an organiser — the reader of this
+              form — always sees the full list. */}
           <p className="field-hint">
             Everyone can always see their own answer; you always see the full list.
           </p>
           <FieldError errors={gatheringErrors} field="rsvp_list_visibility" />
 
           {/* The host's switch (CK-44; consent-gate-defaults §5 and §10.3):
-              rung 1 of the publication ladder, written by a person. Host
-              only — this form renders for nobody else — and never disabled.
-              Two states at the surface: on writes `true`, off writes an
-              explicit `null` (inherit) and never `false` (see
-              gatheringPatch). The statement below appears on the
-              turning-off path alone; turning it on needs no justification
-              and gets none. */}
-          <label htmlFor="edit-review-photos">
-            <input
-              id="edit-review-photos"
-              type="checkbox"
-              checked={gatheringForm.reviewPhotos}
-              aria-describedby={describedBy(gatheringErrors, 'requires_approval_override')}
-              onChange={(event) =>
-                setGatheringForm((form) => ({ ...form, reviewPhotos: event.target.checked }))
-              }
-            />{' '}
-            Review photos before they're published
-          </label>
-          <p className="field-hint">
-            When this is on, each photo waits for you to publish or decline it before anyone
-            else in this gathering can see it.
-          </p>
-          {turningReviewOff && <p className="field-hint">{REVIEW_OFF_STATEMENT}</p>}
-          <FieldError errors={gatheringErrors} field="requires_approval_override" />
+              rung 1 of the publication ladder, written by a person. THE
+              HOST'S ALONE — reserved (co-hosts §4; CK-68): this form renders
+              for a co-host too since CK-69, and the switch, its hint and the
+              statement render for the host only; gatheringPatch never
+              writes the key for anyone else, because the server refuses a
+              co-host's whole body on it. Never disabled. Two states at the
+              surface: on writes `true`, off writes an explicit `null`
+              (inherit) and never `false` (see gatheringPatch). The
+              statement below appears on the turning-off path alone; turning
+              it on needs no justification and gets none. */}
+          {isHost && (
+            <>
+              <label htmlFor="edit-review-photos">
+                <input
+                  id="edit-review-photos"
+                  type="checkbox"
+                  checked={gatheringForm.reviewPhotos}
+                  aria-describedby={describedBy(gatheringErrors, 'requires_approval_override')}
+                  onChange={(event) =>
+                    setGatheringForm((form) => ({ ...form, reviewPhotos: event.target.checked }))
+                  }
+                />{' '}
+                Review photos before they're published
+              </label>
+              <p className="field-hint">
+                When this is on, each photo waits for you to publish or decline it before anyone
+                else in this gathering can see it.
+              </p>
+              {turningReviewOff && <p className="field-hint">{REVIEW_OFF_STATEMENT}</p>}
+              <FieldError errors={gatheringErrors} field="requires_approval_override" />
+            </>
+          )}
 
           <button type="submit" disabled={!gatheringDirty || gatheringSubmitting}>
             {gatheringSubmitting ? 'Saving…' : 'Save'}
@@ -1041,7 +1193,7 @@ export function GatheringDetail() {
         <ul className="occurrence-list">
           {gathering.occurrences.map((occurrence) => (
             <li key={occurrence.id} className="occurrence-item">
-              {canEdit && editingOccurrenceId === occurrence.id ? (
+              {organises && editingOccurrenceId === occurrence.id ? (
                 <form onSubmit={(event) => void saveOccurrence(event, occurrence)}>
                   <fieldset className="occurrence-fields">
                     <legend>Edit this date</legend>
@@ -1138,7 +1290,7 @@ export function GatheringDetail() {
                       // navigates to it.
                       <p>{occurrence.map_url}</p>
                     ))}
-                  {canEdit && (
+                  {organises && (
                     <>
                       <button
                         type="button"
@@ -1200,7 +1352,7 @@ export function GatheringDetail() {
                   <OccurrenceRsvp
                     occurrenceId={occurrence.id}
                     zone={zone}
-                    isHost={canEdit}
+                    organises={organises}
                   />
                 </>
               )}
@@ -1208,7 +1360,7 @@ export function GatheringDetail() {
           ))}
         </ul>
 
-        {canEdit && !addingOccurrence && (
+        {organises && !addingOccurrence && (
           <button
             type="button"
             className="link-button"
@@ -1221,7 +1373,7 @@ export function GatheringDetail() {
             Add another date
           </button>
         )}
-        {canEdit && addingOccurrence && (
+        {organises && addingOccurrence && (
           <form onSubmit={(event) => void addOccurrence(event)}>
             <fieldset className="occurrence-fields">
               <legend>New date</legend>
@@ -1300,20 +1452,23 @@ export function GatheringDetail() {
           pending photograph, and — with the gathering's effective
           requires_approval (CK-41), since CK-43.1, or with anything waiting
           in the list, since CK-44 — whether the host's review exists in the
-          section at all; the server decides who sees anything and who may
-          act. The switch that writes the setting is in the edit form above. */}
+          section at all; organises (CK-69) opens the delegable side — the
+          takedown, the Removed view and Put back from it — to a co-host;
+          the server decides who sees anything and who may act. The switch
+          that writes the setting is in the edit form above. */}
       <section className="auth-card" aria-labelledby="photos-heading">
         <h2 id="photos-heading">Photos</h2>
         <GatheringMedia
           gatheringId={gathering.id}
-          isHost={canEdit}
+          isHost={isHost}
+          organises={organises}
           requiresApproval={gathering.requires_approval}
           occurrences={gathering.occurrences}
           zone={zone}
         />
       </section>
 
-      {canEdit && (
+      {organises && (
         <section className="auth-card" aria-labelledby="invitations-heading">
           <h2 id="invitations-heading">Invitations</h2>
           {!invitationsOpen ? (
@@ -1382,14 +1537,130 @@ export function GatheringDetail() {
                       ))}
                     </ul>
                   )}
+                  {/* Co-hosts (CK-69; co-hosts §4): the list for every
+                      organiser; the host alone makes and removes one, and
+                      reads the hint that says what they are handing over;
+                      a co-host reads the list and steps down from their
+                      own row — nobody else's — and nowhere else on the
+                      page is the list shown. */}
+                  <h3>Co-hosts</h3>
+                  {isHost && <p className="field-hint">{CO_HOST_HINT}</p>}
+                  {coHostsFailed && (
+                    <p className="form-error" role="alert">
+                      <span aria-hidden="true">⚠ </span>
+                      The co-host list couldn't be loaded just now.
+                    </p>
+                  )}
+                  {coHosts !== null &&
+                    (coHosts.length === 0 ? (
+                      <p className="field-hint">No co-hosts yet.</p>
+                    ) : (
+                      <ul className="occurrence-list" aria-label="Co-hosts">
+                        {coHosts.map((row) => {
+                          const name = coHostName(row.display_name)
+                          // The host removes anyone; a co-host steps down from
+                          // their OWN row only (the server hides the rest).
+                          const mayUnmake = isHost || row.is_self
+                          const steppingDown = !isHost && row.is_self
+                          const confirming = mayUnmake && confirmUnmake === row.invitation_id
+                          const acting = coHostActing === row.invitation_id
+                          return (
+                            <li key={row.invitation_id}>
+                              {name}
+                              {mayUnmake && !confirming && (
+                                <>
+                                  {' '}
+                                  <button
+                                    type="button"
+                                    className="link-button"
+                                    disabled={coHostActing !== null}
+                                    onClick={() => {
+                                      setCoHostError(null)
+                                      setConfirmUnmake(row.invitation_id)
+                                    }}
+                                  >
+                                    {steppingDown ? 'Step down' : 'Remove as co-host'}
+                                  </button>
+                                </>
+                              )}
+                              {confirming && (
+                                // The second, deliberate step: the person
+                                // loses their controls the moment it lands,
+                                // so the first click only asks, and the
+                                // do-nothing beside it does nothing.
+                                <div
+                                  role="group"
+                                  aria-label={steppingDown ? 'Step down as co-host' : `Remove ${name} as co-host`}
+                                >
+                                  <p className="field-hint">
+                                    {steppingDown ? STEP_DOWN_SENTENCE : removeCoHostSentence(name)}
+                                  </p>
+                                  <button
+                                    type="button"
+                                    disabled={coHostActing !== null}
+                                    onClick={() => void unmakeCoHost(row, steppingDown)}
+                                  >
+                                    {acting
+                                      ? steppingDown
+                                        ? 'Stepping down…'
+                                        : 'Removing…'
+                                      : steppingDown
+                                        ? 'Step down'
+                                        : 'Remove as co-host'}
+                                  </button>{' '}
+                                  <button
+                                    type="button"
+                                    className="link-button"
+                                    disabled={coHostActing !== null}
+                                    onClick={() => setConfirmUnmake(null)}
+                                  >
+                                    {steppingDown ? 'Stay a co-host' : 'Keep as co-host'}
+                                  </button>
+                                </div>
+                              )}
+                              {coHostError?.invitationId === row.invitation_id && (
+                                <FormLevelErrors errors={coHostError.errors} />
+                              )}
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    ))}
                   <h3>Accepted</h3>
                   {invitations.accepted.length === 0 ? (
                     <p className="field-hint">No one has accepted yet.</p>
                   ) : (
-                    <ul className="occurrence-list">
-                      {invitations.accepted.map((accepted) => (
-                        <li key={accepted.id}>{accepted.display_name}</li>
-                      ))}
+                    <ul className="occurrence-list" aria-label="Accepted">
+                      {invitations.accepted.map((accepted) => {
+                        // An Accepted row that is a co-host says so instead
+                        // of offering the act again; the act waits for the
+                        // co-host list to be known, so no row is ever offered
+                        // "Make co-host" while it might already be one.
+                        const isCoHost =
+                          coHosts !== null && coHosts.some((row) => row.invitation_id === accepted.id)
+                        return (
+                          <li key={accepted.id}>
+                            {accepted.display_name}
+                            {isCoHost && ' — Co-host'}
+                            {isHost && coHosts !== null && !isCoHost && (
+                              <>
+                                {' '}
+                                <button
+                                  type="button"
+                                  className="link-button"
+                                  disabled={coHostActing !== null}
+                                  onClick={() => void makeCoHost(accepted)}
+                                >
+                                  {coHostActing === accepted.id ? 'Making co-host…' : 'Make co-host'}
+                                </button>
+                              </>
+                            )}
+                            {coHostError?.invitationId === accepted.id && (
+                              <FormLevelErrors errors={coHostError.errors} />
+                            )}
+                          </li>
+                        )
+                      })}
                     </ul>
                   )}
                 </>
