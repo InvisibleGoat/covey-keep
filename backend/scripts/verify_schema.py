@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0028"
+EXPECTED_REVISION = "0029"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -1887,6 +1887,161 @@ async def verify(conn, ck: Checks) -> None:
             False, "pending invitation integrity", "gathering_invitations_pending missing"
         )
 
+    print("\n-- billing: the paid tiers' rows (0029, CK-73) --")
+    # Two tables that connect an account to a payment provider (paid-tiers
+    # record §9): the provider's customer id, and a local copy of the facts
+    # the allowance is DERIVED from — the plan and the provider's status.
+    # NO allowance column, NO is-paid boolean, nowhere (the never-stored
+    # rule; asserted absent on both tables): the number is computed at read
+    # time from plan and status (services/keeping.py), and a cached copy
+    # would go stale the moment a card failed.
+    ck.check("billing_customers" in tables, "table billing_customers exists", "missing")
+    assert_columns(
+        ck,
+        columns,
+        "billing_customers",
+        not_null=("account_id", "provider", "provider_customer_id", "created_at"),
+        absent=("allowance", "is_paid", "entitlement"),
+    )
+    ck.check("subscriptions" in tables, "table subscriptions exists", "missing")
+    assert_columns(
+        ck,
+        columns,
+        "subscriptions",
+        not_null=(
+            "id",
+            "account_id",
+            "provider",
+            "provider_subscription_id",
+            "plan",
+            "status",
+            "cancel_at_period_end",
+            "created_at",
+        ),
+        nullable=("current_period_end", "updated_at"),
+        absent=("allowance", "is_paid", "entitlement"),
+    )
+    # `status` is TEXT, never an enum: the provider's value verbatim, so a
+    # status the provider adds is stored rather than refused; which values
+    # are PAID is keeping.PAID_STATUSES's decision, not the schema's.
+    status_column = await column_type_and_default(conn, "subscriptions", "status")
+    ck.check(
+        status_column is not None and status_column[0] == "text",
+        "subscriptions.status is text (the provider's value verbatim, never an enum)",
+        f"found {status_column!r}",
+    )
+    # The two types and their labels — read from pg_enum, because
+    # autogenerate never diffs enum labels.
+    billing_provider = await enum_labels(conn, "billing_provider")
+    ck.check("stripe" in billing_provider, "billing_provider carries 'stripe'", "label missing")
+    billing_plan = await enum_labels(conn, "billing_plan")
+    for label in ("photos_100k", "photos_300k"):
+        ck.check(label in billing_plan, f"billing_plan carries {label!r}", "label missing")
+    # The two plain uniques: a provider customer belongs to one account; a
+    # provider subscription is one local row.
+    for name in (
+        "uq_billing_customers_provider_provider_customer_id",
+        "uq_subscriptions_provider_provider_subscription_id",
+    ):
+        ck.check(name in unique_constraints, f"UNIQUE {name} exists", "constraint missing")
+    # THE BACKSTOP: at most one subscription per account in a paid status —
+    # a partial unique index whose predicate names the paid set literally
+    # (keeping.PAID_STATUSES, pinned to agree by test). Read by name with
+    # its definition (`.first()`, so a missing index FAILs).
+    paid_unique = await index_shape(conn, "uq_subscriptions_account_id_paid")
+    ck.check(
+        paid_unique is not None and paid_unique[0] == "subscriptions",
+        "partial UNIQUE uq_subscriptions_account_id_paid exists on subscriptions",
+        f"found {paid_unique!r}",
+    )
+    ck.check(
+        paid_unique is not None
+        and "UNIQUE" in paid_unique[1]
+        and "(account_id)" in paid_unique[1]
+        and "WHERE" in paid_unique[1]
+        and "'active'" in paid_unique[1]
+        and "'past_due'" in paid_unique[1],
+        "uq_subscriptions_account_id_paid is UNIQUE on (account_id) "
+        "WHERE status IN ('active', 'past_due')",
+        f"definition is {paid_unique[1] if paid_unique else None!r}",
+    )
+    account_index = await index_shape(conn, "ix_subscriptions_account_id")
+    ck.check(
+        account_index is not None and account_index[0] == "subscriptions",
+        "index ix_subscriptions_account_id exists on subscriptions",
+        f"found {account_index!r}",
+    )
+    # Both FKs target accounts with NO delete rule (decision 15): the
+    # deletion leg deletes the rows explicitly, after closing the provider's
+    # customer.
+    for conname in ("fk_billing_customers_account_id", "fk_subscriptions_account_id"):
+        fk = await fk_rule(conn, conname)
+        ck.check(
+            fk is not None and fk[0] == "accounts",
+            f"{conname} references accounts",
+            "FK missing or pointing elsewhere",
+        )
+        ck.check(
+            fk is not None and fk[1] == "a",
+            f"{conname} has no delete rule (nothing cascades from an account)",
+            f"delete rule is {fk[1]!r}" if fk else "FK missing",
+        )
+
+    print("\n-- billing integrity (CK-73) --")
+    # Guarded on both tables (the CK-43 lesson). Properties of whatever rows
+    # exist; detail prints counts only — a customer id or a subscription id
+    # is the provider's handle for a person's billing and is never printed.
+    if {"billing_customers", "subscriptions"} <= tables:
+        # (1) Every subscription's account holds the provider's customer: the
+        # webhook keys the account THROUGH billing_customers (never through
+        # metadata), so a subscription row with no customer row of the same
+        # provider is one nothing could have written — or a customer row
+        # deleted without its subscriptions.
+        orphaned = await scalar(
+            conn,
+            "SELECT count(*) FROM subscriptions s WHERE NOT EXISTS ("
+            "SELECT 1 FROM billing_customers c "
+            "WHERE c.account_id = s.account_id AND c.provider = s.provider)",
+        )
+        ck.check(
+            orphaned == 0,
+            "every subscription's account has a billing_customers row of the same provider",
+            f"{orphaned} subscription row(s) with no customer row for the account and provider",
+        )
+        # (2) No billing row on an anonymized account (through
+        # people.account_id): deletion closes the provider's customer and
+        # then deletes both rows in the anonymization transaction. A row
+        # here means a deletion that was half-done — anonymized on our side
+        # with a billing relationship still recorded.
+        for table in ("billing_customers", "subscriptions"):
+            on_deleted = await scalar(
+                conn,
+                f"SELECT count(*) FROM {table} b "
+                "JOIN people p ON p.account_id = b.account_id "
+                "WHERE p.anonymized_at IS NOT NULL",
+            )
+            ck.check(
+                on_deleted == 0,
+                f"no {table} row belongs to an anonymized account",
+                f"{on_deleted} {table} row(s) on an anonymized account",
+            )
+        # (3) At most one subscription per account in a paid status — the
+        # partial unique above, re-asserted as DATA: if the index were ever
+        # dropped the shape line fails and so does this one.
+        double_paid = await scalar(
+            conn,
+            "SELECT count(*) FROM (SELECT account_id FROM subscriptions "
+            "WHERE status IN ('active', 'past_due') "
+            "GROUP BY account_id HAVING count(*) > 1) d",
+        )
+        ck.check(
+            double_paid == 0,
+            "no account holds two subscriptions in a paid status",
+            f"{double_paid} account(s) with more than one paid subscription",
+        )
+    else:
+        ck.check(False, "billing integrity", "billing_customers or subscriptions missing")
+
     # --- Informational -----------------------------------------------------
     print("\n-- row counts (informational, not assertions) --")
     # `media` joins the list at CK-34, the phase that first writes it: a
@@ -1897,6 +2052,8 @@ async def verify(conn, ck: Checks) -> None:
     # baseline to record, never a failure.
     # `gathering_co_hosts` joins at CK-68 (0027): a count is the baseline
     # to record — zero on the deploy until (hx) makes the first co-host.
+    # `billing_customers` and `subscriptions` join at CK-73 (0029): zero on
+    # the deploy until check (iq) buys the first plan with a test card.
     for table in (
         "people",
         "accounts",
@@ -1905,6 +2062,8 @@ async def verify(conn, ck: Checks) -> None:
         "groups",
         "memberships",
         "gathering_co_hosts",
+        "billing_customers",
+        "subscriptions",
     ):
         if table in tables:
             ck.info(f"{table} rows", await scalar(conn, f"SELECT count(*) FROM {table}"))

@@ -10,18 +10,22 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import RATE_WINDOW
+from app.api.billing import BILLING_UNAVAILABLE
 from app.api.deps import AuthContext, client_ip, get_auth_context, get_db, normalize_email
 from app.brand import PRODUCT_NAME
 from app.config import settings
 from app.models import (
+    BillingCustomer,
     EmailChangeRequest,
     MagicLinkToken,
     Person,
     Session,
+    Subscription,
     WebauthnChallenge,
     WebauthnCredential,
 )
 from app.security import hash_token
+from app.services import billing
 from app.services.email import send_email
 from app.services.groups import relinquish_group_admin
 from app.services.keeping import lapse_kept_statuses
@@ -309,10 +313,41 @@ async def delete_account(
     a requirement: nothing derived from the old address (hash, fingerprint)
     may be stored anywhere. `tos_acceptances` is deliberately retained — the
     audit record of contract formation, now pointing at a row with no PII.
+
+    THE DELETION CONTRACT'S FIRST OUTBOUND CALL (CK-73; paid-tiers record
+    §8). An account that has a Stripe customer has its customer DELETED at
+    Stripe — which cancels its subscriptions at once (services/billing.py's
+    citation) — BEFORE the anonymization transaction opens. If Stripe
+    cannot be reached, or refuses for any reason but "already gone", the
+    deletion is refused with a 503 and NOTHING below runs: a person must
+    never be left deleted on our side and still billed on Stripe's. The
+    order is the safe one — if Stripe succeeded and the transaction then
+    failed, a retry finds the customer gone (`resource_missing`, a
+    success) and completes. Then the transaction below deletes the local
+    billing rows: the ids name a Stripe object that no longer exists, and a
+    row about a person who is gone is data with no purpose. A webhook that
+    arrives afterwards for that customer finds no row and is dropped.
     """
     person = ctx.person
     old_email = person.email
     now = datetime.now(timezone.utc)
+
+    # Stripe first (the docstring). Read-only on our side until it answers;
+    # a refusal here leaves the person exactly as they were.
+    customer = await db.scalar(
+        select(BillingCustomer).where(BillingCustomer.account_id == person.account_id)
+    )
+    if customer is not None:
+        try:
+            await billing.close_customer(customer.provider_customer_id)
+        except billing.ProviderError:
+            raise HTTPException(
+                503,
+                detail={
+                    "code": BILLING_UNAVAILABLE,
+                    "message": "your plan couldn't be closed just now, so nothing was deleted; try again in a moment",
+                },
+            )
 
     person.email = None
     person.display_name = ANONYMIZED_DISPLAY_NAME
@@ -357,8 +392,17 @@ async def delete_account(
     # account-spine lapse above — the two are keyed on different ids on
     # purpose.
     await relinquish_group_admin(db, person.id)
+    # The billing rows (CK-73): Stripe's customer is already gone (above),
+    # so the ids here name nothing and the rows describe nobody — deleted,
+    # not retained (no billing row survives an account's deletion;
+    # verifier-asserted). Subscriptions first: nothing references them,
+    # and the order reads as the dependency would.
+    await db.execute(delete(Subscription).where(Subscription.account_id == person.account_id))
+    await db.execute(
+        delete(BillingCustomer).where(BillingCustomer.account_id == person.account_id)
+    )
 
     # One commit = one transaction: anonymization, auth-material deletion,
-    # the kept-status lapse and the group-admin relinquishment land
-    # together or not at all.
+    # the kept-status lapse, the group-admin relinquishment and the
+    # billing rows' deletion land together or not at all.
     await db.commit()

@@ -40,6 +40,14 @@ os.environ["R2_UPLOAD_ACCESS_KEY_ID"] = "7e57ab10ad0000000000000000000001"
 os.environ["R2_UPLOAD_SECRET_ACCESS_KEY"] = "test-upload-secret-never-deployed"
 os.environ["R2_SERVE_ACCESS_KEY_ID"] = "7e575e47e00000000000000000000002"
 os.environ["R2_SERVE_SECRET_ACCESS_KEY"] = "test-serve-secret-never-deployed"
+# Stripe (CK-73): four required settings, so the suite supplies them — fakes
+# in the shapes config.py checks at boot (a `rk_test_` key, a `whsec_`
+# secret), never minted, never deployed; no test reaches the network, and
+# the SDK is stubbed at services/billing.py's functions.
+os.environ["STRIPE_API_KEY"] = "rk_test_00000000000000000000000000000000never_deployed"
+os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_test_never_deployed_000000000000000000000000"
+os.environ["STRIPE_PRICE_LOOKUP_100K"] = "ck_photos_100k_monthly"
+os.environ["STRIPE_PRICE_LOOKUP_300K"] = "ck_photos_300k_monthly"
 
 import asyncpg  # noqa: E402
 import pytest  # noqa: E402

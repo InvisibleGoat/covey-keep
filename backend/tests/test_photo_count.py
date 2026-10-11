@@ -130,8 +130,9 @@ BOTH_INDEXES = {"ix_gatherings_keeper_account_id", "ix_groups_keeper_account_id"
 # on media — `removed_by_person_id` — and likewise touches neither; 0027,
 # CK-68, creates `gathering_co_hosts` and touches neither; 0028, CK-71,
 # adds one nullable column on media — `failure_reason` — and a new enum
-# type, and touches neither.)
-HEAD = "0028"
+# type, and touches neither; 0029, CK-73, creates `billing_customers` and
+# `subscriptions` with two new enum types, and touches neither.)
+HEAD = "0029"
 
 
 async def test_0024_round_trip_backfills_the_count_and_the_downgrade_is_genuine(db_session_factory, capsys):

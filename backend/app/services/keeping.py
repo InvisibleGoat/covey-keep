@@ -81,7 +81,11 @@ lapse_kept_statuses — which since CK-68 also ends the account's CO-HOSTING
 relinquishes host; co-hosts §8), and the upload-intent endpoint (api/media.py, CK-34;
 its subject the resolved keeper since CK-50; counting photographs since
 CK-51b) via resolved_keeper_of / account_usage / account_quota /
-gathering_units. account_bin_count has NO route caller since CK-65 — the
+gathering_units; and the billing router (api/billing.py, CK-73) via
+paid_subscription / holds_paid_plan / account_quota — the paid half of the
+entitlement, read from the `subscriptions` row and NEVER from a provider
+(paid-tiers record §5: the quota path never calls Stripe, and this module
+never imports it — pinned). account_bin_count has NO route caller since CK-65 — the
 refusal's bin clause, its one caller from CK-51b, is retired (the keeper
 empties no bin; see its docstring). Every function that
 writes leaves the commit to the caller, so the keeper write and its side
@@ -101,6 +105,7 @@ from sqlalchemy.orm import aliased
 
 from app.models import (
     Account,
+    BillingPlan,
     Gathering,
     GatheringCoHost,
     GatheringType,
@@ -108,6 +113,7 @@ from app.models import (
     Media,
     MediaStatus,
     PublicationState,
+    Subscription,
 )
 
 # Grace policy (keeper record §2.7): when the keeper leaves, 30 days
@@ -126,9 +132,10 @@ ARCHIVE_AFTER = timedelta(days=30)
 DELETE_AFTER = timedelta(days=90)
 
 # Entitlement (keeper record v2 §15.1; the currency record §3): the free
-# tier is 10,000 PHOTO-EQUIVALENTS, and every account is on it — the paid
-# ladder is the storage-tier phase's, which will make account_quota read a
-# subscription instead of returning this. A photograph is 1, whatever the
+# tier is 10,000 PHOTO-EQUIVALENTS, and every account is on it UNTIL it
+# holds a subscription in a paid status — the paid ladder arrived at CK-73
+# (the two constants below; account_quota reads the `subscriptions` row).
+# A photograph is 1, whatever the
 # file weighed; video, when it lands, enters at a rate the product
 # PUBLISHES (currency record §4), never at a measured ratio. Provisional
 # — and the monitor below moves a PRICE when the real average drifts,
@@ -136,6 +143,39 @@ DELETE_AFTER = timedelta(days=90)
 # 10,000 photographs at the measured size is ≈11.3 GB, a ≈13% raise, not
 # a cut.
 FREE_TIER_PHOTOGRAPHS = 10_000
+
+# The paid tiers (CK-73; decisions/2026-10-10-paid-tiers-on-stripe.md §3,
+# §6; the numbers keeper v2 §15.3's, provisional, revisited after 50 real
+# accounts). TWO CONSTANTS, AND THE ALLOWANCE IS DERIVED FROM THEM AT READ
+# TIME — never stored (the docs-root rule; no allowance column, no is-paid
+# boolean anywhere, verifier-asserted).
+#
+# PAID_STATUSES — the ONE definition of "paid", which account_quota reads
+# and the keeping flows will read through holds_paid_plan (record §6's
+# last paragraph: one function beside account_quota, never a second copy
+# of the status table). `active` is paid. `past_due` is PAID TOO: Stripe
+# is still retrying the card, and a failed card is a non-event until the
+# retries end (v2's own phrase) — revenue recovery is configured to
+# CANCEL after the final retry, so `past_due` always ends at `canceled`,
+# the moment the account is on the free tier, and then
+# keeping-explained §1 item 13 holds: nothing frozen, hidden or deleted.
+# `incomplete` (the first payment has not happened — nothing owed,
+# nothing granted), `incomplete_expired`, `canceled` and `unpaid` are
+# not paid; `trialing` and `paused` are not sold, and a row carrying one
+# is logged as a finding by the webhook and reads as unpaid here, never
+# silently paid. THE PARTIAL UNIQUE `uq_subscriptions_account_id_paid`
+# (migration 0029) names this set LITERALLY in its predicate — an index
+# cannot read a constant — and the two are pinned to agree by test.
+PAID_STATUSES = frozenset({"active", "past_due"})
+
+# What each plan holds, in the unit it is sold in (record §3: a plan is
+# named by what it holds — "100,000 photos", never "Plus"). A third plan is
+# a decision record (v2 §15.7), one label on `billing_plan` one migration
+# early, and one entry here.
+PLAN_PHOTOGRAPHS: dict[BillingPlan, int] = {
+    BillingPlan.PHOTOS_100K: 100_000,
+    BillingPlan.PHOTOS_300K: 300_000,
+}
 
 # The memorial ceiling (keeper record §9.4, decided 2026-08-31 as 5 GB;
 # currency record §8 at 2.4.0): free, permanent, and quota-exempt UP TO
@@ -493,14 +533,46 @@ async def account_usage(db: AsyncSession, account: Account) -> int:
     return total
 
 
+async def paid_subscription(db: AsyncSession, account: Account) -> Optional[Subscription]:
+    """The account's subscription in a PAID status, or None — THE ONE
+    DEFINITION OF "PAID" (PAID_STATUSES), read by account_quota, by
+    holds_paid_plan and by GET /billing, so no caller carries a second copy
+    of the status table (record §6). One indexed query: the partial unique
+    `uq_subscriptions_account_id_paid` guarantees at most one such row per
+    account, and serves the read. Reads the local row and NEVER a
+    provider — an upload must never wait on, or fail because of, a payment
+    provider (record §5), and this module never imports one."""
+    return await db.scalar(
+        select(Subscription)
+        .where(
+            Subscription.account_id == account.id,
+            Subscription.status.in_(PAID_STATUSES),
+        )
+        .limit(1)
+    )
+
+
+async def holds_paid_plan(db: AsyncSession, account: Account) -> bool:
+    """Does this account hold a paid plan? The predicate the keeping flows
+    ask (keeping-explained §5.3's paid-only acts — accepting, offering,
+    claiming — and §5.4's host transfer; readers later), the same one
+    account_quota reads, and the 409 `already_subscribed` on Checkout's."""
+    return await paid_subscription(db, account) is not None
+
+
 async def account_quota(db: AsyncSession, account: Account) -> int:
-    """The PHOTO-EQUIVALENTS the account is entitled to keep. Every account
-    is on the free tier until the storage-tier phase gives this a
-    subscription to read; it takes the session and the account now so that
-    phase changes one function and no caller — the signature the byte
-    version promised, kept through the cutover. Never stored (roadmap
-    §2)."""
-    return FREE_TIER_PHOTOGRAPHS
+    """The PHOTO-EQUIVALENTS the account is entitled to keep — DERIVED, never
+    stored (roadmap §2; record §6): the plan's number (PLAN_PHOTOGRAPHS)
+    where the account holds a subscription in a paid status
+    (paid_subscription — the one definition), else the free tier. The
+    signature the byte version promised and the tier phase kept: CK-73
+    changed this one function and no caller, so api/media.py::
+    _enforce_limits — the gate that reads it — has no diff. Reads the
+    local `subscriptions` row; never calls Stripe, never imports it."""
+    paid = await paid_subscription(db, account)
+    if paid is None:
+        return FREE_TIER_PHOTOGRAPHS
+    return PLAN_PHOTOGRAPHS[paid.plan]
 
 
 async def gathering_units(db: AsyncSession, gathering: Gathering) -> int:

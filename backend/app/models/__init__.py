@@ -12,10 +12,13 @@ from app.models.auth import (
     WebauthnCredential,
 )
 from app.models.base import Base
+from app.models.billing import BillingCustomer, Subscription
 from app.models.capability import CapabilityProfile, Role, RoleLadder
 from app.models.consent import ConsentRecord
 from app.models.enums import (
     AccountKind,
+    BillingPlan,
+    BillingProvider,
     GatheringType,
     GroupType,
     InvitationChannel,
@@ -48,6 +51,9 @@ __all__ = [
     "AccountKind",
     "AttendanceRecord",
     "Base",
+    "BillingCustomer",
+    "BillingPlan",
+    "BillingProvider",
     "CapabilityProfile",
     "ConsentRecord",
     "EmailChangeRequest",
@@ -86,6 +92,7 @@ __all__ = [
     "RoleLadder",
     "Session",
     "SubGroup",
+    "Subscription",
     "TosAcceptance",
     "WebauthnChallenge",
     "WebauthnCredential",

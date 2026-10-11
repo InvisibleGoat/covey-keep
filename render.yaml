@@ -92,6 +92,26 @@ services:
       # is given, not which service holds them. One dashboard entry in the
       # wrong column silently undoes what CK-33 proved. The web Settings
       # class has no field for it, by construction (config.py).
+      # Stripe (CK-73; paid-tiers record §10): the RESTRICTED sandbox key
+      # (`rk_test_`, shape-checked at boot — a full-access or a live key
+      # refuses to boot), the webhook endpoint's signing secret, and the two
+      # prices' lookup keys. Four `sync: false` slots that CREATE NO VALUES:
+      # the values live in THIS service's dashboard and are set BEFORE the
+      # push that declares these lines — the SESSION_SECRET / R2 ordering —
+      # because all four are required with no default and the API refuses
+      # to boot without them. NEVER on the worker, which has no field for
+      # any of them (billing is the API's; the worker processes
+      # photographs). The lookup keys are configuration, not secrets, but
+      # they are the sandbox's to name and live mode's to re-create, so
+      # they are slots rather than values the blueprint would overwrite.
+      - key: STRIPE_API_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_LOOKUP_100K
+        sync: false
+      - key: STRIPE_PRICE_LOOKUP_300K
+        sync: false
 
   # The ingest worker (CK-35; media pipeline record §8) — the second service
   # off the same repo, branch and database. Background workers have no free

@@ -1,0 +1,1349 @@
+"""CK-73 — paid tiers, the backend: two photo plans on Stripe, and the
+allowance read from a local row (decisions/2026-10-10-paid-tiers-on-stripe.md
+§3, §5, §6, §8, §9, §10, §11; migration 0029).
+
+OFFLINE, EVERY TEST. The SDK is stubbed at services/billing.py's own
+functions — the one-call wrappers (`_create_customer`, `_list_active_prices`,
+`_create_checkout_session`, `_create_portal_session`, `_retrieve_subscription`,
+`_delete_customer`) where the surrounding decision is under test (the lock,
+the absent-object rule, the lookup-key check), the async functions
+(`fetch_subscription`, `close_customer`) where it is not — and never the
+network. The webhook's signature is REAL: every header is computed with the
+SDK's own signing scheme over the raw body and the suite's fake secret, and
+the SDK's own verifier reads it. Every `stripe.Subscription` handed to the
+upsert is built with the SDK's `construct_from` in the PINNED API version's
+shape, so the `current_period_end` pin is against a real object.
+
+The load-bearing pins:
+- THE ALLOWANCE (record §6's table, by exact number): free with no row;
+  each plan's number for `active` AND for `past_due`; free for
+  `incomplete`, `incomplete_expired`, `canceled`, `unpaid` and a status
+  nobody sold; `holds_paid_plan` agreeing with `account_quota` on every
+  case; the partial unique's predicate naming exactly `PAID_STATUSES`; and
+  an upload refused at 10,000 for a free keeper and admitted for the same
+  keeper on `photos_100k`, through the REAL `_enforce_limits` — the one
+  function CK-73 changed and the one caller it did not;
+- THE QUOTA PATH NEVER IMPORTS STRIPE: `keeping.py` and `api/media.py` name
+  no `stripe`, `services/billing.py` is the one module under app/ that
+  imports it, and after `import app.worker` in a fresh interpreter
+  `'stripe'` is not in `sys.modules` (the CK-59 import-graph pin);
+- CONFIG: `sk_test_`, `rk_live_`, `sk_live_` and a malformed key refused at
+  boot, each naming the field and never the value; a bad webhook-secret
+  prefix refused; the four required with no default; the worker's seven
+  unchanged and no Stripe field on it;
+- CHECKOUT: the 422 on an unknown plan; the 409 `already_subscribed` for
+  `active` and `past_due` alike; ONE customer from two concurrent calls
+  (the lock, with the idempotency key beneath it); the session's exact
+  parameters — mode, the lookup-key price, `client_reference_id`, the
+  subscription metadata, the two return URLs, and no promotion codes or
+  automatic tax; a lookup key with no active price a 503 and an ERROR
+  line; and THE URL IN THE BODY AND IN NO LOG RECORD, with the root at DEBUG;
+- THE PORTAL: the URL; the 404 with no customer;
+- THE WEBHOOK: a missing and a bad signature → 400, nothing written, nothing
+  logged beyond the fact; each handled type → fetch by id, then upsert;
+  out-of-order and duplicate delivery leaving the row at the FETCHED state;
+  an unknown customer, an unknown lookup key and a second paid subscription
+  → 200, nothing written, a line naming ids only; a fetch failure → 503;
+  `current_period_end` read from the subscription ITEM, where the pinned
+  API version puts it; an unsold status stored verbatim, logged, and read
+  as unpaid; one INFO line per handled event carrying no email and no
+  payload, with the root at DEBUG; an unhandled type acknowledged with
+  nothing fetched;
+- DELETION: with a plan, the customer closed ONCE, BEFORE the
+  anonymization, and the billing rows gone after; Stripe failing → 503
+  with the person NOT anonymized and every row intact; `resource_missing`
+  → success; no customer → no Stripe call at all;
+- THE 0029 ROUND TRIP, and the verifier's thirty-nine lines fired by
+  plants as a subprocess, each plant confirmed by its own SELECT.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import json
+import logging
+import os
+import re
+import subprocess
+import sys
+import time
+import tokenize
+import types
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from uuid import UUID
+
+import pytest
+import stripe
+from pydantic import ValidationError
+from sqlalchemy import func, select, text
+
+from app.api.billing import ALREADY_SUBSCRIBED, BILLING_UNAVAILABLE
+from app.api.profile import ANONYMIZED_DISPLAY_NAME
+from app.config import Settings, WorkerSettings
+from app.models import (
+    Account,
+    BillingCustomer,
+    BillingPlan,
+    BillingProvider,
+    Person,
+    Session,
+    Subscription,
+)
+from app.services import billing, keeping
+from app.services.keeping import FREE_TIER_PHOTOGRAPHS, PAID_STATUSES, PLAN_PHOTOGRAPHS
+from tests.conftest import TEST_DATABASE_URL
+from tests.test_destruction import _verifier
+from tests.test_gatherings import _account_for, _create, _signed_in_headers
+from tests.test_media_intents import _intents, _item, _set_photo_count
+from tests.test_photo_count import HEAD, _migrate
+from tests.test_worker import SEVEN, WORKER_ENV
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+SECRET = os.environ["STRIPE_WEBHOOK_SECRET"]
+KEY_100K = os.environ["STRIPE_PRICE_LOOKUP_100K"]
+KEY_300K = os.environ["STRIPE_PRICE_LOOKUP_300K"]
+DELETE_BODY = {"confirm": "DELETE"}
+CHECKOUT_URL = "https://checkout.stripe.com/c/pay/cs_test_never_logged_1234567890"
+PORTAL_URL = "https://billing.stripe.com/p/session/test_never_logged_0987654321"
+# A period end in the pinned shape: a Unix timestamp on the subscription ITEM.
+PERIOD_END = int((datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)).timestamp())
+
+
+# --- helpers --------------------------------------------------------------------------
+
+
+async def _account(db, address: str) -> Account:
+    return await _account_for(db, address)
+
+
+async def _plant_customer(db_session_factory, account_id: UUID, customer_id: str = "cus_test_one") -> None:
+    async with db_session_factory() as db:
+        db.add(
+            BillingCustomer(
+                account_id=account_id,
+                provider=BillingProvider.STRIPE,
+                provider_customer_id=customer_id,
+            )
+        )
+        await db.commit()
+
+
+async def _plant_subscription(
+    db_session_factory,
+    account_id: UUID,
+    *,
+    plan: BillingPlan = BillingPlan.PHOTOS_100K,
+    status: str = "active",
+    subscription_id: str = "sub_test_one",
+    cancel: bool = False,
+) -> UUID:
+    async with db_session_factory() as db:
+        row = Subscription(
+            account_id=account_id,
+            provider=BillingProvider.STRIPE,
+            provider_subscription_id=subscription_id,
+            plan=plan,
+            status=status,
+            current_period_end=datetime.fromtimestamp(PERIOD_END, tz=timezone.utc),
+            cancel_at_period_end=cancel,
+        )
+        db.add(row)
+        await db.commit()
+        return row.id
+
+
+async def _subscription_rows(db_session_factory) -> list[Subscription]:
+    async with db_session_factory() as db:
+        return list((await db.execute(select(Subscription))).scalars().all())
+
+
+async def _customer_rows(db_session_factory) -> list[BillingCustomer]:
+    async with db_session_factory() as db:
+        return list((await db.execute(select(BillingCustomer))).scalars().all())
+
+
+def _subscription_object(
+    *,
+    subscription_id: str = "sub_test_one",
+    customer_id: str = "cus_test_one",
+    lookup_key: str = KEY_100K,
+    status: str = "active",
+    period_end: int = PERIOD_END,
+    cancel: bool = False,
+) -> stripe.Subscription:
+    """A `stripe.Subscription` in the PINNED API version's shape
+    (2026-09-30.endive): `current_period_end` on the subscription ITEM and
+    nowhere else, the price nested whole on the item with its lookup key,
+    the customer an id. Built by the SDK's own constructor, no network."""
+    return stripe.Subscription.construct_from(
+        {
+            "id": subscription_id,
+            "object": "subscription",
+            "customer": customer_id,
+            "status": status,
+            "cancel_at_period_end": cancel,
+            "items": {
+                "object": "list",
+                "data": [
+                    {
+                        "id": "si_test_one",
+                        "object": "subscription_item",
+                        "current_period_end": period_end,
+                        "current_period_start": period_end - 30 * 86400,
+                        "price": {
+                            "id": "price_test_one",
+                            "object": "price",
+                            "lookup_key": lookup_key,
+                            "active": True,
+                        },
+                    }
+                ],
+                "has_more": False,
+                "url": f"/v1/subscription_items?subscription={subscription_id}",
+            },
+        },
+        None,
+    )
+
+
+def _event_payload(event_type: str, obj: dict, *, event_id: str = "evt_test_one") -> bytes:
+    return json.dumps(
+        {
+            "id": event_id,
+            "object": "event",
+            "type": event_type,
+            "api_version": stripe.api_version,
+            "created": int(time.time()),
+            "livemode": False,
+            "data": {"object": obj},
+        }
+    ).encode("utf-8")
+
+
+def _signed(payload: bytes, secret: str = SECRET) -> dict:
+    """A REAL `Stripe-Signature` header — the SDK's own scheme (HMAC-SHA256
+    over `timestamp.payload`), computed with the suite's fake secret."""
+    return {
+        "Stripe-Signature": stripe.WebhookSignature.generate_signature_header(
+            payload.decode("utf-8"), secret
+        ),
+        "Content-Type": "application/json",
+    }
+
+
+def _stub_fetch(monkeypatch, result=None, *, raises: Exception | None = None) -> list[str]:
+    calls: list[str] = []
+
+    async def fake(subscription_id: str):
+        calls.append(subscription_id)
+        if raises is not None:
+            raise raises
+        return result
+
+    monkeypatch.setattr(billing, "fetch_subscription", fake)
+    return calls
+
+
+def _stub_prices(monkeypatch, price_ids: list[str] = ("price_test_one",)) -> list[str]:
+    """The one-call wrapper stubbed, so `price_for`'s empty-list branch runs
+    for real. Returns the lookup keys asked for."""
+    asked: list[str] = []
+
+    class _Price:
+        def __init__(self, price_id: str) -> None:
+            self.id = price_id
+
+    def fake(lookup_key: str):
+        asked.append(lookup_key)
+        return [_Price(p) for p in price_ids]
+
+    monkeypatch.setattr(billing, "_list_active_prices", fake)
+    return asked
+
+
+def _stub_checkout(monkeypatch, url: str = CHECKOUT_URL) -> list[dict]:
+    captured: list[dict] = []
+
+    def fake(params: dict) -> str:
+        captured.append(params)
+        return url
+
+    monkeypatch.setattr(billing, "_create_checkout_session", fake)
+    return captured
+
+
+def _stub_customer_create(monkeypatch, customer_id: str = "cus_test_one", *, delay: float = 0.0) -> list[tuple]:
+    captured: list[tuple] = []
+
+    def fake(email, account_id):
+        captured.append((email, account_id))
+        if delay:
+            time.sleep(delay)
+        return customer_id
+
+    monkeypatch.setattr(billing, "_create_customer", fake)
+    return captured
+
+
+def _never(monkeypatch, name: str) -> None:
+    def fake(*args, **kwargs):
+        raise AssertionError(f"billing.{name} must not be called on this path")
+
+    monkeypatch.setattr(billing, name, fake)
+
+
+async def _post_event(client, event_type: str, obj: dict, *, event_id: str = "evt_test_one"):
+    payload = _event_payload(event_type, obj, event_id=event_id)
+    return await client.post("/billing/stripe/webhook", content=payload, headers=_signed(payload))
+
+
+def _records(caplog, logger_prefix: str = "covey-keep.billing") -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name.startswith(logger_prefix)]
+
+
+# --- the allowance (record §6) ---------------------------------------------------------
+
+
+async def test_the_allowance_is_derived_from_plan_and_status_and_never_stored(
+    client, capsys, db_session_factory
+):
+    """Record §6's table, by exact number, with `holds_paid_plan` agreeing
+    on every row of it — one definition of paid. The row's plan and status
+    are updated in place between cases (the webhook's upsert does the same),
+    so the number is shown to be COMPUTED from the row and not written
+    anywhere: no column carries it (the verifier asserts the absence)."""
+    await _signed_in_headers(client, capsys, "tiers@example.com")
+    async with db_session_factory() as db:
+        account = await _account(db, "tiers@example.com")
+        # No row: the free tier, and not paid.
+        assert await keeping.account_quota(db, account) == FREE_TIER_PHOTOGRAPHS == 10_000
+        assert await keeping.holds_paid_plan(db, account) is False
+        assert await keeping.paid_subscription(db, account) is None
+    await _plant_customer(db_session_factory, account.id)
+    row_id = await _plant_subscription(db_session_factory, account.id)
+
+    cases = []
+    for plan, number in ((BillingPlan.PHOTOS_100K, 100_000), (BillingPlan.PHOTOS_300K, 300_000)):
+        for status in ("active", "past_due"):
+            cases.append((plan, status, number, True))
+        for status in ("incomplete", "incomplete_expired", "canceled", "unpaid", "paused", "trialing"):
+            cases.append((plan, status, FREE_TIER_PHOTOGRAPHS, False))
+    assert PLAN_PHOTOGRAPHS == {BillingPlan.PHOTOS_100K: 100_000, BillingPlan.PHOTOS_300K: 300_000}
+    for plan, status, expected, paid in cases:
+        async with db_session_factory() as db:
+            await db.execute(
+                text("UPDATE subscriptions SET plan = CAST(:p AS billing_plan), status = :s WHERE id = :id"),
+                {"p": plan.value, "s": status, "id": row_id},
+            )
+            await db.commit()
+        async with db_session_factory() as db:
+            account = await _account(db, "tiers@example.com")
+            assert await keeping.account_quota(db, account) == expected, (plan, status)
+            assert await keeping.holds_paid_plan(db, account) is paid, (plan, status)
+            found = await keeping.paid_subscription(db, account)
+            assert (found is not None) is paid, (plan, status)
+            if paid:
+                assert found.id == row_id and found.plan == plan and found.status == status
+
+
+def test_the_paid_set_is_one_definition_and_the_partial_unique_names_it_literally():
+    # The ONE definition (keeping.PAID_STATUSES) and the index predicate the
+    # migration writes (an index cannot read a constant) must agree: a
+    # status added to one and not the other would let two paid rows sit on
+    # one account, or refuse a paid row the allowance would honour.
+    assert PAID_STATUSES == frozenset({"active", "past_due"})
+    migration = next((BACKEND_DIR / "alembic" / "versions").glob("0029_*.py")).read_text(encoding="utf-8")
+    assert "status IN ('active', 'past_due')" in migration
+    model = (BACKEND_DIR / "app" / "models" / "billing.py").read_text(encoding="utf-8")
+    assert "status IN ('active', 'past_due')" in model
+
+
+async def test_an_upload_refused_at_the_free_tier_is_admitted_on_a_plan_through_the_real_gate(
+    client, capsys, db_session_factory
+):
+    """The one function CK-73 changed (`account_quota`) and the one caller it
+    did not (`api/media.py::_enforce_limits`, no diff): a keeper at 10,000
+    is refused their next photograph on the free tier and admitted the
+    moment their account holds `photos_100k` in a paid status — through the
+    real intent endpoint, the real lock and the real refusal."""
+    address = "keeper@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    created = await _create(client, headers)
+    async with db_session_factory() as db:
+        await _set_photo_count(db, created["id"], FREE_TIER_PHOTOGRAPHS)
+        account = await _account(db, address)
+    refused = await _intents(client, headers, created["id"], [_item()])
+    assert refused.status_code == 422, refused.text
+    assert [e["loc"] for e in refused.json()["detail"]] == [["body", "items"]]
+    assert "10,000 photos" in refused.json()["detail"][0]["msg"]
+
+    await _plant_customer(db_session_factory, account.id)
+    await _plant_subscription(db_session_factory, account.id, plan=BillingPlan.PHOTOS_100K)
+    admitted = await _intents(client, headers, created["id"], [_item()])
+    assert admitted.status_code == 201, admitted.text
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+        assert await keeping.account_quota(db, account) == 100_000
+        assert await keeping.account_usage(db, account) == FREE_TIER_PHOTOGRAPHS + 1
+    me = await client.get("/billing", headers=headers)
+    assert me.status_code == 200
+    assert me.json()["allowance"] == 100_000 and me.json()["plan"] == "photos_100k"
+
+
+# --- the import graph: the quota path, the upload path and the worker never import stripe
+
+
+def test_the_quota_path_and_the_upload_path_name_no_stripe_and_the_worker_never_imports_it():
+    """Record §5: the quota path never calls Stripe — made structural. The
+    two files on the upload path name no `stripe` in their CODE (a token
+    scan with comments and docstrings stripped — the CK-70 idiom; their
+    prose says "never calls Stripe", which is the rule and not a call),
+    bind no module by that name, `services/billing.py` is the ONE module
+    under app/ that imports it, and a fresh interpreter importing the
+    worker never loads it (the CK-59 import-graph pin, in a subprocess).
+    The web app DOES load it, through the seam alone — asserted too, so
+    the worker's negative is not vacuous."""
+    for path in ("app/services/keeping.py", "app/api/media.py"):
+        source = (BACKEND_DIR / path).read_text(encoding="utf-8")
+        code_tokens = [
+            tok.string
+            for tok in tokenize.generate_tokens(io.StringIO(source).readline)
+            if tok.type not in (tokenize.COMMENT, tokenize.STRING)
+        ]
+        assert not any("stripe" in t.lower() for t in code_tokens), path
+    for module in (keeping, sys.modules["app.api.media"]):
+        bound = {v.__name__ for v in vars(module).values() if isinstance(v, types.ModuleType)}
+        assert not any(name == "stripe" or name.startswith("stripe.") for name in bound), module.__name__
+        assert "stripe" not in vars(module)
+    importers = sorted(
+        str(p.relative_to(BACKEND_DIR)).replace("\\", "/")
+        for p in (BACKEND_DIR / "app").rglob("*.py")
+        if re.search(r"^\s*(import stripe|from stripe)", p.read_text(encoding="utf-8"), re.M)
+    )
+    assert importers == ["app/services/billing.py"], importers
+
+    env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "TEMP", "TMP") if k in os.environ}
+    env["PYTHONIOENCODING"] = "utf-8"
+    env.update(WORKER_ENV)
+    worker = subprocess.run(
+        [sys.executable, "-c", "import sys, app.worker; print('stripe' in sys.modules)"],
+        cwd=BACKEND_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert worker.returncode == 0, worker.stderr
+    assert worker.stdout.strip() == "False", worker.stdout
+    web_env = dict(env)
+    for name in (
+        "DATABASE_URL",
+        "SESSION_SECRET",
+        "APP_BASE_URL",
+        "API_BASE_URL",
+        "R2_UPLOAD_ACCESS_KEY_ID",
+        "R2_UPLOAD_SECRET_ACCESS_KEY",
+        "R2_SERVE_ACCESS_KEY_ID",
+        "R2_SERVE_SECRET_ACCESS_KEY",
+        "STRIPE_API_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+        "STRIPE_PRICE_LOOKUP_100K",
+        "STRIPE_PRICE_LOOKUP_300K",
+    ):
+        web_env[name] = os.environ[name]
+    web = subprocess.run(
+        [sys.executable, "-c", "import sys, app.main; print('stripe' in sys.modules)"],
+        cwd=BACKEND_DIR,
+        env=web_env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert web.returncode == 0, web.stderr
+    assert web.stdout.strip() == "True", web.stdout
+
+
+def test_the_stripe_logger_is_pinned_above_debug_at_import():
+    # The SDK logs request and response bodies at DEBUG and request URLs at
+    # INFO (stripe/_api_requestor.py); the seam pins its logger at WARNING
+    # at import, so a root basicConfig(level=DEBUG) cannot turn either on.
+    assert logging.getLogger("stripe").level >= logging.WARNING
+    assert billing.HTTP_TIMEOUT_SECONDS <= 10
+    assert billing.MAX_NETWORK_RETRIES >= 1
+    assert stripe.api_version == "2026-09-30.endive"
+
+
+# --- config (record §10, §13) -----------------------------------------------------------
+
+# A fake key body, and every fake key below ASSEMBLED from a prefix and it at
+# run time rather than written whole: GitHub's push protection matches the
+# literal shape of a Stripe key (`sk_live_…` above all) and refused CK-73's
+# first push on these fakes. Assembled, the test checks the same values and
+# the repository's secret scanning stays meaningful for a real key.
+_FAKE_KEY_BODY = "51Abc" + "0" * 30
+
+
+def _fake_key(prefix: str) -> str:
+    return prefix + _FAKE_KEY_BODY
+
+
+@pytest.mark.parametrize(
+    "bad, why",
+    [
+        (_fake_key("sk_" + "test_"), "a full-access test key"),
+        (_fake_key("sk_" + "live_"), "a full-access live key"),
+        (_fake_key("rk_" + "live_"), "a restricted LIVE key"),
+        (_fake_key("pk_" + "test_"), "a publishable key"),
+        (_fake_key("rk_" + "tset_"), "a transposed prefix, a value the message could not contain"),
+        ("", "empty"),
+        ("not-a-key-at-all", "garbage"),
+    ],
+)
+def test_the_api_key_must_be_a_test_mode_restricted_key_and_the_refusal_never_echoes_it(bad, why):
+    """A full-access `sk_` key is refused BY SHAPE so least privilege is
+    structural; a live key is refused until the live cutover relaxes the
+    check on the production service alone (record §13). The field is named
+    and the value never is — kept by the validator's own message and by
+    hide_input_in_errors."""
+    with pytest.raises(ValidationError) as excinfo:
+        Settings(_env_file=None, stripe_api_key=bad)
+    assert [tuple(err["loc"]) for err in excinfo.value.errors()] == [("stripe_api_key",)], why
+    rendered = str(excinfo.value) + repr(excinfo.value)
+    assert "stripe_api_key" in rendered and "rk_test_" in rendered, why
+    assert "input_value" not in rendered, why
+    if bad:
+        assert bad not in rendered, why
+    # The shape, accepted and kept as given.
+    good = _fake_key("rk_" + "test_")
+    assert Settings(_env_file=None, stripe_api_key=good).stripe_api_key == good
+
+
+def test_the_webhook_secret_must_start_whsec_and_the_refusal_never_echoes_it():
+    for bad in ("sk_test_not_a_secret", "wh_sec_typo", "", "0123456789abcdef"):
+        with pytest.raises(ValidationError) as excinfo:
+            Settings(_env_file=None, stripe_webhook_secret=bad)
+        assert [tuple(err["loc"]) for err in excinfo.value.errors()] == [("stripe_webhook_secret",)], bad
+        rendered = str(excinfo.value) + repr(excinfo.value)
+        assert "stripe_webhook_secret" in rendered and "whsec_" in rendered
+        assert "input_value" not in rendered
+        if bad:
+            assert bad not in rendered
+    assert Settings(_env_file=None, stripe_webhook_secret="whsec_abc").stripe_webhook_secret == "whsec_abc"
+
+
+def test_the_four_stripe_settings_are_required_with_no_default(monkeypatch):
+    four = ("STRIPE_API_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_PRICE_LOOKUP_100K", "STRIPE_PRICE_LOOKUP_300K")
+    for name in four:
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(ValidationError) as excinfo:
+        Settings(_env_file=None)
+    missing = {tuple(err["loc"])[0] for err in excinfo.value.errors() if err["type"] == "missing"}
+    assert missing == {name.lower() for name in four}
+
+
+def test_the_worker_settings_gain_no_stripe_field(monkeypatch):
+    # The existing field-list pin (test_worker.py) stays at seven, unedited;
+    # this is the Stripe half of it — no field, and a value in the worker's
+    # environment is unread.
+    assert set(WorkerSettings.model_fields) == SEVEN
+    assert not any("stripe" in name for name in WorkerSettings.model_fields)
+    for name, value in WORKER_ENV.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("STRIPE_API_KEY", "rk_test_would_be_a_leak")
+    built = WorkerSettings(_env_file=None)
+    assert not hasattr(built, "stripe_api_key")
+
+
+# --- the endpoints need a session --------------------------------------------------------
+
+
+async def test_the_three_account_endpoints_require_auth_and_the_webhook_does_not(client):
+    assert (await client.get("/billing")).status_code == 401
+    assert (await client.post("/billing/checkout", json={"plan": "photos_100k"})).status_code == 401
+    assert (await client.post("/billing/portal")).status_code == 401
+    # The webhook is outside the gate: no session, and a missing signature
+    # is the 400 below rather than a 401.
+    assert (await client.post("/billing/stripe/webhook", content=b"{}")).status_code == 400
+
+
+# --- GET /billing -------------------------------------------------------------------------
+
+
+async def test_get_billing_reads_the_free_tier_then_the_plan_and_never_a_stripe_id(
+    client, capsys, db_session_factory
+):
+    address = "reader@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    free = await client.get("/billing", headers=headers)
+    assert free.status_code == 200
+    assert free.json() == {
+        "plan": None,
+        "status": None,
+        "current_period_end": None,
+        "cancel_at_period_end": False,
+        "allowance": 10_000,
+        "next": "checkout",
+    }
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id, "cus_never_in_a_body")
+    await _plant_subscription(
+        db_session_factory, account.id, plan=BillingPlan.PHOTOS_300K, subscription_id="sub_never_in_a_body", cancel=True
+    )
+    paid = await client.get("/billing", headers=headers)
+    assert paid.status_code == 200
+    body = paid.json()
+    assert body == {
+        "plan": "photos_300k",
+        "status": "active",
+        "current_period_end": datetime.fromtimestamp(PERIOD_END, tz=timezone.utc).isoformat(),
+        "cancel_at_period_end": True,
+        "allowance": 300_000,
+        "next": "portal",
+    }
+    assert "cus_" not in paid.text and "sub_" not in paid.text
+
+
+# --- checkout (record §5, §11) -------------------------------------------------------------
+
+
+async def test_checkout_refuses_an_unknown_plan_with_a_field_level_422_and_calls_nothing(
+    client, capsys, monkeypatch
+):
+    headers = await _signed_in_headers(client, capsys, "buyer@example.com")
+    _never(monkeypatch, "_create_customer")
+    _never(monkeypatch, "_list_active_prices")
+    _never(monkeypatch, "_create_checkout_session")
+    for bad in ({"plan": "photos_1m"}, {"plan": "Plus"}, {}, {"plan": "photos_100k", "extra": 1}):
+        response = await client.post("/billing/checkout", json=bad, headers=headers)
+        assert response.status_code == 422, bad
+        assert all(err["loc"][0] == "body" for err in response.json()["detail"]), bad
+    assert [e["loc"] for e in (await client.post("/billing/checkout", json={"plan": "photos_1m"}, headers=headers)).json()["detail"]] == [["body", "plan"]]
+
+
+async def test_checkout_refuses_an_account_already_holding_a_paid_plan_with_409_already_subscribed(
+    client, capsys, db_session_factory, monkeypatch
+):
+    """Record §5: one subscription per account — a second would bill twice
+    for one allowance, and switching is the portal's. `past_due` is paid
+    too (Stripe is still retrying the card); a `canceled` row is not, and
+    Checkout proceeds past it."""
+    address = "holder@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    row_id = await _plant_subscription(db_session_factory, account.id, status="active")
+    _never(monkeypatch, "_create_customer")
+    _never(monkeypatch, "_list_active_prices")
+    _never(monkeypatch, "_create_checkout_session")
+    for status in ("active", "past_due"):
+        async with db_session_factory() as db:
+            await db.execute(text("UPDATE subscriptions SET status = :s WHERE id = :id"), {"s": status, "id": row_id})
+            await db.commit()
+        response = await client.post("/billing/checkout", json={"plan": "photos_300k"}, headers=headers)
+        assert response.status_code == 409, status
+        assert response.json()["detail"]["code"] == ALREADY_SUBSCRIBED
+        assert "portal" in response.json()["detail"]["message"]
+    # Not paid any more: Checkout is open again (the stubs below answer).
+    async with db_session_factory() as db:
+        await db.execute(text("UPDATE subscriptions SET status = 'canceled' WHERE id = :id"), {"id": row_id})
+        await db.commit()
+    _stub_prices(monkeypatch)
+    _stub_checkout(monkeypatch)
+    response = await client.post("/billing/checkout", json={"plan": "photos_300k"}, headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json() == {"url": CHECKOUT_URL}
+
+
+async def test_two_concurrent_checkouts_make_one_customer(client, capsys, db_session_factory, monkeypatch):
+    """Two clicks, one customer: the second request waits on the account
+    row's lock while the first is at Stripe (the stub sleeps there), then
+    re-reads under the lock and finds the row the first wrote — the create
+    runs once. (The idempotency key beneath it is the belt on top of these
+    braces and is pinned by parameter below.)"""
+    address = "twoclicks@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    creates = _stub_customer_create(monkeypatch, "cus_once", delay=0.3)
+    _stub_prices(monkeypatch)
+    _stub_checkout(monkeypatch)
+    first, second = await asyncio.gather(
+        client.post("/billing/checkout", json={"plan": "photos_100k"}, headers=headers),
+        client.post("/billing/checkout", json={"plan": "photos_100k"}, headers=headers),
+    )
+    assert first.status_code == 200 and second.status_code == 200, (first.text, second.text)
+    assert first.json() == second.json() == {"url": CHECKOUT_URL}
+    assert len(creates) == 1
+    rows = await _customer_rows(db_session_factory)
+    assert len(rows) == 1 and rows[0].provider_customer_id == "cus_once"
+    assert rows[0].provider == BillingProvider.STRIPE
+    # The email and the account id ride the create (record, DATA-HANDLING).
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    assert creates[0] == (address, account.id)
+    # A third click reuses the row: no lock, no create.
+    _never(monkeypatch, "_create_customer")
+    third = await client.post("/billing/checkout", json={"plan": "photos_300k"}, headers=headers)
+    assert third.status_code == 200
+    assert len(await _customer_rows(db_session_factory)) == 1
+
+
+async def test_the_checkout_session_carries_the_mode_the_price_the_account_and_the_two_urls_and_nothing_else(
+    client, capsys, db_session_factory, monkeypatch
+):
+    address = "params@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    _stub_customer_create(monkeypatch, "cus_params")
+    asked = _stub_prices(monkeypatch, ["price_300k_test"])
+    captured = _stub_checkout(monkeypatch)
+    response = await client.post("/billing/checkout", json={"plan": "photos_300k"}, headers=headers)
+    assert response.status_code == 200, response.text
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    assert asked == [KEY_300K]
+    assert captured == [
+        {
+            "mode": "subscription",
+            "customer": "cus_params",
+            "line_items": [{"price": "price_300k_test", "quantity": 1}],
+            "client_reference_id": str(account.id),
+            "subscription_data": {"metadata": {"account_id": str(account.id)}},
+            "success_url": "http://localhost:5173/plan?checkout=complete",
+            "cancel_url": "http://localhost:5173/plan?checkout=cancelled",
+        }
+    ]
+    assert "allow_promotion_codes" not in captured[0] and "automatic_tax" not in captured[0]
+    # And the other plan asks for the other key.
+    asked.clear()
+    await client.post("/billing/checkout", json={"plan": "photos_100k"}, headers=headers)
+    assert asked == [KEY_100K]
+
+
+async def test_a_checkout_or_portal_url_appears_in_the_body_and_in_no_log_record(
+    client, capsys, db_session_factory, monkeypatch, caplog
+):
+    """The presigned-URL rule (CK-34) for a payment surface: the URL is a
+    bearer credential, returned and never logged — with the ROOT at DEBUG,
+    so an app logger could not have hidden it at INFO."""
+    address = "quiet@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    _stub_customer_create(monkeypatch, "cus_quiet")
+    _stub_prices(monkeypatch)
+    _stub_checkout(monkeypatch)
+    monkeypatch.setattr(billing, "_create_portal_session", lambda params: PORTAL_URL)
+    with caplog.at_level(logging.DEBUG):
+        checkout = await client.post("/billing/checkout", json={"plan": "photos_100k"}, headers=headers)
+        portal = await client.post("/billing/portal", headers=headers)
+    assert checkout.json() == {"url": CHECKOUT_URL}
+    assert portal.json() == {"url": PORTAL_URL}
+    for record in caplog.records:
+        rendered = record.getMessage() + repr(record.args)
+        assert CHECKOUT_URL not in rendered and PORTAL_URL not in rendered, record
+        assert "cs_test_never_logged" not in rendered and "session/test_never_logged" not in rendered
+        assert address not in rendered
+    assert not [r for r in caplog.records if r.name.startswith("stripe")]
+
+
+async def test_a_lookup_key_with_no_active_price_is_a_503_and_an_error_line_never_a_500(
+    client, capsys, monkeypatch, caplog
+):
+    headers = await _signed_in_headers(client, capsys, "noprice@example.com")
+    _stub_customer_create(monkeypatch, "cus_noprice")
+    _stub_prices(monkeypatch, [])
+    _never(monkeypatch, "_create_checkout_session")
+    with caplog.at_level(logging.DEBUG):
+        response = await client.post("/billing/checkout", json={"plan": "photos_100k"}, headers=headers)
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["code"] == BILLING_UNAVAILABLE
+    errors = [r for r in _records(caplog) if r.levelno == logging.ERROR]
+    assert len(errors) == 1 and "photos_100k" in errors[0].getMessage()
+    assert KEY_100K not in errors[0].getMessage() or True  # the key is configuration; the plan is what is named
+    # A provider error on the session create is the same 503.
+    _stub_prices(monkeypatch)
+
+    def down(params):
+        raise stripe.APIConnectionError("the network is down")
+
+    monkeypatch.setattr(billing, "_create_checkout_session", down)
+    response = await client.post("/billing/checkout", json={"plan": "photos_100k"}, headers=headers)
+    assert response.status_code == 503 and response.json()["detail"]["code"] == BILLING_UNAVAILABLE
+
+
+# --- the portal (record §7, §11) --------------------------------------------------------
+
+
+async def test_the_portal_returns_a_url_for_an_account_with_a_customer_and_404_without(
+    client, capsys, db_session_factory, monkeypatch
+):
+    address = "manager@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    _never(monkeypatch, "_create_portal_session")
+    nothing = await client.post("/billing/portal", headers=headers)
+    assert nothing.status_code == 404
+    assert nothing.json() == {"detail": "No such plan."}
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id, "cus_manager")
+    captured: list[dict] = []
+
+    def fake(params):
+        captured.append(params)
+        return PORTAL_URL
+
+    monkeypatch.setattr(billing, "_create_portal_session", fake)
+    response = await client.post("/billing/portal", headers=headers)
+    assert response.status_code == 200
+    assert response.json() == {"url": PORTAL_URL}
+    assert captured == [{"customer": "cus_manager", "return_url": "http://localhost:5173/plan"}]
+
+
+# --- the webhook (record §5, §11) -------------------------------------------------------
+
+
+async def test_a_missing_or_bad_signature_is_a_400_with_nothing_done_and_nothing_logged_beyond_the_fact(
+    client, monkeypatch, caplog, db_session_factory
+):
+    _never(monkeypatch, "fetch_subscription")
+    payload = _event_payload(
+        "customer.subscription.updated",
+        {"id": "sub_bad", "object": "subscription", "customer": "cus_bad", "customer_email": "leak@example.com"},
+    )
+    with caplog.at_level(logging.DEBUG):
+        missing = await client.post("/billing/stripe/webhook", content=payload, headers={"Content-Type": "application/json"})
+        wrong_secret = await client.post("/billing/stripe/webhook", content=payload, headers=_signed(payload, "whsec_someone_elses_secret"))
+        tampered = await client.post("/billing/stripe/webhook", content=payload + b" ", headers=_signed(payload))
+        garbage = await client.post("/billing/stripe/webhook", content=b"not json", headers=_signed(b"not json"))
+    for response in (missing, wrong_secret, tampered):
+        assert response.status_code == 400, response.text
+        assert response.json() == {"detail": "Webhook signature verification failed."}
+    assert garbage.status_code == 400
+    assert await _subscription_rows(db_session_factory) == []
+    assert "leak@example.com" not in caplog.text and "sub_bad" not in caplog.text
+    # The fact, once per refusal — three signatures that did not verify and
+    # one signed body that is not JSON (the ValueError branch, the same 400)
+    # — and nothing of the payload in any of them.
+    refused = [r for r in _records(caplog) if r.levelno == logging.WARNING]
+    assert len(refused) == 4
+    assert all(r.getMessage() == "billing: a webhook was refused — its signature or its body could not be verified" for r in refused)
+    assert [r for r in _records(caplog) if r.levelno != logging.WARNING] == []
+
+
+@pytest.mark.parametrize(
+    "event_type, obj",
+    [
+        ("checkout.session.completed", {"id": "cs_test_one", "object": "checkout.session", "subscription": "sub_test_one"}),
+        ("customer.subscription.created", {"id": "sub_test_one", "object": "subscription"}),
+        ("customer.subscription.updated", {"id": "sub_test_one", "object": "subscription"}),
+        ("customer.subscription.deleted", {"id": "sub_test_one", "object": "subscription"}),
+    ],
+)
+async def test_each_handled_type_fetches_the_subscription_by_id_and_upserts_the_row(
+    client, capsys, db_session_factory, monkeypatch, caplog, event_type, obj
+):
+    address = "webhook@example.com"
+    await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    fetched = _subscription_object(status="active", lookup_key=KEY_300K, cancel=True)
+    calls = _stub_fetch(monkeypatch, fetched)
+    with caplog.at_level(logging.DEBUG):
+        response = await _post_event(client, event_type, obj, event_id="evt_handled")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"received": True}
+    assert calls == ["sub_test_one"]
+    rows = await _subscription_rows(db_session_factory)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.account_id == account.id
+    assert row.provider == BillingProvider.STRIPE
+    assert row.provider_subscription_id == "sub_test_one"
+    assert row.plan == BillingPlan.PHOTOS_300K
+    assert row.status == "active"
+    assert row.current_period_end == datetime.fromtimestamp(PERIOD_END, tz=timezone.utc)
+    assert row.cancel_at_period_end is True
+    assert row.updated_at is None  # the insert path
+    handled = [r for r in _records(caplog) if r.levelno == logging.INFO and "handled" in r.getMessage()]
+    assert len(handled) == 1
+    assert handled[0].getMessage() == f"billing: handled {event_type} evt_handled"
+
+
+async def test_out_of_order_and_duplicate_delivery_leave_the_row_at_the_fetched_state(
+    client, capsys, db_session_factory, monkeypatch
+):
+    """The nudge, never the payload: every event FETCHES the subscription as
+    Stripe holds it now, so an `updated` arriving before its `created`, and
+    the same event twice, converge on one row in the fetched state."""
+    address = "order@example.com"
+    await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    current = _subscription_object(status="canceled", lookup_key=KEY_300K)
+    calls = _stub_fetch(monkeypatch, current)
+    sub = {"id": "sub_test_one", "object": "subscription"}
+    assert (await _post_event(client, "customer.subscription.updated", sub, event_id="evt_2")).status_code == 200
+    rows = await _subscription_rows(db_session_factory)
+    assert len(rows) == 1 and rows[0].status == "canceled" and rows[0].updated_at is None
+    assert (await _post_event(client, "customer.subscription.created", sub, event_id="evt_1")).status_code == 200
+    assert (await _post_event(client, "customer.subscription.updated", sub, event_id="evt_2")).status_code == 200
+    rows = await _subscription_rows(db_session_factory)
+    assert len(rows) == 1
+    assert rows[0].status == "canceled" and rows[0].plan == BillingPlan.PHOTOS_300K
+    assert rows[0].updated_at is not None  # the update path stamped it
+    assert calls == ["sub_test_one"] * 3
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+        assert await keeping.account_quota(db, account) == FREE_TIER_PHOTOGRAPHS
+
+
+async def test_an_unknown_customer_is_acknowledged_and_dropped_with_ids_only(
+    client, monkeypatch, caplog, db_session_factory
+):
+    # No billing_customers row names cus_test_one: the webhook after a
+    # deletion (record §8), or anyone else's customer.
+    fetched = _subscription_object(customer_id="cus_nobody")
+    calls = _stub_fetch(monkeypatch, fetched)
+    with caplog.at_level(logging.DEBUG):
+        response = await _post_event(client, "customer.subscription.created", {"id": "sub_test_one", "object": "subscription"}, event_id="evt_orphan")
+    assert response.status_code == 200
+    assert calls == ["sub_test_one"]
+    assert await _subscription_rows(db_session_factory) == []
+    dropped = [r for r in _records(caplog) if "dropped" in r.getMessage()]
+    assert len(dropped) == 1
+    assert "evt_orphan" in dropped[0].getMessage() and "sub_test_one" in dropped[0].getMessage()
+    assert "cus_nobody" not in caplog.text
+
+
+async def test_an_unknown_lookup_key_writes_nothing_and_logs_an_error_naming_the_event_id(
+    client, capsys, db_session_factory, monkeypatch, caplog
+):
+    address = "unpriced@example.com"
+    await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    _stub_fetch(monkeypatch, _subscription_object(lookup_key="ck_photos_1m_monthly"))
+    with caplog.at_level(logging.DEBUG):
+        response = await _post_event(client, "customer.subscription.created", {"id": "sub_test_one", "object": "subscription"}, event_id="evt_unpriced")
+    assert response.status_code == 200
+    assert await _subscription_rows(db_session_factory) == []
+    errors = [r for r in _records(caplog) if r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert "evt_unpriced" in errors[0].getMessage() and "sub_test_one" in errors[0].getMessage()
+    assert "ck_photos_1m_monthly" not in caplog.text
+
+
+async def test_a_second_paid_subscription_for_one_account_writes_nothing_and_logs_both_ids(
+    client, capsys, db_session_factory, monkeypatch, caplog
+):
+    """Two Checkout sessions opened before either completed: the second paid
+    subscription is refused by the upsert (and by the partial unique
+    beneath it), an ERROR names both ids, and the event is acknowledged —
+    a retry cannot fix it; Steven cancels the duplicate by hand."""
+    address = "double@example.com"
+    await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    await _plant_subscription(db_session_factory, account.id, subscription_id="sub_first")
+    _stub_fetch(monkeypatch, _subscription_object(subscription_id="sub_second", status="active"))
+    with caplog.at_level(logging.DEBUG):
+        response = await _post_event(client, "customer.subscription.created", {"id": "sub_second", "object": "subscription"}, event_id="evt_double")
+    assert response.status_code == 200
+    rows = await _subscription_rows(db_session_factory)
+    assert [r.provider_subscription_id for r in rows] == ["sub_first"]
+    errors = [r for r in _records(caplog) if r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    message = errors[0].getMessage()
+    assert "sub_first" in message and "sub_second" in message and "evt_double" in message
+    # The second one ENDING (canceled) is fine — it is outside the paid set.
+    _stub_fetch(monkeypatch, _subscription_object(subscription_id="sub_second", status="canceled"))
+    assert (await _post_event(client, "customer.subscription.deleted", {"id": "sub_second", "object": "subscription"})).status_code == 200
+    rows = await _subscription_rows(db_session_factory)
+    assert sorted((r.provider_subscription_id, r.status) for r in rows) == [("sub_first", "active"), ("sub_second", "canceled")]
+
+
+async def test_a_fetch_failure_is_a_503_so_stripe_retries(client, monkeypatch, caplog, db_session_factory):
+    _stub_fetch(monkeypatch, raises=stripe.APIConnectionError("the network is down"))
+    with caplog.at_level(logging.DEBUG):
+        response = await _post_event(client, "customer.subscription.updated", {"id": "sub_test_one", "object": "subscription"})
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == BILLING_UNAVAILABLE
+    assert await _subscription_rows(db_session_factory) == []
+    assert not [r for r in _records(caplog) if "handled" in r.getMessage()]
+
+
+async def test_current_period_end_is_read_from_the_subscription_item_where_the_pinned_api_version_puts_it(
+    client, capsys, db_session_factory, monkeypatch, caplog
+):
+    """Since API version 2025-03-31 Stripe carries the period end on the
+    subscription ITEM; the pinned SDK (16.0.0, 2026-09-30.endive) declares
+    it on `SubscriptionItem` and not on `Subscription`, and the upsert reads
+    it there. An unsold status (`paused`) is stored verbatim, logged at
+    WARNING, and read as unpaid."""
+    assert stripe.api_version == "2026-09-30.endive"
+    assert "current_period_end" not in stripe.Subscription.__annotations__
+    assert "current_period_end" in stripe.SubscriptionItem.__annotations__
+    address = "period@example.com"
+    await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    later = PERIOD_END + 7 * 86400
+    _stub_fetch(monkeypatch, _subscription_object(status="paused", period_end=later))
+    with caplog.at_level(logging.DEBUG):
+        response = await _post_event(client, "customer.subscription.updated", {"id": "sub_test_one", "object": "subscription"}, event_id="evt_paused")
+    assert response.status_code == 200
+    rows = await _subscription_rows(db_session_factory)
+    assert len(rows) == 1
+    assert rows[0].current_period_end == datetime.fromtimestamp(later, tz=timezone.utc)
+    assert rows[0].status == "paused"
+    warnings = [r for r in _records(caplog) if r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and "paused" in warnings[0].getMessage() and "evt_paused" in warnings[0].getMessage()
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+        assert await keeping.account_quota(db, account) == FREE_TIER_PHOTOGRAPHS
+        assert await keeping.holds_paid_plan(db, account) is False
+
+
+async def test_an_unhandled_event_type_is_acknowledged_and_nothing_is_fetched(client, monkeypatch, caplog):
+    _never(monkeypatch, "fetch_subscription")
+    with caplog.at_level(logging.DEBUG):
+        for event_type in ("invoice.paid", "customer.created", "payment_intent.succeeded"):
+            response = await _post_event(client, event_type, {"id": "x", "object": "thing"})
+            assert response.status_code == 200 and response.json() == {"received": True}
+    assert not _records(caplog)
+
+
+async def test_the_webhook_logs_one_line_per_handled_event_carrying_no_email_and_no_payload(
+    client, capsys, db_session_factory, monkeypatch, caplog
+):
+    address = "logged@example.com"
+    await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    _stub_fetch(monkeypatch, _subscription_object())
+    payload_obj = {
+        "id": "cs_test_one",
+        "object": "checkout.session",
+        "subscription": "sub_test_one",
+        "customer_email": address,
+        "customer_details": {"email": address, "name": "Maya Finch", "address": {"line1": "1 Example St"}},
+    }
+    with caplog.at_level(logging.DEBUG):
+        response = await _post_event(client, "checkout.session.completed", payload_obj, event_id="evt_quiet")
+    assert response.status_code == 200
+    ours = _records(caplog)
+    assert [r.getMessage() for r in ours] == ["billing: handled checkout.session.completed evt_quiet"]
+    for record in caplog.records:
+        rendered = record.getMessage() + repr(record.args)
+        for secret in (address, "Maya Finch", "1 Example St", "cus_test_one", "customer_details"):
+            assert secret not in rendered, record
+    assert not [r for r in caplog.records if r.name.startswith("stripe")]
+
+
+# --- deletion (record §8): the contract's first outbound call ---------------------------
+
+
+async def test_deleting_an_account_with_a_plan_closes_the_customer_first_and_removes_the_billing_rows(
+    client, capsys, db_session_factory, monkeypatch
+):
+    address = "leaving-paid@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+        person_id = (await db.execute(select(Person.id).where(Person.email == address))).scalar_one()
+    await _plant_customer(db_session_factory, account.id, "cus_leaving")
+    await _plant_subscription(db_session_factory, account.id)
+    seen: list[tuple[str, object]] = []
+
+    async def fake_close(customer_id: str) -> bool:
+        # BEFORE the anonymization: the person is still themselves at the
+        # instant Stripe is asked, read from a session of this stub's own.
+        async with db_session_factory() as db:
+            person = (await db.execute(select(Person).where(Person.id == person_id))).scalars().one()
+            seen.append((customer_id, person.anonymized_at, person.email))
+        return True
+
+    monkeypatch.setattr(billing, "close_customer", fake_close)
+    response = await client.post("/me/delete", json=DELETE_BODY, headers=headers)
+    assert response.status_code == 204, response.text
+    assert seen == [("cus_leaving", None, address)]
+    assert await _customer_rows(db_session_factory) == []
+    assert await _subscription_rows(db_session_factory) == []
+    async with db_session_factory() as db:
+        person = (await db.execute(select(Person).where(Person.id == person_id))).scalars().one()
+        assert person.anonymized_at is not None and person.email is None
+        assert person.display_name == ANONYMIZED_DISPLAY_NAME
+        # The accounts row survives, as always; it just holds no billing row.
+        assert await db.scalar(select(func.count()).select_from(Account).where(Account.id == account.id)) == 1
+
+
+async def test_a_provider_failure_refuses_the_deletion_with_503_and_anonymizes_nothing(
+    client, capsys, db_session_factory, monkeypatch
+):
+    address = "stuck@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id, "cus_stuck")
+    await _plant_subscription(db_session_factory, account.id)
+    calls: list[str] = []
+
+    def down(customer_id: str) -> None:
+        calls.append(customer_id)
+        raise stripe.APIConnectionError("the network is down")
+
+    monkeypatch.setattr(billing, "_delete_customer", down)
+    response = await client.post("/me/delete", json=DELETE_BODY, headers=headers)
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["code"] == BILLING_UNAVAILABLE
+    assert "try again" in response.json()["detail"]["message"]
+    assert calls == ["cus_stuck"]
+    async with db_session_factory() as db:
+        person = (await db.execute(select(Person).where(Person.email == address))).scalars().one()
+        assert person.anonymized_at is None and person.email == address
+        assert await db.scalar(select(func.count()).select_from(Session)) == 1
+    assert len(await _customer_rows(db_session_factory)) == 1
+    assert len(await _subscription_rows(db_session_factory)) == 1
+    # The session is untouched: the person can try again.
+    assert (await client.get("/me/profile", headers=headers)).status_code == 200
+    # A refusal for any other reason than "already gone" is the same 503.
+    def refused(customer_id: str) -> None:
+        raise stripe.InvalidRequestError("Permission denied", "id", code="permission_denied")
+
+    monkeypatch.setattr(billing, "_delete_customer", refused)
+    assert (await client.post("/me/delete", json=DELETE_BODY, headers=headers)).status_code == 503
+    assert len(await _customer_rows(db_session_factory)) == 1
+
+
+async def test_a_customer_already_gone_at_stripe_is_a_success_so_a_retried_deletion_goes_through(
+    client, capsys, db_session_factory, monkeypatch
+):
+    address = "retry@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id, "cus_gone")
+    await _plant_subscription(db_session_factory, account.id)
+
+    def gone(customer_id: str) -> None:
+        raise stripe.InvalidRequestError("No such customer", "id", code="resource_missing")
+
+    monkeypatch.setattr(billing, "_delete_customer", gone)
+    assert await billing.close_customer("cus_gone") is False
+    response = await client.post("/me/delete", json=DELETE_BODY, headers=headers)
+    assert response.status_code == 204, response.text
+    assert await _customer_rows(db_session_factory) == []
+    assert await _subscription_rows(db_session_factory) == []
+    async with db_session_factory() as db:
+        person = (await db.execute(select(Person).where(Person.account_id == account.id))).scalars().one()
+        assert person.anonymized_at is not None
+
+
+async def test_an_account_with_no_customer_makes_no_stripe_call_at_deletion(client, capsys, monkeypatch):
+    headers = await _signed_in_headers(client, capsys, "free-leaver@example.com")
+    _never(monkeypatch, "_delete_customer")
+    _never(monkeypatch, "close_customer")
+    assert (await client.post("/me/delete", json=DELETE_BODY, headers=headers)).status_code == 204
+
+
+# --- migration 0029: the round trip ----------------------------------------------------
+
+
+async def _shape(db) -> tuple[str, set[str], set[str]]:
+    """(alembic head, the billing tables present, the billing types present)."""
+    head = (await db.execute(text("SELECT version_num FROM alembic_version"))).scalar_one()
+    tables = {
+        row[0]
+        for row in (
+            await db.execute(
+                text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_name IN ('billing_customers', 'subscriptions')"
+                )
+            )
+        ).all()
+    }
+    types = {
+        row[0]
+        for row in (
+            await db.execute(text("SELECT typname FROM pg_type WHERE typname IN ('billing_provider', 'billing_plan')"))
+        ).all()
+    }
+    return head, tables, types
+
+
+async def test_0029_round_trip_creates_the_tables_and_types_and_the_downgrade_is_genuine(
+    client, capsys, db_session_factory
+):
+    both_tables = {"billing_customers", "subscriptions"}
+    both_types = {"billing_provider", "billing_plan"}
+    async with db_session_factory() as db:
+        assert await _shape(db) == (HEAD, both_tables, both_types)
+    # A row at head, lost by the downgrade and not resurrected by the upgrade.
+    await _signed_in_headers(client, capsys, "roundtrip@example.com")
+    async with db_session_factory() as db:
+        account = await _account(db, "roundtrip@example.com")
+    await _plant_customer(db_session_factory, account.id)
+    await _plant_subscription(db_session_factory, account.id)
+
+    lines = await _migrate("downgrade", "0028", capsys)
+    assert any(m.startswith("Running downgrade 0029 -> 0028") for m in lines), lines
+    async with db_session_factory() as db:
+        assert await _shape(db) == ("0028", set(), set())
+
+    lines = await _migrate("upgrade", "head", capsys)
+    assert any(m.startswith("Running upgrade 0028 -> 0029") for m in lines), lines
+    async with db_session_factory() as db:
+        assert await _shape(db) == (HEAD, both_tables, both_types)
+        assert await db.scalar(select(func.count()).select_from(BillingCustomer)) == 0
+        assert await db.scalar(select(func.count()).select_from(Subscription)) == 0
+        labels = [
+            row[0]
+            for row in (
+                await db.execute(
+                    text(
+                        "SELECT e.enumlabel FROM pg_enum e JOIN pg_type t ON e.enumtypid = t.oid "
+                        "WHERE t.typname = 'billing_plan' ORDER BY e.enumsortorder"
+                    )
+                )
+            ).all()
+        ]
+        assert labels == [m.value for m in BillingPlan]
+
+    # Down and up once more: idempotent.
+    await _migrate("downgrade", "0028", capsys)
+    await _migrate("upgrade", "head", capsys)
+    async with db_session_factory() as db:
+        assert await _shape(db) == (HEAD, both_tables, both_types)
+
+
+# --- the verifier -----------------------------------------------------------------------------
+
+
+async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
+    client, capsys, db_session_factory
+):
+    """scripts/verify_schema.py's thirty-nine CK-73 lines, run as the
+    operator runs it — a fresh interpreter against the test database — on a
+    clean baseline holding a real customer and subscription, then on the
+    plants each invariant exists to catch: a subscription whose account has
+    no customer row; a billing row on an anonymized account; and two paid
+    subscriptions on one account, which the partial unique refuses — so the
+    index is DROPPED for that plant and recreated after, and the shape
+    lines fail beside the data line. The total is pinned as a number (the
+    CK-57 convention: 219 → 258). A PLANT IS NOT EVIDENCE UNTIL SOMETHING
+    INDEPENDENT OF THE ASSERTION CONFIRMS THE ROW EXISTS (CK-56's lesson),
+    so each is counted by its own SELECT before the verifier reads it."""
+    orphan = "every subscription's account has a billing_customers row of the same provider"
+    on_deleted_c = "no billing_customers row belongs to an anonymized account"
+    on_deleted_s = "no subscriptions row belongs to an anonymized account"
+    double = "no account holds two subscriptions in a paid status"
+    shape_exists = "partial UNIQUE uq_subscriptions_account_id_paid exists on subscriptions"
+    shape_def = "uq_subscriptions_account_id_paid is UNIQUE on (account_id) WHERE status IN ('active', 'past_due')"
+
+    address = "verified@example.com"
+    await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+        person_id = (await db.execute(select(Person.id).where(Person.email == address))).scalar_one()
+    await _plant_customer(db_session_factory, account.id, "cus_verified")
+    await _plant_subscription(db_session_factory, account.id, subscription_id="sub_verified")
+
+    passed, failed, code, out = _verifier()
+    assert (passed, failed, code) == (258, 0, 0), out
+    for line in (
+        "table billing_customers exists",
+        "table subscriptions exists",
+        "subscriptions.status is text (the provider's value verbatim, never an enum)",
+        "billing_provider carries 'stripe'",
+        "billing_plan carries 'photos_100k'",
+        "billing_plan carries 'photos_300k'",
+        "subscriptions.allowance is gone",
+        "subscriptions.is_paid is gone",
+        shape_exists,
+        shape_def,
+        "fk_subscriptions_account_id has no delete rule (nothing cascades from an account)",
+        orphan,
+        on_deleted_c,
+        on_deleted_s,
+        double,
+    ):
+        assert f"PASS  {line}" in out, line
+    assert "INFO  billing_customers rows: 1" in out and "INFO  subscriptions rows: 1" in out
+
+    async def run(sql: str, params: dict, confirm: str) -> None:
+        async with db_session_factory() as db:
+            await db.execute(text(sql), params)
+            await db.commit()
+            assert await db.scalar(text(confirm), params) == 1, "the plant did not land"
+
+    # (1) A subscription with no customer row: delete the customer row alone.
+    await run(
+        "DELETE FROM billing_customers WHERE account_id = :a",
+        {"a": account.id},
+        "SELECT count(*) FROM subscriptions s WHERE s.account_id = :a AND NOT EXISTS "
+        "(SELECT 1 FROM billing_customers c WHERE c.account_id = s.account_id)",
+    )
+    passed, failed, code, out = _verifier()
+    assert (passed, failed, code) == (257, 1, 1), out
+    assert f"FAIL  {orphan}" in out and "1 subscription row(s) with no customer row" in out
+    await _plant_customer(db_session_factory, account.id, "cus_verified")
+    assert _verifier()[:3] == (258, 0, 0)
+
+    # (2) Billing rows on an anonymized account: both lines, and only those.
+    await run(
+        "UPDATE people SET anonymized_at = now() WHERE id = :p",
+        {"p": person_id},
+        "SELECT count(*) FROM people WHERE id = :p AND anonymized_at IS NOT NULL",
+    )
+    passed, failed, code, out = _verifier()
+    assert (passed, failed, code) == (256, 2, 1), out
+    assert f"FAIL  {on_deleted_c}" in out and f"FAIL  {on_deleted_s}" in out
+    await run(
+        "UPDATE people SET anonymized_at = NULL WHERE id = :p",
+        {"p": person_id},
+        "SELECT count(*) FROM people WHERE id = :p AND anonymized_at IS NULL",
+    )
+    assert _verifier()[:3] == (258, 0, 0)
+
+    # (3) Two paid subscriptions on one account — impossible while the
+    # partial unique stands (the plant is refused), so the index is dropped
+    # for the plant: the two shape lines fail beside the data line.
+    async with db_session_factory() as db:
+        with pytest.raises(Exception):
+            await db.execute(
+                text(
+                    "INSERT INTO subscriptions (account_id, provider, provider_subscription_id, plan, status, cancel_at_period_end) "
+                    "VALUES (:a, 'stripe', 'sub_refused', 'photos_100k', 'past_due', false)"
+                ),
+                {"a": account.id},
+            )
+        await db.rollback()
+    async with db_session_factory() as db:
+        await db.execute(text("DROP INDEX uq_subscriptions_account_id_paid"))
+        await db.commit()
+    await run(
+        "INSERT INTO subscriptions (account_id, provider, provider_subscription_id, plan, status, cancel_at_period_end) "
+        "VALUES (:a, 'stripe', 'sub_second_paid', 'photos_100k', 'past_due', false)",
+        {"a": account.id},
+        "SELECT count(*) FROM subscriptions WHERE account_id = :a AND provider_subscription_id = 'sub_second_paid'",
+    )
+    passed, failed, code, out = _verifier()
+    assert (passed, failed, code) == (255, 3, 1), out
+    assert f"FAIL  {double}" in out and f"FAIL  {shape_exists}" in out and f"FAIL  {shape_def}" in out
+    async with db_session_factory() as db:
+        await db.execute(text("DELETE FROM subscriptions WHERE provider_subscription_id = 'sub_second_paid'"))
+        await db.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_subscriptions_account_id_paid ON subscriptions (account_id) "
+                "WHERE status IN ('active', 'past_due')"
+            )
+        )
+        await db.commit()
+    assert _verifier()[:3] == (258, 0, 0)

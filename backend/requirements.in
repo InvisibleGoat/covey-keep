@@ -116,3 +116,21 @@ botocore==1.43.89
 # license to add dependencies for problems that are actually simple.
 Pillow==12.3.0
 pillow-heif==1.7.0
+# stripe (CK-73). The fourth deliberate exception, and the first one's
+# reasoning with money in it: a Checkout Session, a Customer Portal session
+# and a subscription fetch are HTTPS calls to a versioned API, and a webhook
+# is an HMAC-SHA256 over `timestamp.payload` compared in constant time inside
+# a replay window — payment-protocol plumbing and signature verification,
+# which are never hand-rolled (the WebAuthn mistake with a card behind it).
+# The SDK also pins its own API version (`stripe._api_version` —
+# 2026-09-30.endive at 16.0.0), which is what the webhook endpoint is
+# registered against so a payload and the SDK's objects describe one API;
+# the account's default version is recorded in the paid-tiers record and is
+# not what the code relies on. Pinned exactly, as webauthn, botocore and
+# Pillow are: the SDK moves on our decision, never pip's — and a version
+# move changes which API version every request carries, so it is its own
+# reviewed change with its own sandbox checks. Imported by ONE module,
+# services/billing.py (pinned by test: the quota path, the upload path and
+# the worker never import it). Still not license to add dependencies for
+# problems that are actually simple.
+stripe==16.0.0

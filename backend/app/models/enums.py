@@ -180,6 +180,32 @@ class PublicationState(str, Enum):
     REMOVED = "removed"
 
 
+class BillingProvider(str, Enum):
+    """Which payment provider a billing row belongs to (CK-73, migration
+    0029; paid-tiers record §4). `stripe` is the only value today: the
+    rows name their provider so that a plan bought through a store later is
+    another row with another provider, read by the same allowance rule —
+    and nothing in the quota path may name a provider. A second value is a
+    decision record plus one ADD VALUE, one migration earlier than any
+    migration that writes it (the CK-32 trap)."""
+
+    STRIPE = "stripe"
+
+
+class BillingPlan(str, Enum):
+    """What is sold (paid-tiers record §3): a plan is NAMED BY WHAT IT HOLDS
+    — 100,000 photographs, 300,000 photographs — never "Plus" or "Pro", and
+    the number each grants lives in services/keeping.py::PLAN_PHOTOGRAPHS,
+    derived at read time and never stored (record §6). A subscription's
+    plan is read from its price's LOOKUP KEY, never the price's id.
+    Design-fixed, so a native enum (database-schema decision 2): a third
+    plan is a decision record (keeper v2 §15.7's trigger), never a value
+    that grows as data."""
+
+    PHOTOS_100K = "photos_100k"
+    PHOTOS_300K = "photos_300k"
+
+
 # Single shared sa.Enum instance per Postgres type — several tables reference the
 # same type, and duplicating instances would mean duplicate CREATE TYPE attempts.
 ACCOUNT_KIND = db_enum(AccountKind, "account_kind")
@@ -192,3 +218,5 @@ MEDIA_STATUS = db_enum(MediaStatus, "media_status")
 MEDIA_LAYER = db_enum(MediaLayer, "media_layer")
 MEDIA_FAILURE_REASON = db_enum(MediaFailureReason, "media_failure_reason")
 PUBLICATION_STATE = db_enum(PublicationState, "publication_state")
+BILLING_PROVIDER = db_enum(BillingProvider, "billing_provider")
+BILLING_PLAN = db_enum(BillingPlan, "billing_plan")

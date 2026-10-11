@@ -27,6 +27,16 @@ still happens at boot, and a missing required value still crashes uvicorn
 and alembic before anything serves (the session_secret precedent; CK-33's
 RE_ENDPOINT_URL catch ran through exactly this path). Only the worker no
 longer fails with it.
+
+THE STRIPE FOUR (CK-73; paid-tiers record §10) are the WEB service's and the
+web service's alone: `WorkerSettings` gains no field for any of them — billing
+is the API's, the worker processes photographs — and the field-list pin that
+keeps the two classes apart holds over them too. `stripe_api_key` is
+shape-checked at boot to be a TEST-mode RESTRICTED key (`rk_test_`): a
+full-access `sk_` key is refused so that least privilege is structural rather
+than a habit, and a live key is refused until the live cutover relaxes the
+check on the production service alone (record §13). Nothing gates billing,
+so the four are required with no default — the CK-33 rule.
 """
 
 import re
@@ -95,6 +105,55 @@ def _r2_access_key_id_shape(value: str) -> str:
         "an R2 access key id is exactly 32 hexadecimal characters; "
         "this value has 32, but not all of them are hexadecimal"
     )
+
+
+# The Stripe key shapes (CK-73; paid-tiers record §10, §13). The API's key is
+# a RESTRICTED key — Checkout Sessions, Customers, Subscriptions and portal
+# sessions write, Prices and Products read, and nothing else — minted in
+# the SANDBOX, so it starts `rk_test_`. The prefix is the shape checked at
+# boot; the rest of a key is unmeasured and deliberately unchecked.
+STRIPE_API_KEY_PREFIX = "rk_test_"
+STRIPE_WEBHOOK_SECRET_PREFIX = "whsec_"
+
+
+def _stripe_api_key_shape(value: str) -> str:
+    """A test-mode restricted key, or a ValueError that names the shape and
+    never the value (the CK-61 rule, kept by the message itself as well as
+    by hide_input_in_errors).
+
+    WHY TWO REFUSALS ARE SPELLED OUT. A full-access secret key (`sk_`) is
+    refused BY SHAPE so that least privilege is structural: the full key
+    stays in the password manager and never reaches a server, and the day
+    someone pastes it into the dashboard because "it also works" the
+    service refuses to boot in front of them (record §10). A LIVE key
+    (`rk_live_`) is refused until the live-mode gate is discharged — ToS
+    v2, the privacy policy, the prod cutover, activation, tax (record
+    §13) — and relaxing this to accept it is a deliberate code change on
+    the production service alone, never a dashboard edit; a live key
+    against the dev database would be live money with no terms behind it.
+    The restricted key can still bill a saved card through a subscription,
+    which is why it lives in the API's dashboard alone and is checked here."""
+    if value.startswith(STRIPE_API_KEY_PREFIX):
+        return value
+    if value.startswith("sk_"):
+        raise ValueError(
+            "the Stripe API key must be a RESTRICTED test-mode key (rk_test_...); "
+            "a full-access secret key (sk_...) is refused"
+        )
+    if value.startswith("rk_live_"):
+        raise ValueError(
+            "the Stripe API key must be a TEST-mode restricted key (rk_test_...); "
+            "a live key is refused until the live cutover"
+        )
+    raise ValueError("the Stripe API key must start with rk_test_")
+
+
+def _stripe_webhook_secret_shape(value: str) -> str:
+    """A webhook signing secret starts `whsec_`; anything else is a pasted
+    wrong value, named by field and never echoed."""
+    if value.startswith(STRIPE_WEBHOOK_SECRET_PREFIX):
+        return value
+    raise ValueError("the Stripe webhook secret must start with whsec_")
 
 
 class Settings(BaseSettings):
@@ -173,6 +232,23 @@ class Settings(BaseSettings):
     r2_serve_access_key_id: str
     r2_serve_secret_access_key: str
 
+    # Stripe (CK-73; paid-tiers record §10): the RESTRICTED sandbox key, the
+    # webhook endpoint's signing secret, and the two prices' LOOKUP KEYS
+    # (record §3 — a plan is found by its lookup key, never a price id,
+    # because the id differs between the sandbox and live mode). ALL FOUR
+    # REQUIRED, no defaults — the CK-33 rule: nothing gates billing, so an
+    # empty value can only mean misconfigured, and it fails at boot in front
+    # of whoever deployed rather than at a person's first Checkout click.
+    # All four are `sync: false` slots in render.yaml, set in
+    # covey-keep-api's dashboard BEFORE the push that declares them (the
+    # SESSION_SECRET / R2 ordering), and NEVER on the worker, which has no
+    # field for any of them. The key and the secret are shape-checked at
+    # boot (the validators below); the lookup keys are plain strings.
+    stripe_api_key: str
+    stripe_webhook_secret: str
+    stripe_price_lookup_100k: str
+    stripe_price_lookup_300k: str
+
     @field_validator("database_url")
     @classmethod
     def _force_asyncpg_scheme(cls, value: str) -> str:
@@ -191,6 +267,18 @@ class Settings(BaseSettings):
         # See _r2_access_key_id_shape for why here, why all three, and why
         # the two secrets are left alone.
         return _r2_access_key_id_shape(value)
+
+    @field_validator("stripe_api_key")
+    @classmethod
+    def _stripe_api_key_is_a_test_restricted_key(cls, value: str) -> str:
+        # CK-73: `rk_test_` and nothing else — see _stripe_api_key_shape for
+        # why a full-access key and a live key are each refused by name.
+        return _stripe_api_key_shape(value)
+
+    @field_validator("stripe_webhook_secret")
+    @classmethod
+    def _stripe_webhook_secret_is_a_signing_secret(cls, value: str) -> str:
+        return _stripe_webhook_secret_shape(value)
 
     @property
     def allowed_origins_list(self) -> list[str]:
