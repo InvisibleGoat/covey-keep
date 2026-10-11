@@ -126,6 +126,42 @@ class MediaStatus(str, Enum):
     DESTROYED = "destroyed"
 
 
+class MediaFailureReason(str, Enum):
+    """WHY a photograph could not be kept — for the PERSON (CK-71, migration
+    0028; pipeline record §6.5: failure belongs to the uploader). Written by
+    the worker at the dead-letter BESIDE `last_error` and NEVER derived from
+    it at runtime: `last_error` is the operator's text and rides no body;
+    this is the person's value and rides every media body, which is safe
+    because none of its four values names the file's contents. Each names
+    what the uploader can DO, never what went wrong inside:
+
+    too_large          the pixel guard refused it (processing.MAX_PIXELS,
+                       ~50 megapixels — a phone panorama). A smaller copy
+                       will work.
+    unreadable         every other Undecodable — not an image, an
+                       unsupported format, truncated, corrupt. No copy of
+                       this file will work.
+    upload_incomplete  the quarantine object was missing when the worker
+                       ran — the upload never completed, or the 24-hour
+                       rule took it first. Uploading again works.
+    interrupted        the transient ladder was spent (the store did not
+                       answer three times), or the worker was interrupted
+                       mid-job on three claims. Uploading again works.
+
+    SET IF AND ONLY IF THE ROW IS `failed` (verifier-asserted): every path
+    that writes `failed` writes one of these in the SAME guarded statement,
+    `failed` is terminal so nothing ever clears one, and a `ready` row never
+    carries one. The Undecodable exception carries its kind from the branch
+    that raised it (processing.py); the other dead-letter paths know their
+    own. Design-fixed, so a native enum (database-schema decision 2): a
+    fifth value is a decision record, never a catch-all."""
+
+    TOO_LARGE = "too_large"
+    UNREADABLE = "unreadable"
+    UPLOAD_INCOMPLETE = "upload_incomplete"
+    INTERRUPTED = "interrupted"
+
+
 class MediaLayer(str, Enum):
     """The three stored representations of one photograph
     (decisions/2026-08-25-media-derivative-layers.md §1), as the discriminator
@@ -154,4 +190,5 @@ RSVP_RESPONSE = db_enum(RSVPResponse, "rsvp_response")
 RSVP_LIST_VISIBILITY = db_enum(RSVPListVisibility, "rsvp_list_visibility")
 MEDIA_STATUS = db_enum(MediaStatus, "media_status")
 MEDIA_LAYER = db_enum(MediaLayer, "media_layer")
+MEDIA_FAILURE_REASON = db_enum(MediaFailureReason, "media_failure_reason")
 PUBLICATION_STATE = db_enum(PublicationState, "publication_state")

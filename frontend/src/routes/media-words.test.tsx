@@ -261,9 +261,14 @@ test("a row is called by its caption, then its filename, then Photo; a tag is te
   for (const row of rows.slice(0, 3)) {
     expect(within(row).getByRole('button', { name: 'Edit caption and tags' })).toBeTruthy()
   }
-  // A failed photograph has nothing to caption: its one affordance stays.
+  // A failed photograph has nothing to caption: no editor on it. Its own
+  // controls — Try again and, since CK-71, Dismiss (the fixture carries no
+  // failure_reason, so it reads the fallback and offers both) — are the
+  // uploader's and are pinned in routes/media-failure.test.tsx; what this
+  // pin keeps is that no edit control is among them.
   expect(within(rows[4]).getAllByRole('button').map((button) => button.textContent)).toEqual([
     'Try again',
+    'Dismiss',
   ])
 })
 

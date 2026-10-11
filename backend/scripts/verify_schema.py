@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0027"
+EXPECTED_REVISION = "0028"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -1703,6 +1703,71 @@ async def verify(conn, ck: Checks) -> None:
         )
     else:
         ck.check(False, "media job integrity", "media table missing")
+
+    print("\n-- media: the failure reason (0028, CK-71) --")
+    # WHY a photograph could not be kept, FOR THE PERSON (pipeline record
+    # §6.5 as amended at CK-71) — four values that each name what the
+    # uploader can do, written by the worker beside `last_error` at the
+    # dead-letter and never derived from it at runtime. Nullable with no
+    # default, and the type is the column's own enum: a missing column or a
+    # wrong type FAILs (the `.first()` discipline), never passes vacuously.
+    assert_columns(ck, columns, "media", nullable=("failure_reason",))
+    reason_column = (
+        await conn.execute(
+            text(
+                "SELECT udt_name, column_default FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'media' "
+                "AND column_name = 'failure_reason'"
+            )
+        )
+    ).first()
+    ck.check(
+        reason_column is not None and reason_column[0] == "media_failure_reason",
+        "media.failure_reason is of type media_failure_reason",
+        f"found {reason_column!r}",
+    )
+    ck.check(
+        reason_column is not None and reason_column[1] is None,
+        "media.failure_reason has no server default (the dead-letter writes it, or nothing does)",
+        f"default is {reason_column[1] if reason_column else None!r}",
+    )
+    failure_reason = await enum_labels(conn, "media_failure_reason")
+    for label in ("too_large", "unreadable", "upload_incomplete", "interrupted"):
+        ck.check(
+            label in failure_reason, f"media_failure_reason carries {label!r}", "label missing"
+        )
+
+    print("\n-- media failure-reason integrity (CK-71) --")
+    # Guarded on the column (the CK-43 lesson): a query over a column that
+    # is not there is a crash, not a FAIL.
+    if "media" in tables and "failure_reason" in columns["media"]:
+        # THE INVARIANT: a reason IF AND ONLY IF the row is `failed`. Every
+        # path that writes `failed` writes a reason in the same guarded
+        # statement (services/ingest.py), `failed` is terminal so nothing
+        # clears one, and no other rung ever carries one. Exact once 0028's
+        # backfill has run: the backfill classifies every pre-0028 failed
+        # row by the stable prefix of the text the code wrote, and a row it
+        # could not classify is reported on the migration's INFO line and
+        # fails HERE — the finding the deploy check reads, never a reason
+        # to add a fifth value. A dead-letter written by the OLD worker in
+        # the deploy window (before its new instance took over) would land
+        # here too, and is classified by the same prefixes, by hand.
+        reason_mismatch = await scalar(
+            conn,
+            "SELECT count(*) FROM media "
+            "WHERE (failure_reason IS NOT NULL) <> (status = 'failed')",
+        )
+        ck.check(
+            reason_mismatch == 0,
+            "every failed media row says why, and no other row does",
+            f"{reason_mismatch} media row(s) whose failure_reason disagrees with status",
+        )
+    else:
+        ck.check(
+            False,
+            "media failure-reason integrity",
+            "media table or its failure_reason column missing",
+        )
 
     print("\n-- media: words on a photograph (0018, CK-39) --")
     # The uploader's file name and the person's caption are nullable text on

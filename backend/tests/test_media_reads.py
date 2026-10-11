@@ -46,6 +46,7 @@ from app.models import (
     Gathering,
     Media,
     MediaDerivative,
+    MediaFailureReason,
     MediaLayer,
     MediaStatus,
     Person,
@@ -150,6 +151,7 @@ async def _photograph(
     removed_by_person_id: UUID | None = None,
     created_at: datetime | None = None,
     occurrence_id: str | None = None,
+    failure_reason: MediaFailureReason | None = None,
 ) -> str:
     """One media row by the uploader — `ready` and `pending` by default, the
     state every deployed row is in — with its three derivative rows when it
@@ -157,7 +159,12 @@ async def _photograph(
     carries the remover ONLY when the test says so (CK-63): the default,
     NULL, is the pre-0026 shape — no recorded remover, visible to nobody —
     so a test that wants the uploader to SEE a binned row passes their own
-    person id, explicitly."""
+    person id, explicitly. A `failed` row carries its `failure_reason`
+    ONLY when the test says so (CK-71): the default, NULL, is the shape no
+    writer leaves any more (every dead-letter writes one and 0028's
+    backfill classified every older row), kept so the audience tests that
+    predate the column mean what they meant; a test that wants a realistic
+    failed row passes the reason."""
     born = created_at or _now()
     async with db_session_factory() as db:
         row = Media(
@@ -170,6 +177,7 @@ async def _photograph(
             publication_state=publication_state,
             removed_at=removed_at,
             removed_by_person_id=removed_by_person_id,
+            failure_reason=failure_reason,
             created_at=born,
             uploaded_at=None if status == MediaStatus.PENDING_UPLOAD else born,
         )
@@ -369,8 +377,16 @@ async def test_every_rung_appears_in_the_list_with_its_state_and_only_ready_has_
             assert detail["code"] == "not_ready"
             assert detail["status"] == status.value
             assert "url" not in detail
-    # The host sees the same rungs — pending rows are the host's to see too.
-    assert len(_ids(await _list(client, cast.host, cast.gathering_id))) == len(ingest_rungs)
+    # The host sees the same rungs BUT ONE — pending rows are the host's to
+    # see too, and a `failed` row is not (CK-71; pipeline record §6.5:
+    # failure belongs to the uploader). Until CK-71 this read
+    # `len(ingest_rungs)`: the host saw a guest's failure beside a Try
+    # again that could do nothing for them. The failed row's absence from
+    # the host's list and its 404 for the host are pinned in
+    # test_failure_reason.py; here the count moves with its reason.
+    host_rows = _ids(await _list(client, cast.host, cast.gathering_id))
+    assert len(host_rows) == len(ingest_rungs) - 1
+    assert ids[MediaStatus.FAILED] not in host_rows
 
 
 async def test_the_archival_layer_is_never_issued_a_url(client, capsys, db_session_factory):

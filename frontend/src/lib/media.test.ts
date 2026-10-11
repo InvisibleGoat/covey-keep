@@ -111,6 +111,9 @@ test('every in-flight rung has its own honest line, and failure names the outcom
   expect(at('pending_upload')).toBe('On its way — still being uploaded.')
   expect(at('uploaded')).toBe('Uploaded — waiting to be prepared.')
   expect(at('processing')).toBe('Being prepared — usually within a minute, longer for a big batch.')
+  // Since CK-71 the failed line follows the row's failure_reason
+  // (lib/media-failure.test.ts); this helper passes none, so it reads the
+  // defensive fallback — CK-38's sentence, unchanged.
   expect(at('failed')).toBe("We couldn't process this photo.")
   expect(at('failed')).not.toMatch(/corrupt/i)
   // An unknown rung is named, never blank.

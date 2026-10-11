@@ -78,7 +78,13 @@ file that will not decode today will not decode on a retry, and pipeline
 record §6.2 says a permanent failure fails on its first attempt rather than
 burn the ladder — the worker dead-letters it at attempt 1, exactly as it
 does a missing object. The reason is in operator terms (a format name, an
-exception class, a limit) and never the file's contents (§6.5).
+exception class, a limit) and never the file's contents (§6.5). Since
+CK-71 the exception also carries a `kind` — the one of two
+MediaFailureReason values the dead-letter writes FOR THE PERSON beside
+that text: TOO_LARGE from the two pixel-guard raises (a smaller copy will
+work), UNREADABLE from every other raise (no copy of this file will). Set
+at the raise, from the branch that raised, and never parsed back out of
+the text — `reason` stays operator text, as it is.
 
 DATA-HANDLING: this is the code that makes the EXIF promise true. Nothing
 here logs, and nothing here retains: the decoded original lives in this
@@ -94,7 +100,7 @@ from typing import NamedTuple
 import pillow_heif
 from PIL import Image, ImageCms, ImageOps, UnidentifiedImageError
 
-from app.models import MediaLayer
+from app.models import MediaFailureReason, MediaLayer
 
 # HEIC/HEIF decode through pillow-heif (the iPhone default; CK-36 record §0).
 # Registering the opener is what lets Image.open recognise the container;
@@ -181,11 +187,24 @@ CONTENT_TYPE_WEBP = "image/webp"
 class Undecodable(Exception):
     """A permanent failure: this upload is not a photograph this pipeline
     can process, and never will be on a retry. `reason` is operator terms
-    only — a format, an exception class, a limit — never the file."""
+    only — a format, an exception class, a limit — never the file.
 
-    def __init__(self, reason: str) -> None:
+    `kind` (CK-71) is the PERSON's half of the same fact — the
+    MediaFailureReason the worker writes beside `last_error` at the
+    dead-letter: TOO_LARGE where the pixel guard refused (a smaller copy
+    will work), UNREADABLE for every other refusal (no copy of this file
+    will). Set where the exception is raised, from the branch that raised
+    it, and never parsed back out of `reason`. The default is UNREADABLE
+    because it is the safe direction — a raise that forgets to say offers
+    no retry that could not succeed — and every raise in this module says
+    it anyway."""
+
+    def __init__(
+        self, reason: str, *, kind: MediaFailureReason = MediaFailureReason.UNREADABLE
+    ) -> None:
         super().__init__(reason)
         self.reason = reason
+        self.kind = kind
 
 
 class Rendition(NamedTuple):
@@ -272,17 +291,31 @@ def _open(data: bytes) -> Image.Image:
             warnings.simplefilter("ignore", Image.DecompressionBombWarning)
             image = Image.open(io.BytesIO(data))
     except Image.DecompressionBombError:
-        raise Undecodable(f"larger than the {MAX_PIXELS // 1_000_000} megapixel limit") from None
+        # The pixel guard's backstop (Pillow's own limit, mirrored): TOO
+        # LARGE — a smaller copy will work.
+        raise Undecodable(
+            f"larger than the {MAX_PIXELS // 1_000_000} megapixel limit",
+            kind=MediaFailureReason.TOO_LARGE,
+        ) from None
     except (UnidentifiedImageError, OSError, ValueError, SyntaxError) as exc:
-        raise Undecodable(f"not a decodable image ({exc.__class__.__name__})") from None
+        raise Undecodable(
+            f"not a decodable image ({exc.__class__.__name__})",
+            kind=MediaFailureReason.UNREADABLE,
+        ) from None
     fmt = image.format or "unknown"
     if fmt not in DECODABLE_FORMATS:
-        raise Undecodable(f"{fmt} is not a supported photograph format")
+        raise Undecodable(
+            f"{fmt} is not a supported photograph format", kind=MediaFailureReason.UNREADABLE
+        )
     # The guard reads frame 0's dimensions — for an MPO the primary frame's,
     # which is the image that gets decoded; the file's other images are
     # never opened, so they are never measured either.
     if image.width * image.height > MAX_PIXELS:
-        raise Undecodable(f"larger than the {MAX_PIXELS // 1_000_000} megapixel limit")
+        # The pixel guard itself: TOO LARGE — a smaller copy will work.
+        raise Undecodable(
+            f"larger than the {MAX_PIXELS // 1_000_000} megapixel limit",
+            kind=MediaFailureReason.TOO_LARGE,
+        )
     return image
 
 
@@ -308,7 +341,13 @@ def render_layers(data: bytes) -> tuple[Rendition, Rendition, Rendition]:
         image.load()
     except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
         # A truncated or corrupt file: the header parsed, the pixels do not.
-        raise Undecodable(f"not a decodable image ({exc.__class__.__name__})") from None
+        # UNREADABLE — Pillow's bomb check already ran at open, so a
+        # DecompressionBombError here is a decode that went wrong, not the
+        # guard, and the kind follows the branch rather than the class.
+        raise Undecodable(
+            f"not a decodable image ({exc.__class__.__name__})",
+            kind=MediaFailureReason.UNREADABLE,
+        ) from None
 
     # Step 2: orientation applied to the pixels while the tag still exists.
     try:

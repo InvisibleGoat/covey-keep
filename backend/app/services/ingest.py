@@ -58,7 +58,19 @@ Transient and permanent are different and must never be collapsed (§6.2).
 
 DEAD-LETTER. `status = 'failed'`, `last_error` naming the cause in operator
 terms — the OUTCOME, never the file's contents (record §6.5), never a URL,
-never a key id. Marking a row `failed` RELEASES its quota reservation: that
+never a key id — and, since CK-71 (migration 0028), `failure_reason`
+naming it FOR THE PERSON, in the SAME guarded statement: one of four
+values that each say what the uploader can do (`too_large` — the pixel
+guard; `unreadable` — every other Undecodable; `upload_incomplete` — the
+object missing; `interrupted` — the transient ladder spent, or three
+abandonments at reclaim), written by EVERY path that writes `failed` and
+NEVER derived from `last_error` (the Undecodable carries its kind from the
+raise; the other paths know their own). `last_error` stays operator-only
+and rides no body; `failure_reason` rides every media body. `failed` is
+terminal, so nothing ever clears a reason, and a `ready` row never carries
+one — a row that reaches `ready` after a transient failure carries NULL,
+because the transient rung writes no reason (pinned).
+Marking a row `failed` RELEASES its quota reservation: that
 is already how `keeping.account_usage` reads the ladder (in-flight is
 `pending_upload | uploaded | processing`), and no second mechanism exists —
 pinned by test. THEN the quarantine object is deleted (record §6.2, "at
@@ -330,7 +342,15 @@ from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy import and_, case, delete, func, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Account, Gathering, Media, MediaDerivative, MediaStatus, PublicationState
+from app.models import (
+    Account,
+    Gathering,
+    Media,
+    MediaDerivative,
+    MediaFailureReason,
+    MediaStatus,
+    PublicationState,
+)
 from app.models.enums import PUBLICATION_STATE
 from app.services import processing, publication
 # The entry to the destruction ladder lives in services/destruction.py
@@ -587,6 +607,10 @@ async def claim_next(db: AsyncSession, now: datetime) -> Optional[Media]:
             else:
                 row.status = MediaStatus.FAILED
                 row.last_error = ERROR_ABANDONED
+                # WHY, for the person (CK-71): the worker was interrupted,
+                # and uploading again works — written WITH `failed`, in the
+                # same flush, never derived from the text above.
+                row.failure_reason = MediaFailureReason.INTERRUPTED
             row.claimed_at = None
             row.available_at = None  # terminal: no deferral survives (CK-37)
             await db.flush()
@@ -684,14 +708,18 @@ async def handle_claimed(
     try:
         found = await _head(client, key)
         if found is None:
-            return await _permanent_failure(db, row, ERROR_OBJECT_MISSING)
+            return await _permanent_failure(
+                db, row, ERROR_OBJECT_MISSING, MediaFailureReason.UPLOAD_INCOMPLETE
+            )
         try:
             data = await _read(client, key)
         except ClientError as exc:
             if _error_code(exc) in _ABSENT_CODES:
                 # Raced by the lifecycle rule between the HEAD and the GET:
                 # the same permanent case.
-                return await _permanent_failure(db, row, ERROR_OBJECT_MISSING)
+                return await _permanent_failure(
+                db, row, ERROR_OBJECT_MISSING, MediaFailureReason.UPLOAD_INCOMPLETE
+            )
             raise
     except ClientError as exc:
         code = _error_code(exc)
@@ -705,7 +733,12 @@ async def handle_claimed(
     try:
         renditions = await _render(data)
     except Undecodable as exc:
-        return await _permanent_failure(db, row, ERROR_UNDECODABLE.format(reason=exc.reason))
+        # The person's reason travels on the exception from the branch that
+        # raised it (processing.Undecodable.kind) — never parsed out of the
+        # operator text it rides beside.
+        return await _permanent_failure(
+            db, row, ERROR_UNDECODABLE.format(reason=exc.reason), exc.kind
+        )
     del data
 
     # 3. The three objects, keyed deterministically — idempotent writes.
@@ -954,9 +987,15 @@ async def delete_original(client: WorkerClient, media_id: UUID) -> bool:
     return True
 
 
-async def _permanent_failure(db: AsyncSession, row: Media, last_error: str) -> Outcome:
-    # On the first attempt, whatever the count was: the ladder is for
-    # failures that a retry can change.
+async def _permanent_failure(
+    db: AsyncSession, row: Media, last_error: str, reason: MediaFailureReason
+) -> Outcome:
+    """Dead-letter on the FIRST attempt, whatever the count was: the ladder
+    is for failures that a retry can change. `last_error` is the operator's
+    text and `reason` the PERSON's value (CK-71) — the caller passes both,
+    from the branch it is on, and they land in the ONE guarded statement
+    that writes `failed`: a failed row always says why, in both
+    vocabularies, and the second is never parsed out of the first."""
     applied = await _settle(
         db,
         row,
@@ -965,6 +1004,7 @@ async def _permanent_failure(db: AsyncSession, row: Media, last_error: str) -> O
         available_at=None,
         attempts=row.attempts + 1,
         last_error=last_error,
+        failure_reason=reason,
     )
     return Outcome.DEAD_LETTERED if applied else Outcome.LOST_CLAIM
 
@@ -1015,6 +1055,10 @@ async def _transient_failure(db: AsyncSession, row: Media, now: datetime, cause:
             available_at=None,
             attempts=attempts,
             last_error=f"storage did not answer after {attempts} attempts (last: {cause})",
+            # WHY, for the person (CK-71): nothing was wrong with the
+            # photograph — uploading again works. In the same statement as
+            # `failed`, never a second one.
+            failure_reason=MediaFailureReason.INTERRUPTED,
         )
         return Outcome.DEAD_LETTERED if applied else Outcome.LOST_CLAIM
     backoff = RETRY_BACKOFF[min(attempts, len(RETRY_BACKOFF)) - 1]

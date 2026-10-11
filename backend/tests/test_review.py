@@ -37,7 +37,15 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.api.media import ALREADY_LIVE, MAX_PUBLISH_PER_REQUEST, NOT_PENDING, NOT_READY
-from app.models import Gathering, Media, MediaDerivative, MediaStatus, Person, PublicationState
+from app.models import (
+    Gathering,
+    Media,
+    MediaDerivative,
+    MediaFailureReason,
+    MediaStatus,
+    Person,
+    PublicationState,
+)
 from app.services import keeping
 from app.services.storage import published_key
 from tests.test_gatherings import _account_for, _create, _signed_in_headers
@@ -67,30 +75,40 @@ async def _hosts_own_photograph(
     db_session_factory,
     cast: Cast,
     *,
+    status: MediaStatus = MediaStatus.READY,
     publication_state: PublicationState = PublicationState.PENDING,
     removed_at: datetime | None = None,
     removed_by_person_id: UUID | None = None,
+    failure_reason: MediaFailureReason | None = None,
 ) -> str:
-    """A `ready` row the HOST uploaded — the one configuration in which a
-    host can see a `removed` row (their own bin: since CK-63 a removed row
-    is in the bin of whoever removed it, so a test that wants the host to
-    see a binned one passes the host's own person id as the remover)."""
+    """A row the HOST uploaded — `ready` by default, with its three layers:
+    the one configuration in which a host can see a `removed` row (their
+    own bin: since CK-63 a removed row is in the bin of whoever removed it,
+    so a test that wants the host to see a binned one passes the host's own
+    person id as the remover) — and, since CK-71, the one configuration in
+    which a host can see a `failed` row at all (failure belongs to the
+    uploader, and here the host is the uploader): `status` and
+    `failure_reason` are passed for that case, and a non-ready row gets no
+    derivative rows, as the worker would leave it."""
     async with db_session_factory() as db:
         row = Media(
             gathering_id=cast.gathering_id,
             uploader_person_id=await _host_person_id(db_session_factory),
             upload_content_type="image/jpeg",
             upload_size_bytes=900_000,
-            status=MediaStatus.READY,
+            status=status,
             publication_state=publication_state,
             removed_at=removed_at,
             removed_by_person_id=removed_by_person_id,
+            failure_reason=failure_reason,
             created_at=_now(),
             uploaded_at=_now(),
         )
         db.add(row)
         await db.flush()
-        for layer, (content_type, size, storage_class) in LAYER_SPECS.items():
+        for layer, (content_type, size, storage_class) in (
+            LAYER_SPECS.items() if status == MediaStatus.READY else ()
+        ):
             db.add(
                 MediaDerivative(
                     media_id=row.id,
@@ -273,8 +291,28 @@ async def test_a_failed_row_and_an_unprocessed_row_refuse_with_not_ready(
     and neither moves — a decline is a decision about a photograph the
     host has looked at."""
     cast = await _cast(client, capsys, db_session_factory)
-    for status in (MediaStatus.FAILED, MediaStatus.UPLOADED, MediaStatus.PROCESSING, MediaStatus.PENDING_UPLOAD):
-        media_id = await _photograph(db_session_factory, cast, status=status)
+    # A guest's `failed` row is no longer the host's to see at all (CK-71;
+    # pipeline record §6.5 — failure belongs to the uploader): both acts on
+    # it draw the media 404 byte-identical to a missing id, pinned in
+    # test_failure_reason.py. The `not_ready` refusal on a failed row is
+    # still reachable — on the HOST'S OWN failed row, which they uploaded —
+    # and is pinned here through that row; until CK-71 this loop drew it
+    # through the uploader's. The in-flight rungs are the uploader's rows,
+    # visible to the host as before.
+    rows = [
+        (
+            MediaStatus.FAILED,
+            await _hosts_own_photograph(
+                db_session_factory,
+                cast,
+                status=MediaStatus.FAILED,
+                failure_reason=MediaFailureReason.UNREADABLE,
+            ),
+        )
+    ]
+    for status in (MediaStatus.UPLOADED, MediaStatus.PROCESSING, MediaStatus.PENDING_UPLOAD):
+        rows.append((status, await _photograph(db_session_factory, cast, status=status)))
+    for status, media_id in rows:
         for act in (_publish, _decline):
             refused = await act(client, cast.host, media_id)
             assert refused.status_code == 409, (status, refused.text)
@@ -371,7 +409,17 @@ async def test_the_batch_refuses_whole_and_leaves_nothing_changed(client, capsys
     good = [
         await _photograph(db_session_factory, cast, created_at=t0 + timedelta(seconds=i)) for i in range(3)
     ]
-    failed = await _photograph(db_session_factory, cast, status=MediaStatus.FAILED)
+    # A guest's failed row is invisible to the host since CK-71 (failure
+    # belongs to the uploader), so in a batch it reads as "no such
+    # photograph" — the batch confirms nothing; the `not_ready` item
+    # refusal is pinned through the host's OWN failed row beside it (until
+    # CK-71 the uploader's failed row drew `not_ready` here).
+    failed = await _photograph(
+        db_session_factory, cast, status=MediaStatus.FAILED, failure_reason=MediaFailureReason.UNREADABLE
+    )
+    own_failed = await _hosts_own_photograph(
+        db_session_factory, cast, status=MediaStatus.FAILED, failure_reason=MediaFailureReason.INTERRUPTED
+    )
     theirs_removed = await _photograph(
         db_session_factory, cast, publication_state=PublicationState.REMOVED, removed_at=t0
     )
@@ -387,8 +435,9 @@ async def test_the_batch_refuses_whole_and_leaves_nothing_changed(client, capsys
         assert error["code"] == code
         return error["msg"]
 
-    item(await _batch(client, cast.host, cast.gathering_id, good + [failed]), 3, NOT_READY)
+    item(await _batch(client, cast.host, cast.gathering_id, good + [own_failed]), 3, NOT_READY)
     missing_msg = item(await _batch(client, cast.host, cast.gathering_id, [good[0], MISSING_ID]), 1, "not_found")
+    assert item(await _batch(client, cast.host, cast.gathering_id, good + [failed]), 3, "not_found") == missing_msg
     assert item(await _batch(client, cast.host, cast.gathering_id, [elsewhere, good[0]]), 0, "not_found") == missing_msg
     assert item(await _batch(client, cast.host, cast.gathering_id, [good[1], theirs_removed]), 1, "not_found") == missing_msg
     item(await _batch(client, cast.host, cast.gathering_id, [good[0], good[1], good[0]]), 2, NOT_PENDING)
@@ -404,7 +453,8 @@ async def test_the_batch_refuses_whole_and_leaves_nothing_changed(client, capsys
     # Nothing changed, anywhere.
     for media_id in good + [elsewhere]:
         assert (await _state(db_session_factory, media_id))[1:4] == (PublicationState.PENDING, None, None)
-    assert (await _state(db_session_factory, failed))[:2] == (MediaStatus.FAILED, PublicationState.PENDING)
+    for media_id in (failed, own_failed):
+        assert (await _state(db_session_factory, media_id))[:2] == (MediaStatus.FAILED, PublicationState.PENDING)
     assert (await _state(db_session_factory, theirs_removed))[1] == PublicationState.REMOVED
 
     # The good batch.
@@ -459,12 +509,16 @@ async def test_the_queue_is_the_hosts_alone_and_runs_inside_the_audience_rule(
     # Composes with q — inside the same criterion.
     assert _ids(await _queue(client, cast.host, cast.gathering_id, q="yard")) == [waiting[0]]
     assert _ids(await _queue(client, cast.host, cast.gathering_id, q="nothing matches")) == []
-    # The ordinary list is unchanged by the flag's existence.
-    assert len(_ids(await _list(client, cast.host, cast.gathering_id))) == 5
+    # The ordinary list is unchanged by the flag's existence: the two
+    # waiting rows, the uploaded one and the live one — FOUR since CK-71,
+    # five until then, because the uploader's `failed` row is theirs alone
+    # now (failure belongs to the uploader; test_failure_reason.py) and the
+    # NULL-remover removed row was already nobody's (CK-63).
+    assert len(_ids(await _list(client, cast.host, cast.gathering_id))) == 4
     # Absent or false: not the queue.
     assert len(_ids(await client.get(
         f"/gatherings/{cast.gathering_id}/media", params={"awaiting_review": "false"}, headers=cast.host
-    ))) == 5
+    ))) == 4
 
     missing = await client.get(f"/media/{MISSING_ID}/url", params={"layer": "web"}, headers=cast.host)
     for headers in (cast.uploader, cast.keeper, cast.bystander):

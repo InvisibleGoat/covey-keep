@@ -941,7 +941,8 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
     baseline holding one real co-host row, then on a planted row naming
     the gathering's own host (written around the endpoint, which refuses
     it), then clean again. The total is pinned as a number (the CK-57
-    convention: 197 → 211). A PLANT IS NOT EVIDENCE UNTIL SOMETHING
+    convention: 197 → 211, and 219 since CK-71's eight). A PLANT IS NOT
+    EVIDENCE UNTIL SOMETHING
     INDEPENDENT OF THE ASSERTION CONFIRMS THE ROW EXISTS (CK-56's lesson)."""
     exclusive = "no co-host row names its gathering's own host (host and co-host are exclusive)"
     cast, _ = await _co_hosted(client, capsys, db_session_factory)
@@ -949,7 +950,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
         host_account = (await _account_for(db, HOST)).id
 
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (211, 0, 0), out
+    assert (passed, failed, code) == (219, 0, 0), out
     for line in (
         "table gathering_co_hosts exists",
         "gathering_co_hosts primary key is (gathering_id, account_id)",
@@ -977,7 +978,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
         )
         assert planted == 1, "the plant did not land"
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (210, 1, 1), out
+    assert (passed, failed, code) == (218, 1, 1), out
     assert f"FAIL  {exclusive}" in out and "1 co-host row(s) naming the gathering's host" in out
 
     async with db_session_factory() as db:
@@ -986,7 +987,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
             {"g": UUID(cast.gathering_id), "a": host_account},
         )
         await db.commit()
-    assert _verifier()[:3] == (211, 0, 0)
+    assert _verifier()[:3] == (219, 0, 0)
 
 
 async def test_co_host_management_logs_nothing_at_debug(client, capsys, db_session_factory, caplog):

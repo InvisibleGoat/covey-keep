@@ -157,7 +157,12 @@ which only one is the gathering's ordinary read audience:
            rows "because the gate isn't built yet" would show unapproved
            photographs of children to an entire gathering — the precise
            failure the consent architecture exists to prevent, arriving as
-           an omission rather than a decision.
+           an omission rather than a decision. A `failed` ROW IS THE
+           UPLOADER'S ALONE (CK-71; pipeline record §6.5 — failure belongs
+           to the uploader): a dead-lettered row stays `pending`, and until
+           CK-71 that alone showed it to the host, who could do nothing
+           with it. The second `status` term in `_visible_media` keeps it
+           from them.
   removed  THE BIN OF WHOEVER REMOVED IT (two-bins record §1–§3, CK-63;
            the gathering's bin readable since CK-66): for REMOVED_BIN
            after `removed_at` — the uploader, WHEN THE UPLOADER REMOVED
@@ -374,6 +379,24 @@ by `remove` and `decline` in the same guarded statement as `removed_at`.
                  marked it a moment earlier) and is refused, never
                  half-applied.
 
+A PHOTOGRAPH THAT CANNOT BE KEPT (CK-71; pipeline record §6.5 as amended;
+migration 0028). A dead-lettered row carries `failure_reason` — four values,
+each naming what the uploader can do (`too_large`, `unreadable`,
+`upload_incomplete`, `interrupted`), written by the worker beside
+`last_error` at the dead-letter and never derived from it — on every media
+body, where `last_error` never goes. It is visible to its uploader alone
+(above), and the uploader's ONE act on it is `POST /media/{id}/dismiss`: a
+hard DELETE of the row. A failed row holds nothing — the original went at
+the dead-letter, there are no layers, and it was never counted — so there
+is nothing to keep it for but the operator's record, which survives in the
+worker's dead-letter log line (the row id and `last_error`); the filename
+and any tags are the uploader's own data, and they asked for them to go.
+No bin, no window, no `dismissed_at`, no store call, no count moved.
+Anyone who cannot see the row draws the media 404; a row that is not
+`failed` draws 409 `not_failed` (not `not_ready`, which means "wait"); a
+second dismiss is the 404. Nothing revives, re-queues or reprocesses a
+failed row — the person uploads again.
+
 DATA-HANDLING: the first bytes into the bucket that will hold photographs
 of children move through URLs this router mints. A PRESIGNED URL IS A
 BEARER CREDENTIAL (record §9, binding): it carries the upload Access Key ID
@@ -425,6 +448,14 @@ gate, never around it — and may NOT see an unapproved photograph, publish,
 decline, change the review switch or destroy anyone's: this module widens
 who can act on a gathering and deliberately not who decides a consent
 question (co-hosts §8), and the host stays the one identifiable controller.
+Since CK-71 this module NARROWS who can see a photograph's failure — the
+host loses sight of other people's failed uploads, which held nothing to
+review or publish, and nobody gains sight of anything — and DELETES a row
+on its uploader's request: a failed row holds no photograph, no bytes and
+no count, only the person's own filename and tags; the operator's record
+of the failure is the worker's log line. The four `failure_reason` values
+name what the person can do, never the file's contents, and are safe in
+every body; `last_error` stays operator-only.
 """
 
 import asyncio
@@ -433,7 +464,7 @@ from typing import Annotated, Optional
 from uuid import UUID
 
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import and_, case, delete, exists, func, literal_column, not_, or_, select, update
 from sqlalchemy.dialects.postgresql import aggregate_order_by, array_agg
@@ -541,6 +572,10 @@ ALREADY_REMOVED = "already_removed"
 # for a row with nothing stored (a `failed` row is visible to its uploader
 # and the host, and has no layers to restore).
 NOT_REMOVED = "not_removed"
+# Dismiss's one code of its own (CK-71): `dismiss` on a row that is not
+# `failed`. Not `not_ready` — that code means "wait", and a failed row is
+# the opposite: nothing will ever arrive. Carries the rung.
+NOT_FAILED = "not_failed"
 
 # The lost-race 409 for a removal, a destruction or a restore (CK-54;
 # restore since CK-63). Unreachable under the row lock for the first two,
@@ -784,6 +819,11 @@ def _media_body(row: Media) -> dict:
         # Never the WHO — a person id rides no body (the roster rule); the
         # host is the only person it could be.
         "published_at": row.published_at.isoformat() if row.published_at is not None else None,
+        # WHY a `failed` row failed, FOR THE PERSON (0028, CK-71): one of
+        # four values naming what they can do, never the file's contents;
+        # null on every other row. `last_error` stays out — it is the
+        # operator's, and this is the value that stands in for it in a body.
+        "failure_reason": row.failure_reason.value if row.failure_reason is not None else None,
     }
 
 
@@ -1130,7 +1170,9 @@ def _visible_media(ctx: AuthContext, now: datetime):
                     ladder as SQL — since CK-49b, never a kept row).
       - `pending` → the UPLOADER or the HOST, and nobody else. A keeper is
                     not an approver; an invitation is visibility of the
-                    gathering, not of unreviewed media.
+                    gathering, not of unreviewed media. A `failed` row is
+                    `pending` too and is the UPLOADER's ALONE — the second
+                    `status` term, (2) below (CK-71).
       - `removed` → the bin of whoever removed it, within REMOVED_BIN of
                     `removed_at` (CK-63; the gathering's bin readable
                     since CK-66 — two-bins record §1–§3). Two branches:
@@ -1162,8 +1204,11 @@ def _visible_media(ctx: AuthContext, now: datetime):
                     `removed_at` is malformed and is visible to nobody
                     (the strict direction).
 
-    ONE THING HERE DOES CONSULT `status`, AND ONLY ONE (CK-54): A ROW IN
-    DESTRUCTION IS VISIBLE TO NOBODY, whatever its publication state. The
+    TWO THINGS HERE CONSULT `status`, AND ONLY TWO — each because the
+    publication-state branches above cannot carry it.
+
+    (1) A ROW IN DESTRUCTION IS VISIBLE TO NOBODY (CK-54), whatever its
+    publication state. The
     bin record §7.2 keeps a destroyed photograph's `media` row — its
     filename, its caption, its tags — for the audit trail, on the stated
     ground that *a photograph captioned "Jenny at bat" was deleted* records
@@ -1178,6 +1223,19 @@ def _visible_media(ctx: AuthContext, now: datetime):
     IMMEDIATE from the caller's side: the moment the marking statement
     commits, the photograph is gone from every surface, before a single
     byte has been deleted.
+
+    (2) A `failed` ROW IS VISIBLE TO ITS UPLOADER ALONE (CK-71; pipeline
+    record §6.5: "failure belongs to the uploader"). A dead-lettered row
+    stays `pending` — no dead-letter path touches `publication_state` — so
+    without this term the `pending` branch would show it to the host, who
+    can do nothing with it: there is no photograph to review, nothing to
+    publish or decline, and the only act a failed row admits (dismiss, the
+    end of this module) is the uploader's. Until CK-71 the host read every
+    guest's failure beside a "Try again" that opened the host's own picker
+    — an artifact of a failed row staying `pending`, never a decision. A
+    host's OWN failed row is still theirs, because they are its uploader.
+    A guest upload's failed row (no uploader person) is visible to nobody;
+    the guest flow is unbuilt, and that is recorded rather than decided.
 
     Nothing else consults `status`: a `pending_upload` row is as visible to
     its uploader as a `ready` one — the list shows the rung; the URL
@@ -1198,12 +1256,18 @@ def _visible_media(ctx: AuthContext, now: datetime):
     )
     return and_(
         Media.status.notin_(DESTRUCTION_STATUSES),
+        # (2) in the docstring (CK-71): a failed row is the uploader's
+        # alone. `is_uploader` is NULL for a guest upload (no uploader
+        # person), so such a failed row is visible to nobody.
+        or_(Media.status != MediaStatus.FAILED, is_uploader),
         or_(
             and_(Media.publication_state == PublicationState.LIVE, or_(hosts, keeps, invited)),
             # RESERVED (CK-68; co-hosts §4; who-may-see §2): the uploader
             # and THE HOST. Never `_moderates` here — a co-host is not an
             # approver, and seeing what the host has not decided on is the
-            # approver's half of the consent gate. Do not widen.
+            # approver's half of the consent gate. Do not widen. (A `failed`
+            # row is `pending` too; the status term above keeps it from the
+            # host — CK-71.)
             and_(Media.publication_state == PublicationState.PENDING, or_(is_uploader, hosts)),
             and_(
                 Media.publication_state == PublicationState.REMOVED,
@@ -2404,3 +2468,88 @@ async def restore_media(
     await db.commit()
     await db.refresh(row)
     return _media_body(row)
+
+
+# --- dismiss (CK-71) -----------------------------------------------------------
+# A photograph that cannot be kept says why (`failure_reason`, on every
+# body — the worker writes it at the dead-letter, services/ingest.py), and
+# its uploader can dismiss it. Pipeline record §6.5: FAILURE BELONGS TO THE
+# UPLOADER — made true in `_visible_media` (a failed row is the uploader's
+# alone) and here (the one act a failed row admits is theirs).
+#
+# DISMISS IS A HARD DELETE, AND THE REASONS ARE STATED SO NOBODY ADDS A BIN
+# TO IT. A failed row holds nothing: the quarantine original was deleted at
+# the dead-letter (the 24-hour lifecycle rule backstops a delete that
+# failed then), there are no derivative rows (the publish transaction never
+# ran), and it was never counted (neither `ready` nor in flight — the
+# reservation released at `failed`). What it does hold is the operator's
+# record of the failure, which also lives in the worker's dead-letter
+# WARNING line (the row id and `last_error`), and the person's own
+# filename — and possibly tags written through PATCH — which they are
+# asking to remove. So: no `dismissed_at`, no bin, no window, no reap, no
+# count. `media_tags` and `media_derivatives` go by their CASCADE (a
+# failed row has no derivatives; it may have tags).
+#
+# NO STORE CALL, and this router still imports neither `storage`'s delete
+# for it nor `ingest` at all (the Gotcha: `ingest` pulls the image stack
+# into the web process). Nothing revives, re-queues or reprocesses a failed
+# row: a dismissed row is gone, and the person uploads again.
+
+
+@router.post("/media/{media_id}/dismiss", status_code=204)
+async def dismiss_media(
+    media_id: UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """DISMISS A PHOTOGRAPH THAT COULD NOT BE KEPT — the uploader's, on a
+    `failed` row, and the row is DELETED. 204 with no body.
+
+    Through `_visible_media` first, so anyone who cannot see the row draws
+    the media 404 byte-identical to a missing id — and since CK-71's
+    audience term only the uploader can see a failed row, so the host, a
+    co-host, the keeper, an invitee and a stranger all draw it. A row that
+    is not `failed` draws 409 `not_failed` carrying the rung: not
+    `not_ready`, because that code means "wait", and a failed row is the
+    opposite — nothing will ever arrive. ONE guarded DELETE, keyed on the
+    row still being `failed` AND the caller being its uploader — the
+    uploader condition is in the statement, not inferred from the audience,
+    so nobody but the uploader can delete whatever the audience may later
+    admit; a rowcount of 0 (a second dismiss, a race with another tab) is
+    the 404, never a 500. Nothing is logged; no count moves — nothing
+    counted the row."""
+    now = datetime.now(timezone.utc)
+    row = (
+        await db.execute(
+            select(Media)
+            .join(Gathering, Gathering.id == Media.gathering_id)
+            .where(Media.id == media_id, _visible_media(ctx, now))
+            .with_for_update(of=Media)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise _media_not_found()
+    if row.status != MediaStatus.FAILED:
+        raise HTTPException(
+            409,
+            detail={
+                "code": NOT_FAILED,
+                "publication_state": row.publication_state.value,
+                "status": row.status.value,
+                "message": "this photo didn't fail, so there is nothing to dismiss",
+            },
+        )
+    result = await db.execute(
+        delete(Media)
+        .where(
+            Media.id == row.id,
+            Media.status == MediaStatus.FAILED,
+            Media.uploader_person_id == ctx.person.id,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        await db.rollback()
+        raise _media_not_found()
+    await db.commit()
+    return Response(status_code=204)

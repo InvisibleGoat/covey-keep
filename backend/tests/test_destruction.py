@@ -1121,25 +1121,27 @@ async def test_the_verifier_asserts_a_destroying_row_that_spent_an_attempt_and_i
     # The tallies are the verifier's TOTAL, pinned as a number on purpose
     # (CK-57: 191); CK-63 added six assertions (who removed it), so 197;
     # CK-68 added fourteen (the co-host relation's shape and its
-    # host-and-co-host-are-exclusive invariant), so 211.
+    # host-and-co-host-are-exclusive invariant), so 211; CK-71 added eight
+    # (the failure reason's column shape, its four labels and its iff
+    # invariant), so 219.
     await plant(1, False, None)
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (210, 1, 1), out
+    assert (passed, failed, code) == (218, 1, 1), out
     assert f"FAIL  {label}" in out and "1 destroying media row(s)" in out
 
     # Passes with the reason present — what the release now writes.
     await plant(1, False, ingest.ERROR_CREDENTIAL_REJECTED)
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (211, 0, 0), out
+    assert (passed, failed, code) == (219, 0, 0), out
     assert f"PASS  {label}" in out
 
     # Must NOT fire on a fresh mark (attempts 0, no reason: nothing is
     # wrong with it) ...
     await plant(0, False, None)
-    assert _verifier()[:3] == (211, 0, 0)
+    assert _verifier()[:3] == (219, 0, 0)
     # ... nor on a held row: the claim writes no reason, the outcome will.
     await plant(1, True, None)
-    assert _verifier()[:3] == (211, 0, 0)
+    assert _verifier()[:3] == (219, 0, 0)
 
 
 async def test_a_stalled_destruction_is_reclaimed_and_the_abandoned_attempt_counted(

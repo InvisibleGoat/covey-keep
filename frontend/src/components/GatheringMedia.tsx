@@ -17,6 +17,9 @@ import {
   binRefusalMessage,
   confirmUpload,
   DELETE_PERMANENTLY_CONFIRMATION,
+  dismissMedia,
+  dismissRefusalMessage,
+  failureRetry,
   fetchLayerObjectUrl,
   intentErrorFields,
   intentItem,
@@ -33,6 +36,7 @@ import {
   RESTORE_HINT_EVERYONE,
   RESTORE_HINT_HOST_LOOKS,
   RESTORE_HINT_WAITS_FOR_YOU,
+  RETRY_LABEL,
   reviewMedia,
   reviewRefusalMessage,
   SEARCH_DEBOUNCE_MS,
@@ -209,6 +213,30 @@ import { FieldError, FormLevelErrors } from './FieldError'
 //    meaning the host alone for the pending lines — a co-host's own
 //    waiting photograph reads "Only you and the host can see this", which
 //    is right — and reads the role for the removed branch.
+//
+// And, since CK-71, a photograph that cannot be kept (pipeline record §6.5
+// as amended — three defects, one subject: what a person is told when a
+// photograph fails):
+//
+// 10. A FAILED ROW SAYS WHY, AND ITS CONTROLS ARE THE UPLOADER'S. The
+//    server writes `failure_reason` at the dead-letter and lists a failed
+//    row to its uploader alone (§6.5: failure belongs to the uploader —
+//    until CK-71 the host read every guest's failure beside a Try again
+//    that opened the host's own picker). The line follows the reason
+//    (lib/media.ts::failureMessage; the second sentence, what will work,
+//    for the uploader alone), and so do the controls (failureRetry): a
+//    retry only where a retry can succeed — Try again for an upload that
+//    did not finish or a worker that was interrupted, Choose a smaller
+//    copy for a photograph over the pixel guard, nothing for a file that
+//    is not a photo — and Dismiss beside every one of them, ONE click
+//    with no confirmation, because it removes a row that holds nothing:
+//    no photograph, no bytes, nothing anyone else can see. On the 204 the
+//    row leaves the list on the re-read. The gate on the controls is
+//    `is_own` and does not lean on the server's audience: a failed row
+//    that is not the caller's gets the line and nothing to press. The
+//    device-side lines (a PUT or a confirm that failed FROM HERE) and
+//    their Try again are untouched — those rows are not `failed` on the
+//    server, and are reaped at 24 hours.
 //
 // Collapsed by default (the CK-25/CK-27 pattern): the detail page stays one
 // request until the person opens this section.
@@ -533,7 +561,7 @@ export function GatheringMedia({
   // WHICH act is in flight beside who is acting (CK-64): a row the host both
   // reviews and owns carries Publish beside Send to bin, and a progress label
   // keyed on the id alone would read "Publishing…" during a bin act.
-  const [actingAct, setActingAct] = useState<ReviewAct | BinAct | null>(null)
+  const [actingAct, setActingAct] = useState<ReviewAct | BinAct | 'dismiss' | null>(null)
   // Your own photographs (CK-64): the row whose permanent-delete step is open
   // (never the editor's row at the same time — each closes the other), and
   // the one line that explains a destroyed row's disappearance until the
@@ -769,6 +797,38 @@ export function GatheringMedia({
     }))
   }
 
+  // Dismiss a photograph that could not be kept (CK-71; pipeline record §6.5
+  // as amended): ONE click, no confirmation — the row holds nothing (no
+  // photograph, no bytes, nothing anyone else can see), so there is
+  // nothing a second step would protect. On the `actingId` guard like every
+  // other act; optimistic-free — on the 204 the list is re-read and the row
+  // is gone from it, which is the whole of what the person asked for, so no
+  // status line follows; a refusal stays on the row, in this module's words
+  // for the server's CODE, with Refresh the list beside it.
+  async function dismiss(item: MediaItem) {
+    if (actingId !== null) return
+    setActingId(item.id)
+    setActingAct('dismiss')
+    setDecliningId(null)
+    clearBin()
+    setRowErrors((prev) => {
+      const { [item.id]: _dropped, ...rest } = prev
+      return rest
+    })
+    const outcome = await dismissMedia(item.id)
+    if (!alive.current) return
+    setActingId(null)
+    setActingAct(null)
+    if (outcome.ok) {
+      setReloadKey((key) => key + 1)
+      return
+    }
+    setRowErrors((prev) => ({
+      ...prev,
+      [item.id]: { fields: {}, form: [dismissRefusalMessage(outcome)] },
+    }))
+  }
+
   // Bulk approve (roadmap §3's one tap; record §5): the batch endpoint, the
   // ids in the order selected. The server refuses the batch WHOLE on any
   // bad item and changes nothing; its item-level 422 carries the row's
@@ -872,9 +932,10 @@ export function GatheringMedia({
     setReloadKey((key) => key + 1)
   }
 
-  // §6.5's one affordance: "try again" re-uploads FROM THE DEVICE. Never a
-  // re-queue — the quarantine original is deleted at dead-letter, so there
-  // is nothing on the server to retry.
+  // §6.5's retry re-uploads FROM THE DEVICE — Try again, and since CK-71
+  // Choose a smaller copy, both open the picker. Never a re-queue: the
+  // quarantine original is deleted at dead-letter, so there is nothing on
+  // the server to retry.
   function chooseAgain() {
     fileInput.current?.click()
   }
@@ -1193,12 +1254,24 @@ export function GatheringMedia({
                 : problem === 'confirm_failed'
                   ? "This upload couldn't be confirmed."
                   : mediaStateMessage(item, { isHost, organises, gatheringBin: binView })
-            const offerRetry = item.status === 'failed' || problem !== undefined
+            // A row whose upload failed FROM THIS DEVICE (CK-38) keeps its one
+            // affordance, Try again, exactly as it was: the row is not
+            // `failed` on the server (it is reaped at 24 hours), so none of
+            // the failed row's controls below apply to it.
+            const deviceProblem = problem !== undefined
+            // A `failed` row's line and controls follow its failure_reason,
+            // and the controls are THE UPLOADER'S (CK-71; point 10). The
+            // server lists a failed row to its uploader alone, but the gate
+            // does not lean on that: a non-own failed row — should one ever
+            // arrive — gets the line and nothing to press.
+            const failedRow = item.status === 'failed' && !deviceProblem
+            const failedRetry = failedRow && item.is_own ? failureRetry(item.failure_reason) : null
+            const dismissable = failedRow && item.is_own
             // The editor: the caller's own rows only (the server reserves
             // the edit to the uploader — no affordance that cannot succeed),
-            // and never on a row whose one affordance is try again — a
-            // failed photograph has nothing to caption.
-            const offerEdit = item.is_own && !offerRetry
+            // and never on a failed row or one whose upload failed from
+            // here — a failed photograph has nothing to caption.
+            const offerEdit = item.is_own && !failedRow && !deviceProblem
             const editing = offerEdit && editingId === item.id
             // The acts: the host, on a ready row that is pending — the
             // server's own criterion, so no control is ever offered on a
@@ -1287,10 +1360,31 @@ export function GatheringMedia({
                 <p className={item.status === 'failed' || problem ? 'form-error' : 'field-hint'}>
                   {message}
                 </p>
-                {offerRetry && (
+                {deviceProblem && (
                   <button type="button" className="link-button" onClick={chooseAgain}>
                     Try again
                   </button>
+                )}
+                {dismissable && (
+                  // The uploader's controls on a failed row (CK-71; point 10): a
+                  // retry only where one can succeed — the label says which kind
+                  // — and Dismiss, one click, no confirmation. Both retry labels
+                  // open the picker: the re-upload is from the device.
+                  <div className="media-review media-bin">
+                    {failedRetry !== null && (
+                      <button type="button" className="link-button" onClick={chooseAgain}>
+                        {RETRY_LABEL[failedRetry]}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="link-button"
+                      disabled={actingId !== null}
+                      onClick={() => void dismiss(item)}
+                    >
+                      {actingId === item.id && actingAct === 'dismiss' ? 'Dismissing…' : 'Dismiss'}
+                    </button>
+                  </div>
                 )}
                 {offerEdit && !editing && (
                   <button

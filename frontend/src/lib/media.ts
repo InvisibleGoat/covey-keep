@@ -67,6 +67,16 @@
 // branch) — where until CK-69 it said "only you", true only while the host
 // was the one organiser. The pending lines keep `isHost` meaning the host
 // alone: `pending` is still the host's and the uploader's.
+//
+// A PHOTOGRAPH THAT CANNOT BE KEPT (CK-71; pipeline record §6.5 as amended):
+// a `failed` row's line and controls are decided by its `failure_reason` —
+// four values the worker writes at the dead-letter, each naming what the
+// person can do (failureMessage, failureRetry) — and the reason decides
+// nothing else; the fallback line is CK-38's sentence. Every control on a
+// failed row is the UPLOADER's (§6.5: failure belongs to the uploader), and
+// Dismiss (dismissMedia) deletes a row that holds nothing: no photograph,
+// no bytes, nothing anyone else can see. No line names the file's contents
+// — the record's rule: the outcome, never "corrupt".
 import { PRODUCT_NAME } from '../brand'
 import { authFetch } from './api'
 import { networkErrors } from './formErrors'
@@ -74,6 +84,9 @@ import { networkErrors } from './formErrors'
 export type MediaStatus = 'pending_upload' | 'uploaded' | 'processing' | 'ready' | 'failed'
 export type PublicationState = 'pending' | 'live' | 'removed'
 export type ServableLayer = 'web' | 'thumbnail'
+// Why a `failed` row failed, for the person (CK-71; migration 0028): what
+// they can do, never what went wrong inside. Null on every other row.
+export type FailureReason = 'too_large' | 'unreadable' | 'upload_incomplete' | 'interrupted'
 
 // A GET /gatherings/{id}/media row: the CK-34 media body plus who uploaded
 // it (a display name — never an email, never a person id), whether it is
@@ -107,6 +120,11 @@ export interface MediaItem {
   // it and RENDERED NOWHERE — the stamp is consent evidence, never row
   // furniture (record §7), and the publisher's person id rides no body.
   published_at: string | null
+  // Why a `failed` row failed (CK-71; migration 0028): the worker writes it
+  // at the dead-letter beside `last_error`, which never reaches a body. Null
+  // on every row that is not `failed`. Typed loosely like `status`: a value
+  // this build does not know reads the fallback line, never a blank.
+  failure_reason: FailureReason | string | null
 }
 
 export interface MediaList {
@@ -441,6 +459,114 @@ export function anyInFlight(items: Pick<MediaItem, 'status'>[]): boolean {
   return items.some((item) => !isTerminal(item))
 }
 
+// ---------------------------------------------------------------------------
+// A photograph that cannot be kept (CK-71; pipeline record §6.5 as amended).
+// The worker writes `failure_reason` at the dead-letter — four values, each
+// naming what the PERSON can do — and it rides every media body, where
+// `last_error` (the operator's text) never goes. The line and the controls
+// follow it, and it decides nothing else.
+// ---------------------------------------------------------------------------
+
+// The pixel guard's number, in megapixels. THE SOURCE IS
+// backend/app/services/processing.py::MAX_PIXELS (50_000_000), and the two
+// must move together: this is copy about the server's rule, never a check of
+// its own — the server refuses, this says how big is too big.
+export const MAX_PHOTO_MEGAPIXELS = 50
+
+// The first sentence, for every reader; the second — what will work — for
+// the uploader alone, because only they can act on it. The default branch is
+// the defensive fallback for a row carrying no reason, or one this build does
+// not know: CK-38's sentence, unchanged. The record's rule holds on every
+// line: the OUTCOME, never the file's contents.
+export function failureMessage(reason: string | null | undefined, isOwn: boolean): string {
+  switch (reason) {
+    case 'too_large': {
+      const first = `This photo is too large to keep here — it's over ${MAX_PHOTO_MEGAPIXELS} megapixels.`
+      return isOwn ? `${first} A smaller copy will work.` : first
+    }
+    case 'unreadable':
+      return "This file isn't a photo we can read."
+    case 'upload_incomplete':
+      // Exactly the device-side `upload_failed` line (GatheringMedia): one
+      // outcome, one sentence, whoever noticed it first.
+      return "This upload didn't finish."
+    case 'interrupted':
+      return "We couldn't finish preparing this photo."
+    default:
+      return "We couldn't process this photo."
+  }
+}
+
+// Which retry control a failed row offers its uploader — only where a retry
+// can succeed. `too_large`: the same file will fail again, so the control is
+// for a SMALLER copy; `unreadable`: no copy of this file will work, so no
+// retry at all; the other two — and the fallback — a plain Try again. Both
+// controls re-upload FROM THE DEVICE (§6.5: never a re-queue — the original
+// went at the dead-letter). Dismiss is offered beside every one of them.
+export type FailureRetry = 'try_again' | 'choose_smaller'
+
+export function failureRetry(reason: string | null | undefined): FailureRetry | null {
+  switch (reason) {
+    case 'too_large':
+      return 'choose_smaller'
+    case 'unreadable':
+      return null
+    default:
+      return 'try_again'
+  }
+}
+
+export const RETRY_LABEL: Record<FailureRetry, string> = {
+  try_again: 'Try again',
+  choose_smaller: 'Choose a smaller copy',
+}
+
+export type DismissOutcome =
+  | { ok: true }
+  // `not_found` for the 404 (a row that is not the caller's — only the
+  // uploader can see a failed row — or one already dismissed), the 409's
+  // stable code `not_failed` (the row has not failed; carries the rung),
+  // `unreachable` for a network failure, or this module's own words for the
+  // rest. The server's `message` is NOT carried: the codes are the contract.
+  | { ok: false; code: string; status?: string }
+
+// Dismiss a photograph that could not be kept: ONE POST with no body, the
+// `binMedia` shape. On the server it is a hard DELETE of a row that holds
+// nothing — no photograph, no bytes, no count, nothing anyone else can see —
+// so a 204 means the row is gone and the next list read will not carry it.
+export async function dismissMedia(mediaId: string): Promise<DismissOutcome> {
+  try {
+    const response = await authFetch(`/media/${mediaId}/dismiss`, { method: 'POST' })
+    if (response.ok) return { ok: true }
+    if (response.status === 404) return { ok: false, code: 'not_found' }
+    if (response.status === 409) {
+      const body = (await response.json().catch(() => null)) as {
+        detail?: { code?: string; status?: string }
+      } | null
+      return { ok: false, code: body?.detail?.code ?? 'failed', status: body?.detail?.status }
+    }
+    return { ok: false, code: 'failed' }
+  } catch {
+    return { ok: false, code: 'unreachable' }
+  }
+}
+
+// What a refused dismiss tells the person — switched on the CODE and never
+// the wording. None claims the row is gone when it is not; the list re-read
+// is the way to see what is true now.
+export function dismissRefusalMessage(refusal: { code: string; status?: string }): string {
+  switch (refusal.code) {
+    case 'not_found':
+      return "This photo isn't here any more — refresh the list to see what is."
+    case 'not_failed':
+      return "This photo didn't fail, so there's nothing to dismiss — refresh the list to see where it is."
+    case 'unreachable':
+      return networkErrors().form[0]
+    default:
+      return 'Something went wrong. Nothing changed — try again.'
+  }
+}
+
 // What the person is told about a row — A FUNCTION OF THE ROW'S STATE, NEVER
 // A CONSTANT. `status` is the machine's answer (is it processed?);
 // `publication_state` is the human's (who may see it?). Both are read from
@@ -457,7 +583,9 @@ export function anyInFlight(items: Pick<MediaItem, 'status'>[]): boolean {
 // a `pending` photograph is shared or visible to the gathering. It is not;
 // the audience rule is what makes that true. The `failed` line names the
 // outcome, never the file's contents (pipeline record §6.5: "we couldn't
-// process this photo", not "corrupt").
+// process this photo", not "corrupt") — and since CK-71 it is decided by
+// the row's `failure_reason` (failureMessage, above), CK-38's sentence
+// standing as the fallback for a row that carries none.
 //
 // A `ready` row that is `pending` is WAITING — for the host, who can act on
 // it (the-hosts-review §8, restated at 1.2.0 by CK-44): the host's queue
@@ -480,6 +608,9 @@ export function mediaStateMessage(
     // The bin clock (CK-64), read on a removed row for the days-left phrase;
     // optional so a caller that does not carry it still gets an honest line.
     removed_at?: string | null
+    // Why a failed row failed (CK-71), read on a failed row for its line;
+    // optional for the same reason — absent reads the fallback sentence.
+    failure_reason?: string | null
   },
   // The reader's seat. `isHost` means THE HOST ALONE on every line: the
   // pending lines stay true with it (`pending` is the host's and the
@@ -502,7 +633,9 @@ export function mediaStateMessage(
     case 'processing':
       return 'Being prepared — usually within a minute, longer for a big batch.'
     case 'failed':
-      return "We couldn't process this photo."
+      // The reason decides the line (CK-71) — and the second sentence, where
+      // there is one, is the uploader's alone.
+      return failureMessage(item.failure_reason, item.is_own)
     case 'ready':
       break
     default:

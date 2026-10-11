@@ -5,7 +5,9 @@
 // message rendered inline against the file it names, and no PUT follows;
 // every rung renders its own honest line, the ready line read from
 // publication_state (the `live` branch exists before anything reaches it);
-// a failed row offers exactly one affordance; the list polls while anything
+// a failed row offers its uploader's controls — since CK-71 decided by its
+// failure_reason (routes/media-failure.test.tsx), here the fallback's two;
+// the list polls while anything
 // is in flight and makes no request once everything is terminal; and NO
 // presigned URL ever appears anywhere but the one fetch that spends it —
 // not in state, not in the DOM, not in an error.
@@ -436,7 +438,7 @@ test('a 422 carrying both a batch-level and a per-file error names the photo —
   ).toBeTruthy()
 })
 
-test('every rung renders its own line; the ready line is read from publication_state; a failed row offers exactly one affordance', async () => {
+test("every rung renders its own line; the ready line is read from publication_state; a failed row offers its uploader's controls", async () => {
   stubRoutes([
     {
       method: 'GET',
@@ -474,11 +476,14 @@ test('every rung renders its own line; the ready line is read from publication_s
   // The date label renders in the profile zone.
   expect(rows[2].textContent).toContain('for ')
   expect(rows[3].textContent).toContain("We couldn't process this photo.")
-  // §6.5: retries are invisible, and the ONE affordance is "try again" —
-  // re-uploading from the device. Exactly one button on the failed row.
+  // §6.5: retries are invisible. Since CK-71 a failed row's controls follow
+  // its failure_reason (routes/media-failure.test.tsx pins the matrix), and
+  // this fixture carries none — the defensive fallback — so it reads CK-38's
+  // sentence and offers the uploader's two: Try again (re-uploading from the
+  // device, never a re-queue) and Dismiss. (Until CK-71: exactly one button,
+  // Try again.)
   const failedButtons = within(rows[3]).getAllByRole('button')
-  expect(failedButtons).toHaveLength(1)
-  expect(failedButtons[0].textContent).toBe('Try again')
+  expect(failedButtons.map((button) => button.textContent)).toEqual(['Try again', 'Dismiss'])
   // The branch nothing reaches yet, rendered from the row, not from a
   // constant: when the publication phase moves rows to live, this is the
   // line they get, with no copy rewrite.

@@ -16,9 +16,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, created_at_col, uuid_pk
 from app.models.enums import (
+    MEDIA_FAILURE_REASON,
     MEDIA_LAYER,
     MEDIA_STATUS,
     PUBLICATION_STATE,
+    MediaFailureReason,
     MediaLayer,
     MediaStatus,
     PublicationState,
@@ -70,7 +72,9 @@ class Media(Base):
     count), `available_at` (not claimable before — the backoff ladder),
     `claimed_at` (the reclaim clock), `last_error` (why the row is not
     progressing right now — see the column; names the outcome, never the
-    file's contents)."""
+    file's contents) — and, since 0028 (CK-71), `failure_reason`: WHY a
+    `failed` row failed, FOR THE PERSON, written beside `last_error` at the
+    dead-letter and never derived from it (see the column)."""
 
     __tablename__ = "media"
     __table_args__ = (
@@ -140,6 +144,28 @@ class Media(Base):
         DateTime(timezone=True), nullable=True
     )
     last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # WHY this row failed, FOR THE PERSON (0028, CK-71; pipeline record §6.5
+    # as amended): one of four values that each name what the uploader can
+    # do — `too_large` (the pixel guard; a smaller copy works), `unreadable`
+    # (every other Undecodable; no copy of this file will),
+    # `upload_incomplete` (the quarantine object was missing; upload again),
+    # `interrupted` (the transient ladder spent, or three abandonments at
+    # reclaim; upload again) — written by the worker at the dead-letter in
+    # the SAME guarded statement as `status = 'failed'` and `last_error`
+    # (services/ingest.py), and NEVER derived from `last_error` at runtime:
+    # the one-time backfill in 0028 is the exception, by the stable prefix
+    # of the text the code wrote, in the migration alone. SET IF AND ONLY
+    # IF THE ROW IS `failed` (verifier-asserted): `failed` is terminal, so
+    # nothing clears it, and a `ready` row never carries one. Where
+    # `last_error` is the operator's and rides no body, this is the
+    # person's and rides every media body — safe there, because none of
+    # its four values names the file's contents. A `failed` row is visible
+    # to its uploader alone (api/media.py::_visible_media) and admits one
+    # act, dismiss, which DELETES the row — a failed row holds nothing but
+    # the person's own filename and tags.
+    failure_reason: Mapped[Optional[MediaFailureReason]] = mapped_column(
+        MEDIA_FAILURE_REASON, nullable=True
+    )
     # The host's gate — the ONE publication state the three layers share
     # (media-layers record §8). Revocation and removal act here, on the
     # logical photograph; the layers have no state of their own.
