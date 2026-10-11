@@ -1,0 +1,22 @@
+# requirements-dev.in — THE DEV TOOLS A PERSON EDITS (CK-72). The file beside
+# it, `requirements-dev.txt`, is GENERATED from this one and is never edited
+# by hand. It is constrained to the runtime lock (the -c line below), so the
+# suite runs on exactly the tree Render installs plus these tools, and a
+# shared package (anyio, idna, h11, typing-extensions) can never sit at one
+# version here and another there. Regenerate from backend/ after editing this
+# file, and again after any recompile of requirements.txt:
+#   uv pip compile requirements-dev.in --universal --python-version 3.13 --generate-hashes -o requirements-dev.txt
+# Local install, both locks in one hash-checked pip call:
+#   pip install -r requirements.txt -r requirements-dev.txt
+# Nothing here reaches Render: render.yaml installs requirements.txt alone, and
+# tests/test_requirements_lock.py pins that the runtime lock names no dev tool.
+# Every pin is `==`, at the version the local venv ran on 2026-10-11: the dev
+# tools were never deployed, so the versions the suite passed on are the
+# verified ones.
+-c requirements.txt
+pytest==9.1.1
+pytest-asyncio==1.4.0
+httpx==0.28.1
+# uv (CK-72) — the universal resolver that compiles both locks. A DEV tool
+# only: it is never in requirements.txt and never on Render.
+uv==0.13.0
