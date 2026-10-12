@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0029"
+EXPECTED_REVISION = "0030"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -1887,7 +1887,7 @@ async def verify(conn, ck: Checks) -> None:
             False, "pending invitation integrity", "gathering_invitations_pending missing"
         )
 
-    print("\n-- billing: the paid tiers' rows (0029, CK-73) --")
+    print("\n-- billing: the paid tiers' rows (0029, CK-73; cancel_at 0030, CK-73.1) --")
     # Two tables that connect an account to a payment provider (paid-tiers
     # record §9): the provider's customer id, and a local copy of the facts
     # the allowance is DERIVED from — the plan and the provider's status.
@@ -1918,7 +1918,7 @@ async def verify(conn, ck: Checks) -> None:
             "cancel_at_period_end",
             "created_at",
         ),
-        nullable=("current_period_end", "updated_at"),
+        nullable=("current_period_end", "cancel_at", "updated_at"),
         absent=("allowance", "is_paid", "entitlement"),
     )
     # `status` is TEXT, never an enum: the provider's value verbatim, so a
@@ -1929,6 +1929,25 @@ async def verify(conn, ck: Checks) -> None:
         status_column is not None and status_column[0] == "text",
         "subscriptions.status is text (the provider's value verbatim, never an enum)",
         f"found {status_column!r}",
+    )
+    # `cancel_at` (0030, CK-73.1): WHEN the subscription is set to end —
+    # Stripe's own field verbatim, as an instant. Under 2026-09-30.endive
+    # the Customer Portal cancels by setting it and leaving
+    # `cancel_at_period_end` false, so the boolean alone misses every
+    # portal cancellation (CK-73's check (ir)). Nullable (the line above,
+    # which FAILs on a missing column), timestamptz, no default: the
+    # webhook writes it from a fetched subscription, or nothing does.
+    # Read with `.first()`, so a missing column FAILs here too.
+    cancel_at_column = await column_type_and_default(conn, "subscriptions", "cancel_at")
+    ck.check(
+        cancel_at_column is not None and cancel_at_column[0] == "timestamp with time zone",
+        "subscriptions.cancel_at is timestamp with time zone",
+        f"found {cancel_at_column!r}",
+    )
+    ck.check(
+        cancel_at_column is not None and cancel_at_column[1] is None,
+        "subscriptions.cancel_at has no server default (the webhook writes it, or nothing does)",
+        f"default is {cancel_at_column[1] if cancel_at_column else None!r}",
     )
     # The two types and their labels — read from pg_enum, because
     # autogenerate never diffs enum labels.

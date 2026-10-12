@@ -75,8 +75,9 @@ class Subscription(Base):
     (record §6, §9): the PLAN (read from the subscription's price by its
     LOOKUP KEY, never by the price's id — a price id differs between the
     sandbox and live mode, a lookup key does not), the provider's STATUS
-    verbatim, the period end and the cancel-at-period-end flag. Upserted by
-    the webhook keyed on (provider, provider_subscription_id); never
+    verbatim, the period end, the cancel-at-period-end flag and — since
+    0030, CK-73.1 — `cancel_at`, the instant Stripe will end it. Upserted
+    by the webhook keyed on (provider, provider_subscription_id); never
     written by any other path.
 
     AT MOST ONE SUBSCRIPTION PER ACCOUNT IN A PAID STATUS — the partial
@@ -122,6 +123,22 @@ class Subscription(Base):
         DateTime(timezone=True), nullable=True
     )
     cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # WHEN the subscription is set to end, as an instant — Stripe's
+    # `cancel_at`, verbatim (0030, CK-73.1). Under API 2026-09-30.endive the
+    # Customer Portal cancels "at the end of the period" by setting THIS to
+    # the period-end instant and leaving `cancel_at_period_end` FALSE, so a
+    # reader of the boolean alone never sees a portal cancellation (CK-73's
+    # check (ir)). Both are stored as Stripe's facts; what the surface
+    # needs — "this plan is ending, on this date" — is DERIVED by
+    # api/billing.py (`ends_at`: this when set, else the period end when
+    # the boolean is true, else null) and never stored. The allowance
+    # reads neither: a plan with an end date is paid until Stripe says it
+    # is not. NULL means Stripe holds no cancellation date — or, for a row
+    # last synced before 0030, that none is known locally until the next
+    # event writes it (nothing backfilled; a migration cannot ask Stripe).
+    cancel_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = created_at_col()
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

@@ -27,6 +27,11 @@ the subscription id out of the event, and then `fetch_subscription` reads
 the subscription from Stripe BY ID and `sync_subscription` upserts the
 local row from what it reads — so event order and duplicate delivery
 cannot leave the row stale, and no event table is kept for deduplication.
+A subscription Stripe NO LONGER HOLDS — `resource_missing` on the fetch —
+is a finding, not an outage: `fetch_subscription` answers None and the
+router acknowledges the event with one ERROR line naming the event and
+subscription ids, never the 503 that would have Stripe retry it for days
+(CK-73.1, the record's own rule applied to the fetch).
 
 WHAT `sync_subscription` TRUSTS, AND WHAT IT DOES NOT. The ACCOUNT comes
 from the subscription's CUSTOMER through `billing_customers` — never from
@@ -45,7 +50,15 @@ version 2025-03-31 Stripe carries it on `items.data[].current_period_end`,
 not on the subscription (the pinned SDK, 16.0.0, speaks 2026-09-30.endive:
 `stripe.Subscription` has no such attribute and
 `stripe.SubscriptionItem` does); pinned by test against an object built
-in the pinned version's shape. A SECOND PAID SUBSCRIPTION FOR ONE ACCOUNT
+in the pinned version's shape. `cancel_at` IS STORED BESIDE
+`cancel_at_period_end`, both verbatim (0030, CK-73.1): under
+2026-09-30.endive the Customer Portal cancels "at the end of the period"
+by setting `cancel_at` to that instant and leaving the boolean FALSE, so
+a reader of the boolean alone misses every portal cancellation (CK-73's
+check (ir)); the one fact the surface needs — `ends_at` — is derived in
+api/billing.py, and the allowance reads neither (a plan with an end date
+is paid until Stripe says it is not).
+A SECOND PAID SUBSCRIPTION FOR ONE ACCOUNT
 (two Checkout sessions opened before either completed) writes nothing,
 logs an ERROR with both subscription ids and is acknowledged: the partial
 unique `uq_subscriptions_account_id_paid` is the backstop, Steven cancels
@@ -69,7 +82,12 @@ request's URL — so it is held at WARNING, and the two SDK lines that
 would carry a URL never print. Nothing in this module logs an email, a
 URL, a key or a payload: event ids, subscription ids and plan names only.
 A Checkout or portal URL is a bearer credential for a payment surface —
-it is returned and never logged (the presigned-URL rule, CK-34).
+it is returned and never logged (the presigned-URL rule, CK-34). THESE
+LINES REACH THE DEPLOY ONLY SINCE CK-73.1: the API process configured no
+logging before it (the worker's basicConfig is the worker's alone), so
+every INFO line this module wrote was dropped at a root logger with no
+handler — app/logging_setup.py configures the `covey-keep` namespace,
+and nothing else, at app.main's import.
 """
 
 from __future__ import annotations
@@ -326,9 +344,20 @@ async def portal_url(customer_id: str) -> str:
     return await asyncio.to_thread(_create_portal_session, params)
 
 
-async def fetch_subscription(subscription_id: str) -> stripe.Subscription:
-    """The subscription as Stripe holds it now, by id."""
-    return await asyncio.to_thread(_retrieve_subscription, subscription_id)
+async def fetch_subscription(subscription_id: str) -> Optional[stripe.Subscription]:
+    """The subscription as Stripe holds it now, by id — or None when Stripe
+    answers `resource_missing`: a subscription that no longer exists, or
+    never did. An event naming one is a finding a retry cannot fix, so the
+    router acknowledges it with a 200 and an ERROR line naming both ids
+    rather than the 503 that would have Stripe retry it for days (CK-73.1;
+    the absent-object rule, `close_customer`'s shape). Every other provider
+    error propagates — the router's 503 is for those."""
+    try:
+        return await asyncio.to_thread(_retrieve_subscription, subscription_id)
+    except stripe.InvalidRequestError as exc:
+        if exc.code == "resource_missing":
+            return None
+        raise
 
 
 async def close_customer(customer_id: str) -> bool:
@@ -468,6 +497,18 @@ async def sync_subscription(
         else None
     )
     cancel_at_period_end = bool(_field(sub, "cancel_at_period_end") or False)
+    # WHEN it is set to end — Stripe's `cancel_at`, epoch seconds or null
+    # (0030, CK-73.1). Under 2026-09-30.endive the Customer Portal cancels
+    # "at the end of the period" by setting THIS and leaving the boolean
+    # false (CK-73's check (ir)); both are stored verbatim and
+    # api/billing.py derives the one fact the surface needs. A "don't
+    # cancel" in the portal sets it back to null, written like any value.
+    cancel_at_raw = _field(sub, "cancel_at")
+    cancel_at = (
+        datetime.fromtimestamp(int(cancel_at_raw), tz=timezone.utc)
+        if cancel_at_raw is not None
+        else None
+    )
 
     if status in PAID_STATUSES:
         other = await _other_paid_subscription(db, customer.account_id, subscription_id)
@@ -496,6 +537,7 @@ async def sync_subscription(
             status=status,
             current_period_end=current_period_end,
             cancel_at_period_end=cancel_at_period_end,
+            cancel_at=cancel_at,
         )
         db.add(row)
     else:
@@ -503,6 +545,7 @@ async def sync_subscription(
         row.status = status
         row.current_period_end = current_period_end
         row.cancel_at_period_end = cancel_at_period_end
+        row.cancel_at = cancel_at
         row.updated_at = datetime.now(timezone.utc)
     try:
         await db.flush()

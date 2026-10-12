@@ -1,6 +1,8 @@
 """CK-73 — paid tiers, the backend: two photo plans on Stripe, and the
 allowance read from a local row (decisions/2026-10-10-paid-tiers-on-stripe.md
-§3, §5, §6, §8, §9, §10, §11; migration 0029).
+§3, §5, §6, §8, §9, §10, §11; migration 0029) — and CK-73.1, the two
+defects its deploy checks found (§7 and §11 as amended there; migration
+0030): the API's own log lines, `cancel_at` and `ends_at`, and the rider.
 
 OFFLINE, EVERY TEST. The SDK is stubbed at services/billing.py's own
 functions — the one-call wrappers (`_create_customer`, `_list_active_prices`,
@@ -53,8 +55,28 @@ The load-bearing pins:
   anonymization, and the billing rows gone after; Stripe failing → 503
   with the person NOT anonymized and every row intact; `resource_missing`
   → success; no customer → no Stripe call at all;
-- THE 0029 ROUND TRIP, and the verifier's thirty-nine lines fired by
-  plants as a subprocess, each plant confirmed by its own SELECT.
+- CK-73.1, THE API'S OWN LOGGING: `app.main` configures the `covey-keep`
+  namespace and nothing else — INFO, one marked handler to stdout in the
+  worker's format, idempotent, the root untouched, `propagate` TRUE (the
+  never-log pins in this file read the root's capture and would pass
+  vacuously otherwise); in a fresh interpreter the line lands on STDOUT
+  and the root stays at WARNING with no handler, before and after; the
+  worker never loads it;
+- CK-73.1, CANCELLATION: the endive portal shape (`cancel_at` set, the
+  boolean false, status active) writes `cancel_at` and `GET /billing`'s
+  `ends_at` is that instant with the allowance unchanged; "don't cancel"
+  nulls both; the classic shape (the boolean true, `cancel_at` null)
+  reads `ends_at` = the period end; neither reads null; both set reads
+  `cancel_at`; `cancel_at_period_end` no longer rides the body;
+- CK-73.1, THE RIDER: `resource_missing` on the fetch → 200, nothing
+  written, one ERROR line naming both ids and no payload, no "handled"
+  line; every other provider error on the fetch still the 503;
+- THE 0029 ROUND TRIP; THE 0030 ROUND TRIP (the column gone on the
+  downgrade with the verifier failing on exactly its four lines — the
+  head and the three cancel_at lines — then back and NULL on the
+  upgrade, a planted value lost); and the verifier's thirty-nine CK-73
+  lines plus CK-73.1's three fired by plants as a subprocess, each plant
+  confirmed by its own SELECT.
 """
 
 from __future__ import annotations
@@ -81,6 +103,7 @@ from sqlalchemy import func, select, text
 
 from app.api.billing import ALREADY_SUBSCRIBED, BILLING_UNAVAILABLE
 from app.api.profile import ANONYMIZED_DISPLAY_NAME
+from app import logging_setup
 from app.config import Settings, WorkerSettings
 from app.models import (
     Account,
@@ -138,6 +161,7 @@ async def _plant_subscription(
     status: str = "active",
     subscription_id: str = "sub_test_one",
     cancel: bool = False,
+    cancel_at: datetime | None = None,
 ) -> UUID:
     async with db_session_factory() as db:
         row = Subscription(
@@ -148,6 +172,7 @@ async def _plant_subscription(
             status=status,
             current_period_end=datetime.fromtimestamp(PERIOD_END, tz=timezone.utc),
             cancel_at_period_end=cancel,
+            cancel_at=cancel_at,
         )
         db.add(row)
         await db.commit()
@@ -172,11 +197,15 @@ def _subscription_object(
     status: str = "active",
     period_end: int = PERIOD_END,
     cancel: bool = False,
+    cancel_at: int | None = None,
 ) -> stripe.Subscription:
     """A `stripe.Subscription` in the PINNED API version's shape
     (2026-09-30.endive): `current_period_end` on the subscription ITEM and
     nowhere else, the price nested whole on the item with its lookup key,
-    the customer an id. Built by the SDK's own constructor, no network."""
+    the customer an id, and `cancel_at` as Stripe sends it — the key always
+    present, epoch seconds or null (CK-73.1: the portal's cancellation is
+    this field set with the boolean left false). Built by the SDK's own
+    constructor, no network."""
     return stripe.Subscription.construct_from(
         {
             "id": subscription_id,
@@ -184,6 +213,7 @@ def _subscription_object(
             "customer": customer_id,
             "status": status,
             "cancel_at_period_end": cancel,
+            "cancel_at": cancel_at,
             "items": {
                 "object": "list",
                 "data": [
@@ -475,6 +505,181 @@ def test_the_stripe_logger_is_pinned_above_debug_at_import():
     assert stripe.api_version == "2026-09-30.endive"
 
 
+# --- the API's own logging (CK-73.1) ----------------------------------------------------
+
+# The web service's environment for a fresh interpreter: the worker's six
+# plus everything the web Settings require (the import-graph test's list).
+_WEB_SETTINGS_NAMES = (
+    "DATABASE_URL",
+    "SESSION_SECRET",
+    "APP_BASE_URL",
+    "API_BASE_URL",
+    "R2_UPLOAD_ACCESS_KEY_ID",
+    "R2_UPLOAD_SECRET_ACCESS_KEY",
+    "R2_SERVE_ACCESS_KEY_ID",
+    "R2_SERVE_SECRET_ACCESS_KEY",
+    "STRIPE_API_KEY",
+    "STRIPE_WEBHOOK_SECRET",
+    "STRIPE_PRICE_LOOKUP_100K",
+    "STRIPE_PRICE_LOOKUP_300K",
+)
+
+_LOG_LINE = r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} (INFO|WARNING|ERROR) covey-keep\.[a-z]+: .*"
+
+# Run in a fresh interpreter: the production-shaped import, a line logged,
+# the module reloaded — the facts printed as one JSON line on STDERR so the
+# log line on STDOUT stands alone.
+_FRESH_INTERPRETER = r"""
+import importlib, json, logging, sys
+root = logging.getLogger()
+before = [root.level, len(root.handlers)]
+import app.main
+from app import logging_setup
+ns = logging.getLogger(logging_setup.NAMESPACE)
+marked = [h for h in ns.handlers if getattr(h, "covey_keep_api_handler", False)]
+logging.getLogger("covey-keep.billing").info("billing: handled customer.subscription.updated evt_fresh")
+logging.getLogger("covey-keep.billing").debug("a DEBUG line nobody turned on")
+importlib.reload(app.main)
+again = [h for h in ns.handlers if getattr(h, "covey_keep_api_handler", False)]
+sys.stdout.flush()
+print(json.dumps({
+    "root_before": before,
+    "root_after": [root.level, len(root.handlers)],
+    "handlers": len(ns.handlers),
+    "marked": len(marked),
+    "marked_after_reload": len(again),
+    "same_handler": marked == again,
+    "level": ns.level,
+    "propagate": ns.propagate,
+    "stripe": logging.getLogger("stripe").level,
+    "botocore_auth": logging.getLogger("botocore.auth").level,
+    "botocore_regions": logging.getLogger("botocore.regions").level,
+    "stream_is_stdout": marked[0].stream is sys.stdout,
+    "logging_setup_loaded": "app.logging_setup" in sys.modules,
+}), file=sys.stderr)
+"""
+
+
+def test_the_api_configures_the_covey_keep_namespace_alone_and_keeps_propagating():
+    """CK-73's check (iq): the webhook's INFO line never reached Render's
+    log, because the web process configured no logging — the root at
+    WARNING with no handler drops every INFO record, and the worker's
+    `basicConfig` runs in the worker alone. `app.main` now configures the
+    `covey-keep` namespace: INFO, ONE marked handler to stdout in the
+    worker's format, the ROOT untouched (a root handler would surface every
+    library's INFO line — stripe's and botocore's carry request URLs), and
+    `propagate` TRUE — the never-log pins in this file read `caplog.records`,
+    captured at the root, and a namespace that stopped propagating would let
+    every one of them pass vacuously. Idempotent: a second call, with or
+    without a stream, returns the same handler and adds nothing."""
+    import app.main  # noqa: F401 — the one caller; the suite imported it already
+
+    namespace = logging.getLogger(logging_setup.NAMESPACE)
+    handler = logging_setup.api_handler()
+    assert handler is not None and handler in namespace.handlers
+    assert namespace.level == logging.INFO
+    assert namespace.propagate is True
+    marked = [h for h in namespace.handlers if getattr(h, "covey_keep_api_handler", False)]
+    assert marked == [handler]
+    root = logging.getLogger()
+    root_before = (root.level, list(root.handlers))
+
+    # Configured again — a reimport, the reloader, this call — nothing is added
+    # and the root is exactly what it was.
+    assert logging_setup.configure_logging() is handler
+    assert logging_setup.configure_logging(io.StringIO()) is handler
+    assert [h for h in namespace.handlers if getattr(h, "covey_keep_api_handler", False)] == [handler]
+    assert (root.level, list(root.handlers)) == root_before
+
+    # Written to the handler's stream in the worker's format: the billing
+    # logger and any other logger under the namespace at INFO; nothing at
+    # DEBUG, which the namespace's level keeps out.
+    buffer = io.StringIO()
+    previous = handler.setStream(buffer)
+    try:
+        logging.getLogger("covey-keep.billing").info("billing: handled customer.subscription.updated evt_stream")
+        logging.getLogger("covey-keep.anything").info("another line, from another module under the namespace")
+        logging.getLogger("covey-keep.billing").debug("a DEBUG line nobody turned on")
+    finally:
+        handler.setStream(previous)
+    lines = buffer.getvalue().splitlines()
+    assert len(lines) == 2, lines
+    stamp = r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3}"
+    assert re.fullmatch(
+        stamp + r" INFO covey-keep\.billing: billing: handled customer\.subscription\.updated evt_stream", lines[0]
+    ), lines[0]
+    assert re.fullmatch(stamp + r" INFO covey-keep\.anything: another line, from another module under the namespace", lines[1]), lines[1]
+    # The worker's format, verbatim — read from the worker's source, which
+    # this phase does not touch; the two services' lines read alike.
+    worker_source = (BACKEND_DIR / "app" / "worker.py").read_text(encoding="utf-8")
+    assert f'format="{logging_setup.LOG_FORMAT}"' in worker_source
+    # The library pins stand: stripe at WARNING, botocore's two above DEBUG.
+    assert logging.getLogger("stripe").level == logging.WARNING
+    assert logging.getLogger("botocore.auth").level >= logging.INFO
+    assert logging.getLogger("botocore.regions").level >= logging.INFO
+
+
+def test_in_a_fresh_interpreter_the_api_writes_to_stdout_and_the_root_stays_untouched():
+    """Production-shaped: a fresh interpreter imports `app.main` the way
+    uvicorn does. The root is at WARNING with NO handler before and after
+    (uvicorn configures only its own `uvicorn.*` loggers, so in production
+    nothing is written twice); the namespace has exactly one handler, bound
+    to stdout; an INFO line on `covey-keep.billing` lands on STDOUT — not
+    stderr, where Python's last-resort handler put the API's WARNINGs until
+    now — in the worker's format, and a DEBUG line does not; reloading the
+    module adds no handler. And the worker's own import graph never loads
+    the module (the CK-59 pin, re-asserted): it configures the root itself,
+    and a namespace handler beside it would write every worker line twice."""
+    env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "TEMP", "TMP") if k in os.environ}
+    env["PYTHONIOENCODING"] = "utf-8"
+    env.update(WORKER_ENV)
+    web_env = dict(env)
+    for name in _WEB_SETTINGS_NAMES:
+        web_env[name] = os.environ[name]
+    web = subprocess.run(
+        [sys.executable, "-c", _FRESH_INTERPRETER],
+        cwd=BACKEND_DIR,
+        env=web_env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert web.returncode == 0, web.stderr
+    stdout_lines = [line for line in web.stdout.splitlines() if line.strip()]
+    assert len(stdout_lines) == 1, web.stdout
+    assert re.fullmatch(
+        r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} INFO covey-keep\.billing: "
+        r"billing: handled customer\.subscription\.updated evt_fresh",
+        stdout_lines[0],
+    ), stdout_lines[0]
+    facts = json.loads([line for line in web.stderr.splitlines() if line.strip()][-1])
+    assert facts["root_before"] == [logging.WARNING, 0] == facts["root_after"], facts
+    assert facts["handlers"] == 1 and facts["marked"] == 1 and facts["marked_after_reload"] == 1, facts
+    assert facts["same_handler"] is True and facts["stream_is_stdout"] is True, facts
+    assert facts["level"] == logging.INFO and facts["propagate"] is True, facts
+    assert facts["stripe"] == logging.WARNING, facts
+    assert facts["botocore_auth"] >= logging.INFO and facts["botocore_regions"] >= logging.INFO, facts
+    assert facts["logging_setup_loaded"] is True, facts
+    # The log line is on stdout alone: nothing of it on stderr (the root has
+    # no handler there, and the last-resort handler is not reached).
+    assert "evt_fresh" not in web.stderr
+
+    worker = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, app.worker; print('app.logging_setup' in sys.modules, 'app.main' in sys.modules)",
+        ],
+        cwd=BACKEND_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert worker.returncode == 0, worker.stderr
+    assert worker.stdout.strip() == "False False", worker.stdout
+
+
 # --- config (record §10, §13) -----------------------------------------------------------
 
 # A fake key body, and every fake key below ASSEMBLED from a prefix and it at
@@ -582,7 +787,7 @@ async def test_get_billing_reads_the_free_tier_then_the_plan_and_never_a_stripe_
         "plan": None,
         "status": None,
         "current_period_end": None,
-        "cancel_at_period_end": False,
+        "ends_at": None,
         "allowance": 10_000,
         "next": "checkout",
     }
@@ -595,15 +800,125 @@ async def test_get_billing_reads_the_free_tier_then_the_plan_and_never_a_stripe_
     paid = await client.get("/billing", headers=headers)
     assert paid.status_code == 200
     body = paid.json()
+    # The pin moved at CK-73.1: `cancel_at_period_end` left the body and
+    # `ends_at` arrived — derived, and here from the classic shape (the
+    # boolean true, no `cancel_at`), so it is the period end.
     assert body == {
         "plan": "photos_300k",
         "status": "active",
         "current_period_end": datetime.fromtimestamp(PERIOD_END, tz=timezone.utc).isoformat(),
-        "cancel_at_period_end": True,
+        "ends_at": datetime.fromtimestamp(PERIOD_END, tz=timezone.utc).isoformat(),
         "allowance": 300_000,
         "next": "portal",
     }
     assert "cus_" not in paid.text and "sub_" not in paid.text
+
+
+# --- cancellation: cancel_at beside the boolean, ends_at derived (CK-73.1) ----------------
+
+
+def _instant(epoch: int) -> datetime:
+    return datetime.fromtimestamp(epoch, tz=timezone.utc)
+
+
+async def test_a_portal_cancellation_under_endive_is_recognised_through_cancel_at(
+    client, capsys, db_session_factory, monkeypatch
+):
+    """CK-73's check (ir): Steven cancelled in the Customer Portal, the
+    portal read "Cancels Nov 12", the subscription stayed `active` — and
+    `GET /billing` said `cancel_at_period_end: false`, because under API
+    2026-09-30.endive the portal cancels by setting `cancel_at` to the
+    period-end instant and leaving the boolean FALSE, and the upsert read
+    only the boolean. The shape Steven's delivery carried, built with
+    `construct_from`: `cancel_at` written as an instant, the boolean false,
+    `ends_at` = that instant, the status and the allowance unchanged (a
+    plan cancelled at the period's end is paid until it ends). Then "Don't
+    cancel" in the portal: `cancel_at` back to null, and `ends_at` null."""
+    address = "portal-cancel@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    sub = {"id": "sub_test_one", "object": "subscription"}
+
+    # Bought: no cancellation of either shape.
+    _stub_fetch(monkeypatch, _subscription_object(status="active", lookup_key=KEY_300K))
+    assert (await _post_event(client, "customer.subscription.created", sub, event_id="evt_bought")).status_code == 200
+    before = (await client.get("/billing", headers=headers)).json()
+    assert before["ends_at"] is None and before["status"] == "active" and before["allowance"] == 300_000
+    assert "cancel_at_period_end" not in before
+
+    # Cancelled in the portal: cancel_at set to the period end, the boolean
+    # FALSE, the status still active — the endive shape.
+    _stub_fetch(
+        monkeypatch,
+        _subscription_object(status="active", lookup_key=KEY_300K, cancel_at=PERIOD_END, cancel=False),
+    )
+    assert (await _post_event(client, "customer.subscription.updated", sub, event_id="evt_cancel")).status_code == 200
+    rows = await _subscription_rows(db_session_factory)
+    assert len(rows) == 1
+    assert rows[0].cancel_at == _instant(PERIOD_END)
+    assert rows[0].cancel_at_period_end is False
+    assert rows[0].status == "active"
+    assert rows[0].updated_at is not None
+    body = (await client.get("/billing", headers=headers)).json()
+    assert body == {
+        "plan": "photos_300k",
+        "status": "active",
+        "current_period_end": _instant(PERIOD_END).isoformat(),
+        "ends_at": _instant(PERIOD_END).isoformat(),
+        "allowance": 300_000,
+        "next": "portal",
+    }
+    # Paid until it ends: the allowance reads neither cancellation fact.
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+        assert await keeping.account_quota(db, account) == 300_000
+        assert await keeping.holds_paid_plan(db, account) is True
+
+    # "Don't cancel" in the portal: cancel_at null again, written like any value.
+    _stub_fetch(monkeypatch, _subscription_object(status="active", lookup_key=KEY_300K, cancel_at=None))
+    assert (await _post_event(client, "customer.subscription.updated", sub, event_id="evt_renew")).status_code == 200
+    rows = await _subscription_rows(db_session_factory)
+    assert len(rows) == 1 and rows[0].cancel_at is None and rows[0].status == "active"
+    assert (await client.get("/billing", headers=headers)).json()["ends_at"] is None
+
+
+async def test_ends_at_follows_the_boolean_in_the_classic_shape_and_is_null_with_neither(
+    client, capsys, db_session_factory, monkeypatch
+):
+    """The derivation, every branch: the classic shape (the boolean true,
+    `cancel_at` null) reads `ends_at` = `current_period_end`; both set reads
+    `cancel_at` — the date Stripe states wins; neither reads null. The row
+    stores both facts verbatim on every path, and `cancel_at_period_end`
+    never rides the body."""
+    address = "classic-cancel@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    sub = {"id": "sub_test_one", "object": "subscription"}
+    other_instant = PERIOD_END - 3 * 86400
+
+    cases = [
+        # (cancel_at_period_end, cancel_at, expected ends_at)
+        (True, None, _instant(PERIOD_END).isoformat()),
+        (True, other_instant, _instant(other_instant).isoformat()),
+        (False, other_instant, _instant(other_instant).isoformat()),
+        (False, None, None),
+    ]
+    for cancel, cancel_at, expected in cases:
+        _stub_fetch(monkeypatch, _subscription_object(status="active", cancel=cancel, cancel_at=cancel_at))
+        response = await _post_event(client, "customer.subscription.updated", sub, event_id="evt_shape")
+        assert response.status_code == 200, (cancel, cancel_at)
+        rows = await _subscription_rows(db_session_factory)
+        assert len(rows) == 1, (cancel, cancel_at)
+        assert rows[0].cancel_at_period_end is cancel, (cancel, cancel_at)
+        assert rows[0].cancel_at == (_instant(cancel_at) if cancel_at is not None else None), (cancel, cancel_at)
+        body = (await client.get("/billing", headers=headers)).json()
+        assert body["ends_at"] == expected, (cancel, cancel_at, body)
+        assert "cancel_at_period_end" not in body
+        assert body["status"] == "active" and body["allowance"] == 100_000 and body["next"] == "portal"
 
 
 # --- checkout (record §5, §11) -------------------------------------------------------------
@@ -976,6 +1291,63 @@ async def test_a_fetch_failure_is_a_503_so_stripe_retries(client, monkeypatch, c
     assert not [r for r in _records(caplog) if "handled" in r.getMessage()]
 
 
+async def test_a_subscription_stripe_no_longer_holds_is_a_200_with_one_error_line_and_nothing_written(
+    client, capsys, db_session_factory, monkeypatch, caplog
+):
+    """The record's own rule, applied to the fetch (CK-73.1): a
+    `resource_missing` from Stripe is a finding a retry cannot fix — a 200,
+    nothing written, ONE ERROR line naming the event id and the subscription
+    id and nothing else (no "handled" line, no payload, no Stripe message) —
+    never the 503 that would have Stripe retry it for days. Through the REAL
+    `fetch_subscription`, the one-call wrapper stubbed beneath it. Every
+    other provider error on the fetch is still the 503."""
+    address = "vanished@example.com"
+    await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+
+    def gone(subscription_id: str):
+        raise stripe.InvalidRequestError("No such subscription: 'sub_gone'", "id", code="resource_missing")
+
+    monkeypatch.setattr(billing, "_retrieve_subscription", gone)
+    assert await billing.fetch_subscription("sub_gone") is None
+    payload_obj = {
+        "id": "sub_gone",
+        "object": "subscription",
+        "customer": "cus_test_one",
+        "customer_email": address,
+    }
+    with caplog.at_level(logging.DEBUG):
+        response = await _post_event(client, "customer.subscription.deleted", payload_obj, event_id="evt_gone")
+    assert response.status_code == 200 and response.json() == {"received": True}
+    assert await _subscription_rows(db_session_factory) == []
+    ours = _records(caplog)
+    assert len(ours) == 1 and ours[0].levelno == logging.ERROR, [r.getMessage() for r in ours]
+    message = ours[0].getMessage()
+    assert "evt_gone" in message and "sub_gone" in message and "handled" not in message
+    for record in caplog.records:
+        rendered = record.getMessage() + repr(record.args)
+        assert address not in rendered and "cus_test_one" not in rendered, record
+        assert "No such subscription" not in rendered, record
+    assert not [r for r in caplog.records if r.name.startswith("stripe")]
+
+    # Any other refusal, and the network down, are still the 503 — Stripe retries.
+    for exc in (
+        stripe.InvalidRequestError("Permission denied", "id", code="permission_denied"),
+        stripe.APIConnectionError("the network is down"),
+    ):
+
+        def down(subscription_id: str, exc=exc):
+            raise exc
+
+        monkeypatch.setattr(billing, "_retrieve_subscription", down)
+        response = await _post_event(client, "customer.subscription.updated", {"id": "sub_gone", "object": "subscription"})
+        assert response.status_code == 503, type(exc).__name__
+        assert response.json()["detail"]["code"] == BILLING_UNAVAILABLE
+    assert await _subscription_rows(db_session_factory) == []
+
+
 async def test_current_period_end_is_read_from_the_subscription_item_where_the_pinned_api_version_puts_it(
     client, capsys, db_session_factory, monkeypatch, caplog
 ):
@@ -1223,6 +1595,75 @@ async def test_0029_round_trip_creates_the_tables_and_types_and_the_downgrade_is
         assert await _shape(db) == (HEAD, both_tables, both_types)
 
 
+# --- migration 0030: the round trip ----------------------------------------------------
+
+
+async def _cancel_at_column(db_session_factory):
+    """(is_nullable, data_type, column_default) for subscriptions.cancel_at,
+    or None when the column is absent."""
+    async with db_session_factory() as db:
+        row = (
+            await db.execute(
+                text(
+                    "SELECT is_nullable, data_type, column_default FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'subscriptions' AND column_name = 'cancel_at'"
+                )
+            )
+        ).first()
+    return tuple(row) if row is not None else None
+
+
+async def test_0030_round_trip_adds_cancel_at_and_the_downgrade_is_genuine(client, capsys, db_session_factory):
+    """Down to 0029 — the column gone, the row still there, and the verifier
+    (expecting 0030) failing on EXACTLY its four lines: the head and the
+    three cancel_at lines, the nullable one by "column missing" and the two
+    `.first()` lines by a None; up — the column back, nullable, timestamptz,
+    no default, and a value planted at head LOST and not resurrected (a
+    migration cannot ask Stripe; the next event writes it). Down and up once
+    more: idempotent."""
+    shape = ("YES", "timestamp with time zone", None)
+    assert await _cancel_at_column(db_session_factory) == shape
+    address = "cancel-roundtrip@example.com"
+    await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    await _plant_subscription(db_session_factory, account.id, cancel_at=datetime.fromtimestamp(PERIOD_END, tz=timezone.utc))
+    rows = await _subscription_rows(db_session_factory)
+    assert len(rows) == 1 and rows[0].cancel_at is not None
+
+    lines = await _migrate("downgrade", "0029", capsys)
+    assert any(m.startswith("Running downgrade 0030 -> 0029") for m in lines), lines
+    assert await _cancel_at_column(db_session_factory) is None
+    async with db_session_factory() as db:
+        # Only the column went: the row stands (read by SQL — the ORM maps the column).
+        assert await db.scalar(text("SELECT count(*) FROM subscriptions")) == 1
+        assert (await db.execute(text("SELECT version_num FROM alembic_version"))).scalar_one() == "0029"
+    passed, failed, code, out = _verifier()
+    assert (passed, failed, code) == (257, 4, 1), out
+    for line in (
+        "alembic_version is at 0030",
+        "subscriptions.cancel_at is nullable",
+        "subscriptions.cancel_at is timestamp with time zone",
+        "subscriptions.cancel_at has no server default (the webhook writes it, or nothing does)",
+    ):
+        assert f"FAIL  {line}" in out, line
+
+    lines = await _migrate("upgrade", "head", capsys)
+    assert any(m.startswith("Running upgrade 0029 -> 0030") for m in lines), lines
+    assert await _cancel_at_column(db_session_factory) == shape
+    rows = await _subscription_rows(db_session_factory)
+    assert len(rows) == 1 and rows[0].cancel_at is None  # lost with the column, not resurrected
+    assert rows[0].cancel_at_period_end is False and rows[0].status == "active"
+    assert _verifier()[:3] == (261, 0, 0)
+
+    await _migrate("downgrade", "0029", capsys)
+    await _migrate("upgrade", "head", capsys)
+    assert await _cancel_at_column(db_session_factory) == shape
+    async with db_session_factory() as db:
+        assert (await db.execute(text("SELECT version_num FROM alembic_version"))).scalar_one() == HEAD
+
+
 # --- the verifier -----------------------------------------------------------------------------
 
 
@@ -1237,7 +1678,8 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
     subscriptions on one account, which the partial unique refuses — so the
     index is DROPPED for that plant and recreated after, and the shape
     lines fail beside the data line. The total is pinned as a number (the
-    CK-57 convention: 219 → 258). A PLANT IS NOT EVIDENCE UNTIL SOMETHING
+    CK-57 convention: 219 → 258, and 261 since CK-73.1's three cancel_at
+    lines). A PLANT IS NOT EVIDENCE UNTIL SOMETHING
     INDEPENDENT OF THE ASSERTION CONFIRMS THE ROW EXISTS (CK-56's lesson),
     so each is counted by its own SELECT before the verifier reads it."""
     orphan = "every subscription's account has a billing_customers row of the same provider"
@@ -1256,11 +1698,14 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
     await _plant_subscription(db_session_factory, account.id, subscription_id="sub_verified")
 
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (258, 0, 0), out
+    assert (passed, failed, code) == (261, 0, 0), out
     for line in (
         "table billing_customers exists",
         "table subscriptions exists",
         "subscriptions.status is text (the provider's value verbatim, never an enum)",
+        "subscriptions.cancel_at is nullable",
+        "subscriptions.cancel_at is timestamp with time zone",
+        "subscriptions.cancel_at has no server default (the webhook writes it, or nothing does)",
         "billing_provider carries 'stripe'",
         "billing_plan carries 'photos_100k'",
         "billing_plan carries 'photos_300k'",
@@ -1291,10 +1736,10 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
         "(SELECT 1 FROM billing_customers c WHERE c.account_id = s.account_id)",
     )
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (257, 1, 1), out
+    assert (passed, failed, code) == (260, 1, 1), out
     assert f"FAIL  {orphan}" in out and "1 subscription row(s) with no customer row" in out
     await _plant_customer(db_session_factory, account.id, "cus_verified")
-    assert _verifier()[:3] == (258, 0, 0)
+    assert _verifier()[:3] == (261, 0, 0)
 
     # (2) Billing rows on an anonymized account: both lines, and only those.
     await run(
@@ -1303,14 +1748,14 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
         "SELECT count(*) FROM people WHERE id = :p AND anonymized_at IS NOT NULL",
     )
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (256, 2, 1), out
+    assert (passed, failed, code) == (259, 2, 1), out
     assert f"FAIL  {on_deleted_c}" in out and f"FAIL  {on_deleted_s}" in out
     await run(
         "UPDATE people SET anonymized_at = NULL WHERE id = :p",
         {"p": person_id},
         "SELECT count(*) FROM people WHERE id = :p AND anonymized_at IS NULL",
     )
-    assert _verifier()[:3] == (258, 0, 0)
+    assert _verifier()[:3] == (261, 0, 0)
 
     # (3) Two paid subscriptions on one account — impossible while the
     # partial unique stands (the plant is refused), so the index is dropped
@@ -1335,7 +1780,7 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
         "SELECT count(*) FROM subscriptions WHERE account_id = :a AND provider_subscription_id = 'sub_second_paid'",
     )
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (255, 3, 1), out
+    assert (passed, failed, code) == (258, 3, 1), out
     assert f"FAIL  {double}" in out and f"FAIL  {shape_exists}" in out and f"FAIL  {shape_def}" in out
     async with db_session_factory() as db:
         await db.execute(text("DELETE FROM subscriptions WHERE provider_subscription_id = 'sub_second_paid'"))
@@ -1346,4 +1791,4 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
             )
         )
         await db.commit()
-    assert _verifier()[:3] == (258, 0, 0)
+    assert _verifier()[:3] == (261, 0, 0)

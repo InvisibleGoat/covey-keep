@@ -14,6 +14,15 @@ from app.api.profile import router as profile_router
 from app.api.rsvps import router as rsvps_router
 from app.brand import PRODUCT_NAME
 from app.config import settings
+from app.logging_setup import configure_logging
+
+# The API's own log lines reach stdout from here (CK-73.1): the `covey-keep`
+# namespace at INFO with one handler in the worker's format, the ROOT
+# untouched and `propagate` kept (app/logging_setup.py says why each).
+# Idempotent, so a reimport adds no second handler. Before this call the
+# web process never configured logging, and every INFO line an app module
+# wrote was dropped at a root logger with no handler — CK-73's check (iq).
+configure_logging()
 
 app = FastAPI(title=PRODUCT_NAME)
 

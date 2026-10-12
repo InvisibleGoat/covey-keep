@@ -6,12 +6,17 @@ CALLER'S OWN ACCOUNT — there is no other account a person can read or buy
 for; an anonymized account is already a 401 at the gate. The fourth is
 Stripe's, unauthenticated and outside the gate, verified by signature.
 
-- `GET /billing` — the plan and its facts, the DERIVED allowance (through
-  `keeping.account_quota`, the same function the upload path reads, so
-  the number here is the number the gate enforces), and what the next
-  step is: Checkout with no paid subscription, the portal with one.
-  NEVER A STRIPE ID: the customer and subscription ids are this process's
-  keys, not the person's.
+- `GET /billing` — the plan and its facts, WHEN IT ENDS if it is ending
+  (`ends_at`, DERIVED from Stripe's two cancellation facts — `cancel_at`
+  when set, else the period end when `cancel_at_period_end` is true,
+  else null — because under 2026-09-30.endive the Customer Portal cancels
+  by setting the date and leaving the boolean false, and one reader
+  combining two facts is one reader too many; CK-73.1), the DERIVED
+  allowance (through `keeping.account_quota`, the same function the
+  upload path reads, so the number here is the number the gate
+  enforces), and what the next step is: Checkout with no paid
+  subscription, the portal with one. NEVER A STRIPE ID: the customer and
+  subscription ids are this process's keys, not the person's.
 - `POST /billing/checkout` — creates or reuses the customer and creates a
   Checkout Session for one plan; `{"url"}`. **409 `already_subscribed`**
   for an account already holding a subscription in a paid status: a
@@ -27,14 +32,22 @@ Stripe's, unauthenticated and outside the gate, verified by signature.
   PER HANDLED EVENT, its type and id and nothing else. A bad signature is
   a 400 with nothing done; a Stripe error while fetching is a 503 so
   Stripe retries; a FINDING (an unknown customer, an unknown price, a
-  second paid subscription) is a 200, because a retry cannot fix it.
+  second paid subscription, and — CK-73.1 — a subscription Stripe NO
+  LONGER HOLDS, `resource_missing` on the fetch, one ERROR line naming
+  the event and subscription ids) is a 200, because a retry cannot fix it.
 
 A CHECKOUT OR PORTAL URL IS A BEARER CREDENTIAL FOR A PAYMENT SURFACE (the
 presigned-URL rule, CK-34): it is never logged, and the response body is
 the only place one appears — pinned with the root logger at DEBUG. This
-router logs one line per handled webhook event and nothing on any other
-path; a webhook payload carries the customer's email and billing details
-and is never logged at any level.
+router logs one INFO line per handled webhook event, one WARNING per
+refused webhook, one ERROR for an event naming a subscription Stripe no
+longer holds, and nothing on any other path; a webhook payload carries
+the customer's email and billing details and is never logged at any
+level. THESE LINES REACH THE DEPLOY ONLY SINCE CK-73.1 — the API process
+configured no logging before it, and check (iq) found uvicorn's access
+lines alone (app/logging_setup.py: the `covey-keep` namespace at INFO,
+the root untouched, `propagate` kept so the never-log pins keep reading
+the root's capture).
 
 Every Stripe error class the handlers name is re-exported by
 services/billing.py: this module does not import `stripe` (the seam is
@@ -91,6 +104,23 @@ def _iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value is not None else None
 
 
+def _ends_at(paid: Optional[Subscription]) -> Optional[datetime]:
+    """WHEN the plan ends, or None when nothing says it will: Stripe's
+    `cancel_at` when set (how the Customer Portal cancels under
+    2026-09-30.endive — the date, the boolean left false), else the period
+    end when `cancel_at_period_end` is true (the classic shape), else None.
+    DERIVED here from the two stored facts, so the one reader — the plan
+    screen, CK-74 — gets the answer and never two fields to combine;
+    nothing stores it (CK-73.1). The allowance reads neither input."""
+    if paid is None:
+        return None
+    if paid.cancel_at is not None:
+        return paid.cancel_at
+    if paid.cancel_at_period_end:
+        return paid.current_period_end
+    return None
+
+
 class CheckoutBody(BaseModel):
     # An unknown plan is FastAPI's own field-level 422 on ["body", "plan"];
     # an unknown field likewise.
@@ -111,9 +141,11 @@ async def read_billing(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """The caller's plan: null on the free tier, else the plan held in a
-    paid status, with Stripe's status, the period end and the cancel flag;
-    the allowance DERIVED (never stored — record §6) by the same function
-    the upload gate reads; and the next step. No Stripe id rides."""
+    paid status, with Stripe's status, the period end and — when it is
+    ending — `ends_at` (derived, `_ends_at`; `cancel_at_period_end` left
+    the body at CK-73.1); the allowance DERIVED (never stored — record §6)
+    by the same function the upload gate reads; and the next step. No
+    Stripe id rides."""
     account = await _account(db, ctx)
     paid: Optional[Subscription] = await keeping.paid_subscription(db, account)
     allowance = await keeping.account_quota(db, account)
@@ -121,7 +153,7 @@ async def read_billing(
         "plan": paid.plan.value if paid is not None else None,
         "status": paid.status if paid is not None else None,
         "current_period_end": _iso(paid.current_period_end) if paid is not None else None,
-        "cancel_at_period_end": paid.cancel_at_period_end if paid is not None else False,
+        "ends_at": _iso(_ends_at(paid)),
         "allowance": allowance,
         "next": NEXT_PORTAL if paid is not None else NEXT_CHECKOUT,
     }
@@ -201,6 +233,18 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)) -
     except billing.ProviderError:
         # Stripe did not answer the fetch: a 503, so Stripe retries the event.
         raise _unavailable("billing")
+    if subscription is None:
+        # Stripe no longer holds the subscription the event names (the
+        # record's own rule, CK-73.1): a finding a retry cannot fix, so a
+        # 200 — never the 503 that would have Stripe retry it for days —
+        # with one ERROR line naming the event and the subscription and
+        # nothing else; nothing written, and no "handled" line.
+        log.error(
+            "billing: event %s names subscription %s, which Stripe no longer holds; nothing written",
+            event.id,
+            subscription_id,
+        )
+        return {"received": True}
     await billing.sync_subscription(db, subscription, event_id=event.id)
     await db.commit()
     log.info("billing: handled %s %s", event.type, event.id)
