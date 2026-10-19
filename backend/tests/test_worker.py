@@ -2240,7 +2240,9 @@ def test_the_sweeps_numbers_and_that_its_switch_reads_a_dashboard_string(monkeyp
     monkeypatch.delenv("SWEEP_ENABLED", raising=False)
     assert WorkerSettings(_env_file=None).sweep_enabled is False
     # And the string a dashboard (or render.yaml) holds parses as a boolean,
-    # both ways — the slot is declared `"false"` and turned on with `true`.
+    # both ways — the slot was declared `"false"` from CK-59 and reads
+    # `"true"` since CK-73.2 (the sweep switched on at (gt), 2026-10-19);
+    # the CODE default, asserted above, stays off either way.
     monkeypatch.setenv("SWEEP_ENABLED", "false")
     assert WorkerSettings(_env_file=None).sweep_enabled is False
     monkeypatch.setenv("SWEEP_ENABLED", "true")

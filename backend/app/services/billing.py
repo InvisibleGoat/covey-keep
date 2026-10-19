@@ -58,6 +58,32 @@ a reader of the boolean alone misses every portal cancellation (CK-73's
 check (ir)); the one fact the surface needs — `ends_at` — is derived in
 api/billing.py, and the allowance reads neither (a plan with an end date
 is paid until Stripe says it is not).
+THE SCHEDULED CHANGE IS TWO MORE STRIPE FACTS (0031, CK-73.2; record §12 as
+amended 2026-10-19): in the Customer Portal a downgrade takes effect at
+renewal (record §7), and Stripe does that with a SUBSCRIPTION SCHEDULE on
+the subscription's `schedule` — two phases, the current price until the
+period ends and the lower price after it. The one fetch asks for it
+EXPANDED four levels deep (`SUBSCRIPTION_EXPAND`: `schedule.phases.items.
+price` — Stripe's limit), and `sync_subscription` writes the NEXT phase's
+plan (the first phase starting at or after the current phase's end, its
+price by lookup key) and that phase's start as `scheduled_plan` /
+`scheduled_plan_at` — both null when nothing is scheduled: no schedule, no
+such phase, the same plan, or a schedule in any status but `active` /
+`not_started`. A next phase whose price names no configured plan — or a
+schedule or a price that came back unexpanded — is ONE ERROR line naming
+the event and subscription ids, both columns null, and the rest of the
+upsert written as usual: it never blocks the current plan. THE ALLOWANCE
+NEVER READS THEM — a downgrade waiting for renewal is still the higher
+plan until Stripe changes the item (record §2's portal bullet) — and
+api/billing.py derives the one fact the surface needs, `scheduled_change`,
+null whenever `ends_at` is set. THE WEBHOOK LEARNS THE SIX SCHEDULE EVENTS
+(`SCHEDULE_EVENT_TYPES`) because a schedule can change without any field
+on the subscription itself changing, so `customer.subscription.updated`
+alone can miss it: each is the same nudge — the subscription id read from
+the event's schedule (`subscription`, else `released_subscription`), the
+subscription fetched by id, the row upserted — and a schedule naming
+neither is acknowledged with nothing done. Not `.expiring`, a seven-day
+reminder nothing reads.
 A SECOND PAID SUBSCRIPTION FOR ONE ACCOUNT
 (two Checkout sessions opened before either completed) writes nothing,
 logs an ERROR with both subscription ids and is acknowledged: the partial
@@ -145,9 +171,10 @@ KNOWN_STATUSES = frozenset(
     {"active", "past_due", "incomplete", "incomplete_expired", "canceled", "unpaid"}
 )
 
-# The event types the webhook handles (record §11): each carries, or names,
-# one subscription, which is then FETCHED and upserted.
-HANDLED_EVENT_TYPES = frozenset(
+# The event types the webhook handles (record §11, §12): each carries, or
+# names, one subscription, which is then FETCHED and upserted. Four on the
+# subscription itself (CK-73) ...
+SUBSCRIPTION_EVENT_TYPES = frozenset(
     {
         "checkout.session.completed",
         "customer.subscription.created",
@@ -155,6 +182,36 @@ HANDLED_EVENT_TYPES = frozenset(
         "customer.subscription.deleted",
     }
 )
+# ... and six on a SUBSCRIPTION SCHEDULE (CK-73.2): the portal's downgrade
+# at renewal is a schedule, and a schedule can change without any field on
+# the subscription changing, so `customer.subscription.updated` alone can
+# miss it. Each names its subscription on the schedule — `subscription`,
+# else `released_subscription` once the schedule is released. NOT
+# `subscription_schedule.expiring`, a seven-day reminder nothing reads.
+SCHEDULE_EVENT_TYPES = frozenset(
+    {
+        "subscription_schedule.created",
+        "subscription_schedule.updated",
+        "subscription_schedule.released",
+        "subscription_schedule.canceled",
+        "subscription_schedule.completed",
+        "subscription_schedule.aborted",
+    }
+)
+HANDLED_EVENT_TYPES = SUBSCRIPTION_EVENT_TYPES | SCHEDULE_EVENT_TYPES
+
+# A schedule in one of these statuses still has a change to come; a
+# released, canceled or completed one schedules nothing (both columns
+# null). `not_started` has no current phase, so its boundary is the
+# subscription item's period end.
+SCHEDULE_STATUSES_PENDING = frozenset({"active", "not_started"})
+
+# What the ONE subscription fetch asks Stripe to expand: the schedule, its
+# phases, their items and each item's PRICE — four levels, Stripe's limit —
+# so the next phase's lookup key is on the object `sync_subscription`
+# reads, in the same call that reads the current item (one nudge, one
+# fetch). Pinned by test on the wrapper.
+SUBSCRIPTION_EXPAND = ("schedule.phases.items.price",)
 
 # The two exception classes the ROUTERS catch, re-exported so that nothing
 # outside this module imports `stripe` to name them.
@@ -255,8 +312,12 @@ def _create_portal_session(params: dict) -> str:
 
 def _retrieve_subscription(subscription_id: str) -> stripe.Subscription:
     """The subscription BY ID, as Stripe holds it now — the nudge's
-    counterpart (the module docstring)."""
-    return client().v1.subscriptions.retrieve(subscription_id)
+    counterpart (the module docstring) — with its schedule expanded down to
+    each phase item's price (`SUBSCRIPTION_EXPAND`, CK-73.2), so the
+    scheduled change rides the same object as the current item."""
+    return client().v1.subscriptions.retrieve(
+        subscription_id, params={"expand": list(SUBSCRIPTION_EXPAND)}
+    )
 
 
 def _delete_customer(customer_id: str) -> None:
@@ -390,16 +451,27 @@ def subscription_id_of(event: stripe.Event) -> Optional[str]:
     """The subscription an event is about, or None for an event type the
     webhook does not handle (acknowledged and ignored). A
     `checkout.session.completed` names its subscription on the session; a
-    `customer.subscription.*` IS the subscription."""
+    `customer.subscription.*` IS the subscription; a
+    `subscription_schedule.*` (CK-73.2) names it on the schedule —
+    `subscription`, else `released_subscription` (set once a schedule is
+    released), else None: a schedule attached to no subscription is
+    acknowledged with nothing done, and no "handled" line."""
     if event.type not in HANDLED_EVENT_TYPES:
         return None
     obj = event.data.object
     if event.type == "checkout.session.completed":
-        subscription = _field(obj, "subscription")
-        if subscription is None:
-            return None
-        return subscription if isinstance(subscription, str) else subscription.id
+        return _id_of(_field(obj, "subscription"))
+    if event.type in SCHEDULE_EVENT_TYPES:
+        return _id_of(_field(obj, "subscription")) or _id_of(_field(obj, "released_subscription"))
     return _field(obj, "id")
+
+
+def _id_of(value) -> Optional[str]:
+    """An id from a field that Stripe sends as an id string or, expanded, as
+    the object itself; None when absent."""
+    if value is None:
+        return None
+    return value if isinstance(value, str) else value.id
 
 
 def _field(obj, name: str):
@@ -425,6 +497,66 @@ def _first_item(sub: stripe.Subscription):
     items = _field(sub, "items")
     data = list(getattr(items, "data", None) or []) if items is not None else []
     return data[0] if data else None
+
+
+def _scheduled_change(
+    sub: stripe.Subscription, current_plan: BillingPlan, period_end_raw, *, event_id: Optional[str]
+) -> tuple[Optional[BillingPlan], Optional[datetime]]:
+    """The change waiting for renewal, as (plan, instant) — or (None, None)
+    when nothing is scheduled (0031, CK-73.2; the module docstring). From
+    the subscription's `schedule`, EXPANDED by the fetch: when its status
+    is `active` or `not_started`, the first phase whose `start_date` is at
+    or after the current phase's `end_date` (or, with no current phase,
+    the item's period end) is the next phase; its one item's price names
+    the plan by lookup key. Null when there is no schedule, no such phase,
+    that phase's plan is the current plan, or the schedule is in any other
+    status. A next phase that cannot be read as a configured plan — an
+    unknown lookup key, or a schedule or a price that came back unexpanded
+    — is ONE ERROR line naming the event and subscription ids and (None,
+    None): a finding, never a crash, and never a reason to drop the
+    current plan's upsert. Everything read through `_field`."""
+    subscription_id = sub.id
+    schedule = _field(sub, "schedule")
+    if schedule is None:
+        return None, None
+
+    def unreadable() -> tuple[None, None]:
+        log.error(
+            "billing: event %s: subscription %s carries a schedule whose next phase could not be "
+            "read as a configured plan; the scheduled change is not recorded",
+            event_id,
+            subscription_id,
+        )
+        return None, None
+
+    if isinstance(schedule, str):
+        # An id where the fetch asked for the object: the expansion was not
+        # honoured. Visible as a finding rather than silently unscheduled.
+        return unreadable()
+    if _field(schedule, "status") not in SCHEDULE_STATUSES_PENDING:
+        return None, None
+    current = _field(schedule, "current_phase")
+    boundary = _field(current, "end_date") if current is not None else period_end_raw
+    if boundary is None:
+        return None, None
+    next_phase = next(
+        (
+            phase
+            for phase in list(_field(schedule, "phases") or [])
+            if _field(phase, "start_date") is not None and int(_field(phase, "start_date")) >= int(boundary)
+        ),
+        None,
+    )
+    if next_phase is None:
+        return None, None
+    items = list(_field(next_phase, "items") or [])
+    price = _field(items[0], "price") if items else None
+    plan = _plan_for_lookup_key(getattr(price, "lookup_key", None))
+    if plan is None:
+        return unreadable()
+    if plan == current_plan:
+        return None, None
+    return plan, datetime.fromtimestamp(int(_field(next_phase, "start_date")), tz=timezone.utc)
 
 
 async def _other_paid_subscription(
@@ -509,6 +641,11 @@ async def sync_subscription(
         if cancel_at_raw is not None
         else None
     )
+    # THE SCHEDULED CHANGE (0031, CK-73.2): two more Stripe facts, from the
+    # expanded schedule — the next phase's plan and its start — both null
+    # when nothing is scheduled; never read by the allowance. An unreadable
+    # next phase is an ERROR line and null, and the upsert goes on.
+    scheduled_plan, scheduled_plan_at = _scheduled_change(sub, plan, period_end_raw, event_id=event_id)
 
     if status in PAID_STATUSES:
         other = await _other_paid_subscription(db, customer.account_id, subscription_id)
@@ -538,6 +675,8 @@ async def sync_subscription(
             current_period_end=current_period_end,
             cancel_at_period_end=cancel_at_period_end,
             cancel_at=cancel_at,
+            scheduled_plan=scheduled_plan,
+            scheduled_plan_at=scheduled_plan_at,
         )
         db.add(row)
     else:
@@ -546,6 +685,8 @@ async def sync_subscription(
         row.current_period_end = current_period_end
         row.cancel_at_period_end = cancel_at_period_end
         row.cancel_at = cancel_at
+        row.scheduled_plan = scheduled_plan
+        row.scheduled_plan_at = scheduled_plan_at
         row.updated_at = datetime.now(timezone.utc)
     try:
         await db.flush()

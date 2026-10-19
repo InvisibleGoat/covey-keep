@@ -14,7 +14,11 @@ Stripe's, unauthenticated and outside the gate, verified by signature.
   combining two facts is one reader too many; CK-73.1), the DERIVED
   allowance (through `keeping.account_quota`, the same function the
   upload path reads, so the number here is the number the gate
-  enforces), and what the next step is: Checkout with no paid
+  enforces), THE CHANGE WAITING FOR RENEWAL if one is scheduled
+  (`scheduled_change` — the next plan, ITS allowance from the one plan
+  table, and the instant; null when nothing is scheduled and null
+  whenever `ends_at` is set, because a plan that ends has no next plan;
+  CK-73.2), and what the next step is: Checkout with no paid
   subscription, the portal with one. NEVER A STRIPE ID: the customer and
   subscription ids are this process's keys, not the person's.
 - `POST /billing/checkout` — creates or reuses the customer and creates a
@@ -26,9 +30,11 @@ Stripe's, unauthenticated and outside the gate, verified by signature.
   an account with no customer, byte-for-byte the shape of the gathering
   and media not-found refusals.
 - `POST /billing/stripe/webhook` — verifies the signature over the RAW
-  body; for the four handled types fetches the subscription by id and
-  upserts the local row (services/billing.py — the nudge, never the
-  payload); every other type is acknowledged and ignored. ONE INFO LINE
+  body; for the ten handled types — four on the subscription, and since
+  CK-73.2 six on a subscription schedule, which names its subscription —
+  fetches the subscription by id and upserts the local row
+  (services/billing.py — the nudge, never the payload); every other type
+  is acknowledged and ignored. ONE INFO LINE
   PER HANDLED EVENT, its type and id and nothing else. A bad signature is
   a 400 with nothing done; a Stripe error while fetching is a 503 so
   Stripe retries; a FINDING (an unknown customer, an unknown price, a
@@ -121,6 +127,26 @@ def _ends_at(paid: Optional[Subscription]) -> Optional[datetime]:
     return None
 
 
+def _scheduled_change(paid: Optional[Subscription], ends_at: Optional[datetime]) -> Optional[dict]:
+    """The change waiting for renewal — `{"plan", "allowance", "at"}` — or
+    None when nothing is scheduled, AND None WHENEVER THE PLAN IS ENDING
+    (`ends_at` set): a plan that ends has no next plan, and Stripe releases
+    the schedule on cancel anyway (CK-73.1's finding); should both facts
+    ever arrive together the ending wins on this surface, while the row
+    still holds what Stripe holds. The plan and the instant are the row's
+    two Stripe facts (0031, CK-73.2); the allowance beside them comes from
+    `keeping.PLAN_PHOTOGRAPHS` — the one plan table, so the screen never
+    keeps its own — and nothing stores the three together (the
+    never-stored rule). The body's `allowance` reads neither column."""
+    if paid is None or ends_at is not None or paid.scheduled_plan is None:
+        return None
+    return {
+        "plan": paid.scheduled_plan.value,
+        "allowance": keeping.PLAN_PHOTOGRAPHS[paid.scheduled_plan],
+        "at": _iso(paid.scheduled_plan_at),
+    }
+
+
 class CheckoutBody(BaseModel):
     # An unknown plan is FastAPI's own field-level 422 on ["body", "plan"];
     # an unknown field likewise.
@@ -144,17 +170,20 @@ async def read_billing(
     paid status, with Stripe's status, the period end and — when it is
     ending — `ends_at` (derived, `_ends_at`; `cancel_at_period_end` left
     the body at CK-73.1); the allowance DERIVED (never stored — record §6)
-    by the same function the upload gate reads; and the next step. No
-    Stripe id rides."""
+    by the same function the upload gate reads; the change waiting for
+    renewal, `scheduled_change` (derived, `_scheduled_change`; CK-73.2);
+    and the next step. No Stripe id rides."""
     account = await _account(db, ctx)
     paid: Optional[Subscription] = await keeping.paid_subscription(db, account)
     allowance = await keeping.account_quota(db, account)
+    ends_at = _ends_at(paid)
     return {
         "plan": paid.plan.value if paid is not None else None,
         "status": paid.status if paid is not None else None,
         "current_period_end": _iso(paid.current_period_end) if paid is not None else None,
-        "ends_at": _iso(_ends_at(paid)),
+        "ends_at": _iso(ends_at),
         "allowance": allowance,
+        "scheduled_change": _scheduled_change(paid, ends_at),
         "next": NEXT_PORTAL if paid is not None else NEXT_CHECKOUT,
     }
 

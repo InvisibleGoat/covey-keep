@@ -170,15 +170,21 @@ services:
       - key: R2_WORKER_SECRET_ACCESS_KEY
         sync: false
       # THE SEVENTH (CK-59): the bin sweep's switch — the first path in the
-      # product that destroys photographs without a person asking. OFF here
-      # AND in the code's default, so the sweep ships dark; it is turned on
-      # as a deliberate act in THIS service's dashboard (SWEEP_ENABLED=true),
-      # no code deploy, after bin record §8's capture is in hand. Declared
-      # explicitly rather than left to the default so the blueprint says
-      # what the worker is doing. A string, as every value here is; the
-      # settings class reads it as a boolean.
+      # product that destroys photographs without a person asking. It
+      # shipped OFF here AND in the code's default, dark, to be turned on
+      # as a deliberate act in THIS service's dashboard (SWEEP_ENABLED=true,
+      # no code deploy) after bin record §8's capture was in hand — and it
+      # WAS, at check (gt) on 2026-10-19: the capture first, the switch
+      # second, two photographs destroyed exactly as predicted
+      # (WORKING-ON-NOW 1.176.0). Since CK-73.2 this line says "true", so
+      # the file says what the worker is doing — a Blueprint sync can set a
+      # dashboard value back to the file's, and "false" here would have
+      # turned the sweep off again on the next sync. The CODE default
+      # (WorkerSettings.sweep_enabled in config.py) stays False, so a local
+      # worker and the test suite are dark. A string, as every value here
+      # is; the settings class reads it as a boolean.
       - key: SWEEP_ENABLED
-        value: "false"
+        value: "true"
 
 databases:
   - name: covey-keep-db-dev

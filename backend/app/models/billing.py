@@ -42,7 +42,16 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Text, UniqueConstraint, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, created_at_col, uuid_pk
@@ -75,10 +84,15 @@ class Subscription(Base):
     (record §6, §9): the PLAN (read from the subscription's price by its
     LOOKUP KEY, never by the price's id — a price id differs between the
     sandbox and live mode, a lookup key does not), the provider's STATUS
-    verbatim, the period end, the cancel-at-period-end flag and — since
-    0030, CK-73.1 — `cancel_at`, the instant Stripe will end it. Upserted
-    by the webhook keyed on (provider, provider_subscription_id); never
-    written by any other path.
+    verbatim, the period end, the cancel-at-period-end flag, since 0030
+    (CK-73.1) `cancel_at` — the instant Stripe will end it — and,
+    since 0031, CK-73.2 — THE SCHEDULED CHANGE, `scheduled_plan` and
+    `scheduled_plan_at`: the plan of the subscription schedule's next phase
+    and the instant it starts, both null when nothing is scheduled (a
+    downgrade in the Customer Portal takes effect at renewal, and Stripe
+    does that with a schedule — record §7, §12). Upserted by the webhook
+    keyed on (provider, provider_subscription_id); never written by any
+    other path.
 
     AT MOST ONE SUBSCRIPTION PER ACCOUNT IN A PAID STATUS — the partial
     unique index `uq_subscriptions_account_id_paid` over `status IN
@@ -103,6 +117,14 @@ class Subscription(Base):
             "account_id",
             unique=True,
             postgresql_where=text("status IN ('active', 'past_due')"),
+        ),
+        # The scheduled change is ONE fact — a plan and the instant it
+        # starts — so its two columns are set together or not at all
+        # (0031, CK-73.2): half of one is a row nothing wrote. The naming
+        # convention yields ck_subscriptions_scheduled_plan_both_or_neither.
+        CheckConstraint(
+            "(scheduled_plan IS NULL) = (scheduled_plan_at IS NULL)",
+            name="scheduled_plan_both_or_neither",
         ),
     )
 
@@ -137,6 +159,29 @@ class Subscription(Base):
     # last synced before 0030, that none is known locally until the next
     # event writes it (nothing backfilled; a migration cannot ask Stripe).
     cancel_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # THE SCHEDULED CHANGE (0031, CK-73.2; record §12 as amended): a
+    # downgrade in the Customer Portal takes effect at renewal, and Stripe
+    # does that with a SUBSCRIPTION SCHEDULE — two phases, the current
+    # price until the period ends and the lower price after it. These are
+    # two of its facts, verbatim: the plan of the schedule's NEXT phase
+    # (the first phase starting at or after the current phase's end, by
+    # its price's lookup key) and the instant that phase starts. BOTH SET
+    # OR BOTH NULL (the CHECK above); null when nothing is scheduled — no
+    # schedule, no next phase, the same plan, or a schedule released,
+    # canceled or completed. THE ALLOWANCE NEVER READS THEM: a downgrade
+    # waiting for renewal is still the higher plan until Stripe changes
+    # the item (record §2's portal bullet), and `keeping.account_quota`
+    # reads `plan` alone. What the surface needs — `GET /billing`'s
+    # `scheduled_change`, with the next plan's allowance from
+    # `keeping.PLAN_PHOTOGRAPHS` — is DERIVED by api/billing.py and never
+    # stored (no "next allowance" column), and is null whenever the plan
+    # is ending (`ends_at`): cancelling releases the schedule anyway.
+    # Nothing backfilled (a migration cannot ask Stripe); the next event
+    # for a subscription writes both.
+    scheduled_plan: Mapped[Optional[BillingPlan]] = mapped_column(BILLING_PLAN, nullable=True)
+    scheduled_plan_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = created_at_col()

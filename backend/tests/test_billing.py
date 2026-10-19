@@ -2,7 +2,11 @@
 allowance read from a local row (decisions/2026-10-10-paid-tiers-on-stripe.md
 §3, §5, §6, §8, §9, §10, §11; migration 0029) — and CK-73.1, the two
 defects its deploy checks found (§7 and §11 as amended there; migration
-0030): the API's own log lines, `cancel_at` and `ends_at`, and the rider.
+0030): the API's own log lines, `cancel_at` and `ends_at`, and the rider —
+and CK-73.2, a downgrade waiting for renewal stored and shown (§12 as
+amended 2026-10-19; migration 0031): the scheduled change as two Stripe
+facts on the row and `scheduled_change` on the body, the six schedule
+events, and the rider that makes `render.yaml` say `SWEEP_ENABLED: "true"`.
 
 OFFLINE, EVERY TEST. The SDK is stubbed at services/billing.py's own
 functions — the one-call wrappers (`_create_customer`, `_list_active_prices`,
@@ -72,11 +76,32 @@ The load-bearing pins:
   written, one ERROR line naming both ids and no payload, no "handled"
   line; every other provider error on the fetch still the 503;
 - THE 0029 ROUND TRIP; THE 0030 ROUND TRIP (the column gone on the
-  downgrade with the verifier failing on exactly its four lines — the
-  head and the three cancel_at lines — then back and NULL on the
-  upgrade, a planted value lost); and the verifier's thirty-nine CK-73
-  lines plus CK-73.1's three fired by plants as a subprocess, each plant
-  confirmed by its own SELECT.
+  downgrade with the verifier failing on its four lines — the head and
+  the three cancel_at lines — and, since 0031 leaves with it, CK-73.2's
+  nine failing lines beside them, then back and NULL on the upgrade, a
+  planted value lost); and the verifier's thirty-nine CK-73 lines plus
+  CK-73.1's three fired by plants as a subprocess, each plant confirmed by
+  its own SELECT;
+- CK-73.2, THE SCHEDULED CHANGE: the portal's downgrade built with
+  `construct_from` in the pinned version's shape, the schedule EXPANDED
+  as the one fetch asks for it (`schedule.phases.items.price`, pinned on
+  the wrapper) — the row's two facts, `GET /billing`'s `scheduled_change`
+  with the next plan's allowance from the server, `account_quota`
+  unchanged; released → null; completed at renewal → the plan moves and
+  nothing is scheduled; the same plan, no next phase, and a released /
+  canceled / completed schedule → null with no line; `not_started` read
+  against the item's period end; ending and scheduled at once → the
+  body's change null while `ends_at` is set and the row holding both; an
+  unreadable next phase (an unknown key, an unexpanded price or schedule)
+  → ONE ERROR line naming the ids, both null, the current plan written;
+  each of the six schedule events fetching the named subscription —
+  `released_subscription` when `subscription` is null — a schedule naming
+  neither a 200 with nothing fetched, `.expiring` unhandled, the handled
+  set exactly ten; the allowance and the gate naming no scheduled column;
+  the 0031 round trip with the CHECK refused on a real row by name; and
+  the verifier's ten lines — eight on the shape, the CHECK and the pair
+  invariant, two never-stored allowance columns absent — fired by a plant
+  with the CHECK dropped.
 """
 
 from __future__ import annotations
@@ -162,6 +187,8 @@ async def _plant_subscription(
     subscription_id: str = "sub_test_one",
     cancel: bool = False,
     cancel_at: datetime | None = None,
+    scheduled_plan: BillingPlan | None = None,
+    scheduled_plan_at: datetime | None = None,
 ) -> UUID:
     async with db_session_factory() as db:
         row = Subscription(
@@ -173,6 +200,8 @@ async def _plant_subscription(
             current_period_end=datetime.fromtimestamp(PERIOD_END, tz=timezone.utc),
             cancel_at_period_end=cancel,
             cancel_at=cancel_at,
+            scheduled_plan=scheduled_plan,
+            scheduled_plan_at=scheduled_plan_at,
         )
         db.add(row)
         await db.commit()
@@ -198,14 +227,17 @@ def _subscription_object(
     period_end: int = PERIOD_END,
     cancel: bool = False,
     cancel_at: int | None = None,
+    schedule=None,
 ) -> stripe.Subscription:
     """A `stripe.Subscription` in the PINNED API version's shape
     (2026-09-30.endive): `current_period_end` on the subscription ITEM and
     nowhere else, the price nested whole on the item with its lookup key,
-    the customer an id, and `cancel_at` as Stripe sends it — the key always
+    the customer an id, `cancel_at` as Stripe sends it — the key always
     present, epoch seconds or null (CK-73.1: the portal's cancellation is
-    this field set with the boolean left false). Built by the SDK's own
-    constructor, no network."""
+    this field set with the boolean left false) — and `schedule` as Stripe
+    sends it (CK-73.2): null, an id string unexpanded, or the schedule
+    object EXPANDED as the one fetch asks for it (`_schedule_object`).
+    Built by the SDK's own constructor, no network."""
     return stripe.Subscription.construct_from(
         {
             "id": subscription_id,
@@ -214,6 +246,7 @@ def _subscription_object(
             "status": status,
             "cancel_at_period_end": cancel,
             "cancel_at": cancel_at,
+            "schedule": schedule,
             "items": {
                 "object": "list",
                 "data": [
@@ -783,12 +816,16 @@ async def test_get_billing_reads_the_free_tier_then_the_plan_and_never_a_stripe_
     headers = await _signed_in_headers(client, capsys, address)
     free = await client.get("/billing", headers=headers)
     assert free.status_code == 200
+    # The pin moved at CK-73.2: `scheduled_change` joins the body — null
+    # here, because nothing is scheduled on the free tier or on a plan with
+    # no schedule (the scheduled-change tests below carry the other shape).
     assert free.json() == {
         "plan": None,
         "status": None,
         "current_period_end": None,
         "ends_at": None,
         "allowance": 10_000,
+        "scheduled_change": None,
         "next": "checkout",
     }
     async with db_session_factory() as db:
@@ -809,6 +846,7 @@ async def test_get_billing_reads_the_free_tier_then_the_plan_and_never_a_stripe_
         "current_period_end": datetime.fromtimestamp(PERIOD_END, tz=timezone.utc).isoformat(),
         "ends_at": datetime.fromtimestamp(PERIOD_END, tz=timezone.utc).isoformat(),
         "allowance": 300_000,
+        "scheduled_change": None,
         "next": "portal",
     }
     assert "cus_" not in paid.text and "sub_" not in paid.text
@@ -868,6 +906,7 @@ async def test_a_portal_cancellation_under_endive_is_recognised_through_cancel_a
         "current_period_end": _instant(PERIOD_END).isoformat(),
         "ends_at": _instant(PERIOD_END).isoformat(),
         "allowance": 300_000,
+        "scheduled_change": None,  # the pin moved at CK-73.2: the key joins the body, null here
         "next": "portal",
     }
     # Paid until it ends: the allowance reads neither cancellation fact.
@@ -1615,12 +1654,16 @@ async def _cancel_at_column(db_session_factory):
 
 async def test_0030_round_trip_adds_cancel_at_and_the_downgrade_is_genuine(client, capsys, db_session_factory):
     """Down to 0029 — the column gone, the row still there, and the verifier
-    (expecting 0030) failing on EXACTLY its four lines: the head and the
+    (expecting the head) failing on its four lines — the head and the
     three cancel_at lines, the nullable one by "column missing" and the two
-    `.first()` lines by a None; up — the column back, nullable, timestamptz,
-    no default, and a value planted at head LOST and not resurrected (a
-    migration cannot ask Stripe; the next event writes it). Down and up once
-    more: idempotent."""
+    `.first()` lines by a None — AND, since CK-73.2, on 0031's nine beside
+    them, because a downgrade to 0029 passes through 0031 and takes the
+    scheduled-change columns and their CHECK too (twelve in all; the two
+    never-stored columns asserted absent pass on a downgraded table; the
+    pin moved at CK-73.2 with this reason); up — the column back, nullable,
+    timestamptz, no default, and a value planted at head LOST and not
+    resurrected (a migration cannot ask Stripe; the next event writes it).
+    Down and up once more: idempotent."""
     shape = ("YES", "timestamp with time zone", None)
     assert await _cancel_at_column(db_session_factory) == shape
     address = "cancel-roundtrip@example.com"
@@ -1640,12 +1683,13 @@ async def test_0030_round_trip_adds_cancel_at_and_the_downgrade_is_genuine(clien
         assert await db.scalar(text("SELECT count(*) FROM subscriptions")) == 1
         assert (await db.execute(text("SELECT version_num FROM alembic_version"))).scalar_one() == "0029"
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (257, 4, 1), out
+    assert (passed, failed, code) == (259, 12, 1), out
     for line in (
-        "alembic_version is at 0030",
+        "alembic_version is at 0031",
         "subscriptions.cancel_at is nullable",
         "subscriptions.cancel_at is timestamp with time zone",
         "subscriptions.cancel_at has no server default (the webhook writes it, or nothing does)",
+        *LINES_0031[1:],
     ):
         assert f"FAIL  {line}" in out, line
 
@@ -1655,7 +1699,7 @@ async def test_0030_round_trip_adds_cancel_at_and_the_downgrade_is_genuine(clien
     rows = await _subscription_rows(db_session_factory)
     assert len(rows) == 1 and rows[0].cancel_at is None  # lost with the column, not resurrected
     assert rows[0].cancel_at_period_end is False and rows[0].status == "active"
-    assert _verifier()[:3] == (261, 0, 0)
+    assert _verifier()[:3] == (271, 0, 0)
 
     await _migrate("downgrade", "0029", capsys)
     await _migrate("upgrade", "head", capsys)
@@ -1678,8 +1722,10 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
     subscriptions on one account, which the partial unique refuses — so the
     index is DROPPED for that plant and recreated after, and the shape
     lines fail beside the data line. The total is pinned as a number (the
-    CK-57 convention: 219 → 258, and 261 since CK-73.1's three cancel_at
-    lines). A PLANT IS NOT EVIDENCE UNTIL SOMETHING
+    CK-57 convention: 219 → 258, 261 since CK-73.1's three cancel_at
+    lines, and 271 since CK-73.2's ten — the scheduled change's two
+    columns, their CHECK, the pair invariant, and two never-stored
+    allowance columns asserted absent). A PLANT IS NOT EVIDENCE UNTIL SOMETHING
     INDEPENDENT OF THE ASSERTION CONFIRMS THE ROW EXISTS (CK-56's lesson),
     so each is counted by its own SELECT before the verifier reads it."""
     orphan = "every subscription's account has a billing_customers row of the same provider"
@@ -1698,7 +1744,7 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
     await _plant_subscription(db_session_factory, account.id, subscription_id="sub_verified")
 
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (261, 0, 0), out
+    assert (passed, failed, code) == (271, 0, 0), out
     for line in (
         "table billing_customers exists",
         "table subscriptions exists",
@@ -1706,6 +1752,14 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
         "subscriptions.cancel_at is nullable",
         "subscriptions.cancel_at is timestamp with time zone",
         "subscriptions.cancel_at has no server default (the webhook writes it, or nothing does)",
+        "subscriptions.scheduled_plan is nullable",
+        "subscriptions.scheduled_plan_at is nullable",
+        "subscriptions.scheduled_plan is of type billing_plan",
+        "subscriptions.scheduled_plan_at is timestamp with time zone",
+        "CHECK ck_subscriptions_scheduled_plan_both_or_neither exists",
+        "no subscription carries a scheduled plan without its instant, or an instant without its plan",
+        "subscriptions.next_allowance is gone",
+        "subscriptions.scheduled_allowance is gone",
         "billing_provider carries 'stripe'",
         "billing_plan carries 'photos_100k'",
         "billing_plan carries 'photos_300k'",
@@ -1736,10 +1790,10 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
         "(SELECT 1 FROM billing_customers c WHERE c.account_id = s.account_id)",
     )
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (260, 1, 1), out
+    assert (passed, failed, code) == (270, 1, 1), out
     assert f"FAIL  {orphan}" in out and "1 subscription row(s) with no customer row" in out
     await _plant_customer(db_session_factory, account.id, "cus_verified")
-    assert _verifier()[:3] == (261, 0, 0)
+    assert _verifier()[:3] == (271, 0, 0)
 
     # (2) Billing rows on an anonymized account: both lines, and only those.
     await run(
@@ -1748,14 +1802,14 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
         "SELECT count(*) FROM people WHERE id = :p AND anonymized_at IS NOT NULL",
     )
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (259, 2, 1), out
+    assert (passed, failed, code) == (269, 2, 1), out
     assert f"FAIL  {on_deleted_c}" in out and f"FAIL  {on_deleted_s}" in out
     await run(
         "UPDATE people SET anonymized_at = NULL WHERE id = :p",
         {"p": person_id},
         "SELECT count(*) FROM people WHERE id = :p AND anonymized_at IS NULL",
     )
-    assert _verifier()[:3] == (261, 0, 0)
+    assert _verifier()[:3] == (271, 0, 0)
 
     # (3) Two paid subscriptions on one account — impossible while the
     # partial unique stands (the plant is refused), so the index is dropped
@@ -1780,7 +1834,7 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
         "SELECT count(*) FROM subscriptions WHERE account_id = :a AND provider_subscription_id = 'sub_second_paid'",
     )
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (258, 3, 1), out
+    assert (passed, failed, code) == (268, 3, 1), out
     assert f"FAIL  {double}" in out and f"FAIL  {shape_exists}" in out and f"FAIL  {shape_def}" in out
     async with db_session_factory() as db:
         await db.execute(text("DELETE FROM subscriptions WHERE provider_subscription_id = 'sub_second_paid'"))
@@ -1791,4 +1845,639 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
             )
         )
         await db.commit()
-    assert _verifier()[:3] == (261, 0, 0)
+    assert _verifier()[:3] == (271, 0, 0)
+
+
+# --- the scheduled change: a downgrade waiting for renewal (CK-73.2; migration 0031) --
+
+SCHEDULE_ID = "sub_sched_test_one"
+# The next phase starts when the current one ends — the renewal boundary,
+# the same instant as the item's period end in the portal's shape.
+NEXT_START = PERIOD_END
+NEXT_END = PERIOD_END + 30 * 86400
+CHECK_NAME = "ck_subscriptions_scheduled_plan_both_or_neither"
+
+
+def _price(lookup_key: str, price_id: str = "price_test_next") -> dict:
+    return {"id": price_id, "object": "price", "lookup_key": lookup_key, "active": True}
+
+
+def _schedule_object(
+    *,
+    status: str = "active",
+    current_lookup_key: str = KEY_300K,
+    next_lookup_key: str | None = KEY_100K,
+    next_start: int = NEXT_START,
+    current_phase: bool = True,
+    subscription_id: str | None = "sub_test_one",
+    released_subscription: str | None = None,
+    next_price=None,
+    schedule_id: str = SCHEDULE_ID,
+) -> dict:
+    """A subscription schedule in the shape the portal's downgrade creates
+    (record §2's portal bullet): two phases — the current price until the
+    period ends, the lower price from the renewal instant — EXPANDED down
+    to each item's price, as the one fetch asks for it
+    (`billing.SUBSCRIPTION_EXPAND`). `next_lookup_key` None drops the
+    second phase; `next_price` overrides the next phase's price (an id
+    string stands for an unexpanded price); `current_phase` False is the
+    `not_started` shape, which has none."""
+    phases = [
+        {
+            "start_date": PERIOD_END - 30 * 86400,
+            "end_date": PERIOD_END,
+            "items": [{"price": _price(current_lookup_key, "price_test_current"), "quantity": 1}],
+        }
+    ]
+    if next_lookup_key is not None or next_price is not None:
+        phases.append(
+            {
+                "start_date": next_start,
+                "end_date": NEXT_END,
+                "items": [
+                    {
+                        "price": next_price if next_price is not None else _price(next_lookup_key),
+                        "quantity": 1,
+                    }
+                ],
+            }
+        )
+    return {
+        "id": schedule_id,
+        "object": "subscription_schedule",
+        "status": status,
+        "subscription": subscription_id,
+        "released_subscription": released_subscription,
+        "current_phase": (
+            {"start_date": PERIOD_END - 30 * 86400, "end_date": PERIOD_END} if current_phase else None
+        ),
+        "phases": phases,
+    }
+
+
+def _schedule_event(subscription: str | None = "sub_test_one", released: str | None = None) -> dict:
+    """The object a `subscription_schedule.*` delivery carries: the schedule,
+    naming its subscription by id (or, once released, the released one)."""
+    return {
+        "id": SCHEDULE_ID,
+        "object": "subscription_schedule",
+        "status": "active",
+        "subscription": subscription,
+        "released_subscription": released,
+    }
+
+
+async def _scheduled(db_session_factory) -> tuple[BillingPlan | None, datetime | None, BillingPlan, str]:
+    rows = await _subscription_rows(db_session_factory)
+    assert len(rows) == 1, [r.provider_subscription_id for r in rows]
+    return rows[0].scheduled_plan, rows[0].scheduled_plan_at, rows[0].plan, rows[0].status
+
+
+async def test_a_portal_downgrade_is_stored_as_two_facts_and_shown_as_a_scheduled_change(
+    client, capsys, db_session_factory, monkeypatch, caplog
+):
+    """The design session's finding (2026-10-14): the plan screen could not
+    say "switches to 100,000 photos on Nov 12". Built with `construct_from`
+    in the pinned API version's shape, with the schedule EXPANDED as the
+    one fetch asks for it: a `photos_300k` subscription whose schedule's
+    second phase is the 100k price starting at the period end. The row
+    stores the two Stripe facts; `GET /billing` still says `photos_300k`
+    and 300,000 and carries `scheduled_change` = {photos_100k, 100000, that
+    instant} — the allowance from the server, so the screen keeps no plan
+    table of its own; `account_quota` reads neither column. Then RELEASED
+    (the schedule gone from the subscription): both null, the body null.
+    Then COMPLETED at renewal (the item now the 100k price, no schedule):
+    the plan moves, the allowance moves, nothing is scheduled."""
+    address = "downgrade@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    sub = {"id": "sub_test_one", "object": "subscription"}
+
+    # Bought: Stripe sends `schedule`, null.
+    _stub_fetch(monkeypatch, _subscription_object(status="active", lookup_key=KEY_300K))
+    assert (await _post_event(client, "customer.subscription.created", sub, event_id="evt_bought")).status_code == 200
+    assert await _scheduled(db_session_factory) == (None, None, BillingPlan.PHOTOS_300K, "active")
+    assert (await client.get("/billing", headers=headers)).json()["scheduled_change"] is None
+
+    # Switched to 100,000 in the portal: the schedule arrives on the
+    # subscription_schedule.created nudge, status active, two phases.
+    _stub_fetch(
+        monkeypatch,
+        _subscription_object(status="active", lookup_key=KEY_300K, schedule=_schedule_object()),
+    )
+    caplog.clear()  # the purchase above logged its own handled line
+    with caplog.at_level(logging.DEBUG):
+        response = await _post_event(client, "subscription_schedule.created", _schedule_event(), event_id="evt_sched")
+    assert response.status_code == 200 and response.json() == {"received": True}
+    assert await _scheduled(db_session_factory) == (
+        BillingPlan.PHOTOS_100K,
+        _instant(NEXT_START),
+        BillingPlan.PHOTOS_300K,
+        "active",
+    )
+    body = (await client.get("/billing", headers=headers)).json()
+    assert body == {
+        "plan": "photos_300k",
+        "status": "active",
+        "current_period_end": _instant(PERIOD_END).isoformat(),
+        "ends_at": None,
+        "allowance": 300_000,
+        "scheduled_change": {
+            "plan": "photos_100k",
+            "allowance": 100_000,
+            "at": _instant(NEXT_START).isoformat(),
+        },
+        "next": "portal",
+    }
+    assert body["scheduled_change"]["allowance"] == PLAN_PHOTOGRAPHS[BillingPlan.PHOTOS_100K]
+    assert [r.getMessage() for r in _records(caplog)] == ["billing: handled subscription_schedule.created evt_sched"]
+    assert "sub_sched" not in caplog.text and "price_test" not in caplog.text
+    # The allowance follows the CURRENT item: still 300,000, still paid.
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+        assert await keeping.account_quota(db, account) == 300_000
+        assert await keeping.holds_paid_plan(db, account) is True
+
+    # Undone in the portal: the schedule RELEASED — the subscription's
+    # `schedule` is null in the fetch — both columns null, the body null,
+    # the plan untouched. The event names the released subscription.
+    _stub_fetch(monkeypatch, _subscription_object(status="active", lookup_key=KEY_300K, schedule=None))
+    released = await _post_event(
+        client,
+        "subscription_schedule.released",
+        _schedule_event(subscription=None, released="sub_test_one"),
+        event_id="evt_released",
+    )
+    assert released.status_code == 200
+    assert await _scheduled(db_session_factory) == (None, None, BillingPlan.PHOTOS_300K, "active")
+    body = (await client.get("/billing", headers=headers)).json()
+    assert body["scheduled_change"] is None and body["plan"] == "photos_300k" and body["allowance"] == 300_000
+
+    # Scheduled again, then RENEWAL: the schedule completed, the item is
+    # now the 100k price, the subscription carries no schedule.
+    _stub_fetch(monkeypatch, _subscription_object(status="active", lookup_key=KEY_300K, schedule=_schedule_object()))
+    assert (await _post_event(client, "subscription_schedule.updated", _schedule_event(), event_id="evt_again")).status_code == 200
+    assert (await _scheduled(db_session_factory))[:2] == (BillingPlan.PHOTOS_100K, _instant(NEXT_START))
+    _stub_fetch(
+        monkeypatch,
+        _subscription_object(status="active", lookup_key=KEY_100K, period_end=NEXT_END, schedule=None),
+    )
+    assert (await _post_event(client, "subscription_schedule.completed", _schedule_event(), event_id="evt_done")).status_code == 200
+    assert await _scheduled(db_session_factory) == (None, None, BillingPlan.PHOTOS_100K, "active")
+    body = (await client.get("/billing", headers=headers)).json()
+    assert body == {
+        "plan": "photos_100k",
+        "status": "active",
+        "current_period_end": _instant(NEXT_END).isoformat(),
+        "ends_at": None,
+        "allowance": 100_000,
+        "scheduled_change": None,
+        "next": "portal",
+    }
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+        assert await keeping.account_quota(db, account) == 100_000
+
+
+async def test_nothing_is_scheduled_for_the_same_plan_no_next_phase_or_a_schedule_in_another_status(
+    client, capsys, db_session_factory, monkeypatch, caplog
+):
+    """Null both — and no line, because nothing is wrong — when the next
+    phase is on the SAME plan (a schedule that changes something other
+    than the price), when there is no phase at or after the current one's
+    end, and when the schedule is `released`, `canceled` or `completed`
+    while still on the subscription. And the one shape that HAS no current
+    phase, `not_started`, reads the item's period end as its boundary, so
+    its first phase at that instant IS the change."""
+    address = "nothing-scheduled@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    cases = [
+        ("the same plan", _schedule_object(next_lookup_key=KEY_300K)),
+        ("no next phase", _schedule_object(next_lookup_key=None)),
+        ("a next phase before the boundary", _schedule_object(next_start=PERIOD_END - 1)),
+        ("released", _schedule_object(status="released")),
+        ("canceled", _schedule_object(status="canceled")),
+        ("completed", _schedule_object(status="completed")),
+    ]
+    for why, schedule in cases:
+        _stub_fetch(monkeypatch, _subscription_object(status="active", lookup_key=KEY_300K, schedule=schedule))
+        with caplog.at_level(logging.DEBUG):
+            response = await _post_event(client, "customer.subscription.updated", {"id": "sub_test_one", "object": "subscription"}, event_id="evt_case")
+        assert response.status_code == 200, why
+        assert await _scheduled(db_session_factory) == (None, None, BillingPlan.PHOTOS_300K, "active"), why
+        assert (await client.get("/billing", headers=headers)).json()["scheduled_change"] is None, why
+        assert [r.levelno for r in _records(caplog)] == [logging.INFO], why
+        caplog.clear()
+
+    # `not_started`: no current phase, the boundary is the item's period end.
+    _stub_fetch(
+        monkeypatch,
+        _subscription_object(
+            status="active", lookup_key=KEY_300K, schedule=_schedule_object(status="not_started", current_phase=False)
+        ),
+    )
+    assert (await _post_event(client, "customer.subscription.updated", {"id": "sub_test_one", "object": "subscription"})).status_code == 200
+    assert await _scheduled(db_session_factory) == (
+        BillingPlan.PHOTOS_100K,
+        _instant(NEXT_START),
+        BillingPlan.PHOTOS_300K,
+        "active",
+    )
+
+
+async def test_a_plan_that_is_ending_shows_no_scheduled_change_while_the_row_still_holds_what_stripe_holds(
+    client, capsys, db_session_factory, monkeypatch
+):
+    """`scheduled_change` is null WHENEVER `ends_at` is set: a plan that ends
+    has no next plan, and Stripe releases the schedule on cancel anyway
+    (CK-73.1). Should both arrive together — the endive shape and the
+    classic shape alike — the row stores the two Stripe facts verbatim and
+    the body shows the ending alone; "Don't cancel" shows the change again
+    with nothing re-fetched beyond the usual nudge."""
+    address = "ending-and-scheduled@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    sub = {"id": "sub_test_one", "object": "subscription"}
+    for cancel, cancel_at in ((False, PERIOD_END), (True, None)):
+        _stub_fetch(
+            monkeypatch,
+            _subscription_object(
+                status="active", lookup_key=KEY_300K, cancel=cancel, cancel_at=cancel_at, schedule=_schedule_object()
+            ),
+        )
+        assert (await _post_event(client, "customer.subscription.updated", sub)).status_code == 200
+        assert (await _scheduled(db_session_factory))[:2] == (BillingPlan.PHOTOS_100K, _instant(NEXT_START)), (cancel, cancel_at)
+        body = (await client.get("/billing", headers=headers)).json()
+        assert body["ends_at"] == _instant(PERIOD_END).isoformat(), (cancel, cancel_at)
+        assert body["scheduled_change"] is None, (cancel, cancel_at)
+        assert body["plan"] == "photos_300k" and body["allowance"] == 300_000
+    _stub_fetch(monkeypatch, _subscription_object(status="active", lookup_key=KEY_300K, schedule=_schedule_object()))
+    assert (await _post_event(client, "customer.subscription.updated", sub)).status_code == 200
+    body = (await client.get("/billing", headers=headers)).json()
+    assert body["ends_at"] is None
+    assert body["scheduled_change"] == {"plan": "photos_100k", "allowance": 100_000, "at": _instant(NEXT_START).isoformat()}
+
+
+async def test_an_unreadable_next_phase_is_one_error_line_both_null_and_the_current_plan_written(
+    client, capsys, db_session_factory, monkeypatch, caplog
+):
+    """A next phase whose price names no configured plan — an unknown
+    lookup key, a price that came back as an id (unexpanded), or a
+    schedule that came back as an id — is ONE ERROR line naming the event
+    and subscription ids and nothing else, both columns null, and the
+    rest of the upsert written as usual: the current plan, status and
+    period end land, the "handled" line follows, and nothing blocks the
+    allowance. The key and the ids of the schedule and the price never
+    reach a log record."""
+    address = "unreadable-phase@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    cases = [
+        ("an unknown lookup key", _schedule_object(next_lookup_key="ck_photos_1m_monthly")),
+        ("an unexpanded price", _schedule_object(next_price="price_unexpanded_next")),
+        ("an unexpanded schedule", "sub_sched_unexpanded"),
+    ]
+    for why, schedule in cases:
+        _stub_fetch(monkeypatch, _subscription_object(status="active", lookup_key=KEY_300K, schedule=schedule))
+        with caplog.at_level(logging.DEBUG):
+            response = await _post_event(client, "subscription_schedule.updated", _schedule_event(), event_id="evt_unreadable")
+        assert response.status_code == 200, why
+        assert await _scheduled(db_session_factory) == (None, None, BillingPlan.PHOTOS_300K, "active"), why
+        body = (await client.get("/billing", headers=headers)).json()
+        assert body["scheduled_change"] is None and body["plan"] == "photos_300k" and body["allowance"] == 300_000, why
+        ours = _records(caplog)
+        assert [r.levelno for r in ours] == [logging.ERROR, logging.INFO], (why, [r.getMessage() for r in ours])
+        message = ours[0].getMessage()
+        assert "evt_unreadable" in message and "sub_test_one" in message and "not recorded" in message, why
+        assert ours[1].getMessage() == "billing: handled subscription_schedule.updated evt_unreadable", why
+        for secret in ("ck_photos_1m_monthly", "price_unexpanded_next", "sub_sched_unexpanded", SCHEDULE_ID):
+            assert secret not in caplog.text, (why, secret)
+        caplog.clear()
+
+
+@pytest.mark.parametrize("event_type", sorted(billing.SCHEDULE_EVENT_TYPES))
+async def test_each_schedule_event_type_fetches_the_named_subscription_and_upserts_the_row(
+    client, capsys, db_session_factory, monkeypatch, caplog, event_type
+):
+    """The six are the same nudge as the four: the subscription id read
+    from the event's schedule, the subscription FETCHED by id — with its
+    schedule expanded — and the row upserted, one INFO line with the type
+    and id and nothing else. A schedule can change without any field on
+    the subscription changing, which is why these exist at all."""
+    address = "schedule-events@example.com"
+    await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    calls = _stub_fetch(
+        monkeypatch, _subscription_object(status="active", lookup_key=KEY_300K, schedule=_schedule_object())
+    )
+    with caplog.at_level(logging.DEBUG):
+        response = await _post_event(client, event_type, _schedule_event(), event_id="evt_handled")
+    assert response.status_code == 200 and response.json() == {"received": True}
+    assert calls == ["sub_test_one"]
+    assert await _scheduled(db_session_factory) == (
+        BillingPlan.PHOTOS_100K,
+        _instant(NEXT_START),
+        BillingPlan.PHOTOS_300K,
+        "active",
+    )
+    assert [r.getMessage() for r in _records(caplog)] == [f"billing: handled {event_type} evt_handled"]
+
+
+async def test_a_schedule_event_names_its_subscription_or_the_released_one_and_expiring_is_not_handled(
+    client, monkeypatch, caplog, db_session_factory
+):
+    """`released_subscription` is used when `subscription` is null (the
+    shape a `.released` delivery carries); an expanded `subscription`
+    object yields its id; a schedule naming neither is a 200 with nothing
+    fetched and no line; `subscription_schedule.expiring` — a seven-day
+    reminder — is not handled: nothing fetched, nothing logged. And the
+    handled set is exactly the ten."""
+    assert billing.SCHEDULE_EVENT_TYPES == frozenset(
+        {
+            "subscription_schedule.created",
+            "subscription_schedule.updated",
+            "subscription_schedule.released",
+            "subscription_schedule.canceled",
+            "subscription_schedule.completed",
+            "subscription_schedule.aborted",
+        }
+    )
+    assert billing.HANDLED_EVENT_TYPES == billing.SUBSCRIPTION_EVENT_TYPES | billing.SCHEDULE_EVENT_TYPES
+    assert len(billing.HANDLED_EVENT_TYPES) == 10
+    assert "subscription_schedule.expiring" not in billing.HANDLED_EVENT_TYPES
+
+    calls = _stub_fetch(monkeypatch, _subscription_object(customer_id="cus_nobody"))
+    with caplog.at_level(logging.DEBUG):
+        # The released shape: `subscription` null, `released_subscription` set.
+        assert (
+            await _post_event(client, "subscription_schedule.released", _schedule_event(subscription=None, released="sub_test_one"))
+        ).status_code == 200
+        assert calls == ["sub_test_one"]
+        # An expanded `subscription`: the object's id.
+        expanded = dict(_schedule_event(), subscription={"id": "sub_test_one", "object": "subscription"})
+        assert (await _post_event(client, "subscription_schedule.updated", expanded)).status_code == 200
+        assert calls == ["sub_test_one"] * 2
+        # Naming neither: acknowledged, nothing fetched, no "handled" line.
+        caplog.clear()
+        assert (
+            await _post_event(client, "subscription_schedule.created", _schedule_event(subscription=None, released=None), event_id="evt_none")
+        ).status_code == 200
+        assert calls == ["sub_test_one"] * 2
+        assert not _records(caplog)
+        # `.expiring`: not handled — nothing fetched, nothing logged.
+        _never(monkeypatch, "fetch_subscription")
+        assert (await _post_event(client, "subscription_schedule.expiring", _schedule_event())).status_code == 200
+        assert not _records(caplog)
+    assert await _subscription_rows(db_session_factory) == []
+
+
+def test_the_one_fetch_asks_stripe_to_expand_the_schedule_down_to_each_phase_items_price(monkeypatch):
+    """The STEP 1 probe, pinned: unexpanded, `Subscription.schedule` is an
+    id string and a phase item's `price` an id string; expanded, they are
+    a `SubscriptionSchedule` and a `Price`, subscript-readable like every
+    StripeObject. The wrapper asks for `schedule.phases.items.price` — four
+    levels, Stripe's limit — on the one subscription fetch, through the
+    SDK's own `expand` parameter, so the next phase's lookup key is on the
+    object `sync_subscription` reads. Stubbed at the client, beneath the
+    wrapper."""
+    assert billing.SUBSCRIPTION_EXPAND == ("schedule.phases.items.price",)
+    assert len(billing.SUBSCRIPTION_EXPAND[0].split(".")) == 4
+    from stripe.params._subscription_retrieve_params import SubscriptionRetrieveParams
+
+    assert "expand" in SubscriptionRetrieveParams.__annotations__
+    assert "schedule" in stripe.Subscription.__annotations__
+    assert "price" in stripe.SubscriptionSchedule.Phase.Item.__annotations__
+    captured: list[tuple] = []
+
+    class _Subscriptions:
+        def retrieve(self, subscription_id, params=None, options=None):
+            captured.append((subscription_id, params, options))
+            return "the subscription, as Stripe holds it"
+
+    class _V1:
+        subscriptions = _Subscriptions()
+
+    class _Client:
+        v1 = _V1()
+
+    monkeypatch.setattr(billing, "client", lambda: _Client())
+    assert billing._retrieve_subscription("sub_probe") == "the subscription, as Stripe holds it"
+    assert captured == [("sub_probe", {"expand": ["schedule.phases.items.price"]}, None)]
+
+    # The shapes, through the SDK's own constructor.
+    expanded = _subscription_object(schedule=_schedule_object())
+    assert isinstance(expanded["schedule"], stripe.SubscriptionSchedule)
+    assert isinstance(expanded["schedule"]["phases"][1]["items"][0]["price"], stripe.Price)
+    assert expanded["schedule"]["phases"][1]["items"][0]["price"]["lookup_key"] == KEY_100K
+    unexpanded = _subscription_object(schedule="sub_sched_id_only")
+    assert unexpanded["schedule"] == "sub_sched_id_only"
+    assert _subscription_object(schedule=None)["schedule"] is None
+
+
+def test_the_allowance_and_the_upload_gate_read_neither_scheduled_column():
+    """Record §12's banner, made structural: `keeping.py` (the allowance,
+    `holds_paid_plan`, the quota) and `api/media.py` (the gate) name no
+    `scheduled` anything in their CODE — a token scan with comments and
+    docstrings stripped, the CK-70 idiom. The behavioural half — 300,000
+    with a 100k change scheduled — is the first test of this block."""
+    for path in ("app/services/keeping.py", "app/api/media.py"):
+        source = (BACKEND_DIR / path).read_text(encoding="utf-8")
+        code_tokens = [
+            tok.string
+            for tok in tokenize.generate_tokens(io.StringIO(source).readline)
+            if tok.type not in (tokenize.COMMENT, tokenize.STRING)
+        ]
+        assert not any("scheduled" in t.lower() for t in code_tokens), path
+    # And the body's allowance comes from the one plan table, never a column.
+    api_source = (BACKEND_DIR / "app" / "api" / "billing.py").read_text(encoding="utf-8")
+    assert "keeping.PLAN_PHOTOGRAPHS[paid.scheduled_plan]" in api_source
+    model_source = (BACKEND_DIR / "app" / "models" / "billing.py").read_text(encoding="utf-8")
+    assert "allowance" not in [
+        tok.string
+        for tok in tokenize.generate_tokens(io.StringIO(model_source).readline)
+        if tok.type == tokenize.NAME
+    ]
+
+
+# --- migration 0031: the round trip, and the CHECK on a real row ------------------------
+
+
+async def _scheduled_columns(db_session_factory):
+    """{column: (is_nullable, udt_name, column_default)} for the two 0031
+    columns present, and whether the CHECK exists."""
+    async with db_session_factory() as db:
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT column_name, is_nullable, udt_name, column_default FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'subscriptions' "
+                    "AND column_name IN ('scheduled_plan', 'scheduled_plan_at')"
+                )
+            )
+        ).all()
+        check = await db.scalar(text("SELECT count(*) FROM pg_constraint WHERE conname = :n"), {"n": CHECK_NAME})
+    return {row[0]: tuple(row[1:]) for row in rows}, check == 1
+
+
+SCHEDULED_SHAPE = {
+    "scheduled_plan": ("YES", "billing_plan", None),
+    "scheduled_plan_at": ("YES", "timestamptz", None),
+}
+# The nine lines the verifier (expecting 0031) fails on at 0030: the head,
+# the two nullable lines ("column missing"), the four `.first()` lines, the
+# CHECK, and the pair invariant's guard.
+LINES_0031 = (
+    "alembic_version is at 0031",
+    "subscriptions.scheduled_plan is nullable",
+    "subscriptions.scheduled_plan_at is nullable",
+    "subscriptions.scheduled_plan is of type billing_plan",
+    "subscriptions.scheduled_plan has no server default (the webhook writes it, or nothing does)",
+    "subscriptions.scheduled_plan_at is timestamp with time zone",
+    "subscriptions.scheduled_plan_at has no server default (the webhook writes it, or nothing does)",
+    f"CHECK {CHECK_NAME} exists",
+    "scheduled-change integrity",
+)
+
+
+async def test_0031_round_trip_adds_the_two_columns_and_the_check_and_the_downgrade_is_genuine(
+    client, capsys, db_session_factory
+):
+    """Down to 0030 — both columns and the CHECK gone, the row still there,
+    and the verifier (expecting 0031) failing on EXACTLY its nine lines; up
+    — the columns back, nullable, on the enum and timestamptz, no default,
+    the CHECK back, and a pair planted at head LOST and not resurrected (a
+    migration cannot ask Stripe); the CHECK refused on a real row by name,
+    both halves; down and up once more: idempotent."""
+    assert await _scheduled_columns(db_session_factory) == (SCHEDULED_SHAPE, True)
+    address = "scheduled-roundtrip@example.com"
+    await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    await _plant_subscription(
+        db_session_factory,
+        account.id,
+        plan=BillingPlan.PHOTOS_300K,
+        scheduled_plan=BillingPlan.PHOTOS_100K,
+        scheduled_plan_at=_instant(NEXT_START),
+    )
+    assert (await _scheduled(db_session_factory))[:2] == (BillingPlan.PHOTOS_100K, _instant(NEXT_START))
+
+    lines = await _migrate("downgrade", "0030", capsys)
+    assert any(m.startswith("Running downgrade 0031 -> 0030") for m in lines), lines
+    assert await _scheduled_columns(db_session_factory) == ({}, False)
+    async with db_session_factory() as db:
+        assert await db.scalar(text("SELECT count(*) FROM subscriptions")) == 1
+        assert (await db.execute(text("SELECT version_num FROM alembic_version"))).scalar_one() == "0030"
+    passed, failed, code, out = _verifier()
+    assert (passed, failed, code) == (262, 9, 1), out
+    for line in LINES_0031:
+        assert f"FAIL  {line}" in out, line
+
+    lines = await _migrate("upgrade", "head", capsys)
+    assert any(m.startswith("Running upgrade 0030 -> 0031") for m in lines), lines
+    assert await _scheduled_columns(db_session_factory) == (SCHEDULED_SHAPE, True)
+    rows = await _subscription_rows(db_session_factory)
+    assert len(rows) == 1 and rows[0].scheduled_plan is None and rows[0].scheduled_plan_at is None
+    assert rows[0].plan == BillingPlan.PHOTOS_300K and rows[0].status == "active"
+    assert _verifier()[:3] == (271, 0, 0)
+
+    # The CHECK, on a real row, by name — half a change is refused both ways.
+    for sql in (
+        "UPDATE subscriptions SET scheduled_plan = 'photos_100k' WHERE id = :id",
+        "UPDATE subscriptions SET scheduled_plan_at = now() WHERE id = :id",
+    ):
+        async with db_session_factory() as db:
+            with pytest.raises(Exception) as excinfo:
+                await db.execute(text(sql), {"id": rows[0].id})
+            assert CHECK_NAME in str(excinfo.value), sql
+            await db.rollback()
+    async with db_session_factory() as db:
+        await db.execute(
+            text("UPDATE subscriptions SET scheduled_plan = 'photos_100k', scheduled_plan_at = now() WHERE id = :id"),
+            {"id": rows[0].id},
+        )
+        await db.commit()
+    assert (await _scheduled(db_session_factory))[0] == BillingPlan.PHOTOS_100K
+
+    await _migrate("downgrade", "0030", capsys)
+    await _migrate("upgrade", "head", capsys)
+    assert await _scheduled_columns(db_session_factory) == (SCHEDULED_SHAPE, True)
+    async with db_session_factory() as db:
+        assert (await db.execute(text("SELECT version_num FROM alembic_version"))).scalar_one() == HEAD
+
+
+async def test_the_verifier_asserts_the_scheduled_change_shape_and_its_pair_invariant(
+    client, capsys, db_session_factory
+):
+    """scripts/verify_schema.py's ten CK-73.2 lines — eight on the two
+    columns, their CHECK and the pair invariant, two never-stored
+    allowance columns asserted absent — run as the operator runs it, on a
+    clean baseline holding a real row with a scheduled change, then on the
+    plant the pair invariant exists to catch — half a
+    change, which the CHECK refuses, so the CHECK is DROPPED for the plant
+    and recreated after (the CK-73 idiom): the shape line fails beside the
+    data line, and nothing else. A PLANT IS NOT EVIDENCE UNTIL SOMETHING
+    INDEPENDENT OF THE ASSERTION CONFIRMS THE ROW EXISTS (CK-56's lesson)."""
+    pair = "no subscription carries a scheduled plan without its instant, or an instant without its plan"
+    shape = f"CHECK {CHECK_NAME} exists"
+    address = "scheduled-verified@example.com"
+    await _signed_in_headers(client, capsys, address)
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id, "cus_scheduled")
+    await _plant_subscription(
+        db_session_factory,
+        account.id,
+        plan=BillingPlan.PHOTOS_300K,
+        subscription_id="sub_scheduled",
+        scheduled_plan=BillingPlan.PHOTOS_100K,
+        scheduled_plan_at=_instant(NEXT_START),
+    )
+    passed, failed, code, out = _verifier()
+    assert (passed, failed, code) == (271, 0, 0), out
+    for line in (
+        *LINES_0031[1:8],
+        pair,
+        "subscriptions.next_allowance is gone",
+        "subscriptions.scheduled_allowance is gone",
+    ):
+        assert f"PASS  {line}" in out, line
+
+    async with db_session_factory() as db:
+        await db.execute(text(f"ALTER TABLE subscriptions DROP CONSTRAINT {CHECK_NAME}"))
+        await db.execute(text("UPDATE subscriptions SET scheduled_plan_at = NULL WHERE provider_subscription_id = 'sub_scheduled'"))
+        await db.commit()
+        planted = await db.scalar(
+            text(
+                "SELECT count(*) FROM subscriptions WHERE provider_subscription_id = 'sub_scheduled' "
+                "AND scheduled_plan IS NOT NULL AND scheduled_plan_at IS NULL"
+            )
+        )
+        assert planted == 1, "the plant did not land"
+    passed, failed, code, out = _verifier()
+    assert (passed, failed, code) == (269, 2, 1), out
+    assert f"FAIL  {shape}" in out and f"FAIL  {pair}" in out
+    assert "1 subscription row(s) with half a scheduled change" in out
+
+    async with db_session_factory() as db:
+        await db.execute(text("UPDATE subscriptions SET scheduled_plan = NULL WHERE provider_subscription_id = 'sub_scheduled'"))
+        await db.execute(
+            text(
+                f"ALTER TABLE subscriptions ADD CONSTRAINT {CHECK_NAME} "
+                "CHECK ((scheduled_plan IS NULL) = (scheduled_plan_at IS NULL))"
+            )
+        )
+        await db.commit()
+    assert _verifier()[:3] == (271, 0, 0)

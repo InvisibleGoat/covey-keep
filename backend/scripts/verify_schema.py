@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0030"
+EXPECTED_REVISION = "0031"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -1887,7 +1887,10 @@ async def verify(conn, ck: Checks) -> None:
             False, "pending invitation integrity", "gathering_invitations_pending missing"
         )
 
-    print("\n-- billing: the paid tiers' rows (0029, CK-73; cancel_at 0030, CK-73.1) --")
+    print(
+        "\n-- billing: the paid tiers' rows (0029, CK-73; cancel_at 0030, CK-73.1; "
+        "the scheduled change 0031, CK-73.2) --"
+    )
     # Two tables that connect an account to a payment provider (paid-tiers
     # record §9): the provider's customer id, and a local copy of the facts
     # the allowance is DERIVED from — the plan and the provider's status.
@@ -1918,8 +1921,8 @@ async def verify(conn, ck: Checks) -> None:
             "cancel_at_period_end",
             "created_at",
         ),
-        nullable=("current_period_end", "cancel_at", "updated_at"),
-        absent=("allowance", "is_paid", "entitlement"),
+        nullable=("current_period_end", "cancel_at", "scheduled_plan", "scheduled_plan_at", "updated_at"),
+        absent=("allowance", "is_paid", "entitlement", "next_allowance", "scheduled_allowance"),
     )
     # `status` is TEXT, never an enum: the provider's value verbatim, so a
     # status the provider adds is stored rather than refused; which values
@@ -1948,6 +1951,56 @@ async def verify(conn, ck: Checks) -> None:
         cancel_at_column is not None and cancel_at_column[1] is None,
         "subscriptions.cancel_at has no server default (the webhook writes it, or nothing does)",
         f"default is {cancel_at_column[1] if cancel_at_column else None!r}",
+    )
+    # THE SCHEDULED CHANGE (0031, CK-73.2): a downgrade waiting for renewal
+    # is a SUBSCRIPTION SCHEDULE at Stripe (the paid-tiers record §2's
+    # portal bullet, §12 as amended), and the row stores two of its facts
+    # verbatim — the plan of the schedule's NEXT phase and the instant it
+    # starts — BOTH SET OR BOTH NULL (the CHECK below). The allowance never
+    # reads them: a downgrade scheduled for renewal is still the higher
+    # plan until Stripe changes the item. Nullable (the column loop above,
+    # which FAILs on a missing column), the plan on the column's own enum
+    # and the instant timestamptz, no default on either — the webhook
+    # writes them from a fetched subscription, or nothing does. Each read
+    # with `.first()`, so a missing column FAILs here too. No "next
+    # allowance" column, asserted absent above: the surface's figure is
+    # derived from the plan at read time.
+    scheduled_plan_column = (
+        await conn.execute(
+            text(
+                "SELECT udt_name, column_default FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'subscriptions' "
+                "AND column_name = 'scheduled_plan'"
+            )
+        )
+    ).first()
+    ck.check(
+        scheduled_plan_column is not None and scheduled_plan_column[0] == "billing_plan",
+        "subscriptions.scheduled_plan is of type billing_plan",
+        f"found {scheduled_plan_column!r}",
+    )
+    ck.check(
+        scheduled_plan_column is not None and scheduled_plan_column[1] is None,
+        "subscriptions.scheduled_plan has no server default (the webhook writes it, or nothing does)",
+        f"default is {scheduled_plan_column[1] if scheduled_plan_column else None!r}",
+    )
+    scheduled_at_column = await column_type_and_default(conn, "subscriptions", "scheduled_plan_at")
+    ck.check(
+        scheduled_at_column is not None and scheduled_at_column[0] == "timestamp with time zone",
+        "subscriptions.scheduled_plan_at is timestamp with time zone",
+        f"found {scheduled_at_column!r}",
+    )
+    ck.check(
+        scheduled_at_column is not None and scheduled_at_column[1] is None,
+        "subscriptions.scheduled_plan_at has no server default (the webhook writes it, or nothing does)",
+        f"default is {scheduled_at_column[1] if scheduled_at_column else None!r}",
+    )
+    # A plan and an instant are ONE fact — a change — and half of one is a
+    # row nothing wrote: the CHECK makes it structural, by name.
+    ck.check(
+        "ck_subscriptions_scheduled_plan_both_or_neither" in check_constraints,
+        "CHECK ck_subscriptions_scheduled_plan_both_or_neither exists",
+        "constraint missing",
     )
     # The two types and their labels — read from pg_enum, because
     # autogenerate never diffs enum labels.
@@ -2058,6 +2111,28 @@ async def verify(conn, ck: Checks) -> None:
             "no account holds two subscriptions in a paid status",
             f"{double_paid} account(s) with more than one paid subscription",
         )
+        # (4) The scheduled change's two columns are set together or not at
+        # all (0031, CK-73.2) — the CHECK above, re-asserted as DATA: if the
+        # constraint were ever dropped the shape line fails and so does this
+        # one. Guarded on the columns (the CK-43 lesson): a query over a
+        # column that is not there is a crash, not a FAIL.
+        if {"scheduled_plan", "scheduled_plan_at"} <= set(columns["subscriptions"]):
+            half_scheduled = await scalar(
+                conn,
+                "SELECT count(*) FROM subscriptions "
+                "WHERE (scheduled_plan IS NULL) <> (scheduled_plan_at IS NULL)",
+            )
+            ck.check(
+                half_scheduled == 0,
+                "no subscription carries a scheduled plan without its instant, or an instant without its plan",
+                f"{half_scheduled} subscription row(s) with half a scheduled change",
+            )
+        else:
+            ck.check(
+                False,
+                "scheduled-change integrity",
+                "subscriptions.scheduled_plan or subscriptions.scheduled_plan_at missing",
+            )
     else:
         ck.check(False, "billing integrity", "billing_customers or subscriptions missing")
 
