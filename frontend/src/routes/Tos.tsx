@@ -17,6 +17,12 @@ import { PRODUCT_NAME } from '../brand'
 // one number must mean one text. Its only job is to be true — do not add
 // reassurance the product cannot back, and never pin a sentence about
 // something not built yet: that pin is what kept version 1 false.
+//
+// Two of version 2's sentences were corrected at CK-73.4 under the SAME
+// number — the one case the rule allows: nothing had been pushed, so no
+// account had accepted version 2 (the record's §3.1 banner says which two,
+// and why each was wrong). A sentence that tells a person what they can do
+// is checked against what the product lets them do.
 export function Tos() {
   return (
     <main className="auth-screen">
@@ -47,7 +53,9 @@ export function Tos() {
         from the copies. You can delete your own photos at any time, and a photo sent to a
         bin is deleted for good 30 days later. Deleting your account removes your email
         address and name, but photos and answers you added stay in their gatherings under
-        "a former member". Delete them first if you'd rather they went.
+        "a former member". Delete your photos first if you'd rather they went. Answers
+        can't be deleted, but you can change yours to "Can't make it" and remove anyone
+        you said you were bringing.
       </p>
       <p>
         {PRODUCT_NAME} may show paid plans during the test. They run in Stripe's test mode:
@@ -55,9 +63,11 @@ export function Tos() {
         on its page; {PRODUCT_NAME} keeps a record of which plan you're on, never your card.
       </p>
       <p>
-        One thing worth knowing: during this test, sign-in links are printed to a server
-        log, and Steven — who runs the server — can see them. That's temporary, and it's
-        told to you here because you should hear it rather than find out.
+        One thing worth knowing: during this test, sign-in links, invitations and
+        email-change confirmations are printed to a server log, with the email address
+        each one is for, and Steven — who runs the server — can see them. That's
+        temporary, and it's told to you here because you should hear it rather than find
+        out.
       </p>
       <p>
         A real Terms of Service and privacy policy are being written and reviewed. When

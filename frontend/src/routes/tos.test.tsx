@@ -3,9 +3,13 @@
 // requires — private test, data not kept, what is stored (photos among it:
 // the three copies and the deleted original, location removed, the bin's 30
 // days, what deletion leaves behind, invitees' addresses cleared after a week,
-// plans in Stripe's test mode), sign-in links visible in a server log, real
-// terms coming — and NEVER the sentence that went false (version 1's "Photo
-// upload doesn't exist yet"); the sign-in checkbox agrees to the test rather
+// plans in Stripe's test mode), every email the app sends — sign-in links,
+// invitations, email-change confirmations — visible in a server log with the
+// address it is for, what a person can remove before deleting an account
+// (photos; an answer can only be changed) — both CK-73.4's corrections — real
+// terms coming — and NEVER a sentence that went false (version 1's "Photo
+// upload doesn't exist yet"; version 2's first "Delete them first"); the
+// sign-in checkbox agrees to the test rather
 // than to Terms that do not exist yet — with its mechanism intact (unchecked
 // by default, submit disabled until checked) — and TOS_VERSION is 2: this
 // text's number, version 1 being the CK-26 text and the published terms
@@ -23,6 +27,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { AuthContext, type AuthState } from '../auth/context'
 import { PRODUCT_NAME } from '../brand'
 import { TOS_VERSION } from '../lib/api'
+import { RSVP_RESPONSES } from '../lib/rsvps'
 import { SignIn } from './SignIn'
 import { Tos } from './Tos'
 import tosSource from './Tos.tsx?raw'
@@ -76,8 +81,20 @@ test('the notice says what it is and carries every load-bearing statement', () =
     ),
   ).toBeTruthy()
   expect(screen.getByText(/a passkey if you add one/i)).toBeTruthy()
-  // The console-mode disclosure: sign-in links are visible in a server log.
-  expect(screen.getByText(/sign-in links are printed to a server log/i)).toBeTruthy()
+  // The console-mode disclosure, in version 2's corrected words. THE PIN MOVED
+  // at CK-73.4, with its reason: as first built, version 2 said sign-in links
+  // alone, and services/email.py's one console line prints EVERY email the app
+  // sends with the address it is for — the sign-in link (api/auth.py), an
+  // invitation (api/invitations.py: a third party's address, supplied by the
+  // inviter), and both email-change messages (api/profile.py). The old regex,
+  // /sign-in links are printed to a server log/, no longer matches because the
+  // list of what is printed grew — which is the correction.
+  expect(
+    screen.getByText(
+      /sign-in links, invitations and email-change confirmations are printed to a server log/i,
+    ),
+  ).toBeTruthy()
+  expect(screen.getByText(/with the email address each one is for/i)).toBeTruthy()
   // Real terms and a privacy policy are coming, and they will need accepting.
   expect(screen.getByText(/asked to read and accept them/i)).toBeTruthy()
 })
@@ -107,6 +124,28 @@ test('the notice tells the truth about photographs, deletion and plans', () => {
     screen.getByText(/removes your email address and name, but photos and answers you added stay/i),
   ).toBeTruthy()
   expect(screen.getByText(/under [“"]a former member[”"]/i)).toBeTruthy()
+  // What a person can remove before deleting their account, said truthfully
+  // (CK-73.4; version 2 as first built said "Delete them first", them being
+  // photos AND answers): photos, yes — Send to bin and Delete permanently
+  // (CK-64), Dismiss for a failed one (CK-71); answers, never — api/rsvps.py
+  // has no delete route, deliberately (CK-27), so an answer can only be
+  // changed to the `no` answer, which also clears its companions (a "no"
+  // sends an empty list — CK-29's clearing path). Either quote style, as the
+  // pin above.
+  expect(screen.getByText(/Delete your photos first if you'd rather they went/i)).toBeTruthy()
+  expect(
+    screen.getByText(
+      /Answers can't be deleted, but you can change yours to [“"]Can't make it[”"]/i,
+    ),
+  ).toBeTruthy()
+  // And the label the sentence quotes IS the product's: the `no` answer as
+  // lib/rsvps.ts spells it, so relabelling the button fails here instead of
+  // leaving the notice naming a choice nobody can find. A sentence that tells
+  // a person what they can do is checked against what the product lets them
+  // do — this phase's lesson, made a test.
+  const noLabel = RSVP_RESPONSES.find((r) => r.value === 'no')?.label
+  expect(noLabel).toBeTruthy()
+  expect(document.body.textContent ?? '').toContain(noLabel as string)
   // Plans: Stripe's test mode, no real payment, never your card (the key is
   // boot-checked to rk_test_; the subscriptions row holds a plan and nothing
   // about a card).
@@ -116,7 +155,7 @@ test('the notice tells the truth about photographs, deletion and plans', () => {
   expect(screen.getByText(/keeps a record of which plan you're on, never your card/i)).toBeTruthy()
 })
 
-test("the sentence that went false never renders — version 1's photo claim is gone", () => {
+test("the sentences that went false never render — version 1's photo claim, and version 2's first 'Delete them'", () => {
   // The NEGATION of the CK-26 pin. "Photo upload doesn't exist yet, so no
   // photos are stored" was true on 2026-09-02 and false from CK-36 on; the
   // old pin asserted it present, and nothing failed when it stopped being
@@ -126,6 +165,11 @@ test("the sentence that went false never renders — version 1's photo claim is 
   const page = document.body.textContent ?? ''
   expect(page).not.toMatch(/Photo upload doesn't exist/i)
   expect(page).not.toMatch(/no photos are stored/i)
+  // And version 2's own half-truth, corrected at CK-73.4 before any account
+  // accepted it: "Delete them first if you'd rather they went" told a person
+  // they could delete their answers, which the product has never let anyone
+  // do (CK-27 shipped no RSVP delete, deliberately).
+  expect(page).not.toMatch(/Delete them first/i)
 })
 
 test('the notice renders the product name from the brand module, never a literal', () => {
