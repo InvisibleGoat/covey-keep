@@ -41,7 +41,15 @@ MAX_REQUESTS_PER_EMAIL = 5
 # cap is evadable and must never be treated as the load-bearing limit.
 # MAX_REQUESTS_PER_EMAIL above is what actually protects an account.
 MAX_REQUESTS_PER_IP = 20
-TOS_VERSION = 1
+# The ToS version the sign-in form presents today, recorded per account at
+# creation (verify). 1 = the CK-26 private test notice; 2 = the notice as
+# revised at CK-73.3, true about what is stored; the published terms take 3.
+# The validator keeps accepting every version from 1 up to this one: a
+# browser still on the old bundle showed its user version 1's text, and 1 is
+# then the TRUE record of what they agreed to. Never renumber an existing
+# version, and never narrow the lower bound
+# (decisions/2026-08-31-private-alpha-scope.md §3, §3.1).
+TOS_VERSION = 2
 
 # The one and only /auth/request-link success body. Byte-identical whether or
 # not the email is known, and it must NEVER gain a send-status field — failure

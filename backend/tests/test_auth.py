@@ -29,10 +29,12 @@ ERROR_REDIRECT = "http://localhost:5173/auth/callback#error=invalid_link"
 
 async def _request_link(client, address: str):
     # The sign-in form always submits affirmative ToS consent (it cannot know
-    # whether the address is new — that would be enumeration).
+    # whether the address is new — that would be enumeration), at the version
+    # the current bundle presents. Version 1 — what a browser still on the old
+    # bundle sends — is pinned by its own test below, not by this helper.
     return await client.post(
         "/auth/request-link",
-        json={"email": address, "tos_accepted": True, "tos_version": 1},
+        json={"email": address, "tos_accepted": True, "tos_version": auth_api.TOS_VERSION},
     )
 
 
@@ -75,7 +77,10 @@ async def test_happy_path_end_to_end(client, capsys, db_session_factory):
         assert len(people) == 1
         tos = (await db.execute(select(TosAcceptance))).scalars().all()
         assert len(tos) == 1
-        assert tos[0].version == 1
+        # The row records the version the sign-in form SENT — the current
+        # bundle's TOS_VERSION (2 since CK-73.3; this read 1 until then, when the
+        # helper sent 1). Version 1 still recording 1 has its own test below.
+        assert tos[0].version == auth_api.TOS_VERSION
         assert tos[0].person_id == people[0].id
         token_row = (await db.execute(select(MagicLinkToken))).scalars().one()
         assert token_row.consumed_at is not None
@@ -193,6 +198,9 @@ async def test_request_link_requires_affirmative_tos(client, db_session_factory)
 
 
 async def test_unknown_tos_version_rejected(client):
+    # A version nothing has ever published: no text exists for it, so no
+    # consent to it can be recorded. (The version one past the current — the
+    # published terms' number — has its own test below, for its own reason.)
     response = await client.post(
         "/auth/request-link",
         json={"email": "keen@example.com", "tos_accepted": True, "tos_version": 99},
@@ -200,12 +208,16 @@ async def test_unknown_tos_version_rejected(client):
     assert response.status_code == 422
 
 
-async def test_acceptance_records_the_version_the_client_sent(
-    client, capsys, monkeypatch, db_session_factory
+async def test_a_new_account_signing_up_with_version_2_records_2(
+    client, capsys, db_session_factory
 ):
-    # The acceptance row must carry what the person actually agreed to, not a
-    # hardcoded 1: publish version 2, accept version 2, expect 2 recorded.
-    monkeypatch.setattr(auth_api, "TOS_VERSION", 2)
+    # CK-73.3: the private test notice is version 2 — the text behind /tos
+    # today, true about what is stored — and a sign-up from the current bundle
+    # sends it. The acceptance row carries what the person actually agreed to,
+    # never a hardcoded number (until CK-73.3 this test monkeypatched the
+    # constant up to 2 to prove that; 2 is the real value now, so the pin on
+    # the constant and the pin on the row are read together).
+    assert auth_api.TOS_VERSION == 2
     response = await client.post(
         "/auth/request-link",
         json={"email": "versioned@example.com", "tos_accepted": True, "tos_version": 2},
@@ -217,6 +229,46 @@ async def test_acceptance_records_the_version_the_client_sent(
     async with db_session_factory() as db:
         acceptance = (await db.execute(select(TosAcceptance))).scalars().one()
         assert acceptance.version == 2
+
+
+async def test_a_sign_up_with_version_1_still_records_1_the_stale_bundle_case(
+    client, capsys, db_session_factory
+):
+    # The validator stays `1 <= value <= TOS_VERSION`, so version 1 is still
+    # accepted and still RECORDED AS 1. A browser running the old bundle (the
+    # PWA keeps it until its update notice is taken) showed its user version
+    # 1's text, so 1 is the TRUE record of what that person agreed to — not a
+    # stale one to be corrected up to 2. Narrowing the validator, or recording
+    # TOS_VERSION instead of the value sent, would each falsify the row
+    # (decisions/2026-08-31-private-alpha-scope.md §3, as amended 2026-10-19).
+    response = await client.post(
+        "/auth/request-link",
+        json={"email": "old-bundle@example.com", "tos_accepted": True, "tos_version": 1},
+    )
+    assert response.status_code == 202
+    match = LINK_RE.search(capsys.readouterr().out)
+    assert match, "no magic link in console output"
+    assert TOKEN_REDIRECT_RE.match(await _verify(client, match.group(0)))
+    async with db_session_factory() as db:
+        acceptance = (await db.execute(select(TosAcceptance))).scalars().one()
+        assert acceptance.version == 1
+
+
+async def test_version_3_is_refused_the_published_terms_are_not_published(
+    client, db_session_factory
+):
+    # 3 is the published terms' number (the record's §3): no text exists
+    # behind it yet, so an acceptance of it would be consent to nothing.
+    # Refused before any token is minted, exactly as any unknown version is;
+    # the phase that publishes the terms raises TOS_VERSION and this test
+    # moves to 4 with it.
+    response = await client.post(
+        "/auth/request-link",
+        json={"email": "early@example.com", "tos_accepted": True, "tos_version": 3},
+    )
+    assert response.status_code == 422
+    async with db_session_factory() as db:
+        assert (await db.scalar(select(func.count()).select_from(MagicLinkToken))) == 0
 
 
 async def test_pre_ck6_token_cannot_create_account(client, capsys, db_session_factory):
