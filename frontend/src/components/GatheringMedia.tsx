@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { authFetch } from '../lib/api'
 import { formatInstant } from '../lib/datetime'
 import {
   describedBy,
   errorsFromResponse,
+  errorType,
   networkErrors,
   noErrors,
   type FormErrors,
@@ -23,6 +25,7 @@ import {
   fetchLayerObjectUrl,
   intentErrorFields,
   intentItem,
+  KEEPER_SPACE_FULL,
   MAX_PUBLISH_BATCH,
   mediaListPath,
   mediaName,
@@ -1045,6 +1048,17 @@ export function GatheringMedia({
           </ul>
         )}
         <FieldError errors={errors} field="items" />
+        {/* The keeper's own "no room" refusal — and ONLY that one, by its
+            stable code and never its wording — offers the way to more
+            space beneath the server's message: it is their space (CK-74;
+            paid-tiers record §12). The non-keeper form, the ceiling and
+            every other refusal render exactly as before, with no link
+            (CK-50's rule; keeping-explained moment 6 binds the rest). */}
+        {errorType(errors, 'items') === KEEPER_SPACE_FULL && (
+          <p className="field-hint">
+            <Link to="/plan">Get more space</Link>
+          </p>
+        )}
         <button type="submit" disabled={files.length === 0 || progress !== null}>
           {progress !== null
             ? `Uploading ${Math.min(progress.done + 1, progress.total)} of ${progress.total}…`

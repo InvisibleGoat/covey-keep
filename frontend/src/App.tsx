@@ -10,6 +10,7 @@ import { GatheringNew } from './routes/GatheringNew'
 import { Gatherings } from './routes/Gatherings'
 import { Home } from './routes/Home'
 import { InvitationAccept } from './routes/InvitationAccept'
+import { Plan } from './routes/Plan'
 import { Settings } from './routes/Settings'
 import { SignIn } from './routes/SignIn'
 import { Tos } from './routes/Tos'
@@ -58,6 +59,16 @@ function App() {
           element={
             <RequireAuth>
               <Settings />
+            </RequireAuth>
+          }
+        />
+        {/* The path is fixed by the backend's return URLs (CK-74): Checkout
+            returns to /plan?checkout=complete|cancelled, the portal to /plan. */}
+        <Route
+          path="/plan"
+          element={
+            <RequireAuth>
+              <Plan />
             </RequireAuth>
           }
         />

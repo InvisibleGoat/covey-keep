@@ -73,6 +73,9 @@ Everything here is part of the accept/refuse decision:
   much a refusal says (CK-51b.1; narrowed on both sides at CK-65 —
   keeping-explained §5.2, §5.5) — the caller's account against the
   resolved keeper's, the comparison _gathering_for_read already makes.
+  Since CK-74 the keeper's form alone carries the type `keeper_space_full`
+  (KEEPER_SPACE_FULL) on its 422 entry — the one refusal that may point at
+  more space, because it is the keeper's space; the wording is unchanged.
   THE KEEPER, asking about their own space, reads the allowance, the
   room left and what is being added — their own numbers, the ones they
   can act on. NO REFUSAL NAMES A BIN (CK-65; keeping-explained §5.5 —
@@ -576,6 +579,15 @@ NOT_REMOVED = "not_removed"
 # `failed`. Not `not_ready` — that code means "wait", and a failed row is
 # the opposite: nothing will ever arrive. Carries the rung.
 NOT_FAILED = "not_failed"
+# The KEEPER's own room refusal (CK-74; paid-tiers record §12) carries this
+# as its 422 entry's `type`, in place of Pydantic's `value_error`: the ONE
+# refusal that may point the person at more space, because the space is
+# theirs — the upload form's "Get more space" link renders on this code and
+# never on the wording, which is unchanged. The non-keeper form, the
+# memorial ceiling and the keeperless refusal keep `value_error`: only the
+# keeper may be pointed at more space (CK-50's rule and keeping-explained
+# moment 6 bind the rest, until the offer flow ships).
+KEEPER_SPACE_FULL = "keeper_space_full"
 
 # The lost-race 409 for a removal, a destruction or a restore (CK-54;
 # restore since CK-63). Unreachable under the row lock for the first two,
@@ -874,7 +886,14 @@ async def _enforce_limits(
     one only once the sweep is switched on, and the API cannot know that
     (that line belongs to a later phase with a way to know). The bin is
     counted on NO path — `account_bin_count` has no route caller (see its
-    docstring in keeping.py)."""
+    docstring in keeping.py).
+
+    THE KEEPER'S FORM CARRIES A CODE (CK-74; paid-tiers record §12): its
+    422 entry's `type` is `keeper_space_full`, so the upload form can offer
+    the keeper — and the keeper alone — a way to more space; the message is
+    byte-identical to CK-65's. Every other refusal here keeps `value_error`,
+    because only the keeper may be pointed at more space (CK-50's rule;
+    moment 6 binds the non-keeper form until the offer flow ships)."""
     resolution = await keeping.resolved_keeper_of(db, gathering)
     if resolution.keeper_account_id is None:
         # The Unkept rung (v2 §5) — both columns NULL, read-only and
@@ -935,9 +954,14 @@ async def _enforce_limits(
         # keeper empties no bin), and the bin is not counted.
         room = max(quota - usage, 0)
         room_clause = f"has room for {room:,} more" if room > 0 else "has no room left"
+        # The type is the one stable code on this gate (KEEPER_SPACE_FULL,
+        # CK-74): the plan screen's link hangs on it, the message does not
+        # change, and no other refusal here carries anything but
+        # `value_error`.
         raise _field_422(
             "items",
             f"this space holds {quota:,} photos and {room_clause}, and you're adding {count:,}",
+            error_type=KEEPER_SPACE_FULL,
         )
 
 

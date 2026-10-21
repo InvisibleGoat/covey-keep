@@ -18,9 +18,19 @@ Stripe's, unauthenticated and outside the gate, verified by signature.
   (`scheduled_change` — the next plan, ITS allowance from the one plan
   table, and the instant; null when nothing is scheduled and null
   whenever `ends_at` is set, because a plan that ends has no next plan;
-  CK-73.2), and what the next step is: Checkout with no paid
-  subscription, the portal with one. NEVER A STRIPE ID: the customer and
-  subscription ids are this process's keys, not the person's.
+  CK-73.2), what the next step is: Checkout with no paid
+  subscription, the portal with one — and, since CK-74, THE CALLER'S OWN
+  USAGE (`used`, through `keeping.account_usage`, the same function the
+  upload gate reads: the CHARGED number — photographs in the gatherings
+  the caller keeps, memorials exempt, binned and in-flight ones included —
+  the caller's own number, in no other body; keeping-explained §3
+  principle 5, the bin record §4) and THE PLANS THE SCREEN OFFERS
+  (`plans`: the free tier and the two paid plans by allowance, each with
+  its monthly price in cents from `keeping.PLAN_MONTHLY_PRICE_CENTS`, so
+  the screen keeps no numbers of its own; NO STRIPE CALL on this read —
+  the prices are the record's, and Checkout shows Stripe's before anyone
+  pays). NEVER A STRIPE ID: the customer and subscription ids are this
+  process's keys, not the person's.
 - `POST /billing/checkout` — creates or reuses the customer and creates a
   Checkout Session for one plan; `{"url"}`. **409 `already_subscribed`**
   for an account already holding a subscription in a paid status: a
@@ -147,6 +157,29 @@ def _scheduled_change(paid: Optional[Subscription], ends_at: Optional[datetime])
     }
 
 
+def _plans() -> list[dict]:
+    """Every plan the screen offers, ordered by allowance (CK-74): the free
+    tier first — `plan` null, as the top-level `plan` is on the free tier,
+    its allowance `FREE_TIER_PHOTOGRAPHS`, no price — then each paid plan
+    with its allowance from `PLAN_PHOTOGRAPHS` and its monthly price in
+    cents from `PLAN_MONTHLY_PRICE_CENTS`, the two tables beside each other
+    in keeping.py. The screen keeps no numbers of its own, and nothing here
+    asks Stripe: the prices are the record's (§3), and Checkout shows
+    Stripe's own before anyone pays."""
+    offers = [
+        {"plan": None, "allowance": keeping.FREE_TIER_PHOTOGRAPHS, "monthly_price_cents": None}
+    ]
+    for plan in BillingPlan:
+        offers.append(
+            {
+                "plan": plan.value,
+                "allowance": keeping.PLAN_PHOTOGRAPHS[plan],
+                "monthly_price_cents": keeping.PLAN_MONTHLY_PRICE_CENTS[plan],
+            }
+        )
+    return sorted(offers, key=lambda offer: offer["allowance"])
+
+
 class CheckoutBody(BaseModel):
     # An unknown plan is FastAPI's own field-level 422 on ["body", "plan"];
     # an unknown field likewise.
@@ -170,12 +203,18 @@ async def read_billing(
     paid status, with Stripe's status, the period end and — when it is
     ending — `ends_at` (derived, `_ends_at`; `cancel_at_period_end` left
     the body at CK-73.1); the allowance DERIVED (never stored — record §6)
-    by the same function the upload gate reads; the change waiting for
-    renewal, `scheduled_change` (derived, `_scheduled_change`; CK-73.2);
-    and the next step. No Stripe id rides."""
+    by the same function the upload gate reads; the caller's own usage,
+    `used` (CK-74: `keeping.account_usage`, the gate's own reading — the
+    CHARGED count over the gatherings the caller keeps, memorials exempt,
+    binned and in-flight photographs included; shown to the caller alone,
+    and never called "your photos" — the bin record §4); the change waiting
+    for renewal, `scheduled_change` (derived, `_scheduled_change`;
+    CK-73.2); the plans the screen offers, `plans` (CK-74, `_plans`); and
+    the next step. No Stripe id rides, and no Stripe call is made."""
     account = await _account(db, ctx)
     paid: Optional[Subscription] = await keeping.paid_subscription(db, account)
     allowance = await keeping.account_quota(db, account)
+    used = await keeping.account_usage(db, account)
     ends_at = _ends_at(paid)
     return {
         "plan": paid.plan.value if paid is not None else None,
@@ -183,7 +222,9 @@ async def read_billing(
         "current_period_end": _iso(paid.current_period_end) if paid is not None else None,
         "ends_at": _iso(ends_at),
         "allowance": allowance,
+        "used": used,
         "scheduled_change": _scheduled_change(paid, ends_at),
+        "plans": _plans(),
         "next": NEXT_PORTAL if paid is not None else NEXT_CHECKOUT,
     }
 

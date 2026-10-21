@@ -112,6 +112,18 @@ export function formatInstant(iso: string, zone: string): string {
   }).format(new Date(iso))
 }
 
+// The DAY an instant falls on in `zone`, short month and day — "Nov 12" —
+// for a line that names a date and no time (the plan's renewal, CK-74).
+// Through the explicit zone like everything here: 02:10 UTC on Nov 12 is
+// the evening of Nov 11 in Pacific time, and a person there reads Nov 11.
+export function formatDay(iso: string, zone: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: zone,
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date(iso))
+}
+
 // "Sep 1, 2026, 6:00 PM – 9:00 PM" when the end falls on the same day in the
 // zone; the end gets its own full date otherwise.
 export function formatInstantRange(startIso: string, endIso: string | null, zone: string): string {

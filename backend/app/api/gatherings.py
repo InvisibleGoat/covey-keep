@@ -135,13 +135,20 @@ def _not_found() -> HTTPException:
     return HTTPException(404, "No such gathering.")
 
 
-def _field_422(field: str, message: str, *, where: str = "body") -> HTTPException:
+def _field_422(
+    field: str, message: str, *, where: str = "body", error_type: str = "value_error"
+) -> HTTPException:
     # App-layer validation that needs DB state (the row's type, its other
     # occurrences) can't live in the Pydantic model — but its failures wear
     # the same field-level shape FastAPI's validation errors do, so the
-    # frontend renders inline errors from one code path.
+    # frontend renders inline errors from one code path. `error_type` is the
+    # entry's `type`: Pydantic's `value_error` unless the refusal carries a
+    # STABLE CODE of its own for the frontend to switch on — never the
+    # wording (the CK-30 marker precedent). The one such code today is the
+    # upload gate's `keeper_space_full` (api/media.py, CK-74); the message is
+    # the same whatever the type says.
     return HTTPException(
-        422, detail=[{"loc": [where, field], "msg": message, "type": "value_error"}]
+        422, detail=[{"loc": [where, field], "msg": message, "type": error_type}]
     )
 
 

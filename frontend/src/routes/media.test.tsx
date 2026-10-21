@@ -698,3 +698,137 @@ test('no source in the upload surface calls a pending photograph shared, or clai
     expect(code).not.toMatch(/['"`][^'"`\n]*\b(approv|shared|screen)\w*[^'"`\n]*['"`]/i)
   }
 })
+
+// CK-74: the keeper's own "no room" refusal carries the stable code
+// `keeper_space_full` on its 422 entry's `type`, and ONLY then does a
+// "Get more space" link to /plan render beneath the server's message — the
+// code decides, never the wording (the CK-65.1 rule, applied to the type).
+// The non-keeper form, the memorial ceiling and a per-file refusal carry
+// Pydantic's `value_error` and render exactly as before, with no link.
+function renderMediaInRouter(over: Partial<Parameters<typeof GatheringMedia>[0]> = {}) {
+  return render(
+    <MemoryRouter initialEntries={['/gatherings/g-1']}>
+      <GatheringMedia
+        gatheringId="g-1"
+        isHost={true}
+        requiresApproval={false}
+        occurrences={detailBody().occurrences}
+        zone="America/Chicago"
+        pollIntervalMs={20}
+        {...over}
+      />
+    </MemoryRouter>,
+  )
+}
+
+async function uploadOne() {
+  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  await screen.findByText('No photos yet.')
+  const still = new File([new Uint8Array([1])], 'IMG_0569.HEIC', { type: '' })
+  fireEvent.change(screen.getByLabelText(/add photos/i), { target: { files: [still] } })
+  fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+}
+
+test("the keeper's room refusal carries keeper_space_full, and a Get more space link to /plan renders beneath the server's message", async () => {
+  const mock = stubRoutes([
+    { method: 'GET', match: endsWith('/gatherings/g-1/media'), response: () => json(200, { media: [] }) },
+    {
+      method: 'POST',
+      match: endsWith('/gatherings/g-1/media/intents'),
+      response: () =>
+        json(422, {
+          detail: [
+            {
+              loc: ['body', 'items'],
+              msg: "this space holds 10,000 photos and has no room left, and you're adding 1",
+              type: 'keeper_space_full',
+            },
+          ],
+        }),
+    },
+  ])
+
+  renderMediaInRouter()
+  await uploadOne()
+
+  // The server's message, unchanged, on the batch-level field.
+  const message = await screen.findByText(
+    /^This space holds 10,000 photos and has no room left, and you're adding 1/,
+  )
+  expect(message.getAttribute('id')).toBe('error-items')
+  // Beneath it, the way to more space — a link to the plan screen.
+  const link = screen.getByRole('link', { name: 'Get more space' })
+  expect(link.getAttribute('href')).toBe('/plan')
+  expect(message.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  // Everything else exactly as before (CK-65.1's line, nothing about the photo).
+  expect(screen.getByText('Nothing was uploaded.')).toBeTruthy()
+  expect(document.body.textContent).not.toContain('fix the photo')
+  expect(calls(mock, 'PUT', () => true)).toHaveLength(0)
+  // The room form too — any keeper form, by its code.
+  cleanup()
+  vi.unstubAllGlobals()
+  stubRoutes([
+    { method: 'GET', match: endsWith('/gatherings/g-1/media'), response: () => json(200, { media: [] }) },
+    {
+      method: 'POST',
+      match: endsWith('/gatherings/g-1/media/intents'),
+      response: () =>
+        json(422, {
+          detail: [
+            {
+              loc: ['body', 'items'],
+              msg: "this space holds 10,000 photos and has room for 2 more, and you're adding 3",
+              type: 'keeper_space_full',
+            },
+          ],
+        }),
+    },
+  ])
+  renderMediaInRouter()
+  await uploadOne()
+  await screen.findByText(/^This space holds 10,000 photos and has room for 2 more/)
+  expect(screen.getByRole('link', { name: 'Get more space' }).getAttribute('href')).toBe('/plan')
+})
+
+test('no link on the non-keeper form, the memorial ceiling or a per-file refusal: the code decides, never the wording', async () => {
+  const refusals: { loc: (string | number)[]; msg: string; type?: string }[][] = [
+    // The non-keeper's withheld form: value_error, as every refusal was until CK-74.
+    [{ loc: ['body', 'items'], msg: "this space is full, so this photo can't be added", type: 'value_error' }],
+    // The memorial ceiling.
+    [
+      {
+        loc: ['body', 'items'],
+        msg: 'a memorial holds up to 5,000 photos, and this one would go past it',
+        type: 'value_error',
+      },
+    ],
+    // A per-file refusal (the server's own type for a validator's ValueError).
+    [
+      {
+        loc: ['body', 'items', 0, 'content_type'],
+        msg: "Value error, video isn't accepted yet — a Live Photo's video half is what this usually is; the still (HEIC or JPEG) can be added",
+        type: 'value_error',
+      },
+    ],
+    // A body with no type at all — the wording alone, however much it says
+    // about room, never earns the link.
+    [{ loc: ['body', 'items'], msg: "this space holds 10,000 photos and has no room left, and you're adding 1" }],
+  ]
+  for (const detail of refusals) {
+    stubRoutes([
+      { method: 'GET', match: endsWith('/gatherings/g-1/media'), response: () => json(200, { media: [] }) },
+      {
+        method: 'POST',
+        match: endsWith('/gatherings/g-1/media/intents'),
+        response: () => json(422, { detail }),
+      },
+    ])
+    renderMediaInRouter()
+    await uploadOne()
+    await screen.findByText(/^Nothing was uploaded/)
+    expect(screen.queryByRole('link', { name: 'Get more space' })).toBeNull()
+    expect(document.body.textContent).not.toContain('Get more space')
+    cleanup()
+    vi.unstubAllGlobals()
+  }
+})

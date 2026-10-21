@@ -101,7 +101,18 @@ The load-bearing pins:
   the 0031 round trip with the CHECK refused on a real row by name; and
   the verifier's ten lines — eight on the shape, the CHECK and the pair
   invariant, two never-stored allowance columns absent — fired by a plant
-  with the CHECK dropped.
+  with the CHECK dropped;
+- CK-74, YOUR PLAN: `GET /billing` carries `used` — `keeping.account_usage`
+  for the CALLER, the gate's own reading: the charged count over the
+  gatherings they keep, a binned and an in-flight photograph counted, a
+  memorial excluded, nothing of a gathering someone else keeps, the same
+  number on the free tier and on a plan, and the other keeper's body
+  carrying THEIR number — and `plans`, the three offers in allowance order
+  with the free tier's price null and the paid prices from
+  `PLAN_MONTHLY_PRICE_CENTS` (499 / 999), one entry per plan in both
+  tables; and the read makes NO Stripe call (the seam's client stubbed to
+  fail if reached, free and paid). The five exact-dict pins gain the two
+  keys, each with its reason.
 """
 
 from __future__ import annotations
@@ -135,12 +146,20 @@ from app.models import (
     BillingCustomer,
     BillingPlan,
     BillingProvider,
+    Media,
+    MediaStatus,
     Person,
+    PublicationState,
     Session,
     Subscription,
 )
 from app.services import billing, keeping
-from app.services.keeping import FREE_TIER_PHOTOGRAPHS, PAID_STATUSES, PLAN_PHOTOGRAPHS
+from app.services.keeping import (
+    FREE_TIER_PHOTOGRAPHS,
+    PAID_STATUSES,
+    PLAN_MONTHLY_PRICE_CENTS,
+    PLAN_PHOTOGRAPHS,
+)
 from tests.conftest import TEST_DATABASE_URL
 from tests.test_destruction import _verifier
 from tests.test_gatherings import _account_for, _create, _signed_in_headers
@@ -155,6 +174,15 @@ KEY_300K = os.environ["STRIPE_PRICE_LOOKUP_300K"]
 DELETE_BODY = {"confirm": "DELETE"}
 CHECKOUT_URL = "https://checkout.stripe.com/c/pay/cs_test_never_logged_1234567890"
 PORTAL_URL = "https://billing.stripe.com/p/session/test_never_logged_0987654321"
+# The plans the screen offers (CK-74), as every GET /billing body carries
+# them whatever the caller holds: the free tier first, then by allowance,
+# the prices the record's (§3) — the literal here, and the table it must
+# equal pinned in its own test below.
+PLANS = [
+    {"plan": None, "allowance": 10_000, "monthly_price_cents": None},
+    {"plan": "photos_100k", "allowance": 100_000, "monthly_price_cents": 499},
+    {"plan": "photos_300k", "allowance": 300_000, "monthly_price_cents": 999},
+]
 # A period end in the pinned shape: a Unix timestamp on the subscription ITEM.
 PERIOD_END = int((datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)).timestamp())
 
@@ -825,7 +853,12 @@ async def test_get_billing_reads_the_free_tier_then_the_plan_and_never_a_stripe_
         "current_period_end": None,
         "ends_at": None,
         "allowance": 10_000,
+        # The pins moved at CK-74: `used` (the caller's own charged count —
+        # zero, the reader keeps nothing) and `plans` (the same three offers
+        # in every body) join the body.
+        "used": 0,
         "scheduled_change": None,
+        "plans": PLANS,
         "next": "checkout",
     }
     async with db_session_factory() as db:
@@ -846,10 +879,15 @@ async def test_get_billing_reads_the_free_tier_then_the_plan_and_never_a_stripe_
         "current_period_end": datetime.fromtimestamp(PERIOD_END, tz=timezone.utc).isoformat(),
         "ends_at": datetime.fromtimestamp(PERIOD_END, tz=timezone.utc).isoformat(),
         "allowance": 300_000,
+        "used": 0,  # the pin moved at CK-74: the caller's own count, and the offers, join the body
         "scheduled_change": None,
+        "plans": PLANS,
         "next": "portal",
     }
     assert "cus_" not in paid.text and "sub_" not in paid.text
+    # The plans carry no Stripe price id either — a QUOTED id, because the
+    # key `monthly_price_cents` contains the prefix and is not one.
+    assert '"price_' not in paid.text and '"prod_' not in paid.text
 
 
 # --- cancellation: cancel_at beside the boolean, ends_at derived (CK-73.1) ----------------
@@ -906,7 +944,9 @@ async def test_a_portal_cancellation_under_endive_is_recognised_through_cancel_a
         "current_period_end": _instant(PERIOD_END).isoformat(),
         "ends_at": _instant(PERIOD_END).isoformat(),
         "allowance": 300_000,
+        "used": 0,  # the pin moved at CK-74: `used` and `plans` join the body
         "scheduled_change": None,  # the pin moved at CK-73.2: the key joins the body, null here
+        "plans": PLANS,
         "next": "portal",
     }
     # Paid until it ends: the allowance reads neither cancellation fact.
@@ -1984,11 +2024,13 @@ async def test_a_portal_downgrade_is_stored_as_two_facts_and_shown_as_a_schedule
         "current_period_end": _instant(PERIOD_END).isoformat(),
         "ends_at": None,
         "allowance": 300_000,
+        "used": 0,  # the pin moved at CK-74: `used` and `plans` join the body
         "scheduled_change": {
             "plan": "photos_100k",
             "allowance": 100_000,
             "at": _instant(NEXT_START).isoformat(),
         },
+        "plans": PLANS,
         "next": "portal",
     }
     assert body["scheduled_change"]["allowance"] == PLAN_PHOTOGRAPHS[BillingPlan.PHOTOS_100K]
@@ -2033,7 +2075,9 @@ async def test_a_portal_downgrade_is_stored_as_two_facts_and_shown_as_a_schedule
         "current_period_end": _instant(NEXT_END).isoformat(),
         "ends_at": None,
         "allowance": 100_000,
+        "used": 0,  # the pin moved at CK-74: `used` and `plans` join the body
         "scheduled_change": None,
+        "plans": PLANS,
         "next": "portal",
     }
     async with db_session_factory() as db:
@@ -2481,3 +2525,161 @@ async def test_the_verifier_asserts_the_scheduled_change_shape_and_its_pair_inva
         )
         await db.commit()
     assert _verifier()[:3] == (271, 0, 0)
+
+
+# --- CK-74: your plan — the caller's own usage and the plans on GET /billing ---------
+
+
+async def _plant_rows(db_session_factory, gathering_id: str, person_id, *, binned: int, in_flight: int) -> None:
+    """`binned` photographs that are `ready` AND `removed` (still stored, so
+    still charged — the bin record §4) and `in_flight` pending uploads (the
+    CK-34 reservation, one each). `photo_count` is the column, planted
+    separately to the number of ready rows (the verifier's invariant)."""
+    now = datetime.now(timezone.utc)
+    async with db_session_factory() as db:
+        for _ in range(binned):
+            db.add(
+                Media(
+                    gathering_id=gathering_id,
+                    uploader_person_id=person_id,
+                    upload_content_type="image/jpeg",
+                    upload_size_bytes=1_000,
+                    status=MediaStatus.READY,
+                    publication_state=PublicationState.REMOVED,
+                    removed_at=now,
+                    created_at=now,
+                    uploaded_at=now,
+                )
+            )
+        for _ in range(in_flight):
+            db.add(
+                Media(
+                    gathering_id=gathering_id,
+                    uploader_person_id=person_id,
+                    upload_content_type="image/jpeg",
+                    upload_size_bytes=1_000,
+                    status=MediaStatus.PENDING_UPLOAD,
+                    publication_state=PublicationState.PENDING,
+                    created_at=now,
+                    uploaded_at=None,
+                )
+            )
+        await db.commit()
+
+
+async def test_used_is_the_callers_own_charged_count_and_appears_in_no_other_body(
+    client, capsys, db_session_factory
+):
+    """`used` is `keeping.account_usage` for the CALLER — the upload gate's
+    own reading, so the number on the screen is the number the gate
+    enforces — and it is the CHARGED count (the bin record §4): photographs
+    in the gatherings the caller keeps, a binned one and an in-flight one
+    among them, a memorial's excluded, and nothing of a gathering someone
+    else keeps. The same number on the free tier and on a plan (the
+    allowance moves, the usage does not), and the caller's own: the other
+    keeper's body carries THEIR count (keeping-explained §3 principle 5)."""
+    address, other = "keeper@example.com", "other@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    headers_other = await _signed_in_headers(client, capsys, other)
+    potluck = await _create(client, headers)
+    memorial = await _create(
+        client, headers, gathering_type="memorial", title="For Edith", memorial_decedent_name="Edith"
+    )
+    theirs = await _create(client, headers_other, title="Theirs")
+    async with db_session_factory() as db:
+        person = (await db.execute(select(Person).where(Person.email == address))).scalars().one()
+        await _set_photo_count(db, memorial["id"], 4_000)  # exempt: counted by nobody
+        await _set_photo_count(db, theirs["id"], 77)  # someone else's space
+    # Two photographs in the bin — ready AND removed, so the column holds 2 —
+    # and three uploads in flight, which the reservation counts one each.
+    await _plant_rows(db_session_factory, potluck["id"], person.id, binned=2, in_flight=3)
+    async with db_session_factory() as db:
+        await _set_photo_count(db, potluck["id"], 2)
+        account = await _account(db, address)
+        assert await keeping.account_bin_count(db, account) == 2
+        expected = await keeping.account_usage(db, account)
+        assert expected == 2 + 3  # charged: the binned two, plus the three in flight
+
+    free = (await client.get("/billing", headers=headers)).json()
+    assert free["used"] == expected == 5
+    assert free["allowance"] == 10_000 and free["plan"] is None
+    assert "4,000" not in json.dumps(free) and "4000" not in json.dumps(free)  # the memorial's count rides nowhere
+    assert "77" not in json.dumps(free)  # and nothing of the other keeper's
+
+    # On a plan the allowance moves and the usage does not.
+    await _plant_customer(db_session_factory, account.id)
+    await _plant_subscription(db_session_factory, account.id, plan=BillingPlan.PHOTOS_100K)
+    paid = (await client.get("/billing", headers=headers)).json()
+    assert paid["used"] == 5 and paid["allowance"] == 100_000 and paid["plan"] == "photos_100k"
+
+    # The other keeper reads their own number — the gathering they keep,
+    # and nothing of this caller's.
+    other_body = (await client.get("/billing", headers=headers_other)).json()
+    async with db_session_factory() as db:
+        other_account = await _account(db, other)
+        assert other_body["used"] == await keeping.account_usage(db, other_account) == 77
+
+
+async def test_plans_are_the_record_table_in_allowance_order_and_the_free_tier_has_no_price(
+    client, capsys, db_session_factory
+):
+    """`plans` is the one table beside the allowances (record §3): three
+    entries ordered by allowance — the free tier with `plan` null and no
+    price, then each paid plan with its allowance from `PLAN_PHOTOGRAPHS`
+    and its monthly price in cents from `PLAN_MONTHLY_PRICE_CENTS` (499 and
+    999) — one entry per plan in both tables, the same list whatever the
+    caller holds, and no Stripe price id in it."""
+    address = "plans@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    body = (await client.get("/billing", headers=headers)).json()
+    assert body["plans"] == PLANS
+    assert [offer["allowance"] for offer in body["plans"]] == sorted(
+        offer["allowance"] for offer in body["plans"]
+    )
+    assert body["plans"][0] == {
+        "plan": None,
+        "allowance": FREE_TIER_PHOTOGRAPHS,
+        "monthly_price_cents": None,
+    }
+    for offer in body["plans"][1:]:
+        plan = BillingPlan(offer["plan"])
+        assert offer["allowance"] == PLAN_PHOTOGRAPHS[plan]
+        assert offer["monthly_price_cents"] == PLAN_MONTHLY_PRICE_CENTS[plan]
+    assert PLAN_MONTHLY_PRICE_CENTS == {BillingPlan.PHOTOS_100K: 499, BillingPlan.PHOTOS_300K: 999}
+    assert set(PLAN_MONTHLY_PRICE_CENTS) == set(PLAN_PHOTOGRAPHS) == set(BillingPlan)
+    assert len(body["plans"]) == len(BillingPlan) + 1
+    # A paid caller reads the same table — the current plan is not dropped
+    # from it; the screen decides what to show.
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    await _plant_subscription(db_session_factory, account.id, plan=BillingPlan.PHOTOS_300K)
+    paid = await client.get("/billing", headers=headers)
+    assert paid.json()["plans"] == PLANS
+    # A QUOTED Stripe id (the key `monthly_price_cents` carries the prefix
+    # and is not one).
+    assert '"price_' not in paid.text and '"prod_' not in paid.text
+
+
+async def test_get_billing_makes_no_stripe_call(client, capsys, db_session_factory, monkeypatch):
+    """The read is local on every path (record §5: the quota path never
+    calls Stripe, and the screen's read inherits that): the seam's one
+    client builder — every SDK call goes through it — is stubbed to fail if
+    reached, and the free and the paid body both come back."""
+
+    def never():  # pragma: no cover — reaching it is the failure
+        raise AssertionError("GET /billing reached the Stripe client")
+
+    monkeypatch.setattr(billing, "client", never)
+    address = "offline@example.com"
+    headers = await _signed_in_headers(client, capsys, address)
+    free = await client.get("/billing", headers=headers)
+    assert free.status_code == 200 and free.json()["plan"] is None
+    assert free.json()["plans"] == PLANS
+    async with db_session_factory() as db:
+        account = await _account(db, address)
+    await _plant_customer(db_session_factory, account.id)
+    await _plant_subscription(db_session_factory, account.id, plan=BillingPlan.PHOTOS_100K)
+    paid = await client.get("/billing", headers=headers)
+    assert paid.status_code == 200 and paid.json()["plan"] == "photos_100k"
+    assert paid.json()["used"] == 0 and paid.json()["plans"] == PLANS

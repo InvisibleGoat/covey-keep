@@ -1,8 +1,9 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { PasskeySection } from '../components/PasskeySection'
 import { authFetch } from '../lib/api'
+import { planLine, readBilling, type Billing } from '../lib/billing'
 import { clearToken } from '../lib/session'
 import { detectTimeZone, groupedTimeZones, timeZoneLabel } from '../lib/timezone'
 import type { Person } from '../auth/context'
@@ -43,8 +44,23 @@ export function Settings() {
   const [emailError, setEmailError] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState('')
   const [deleteState, setDeleteState] = useState<'idle' | 'deleting' | 'failed'>('idle')
+  // Your plan (CK-74): the current allowance and price, read from
+  // GET /billing — the screen keeps no numbers of its own. A failed read
+  // leaves the link alone; the plan screen says the rest.
+  const [billing, setBilling] = useState<Billing | null>(null)
 
   const groups = useMemo(() => groupedTimeZones(person?.timezone), [person?.timezone])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const result = await readBilling()
+      if (!cancelled && result.ok) setBilling(result.billing)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   function edited() {
     // Any edit invalidates a shown success/failure state.
@@ -216,6 +232,18 @@ export function Settings() {
           <p className="form-error">Something went wrong saving your settings. Try again.</p>
         )}
       </form>
+
+      {/* Your plan (CK-74): one line and a link. The usage, the other plans
+          and the acts live on the plan screen; this section only says
+          which plan, and never a usage figure (keeping-explained §3
+          principle 5 — a person's usage is shown on the one screen that is
+          theirs). Above the email section because it is the thing a person
+          is most likely to come here for. */}
+      <section className="auth-card" aria-labelledby="plan-heading">
+        <h2 id="plan-heading">Your plan</h2>
+        {billing && <p className="field-hint">{planLine(billing)}</p>}
+        <Link to="/plan">See your plan</Link>
+      </section>
 
       {/* Email is the credential, not a profile field (CK-9): it changes only
           by proof of control over the new inbox, so this is its own form —

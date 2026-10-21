@@ -177,6 +177,19 @@ PLAN_PHOTOGRAPHS: dict[BillingPlan, int] = {
     BillingPlan.PHOTOS_300K: 300_000,
 }
 
+# What each plan costs a month, in cents (CK-74; record §3 is the price's
+# home: $4.99 and $9.99). STRIPE HOLDS THE REAL PRICE: a Checkout Session is
+# created from the price Stripe finds by lookup key, and Checkout shows that
+# price before anyone pays, so this table can never charge anyone — it is
+# what GET /billing sends the plan screen, which keeps no numbers of its
+# own. The two must agree: a price changed in Stripe needs this table
+# changed in the same phase, or the screen quotes one figure and Checkout
+# another. Never read by the quota path, never by the upload gate.
+PLAN_MONTHLY_PRICE_CENTS: dict[BillingPlan, int] = {
+    BillingPlan.PHOTOS_100K: 499,
+    BillingPlan.PHOTOS_300K: 999,
+}
+
 # The memorial ceiling (keeper record §9.4, decided 2026-08-31 as 5 GB;
 # currency record §8 at 2.4.0): free, permanent, and quota-exempt UP TO
 # 5,000 PHOTOGRAPHS per memorial gathering, revisable UPWARD ONLY —

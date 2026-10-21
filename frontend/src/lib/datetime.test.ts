@@ -5,6 +5,7 @@
 import { expect, test } from 'vitest'
 import {
   effectiveZone,
+  formatDay,
   formatInstantRange,
   instantToWallClock,
   wallClockToInstant,
@@ -85,4 +86,14 @@ test('same-day ranges render the end as a time, cross-day ends carry a date', ()
   expect(sameDay.split(' – ')[1]).not.toMatch(/2026/)
   const nextDayEnd = wallClockToInstant('2026-09-02T01:00', zone)
   expect(formatInstantRange(start, nextDayEnd, zone).split(' – ')[1]).toMatch(/2026/)
+})
+
+test('formatDay names the day an instant falls on in the given zone — short month and day (CK-74)', () => {
+  // A renewal at 02:10 UTC on Nov 12 is the evening of Nov 11 in Pacific
+  // time, and the plan screen must say Nov 11 there — the profile zone,
+  // never the browser's.
+  expect(formatDay('2026-11-12T02:10:00+00:00', 'America/Los_Angeles')).toBe('Nov 11')
+  expect(formatDay('2026-11-12T02:10:00+00:00', 'UTC')).toBe('Nov 12')
+  expect(formatDay('2026-11-12T02:10:00+00:00', 'Pacific/Kiritimati')).toBe('Nov 12')
+  expect(formatDay('2026-11-12T23:30:00+00:00', 'Pacific/Kiritimati')).toBe('Nov 13')
 })

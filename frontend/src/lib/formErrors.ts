@@ -23,10 +23,16 @@ export interface FormErrors {
   fields: Record<string, string>
   // everything that has no visible field to land on
   form: string[]
+  // field key → the 422 entry's `type` beside its message (CK-74): Pydantic's
+  // `value_error` for most, a STABLE CODE where a refusal carries one (the
+  // upload gate's `keeper_space_full`), so a caller can ask which code a
+  // field carried — the one thing a caller may switch on, never the message.
+  // Optional: errors built by hand (a refusal line in `form`) carry none.
+  types?: Record<string, string>
 }
 
 export function noErrors(): FormErrors {
-  return { fields: {}, form: [] }
+  return { fields: {}, form: [], types: {} }
 }
 
 export function hasErrors(errors: FormErrors): boolean {
@@ -36,7 +42,11 @@ export function hasErrors(errors: FormErrors): boolean {
 // For the catch around a fetch: the request never reached the server, which
 // is not a validation outcome.
 export function networkErrors(): FormErrors {
-  return { fields: {}, form: ["Couldn't reach the server. Check your connection and try again."] }
+  return {
+    fields: {},
+    form: ["Couldn't reach the server. Check your connection and try again."],
+    types: {},
+  }
 }
 
 // The id the inline error element carries and the input's aria-describedby
@@ -58,9 +68,16 @@ export function describedBy(
   return errors.fields[field] ? errorId(field, scope) : undefined
 }
 
+// The code a field's error carried (CK-74), or undefined: the way a caller
+// asks "was this the keeper's room refusal?" without reading the message.
+export function errorType(errors: FormErrors, field: string): string | undefined {
+  return errors.types?.[field]
+}
+
 interface ValidationItem {
   loc?: (string | number)[]
   msg?: string
+  type?: string
 }
 
 // "Value error, a memorial requires the decedent's name"
@@ -111,8 +128,12 @@ export async function errorsFromResponse(
     const key = item.loc && item.loc.length > 1 ? fieldKey(item.loc) : ''
     const message = humanize(item.msg)
     if (key && visible.has(key)) {
-      // First message per field wins — one inline line per input.
-      if (!(key in errors.fields)) errors.fields[key] = message
+      // First message per field wins — one inline line per input; its
+      // type rides beside it.
+      if (!(key in errors.fields)) {
+        errors.fields[key] = message
+        if (item.type) (errors.types ??= {})[key] = item.type
+      }
     } else {
       errors.form.push(key ? `${message} (${key})` : message)
     }

@@ -58,7 +58,11 @@ The load-bearing pins:
 - THE REAP deletes a stale pending_upload row and leaves a stale READY
   photograph untouched (retention.py's second invariant — the trap);
 - a presigned URL appears in the response body and nowhere else, on the
-  success path and on a failure path after presigning.
+  success path and on a failure path after presigning;
+- CK-74: the KEEPER's two room forms carry `keeper_space_full` as their
+  422 entry's `type` — the one refusal that may point at more space — with
+  the message byte-identical; the non-keeper form, the memorial ceiling,
+  the keeperless refusal and a per-file refusal keep `value_error`.
 """
 
 import inspect
@@ -1492,5 +1496,76 @@ async def test_a_failure_after_presigning_logs_no_url_and_leaves_no_row(
     for sink in (caplog.text, captured.out, captured.err, response.text):
         assert minted[0] not in sink
         assert signature not in sink
+    async with db_session_factory() as db:
+        assert await _media_count(db) == 0
+
+
+# --- CK-74: the keeper's room form carries a code -------------------------------------
+
+
+async def test_only_the_keepers_room_form_carries_keeper_space_full(
+    client, capsys, db_session_factory, monkeypatch
+):
+    """CK-74 (paid-tiers record §12): the keeper's refusal is the ONE that
+    may point at more space — it is their space — so it carries a STABLE
+    CODE on its 422 entry's `type`, `keeper_space_full`, on both room forms,
+    the message byte-identical to CK-65's; the upload form's link hangs on
+    the code and never on the wording. The non-keeper form, the memorial
+    ceiling, the keeperless refusal and a per-file refusal keep Pydantic's
+    `value_error`: only the keeper may be pointed at more space (CK-50's
+    rule; keeping-explained moment 6 binds the non-keeper form until the
+    offer flow ships)."""
+    monkeypatch.setattr(keeping, "FREE_TIER_PHOTOGRAPHS", 10)
+    monkeypatch.setattr(keeping, "MEMORIAL_CEILING_PHOTOGRAPHS", 1)
+    keeper_addr, cousin_addr = "grandma@example.com", "cousin@example.com"
+    headers_keeper, headers_cousin, created = await _host_and_invitee(
+        client, capsys, keeper_addr, cousin_addr
+    )
+    memorial = await _create(
+        client, headers_keeper, gathering_type="memorial", title="For Edith", memorial_decedent_name="Edith"
+    )
+    async with db_session_factory() as db:
+        await _set_photo_count(db, created["id"], 8)
+    assert media_api.KEEPER_SPACE_FULL == "keeper_space_full"
+
+    def entry(response) -> dict:
+        assert response.status_code == 422, response.text
+        [only] = response.json()["detail"]
+        return only
+
+    # The keeper, with room left: the code, the loc and the exact message.
+    room = entry(await _intents(client, headers_keeper, created["id"], [_item(MB)] * 3))
+    assert room["type"] == media_api.KEEPER_SPACE_FULL
+    assert room["loc"] == ["body", "items"]
+    assert room["msg"] == "this space holds 10 photos and has room for 2 more, and you're adding 3"
+    # The keeper, with no room left: the same code.
+    async with db_session_factory() as db:
+        await _set_photo_count(db, created["id"], 10)
+    full = entry(await _intents(client, headers_keeper, created["id"], [_item(MB)]))
+    assert full["type"] == media_api.KEEPER_SPACE_FULL
+    assert full["msg"] == "this space holds 10 photos and has no room left, and you're adding 1"
+    # The cousin — in the audience, not the keeper — on the same gathering:
+    # the withheld form, and Pydantic's type.
+    cousin = entry(await _intents(client, headers_cousin, created["id"], [_item(MB)]))
+    assert cousin["type"] == "value_error"
+    assert cousin["msg"] == "this space is full, so this photo can't be added"
+    # The memorial ceiling: the keeper's own gathering, and still value_error
+    # — the ceiling is the gathering's, not the keeper's space.
+    ceiling = entry(await _intents(client, headers_keeper, memorial["id"], [_item(MB)] * 2))
+    assert ceiling["type"] == "value_error" and "memorial" in ceiling["msg"]
+    # A per-file refusal (a video): Pydantic's own, untouched.
+    video = entry(
+        await _intents(client, headers_keeper, created["id"], [_item(MB, content_type="video/quicktime")])
+    )
+    assert video["type"] == "value_error" and video["loc"][:2] == ["body", "items"]
+    # The keeperless refusal: value_error on the path loc.
+    async with db_session_factory() as db:
+        await db.execute(
+            update(Gathering).where(Gathering.id == created["id"]).values(keeper_account_id=None)
+        )
+        await db.commit()
+    keeperless = entry(await _intents(client, headers_keeper, created["id"], [_item(MB)]))
+    assert keeperless["type"] == "value_error" and keeperless["loc"] == ["path", "gathering_id"]
+    # Nothing was created on any of them.
     async with db_session_factory() as db:
         assert await _media_count(db) == 0

@@ -304,6 +304,14 @@ export function declaredContentType(file: { name: string; type: string }): strin
 // The 422 keys the intent form renders inline, per chosen file (the batch is
 // refused whole, so every index the caller sent may carry an error) plus the
 // batch-level key the quota, ceiling, and count refusals land on.
+// The ONE stable code the intent's 422 carries (CK-74): the KEEPER's own
+// "no room" refusal — the one that may point at more space, because the
+// space is theirs — in place of Pydantic's `value_error` on its entry's
+// `type`. The upload form's "Get more space" link renders on this code and
+// never on the wording; the non-keeper form, the ceiling and every other
+// refusal carry no code and get no link.
+export const KEEPER_SPACE_FULL = 'keeper_space_full'
+
 export function intentErrorFields(count: number): string[] {
   const fields = ['items']
   for (let index = 0; index < count; index++) {
