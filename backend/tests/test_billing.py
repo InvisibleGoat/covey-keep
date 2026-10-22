@@ -1084,10 +1084,10 @@ async def test_two_concurrent_checkouts_make_one_customer(client, capsys, db_ses
     assert len(await _customer_rows(db_session_factory)) == 1
 
 
-async def test_the_checkout_session_carries_the_mode_the_price_the_account_the_two_urls_and_card_only_and_nothing_else(
+async def test_the_checkout_session_carries_the_mode_the_price_the_account_the_two_urls_card_only_with_link_hidden_and_nothing_else(
     client, capsys, db_session_factory, monkeypatch
 ):
-    # CK-74.1: the dict gains `allowed_payment_method_types: ["card"]` — Link
+    # CK-74.1: the dict gained `allowed_payment_method_types: ["card"]` — Link
     # is off by Steven's decision of 2026-10-21, because Checkout's "Save my
     # information with Link" box comes pre-ticked and adds a phone-number
     # field, and this product makes people opt in themselves. It is the
@@ -1097,7 +1097,24 @@ async def test_the_checkout_session_carries_the_mode_the_price_the_account_the_t
     # while `excluded_payment_method_types` cannot name `link` at all, and
     # `payment_method_types` is not a key of SessionCreateParams. Apple Pay
     # and Google Pay are card wallets, not entries in either list, and stay.
-    # The dict is still exact: "and nothing else" still holds.
+    # CK-74.2: THE FILTER DID NOT HIDE LINK. Check (jh) on the deploy
+    # (2026-10-22) found Cash App Pay, Klarna and Amazon Pay gone — the filter
+    # worked as a filter — and the pre-ticked Link box, its phone-number
+    # field, the Link terms line and the Link wallet button still there:
+    # Checkout's Link is a wallet with a setting of its own, not a payment
+    # method the filter governs. The installed SDK carries that setting —
+    # `SessionCreateParams.wallet_options` → `link` → `display`, literals
+    # `auto` and `never`, "Specifies whether Checkout should display Link as
+    # a payment option" — so the dict gains
+    # `wallet_options: {"link": {"display": "never"}}` beside the filter.
+    # The filter STAYS, as Steven's decision of 2026-10-22 and no longer a
+    # side effect: cards with Apple Pay and Google Pay cover nearly everyone,
+    # the list is fixed in code so sandbox and live match, and bank payments
+    # and buy-now-pay-later add ways for a $4.99 monthly payment to fail
+    # without adding buyers. A parameter's documentation says what a session
+    # ACCEPTS, not what Checkout SHOWS; this test pins what the code sends,
+    # and check (jk) looks at the sandbox. The dict is still exact: "and
+    # nothing else" still holds.
     address = "params@example.com"
     headers = await _signed_in_headers(client, capsys, address)
     _stub_customer_create(monkeypatch, "cus_params")
@@ -1118,6 +1135,7 @@ async def test_the_checkout_session_carries_the_mode_the_price_the_account_the_t
             "success_url": "http://localhost:5173/plan?checkout=complete",
             "cancel_url": "http://localhost:5173/plan?checkout=cancelled",
             "allowed_payment_method_types": ["card"],
+            "wallet_options": {"link": {"display": "never"}},
         }
     ]
     assert "allow_promotion_codes" not in captured[0] and "automatic_tax" not in captured[0]
@@ -1126,6 +1144,10 @@ async def test_the_checkout_session_carries_the_mode_the_price_the_account_the_t
     assert "excluded_payment_method_types" not in captured[0]
     assert "payment_method_configuration" not in captured[0]
     assert "payment_method_types" not in captured[0]
+    # And Link hidden where Checkout actually decides it (CK-74.2): `never`,
+    # not `auto` — the default, under which Checkout shows every wallet the
+    # session supports, Link's pre-ticked box among them.
+    assert captured[0]["wallet_options"]["link"]["display"] == "never"
     # And the other plan asks for the other key.
     asked.clear()
     await client.post("/billing/checkout", json={"plan": "photos_100k"}, headers=headers)

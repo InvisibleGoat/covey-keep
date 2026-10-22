@@ -386,23 +386,50 @@ async def checkout_url(customer_id: str, price_id: str, account_id: UUID) -> str
     (CK-74). No promotion codes and no automatic tax — tax is undecided
     (record §13) and a default here would decide it.
 
-    CARDS ONLY — `allowed_payment_method_types: ["card"]` (CK-74.1). Stripe
-    Link is OFF, by Steven's decision of 2026-10-21: Checkout's "Save my
-    information with Link" box comes pre-ticked, and ticking it adds a
+    CARDS ONLY, AND LINK HIDDEN — two parameters, two decisions (CK-74.1,
+    CK-74.2).
+
+    `allowed_payment_method_types: ["card"]` is Steven's decision of
+    2026-10-22, standing on its own: cards, with Apple Pay and Google Pay
+    riding them, cover nearly everyone; the list is fixed in code, so the
+    sandbox and live match; and for a $4.99 monthly plan, bank payments
+    and buy-now-pay-later add ways for a payment to fail without adding
+    buyers. On the deploy the filter removed Cash App Pay, Klarna and
+    Amazon Pay (check `(jh)`, 2026-10-22; a *Bank* option remained beside
+    *Card*, probably Link's own bank payment — `(jk)` notes whether it is
+    still offered once Link is hidden).
+
+    `wallet_options: {"link": {"display": "never"}}` is what hides Link.
+    CK-74.1 sent the filter alone to turn Link off, and `(jh)` showed the
+    filter leaves Link's pre-ticked "Save my information with Link" box,
+    the phone-number field beneath it, its terms line and its button in
+    the wallet row all in place: Checkout's Link is not a payment method
+    the filter governs but a wallet with a setting of its own — the SDK
+    documents `display` as "Specifies whether Checkout should display Link
+    as a payment option", `auto` (the default: every wallet the session
+    supports) or `never`. Link stays OFF by Steven's decision of
+    2026-10-21: the box comes pre-ticked, and ticking it adds a
     phone-number field and opens a Link account under Stripe's own terms,
     while this product makes people opt in themselves (the notice checkbox
     starts unticked on purpose) — a pre-ticked box is not a choice the
-    product made. It is decided HERE, in code, so the sandbox and the live
-    setup cannot drift: nothing in either Dashboard needs setting for it.
-    Why this key and not the other: the installed SDK (`stripe` 16.0.0,
-    API `2026-09-30.endive`) has no `payment_method_types` on
-    `SessionCreateParams`; `allowed_payment_method_types` is "a filter on
-    the dynamically computed set of eligible payment methods", whose
-    literals include both `card` and `link`, so it can leave Link out;
-    `excluded_payment_method_types` cannot name `link` at all. Apple Pay
-    and Google Pay are wallets that ride `card` — neither list names them —
-    and they stay. The notice's "your card never reaches CoveyKeep" is true
-    either way."""
+    product made. Both are decided HERE, in code, so the sandbox and the
+    live setup cannot drift: nothing in either Dashboard needs setting for
+    them.
+
+    Why the `allowed_` key and not the other, still: the installed SDK
+    (`stripe` 16.0.0, API `2026-09-30.endive`) has no
+    `payment_method_types` on `SessionCreateParams`;
+    `allowed_payment_method_types` is "a filter on the dynamically
+    computed set of eligible payment methods", whose literals include both
+    `card` and `link`; `excluded_payment_method_types` cannot name `link`
+    at all. Apple Pay and Google Pay are wallets that ride `card` — neither
+    list names them — and they stay. The notice's "your card never reaches
+    CoveyKeep" is true either way.
+
+    A parameter's documentation says what a session ACCEPTS, not what
+    Checkout SHOWS: the filter's docstring was quoted at CK-74.1 and Link
+    stayed. Only a look at the sandbox's Checkout page proves a change
+    here, which is why `(jk)` exists."""
     params = {
         "mode": "subscription",
         "customer": customer_id,
@@ -412,6 +439,7 @@ async def checkout_url(customer_id: str, price_id: str, account_id: UUID) -> str
         "success_url": f"{settings.app_base_url}/plan?checkout=complete",
         "cancel_url": f"{settings.app_base_url}/plan?checkout=cancelled",
         "allowed_payment_method_types": ["card"],
+        "wallet_options": {"link": {"display": "never"}},
     }
     return await asyncio.to_thread(_create_checkout_session, params)
 
