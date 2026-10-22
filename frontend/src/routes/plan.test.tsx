@@ -13,6 +13,14 @@
 // the free view only; no Stripe id rendered; and the copy ban over the
 // whole screen in every state — no "safe", "secure", "backed up",
 // "forever", "guarantee", "quota", "storage" or "GB" (keeping-explained §3).
+//
+// CK-74.1 — the screen says only what is true: on a plan that is ending
+// the Free card carries no "cancel in Manage your plan" line (the plan is
+// already cancelled) while the other paid card still offers the portal; a
+// failed read can be retried — Try again re-reads once per press, back
+// through the loading state; and the waiting page carries the heading and
+// the way back to Settings, in the slow state too. The clock pins are
+// unedited.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
@@ -267,7 +275,7 @@ test('Recommended is on the free view only: a person on 300,000 is not recommend
   expectClean()
 })
 
-test('a paid plan ending: Ends on, and both sentences — the free figure from the body', async () => {
+test('a paid plan ending: Ends on, both sentences — the free figure from the body — and no cancel line on the Free card', async () => {
   stubRoutes([
     {
       method: 'GET',
@@ -292,6 +300,19 @@ test('a paid plan ending: Ends on, and both sentences — the free figure from t
     ),
   ).toBeTruthy()
   expect(within(current).queryByText(/Switches to/)).toBeNull()
+  // CK-74.1: the plan is already cancelled, so the Free card says nothing
+  // about cancelling — pinned by the line's absence from the WHOLE card,
+  // not the one sentence — while the other paid card still offers the
+  // portal: on a cancelling plan it still offers Update subscription beside
+  // Don't cancel subscription (seen on the deploy, 2026-10-21).
+  const free = planCard('10,000 photos')
+  expect(within(free).getByText('Free')).toBeTruthy()
+  expect(within(free).queryByText(/To go back to free/)).toBeNull()
+  expect(free.textContent).not.toMatch(/cancel/i)
+  expect(within(free).queryByRole('button')).toBeNull()
+  expect(
+    within(planCard('300,000 photos')).getByRole('button', { name: 'Switch in Manage your plan' }),
+  ).toBeTruthy()
   expectClean()
 })
 
@@ -313,6 +334,11 @@ test('a change scheduled for renewal: the plan names it and its day; absent when
   expect(within(current).getByText('$9.99 a month · Renews on Nov 12')).toBeTruthy()
   expect(within(current).getByText('Switches to 100,000 photos on Nov 12.')).toBeTruthy()
   expect(within(current).queryByText(/You keep this plan/)).toBeNull()
+  // The Free card's line stays on a plan that is not ending (CK-74.1 took
+  // it off the ending state alone; the renewing test pins it there too).
+  expect(
+    within(planCard('10,000 photos')).getByText('To go back to free, cancel in Manage your plan.'),
+  ).toBeTruthy()
   expectClean()
 })
 
@@ -506,7 +532,11 @@ test('the return from Checkout waits, re-reading every 2 s until a paid plan sho
     await vi.advanceTimersByTimeAsync(0)
   })
   expect(screen.getByRole('status').textContent).toContain('Setting up your plan…')
-  expect(screen.queryByRole('heading', { level: 1, name: 'Your plan' })).toBeNull()
+  // CK-74.1: the waiting page carries the heading above the status region
+  // and the way back beneath it — this pin read the heading ABSENT until
+  // then, and moved with the page.
+  expect(screen.getByRole('heading', { level: 1, name: 'Your plan' })).toBeTruthy()
+  expect(screen.getByRole('link', { name: 'Back to settings' }).getAttribute('href')).toBe('/settings')
   expect(calls(mock, 'GET', endsWith('/billing'))).toHaveLength(1)
   expect(screen.queryByRole('alert')).toBeNull()
   expectClean()
@@ -524,6 +554,9 @@ test('the return from Checkout waits, re-reading every 2 s until a paid plan sho
   expect(calls(mock, 'GET', endsWith('/billing'))).toHaveLength(3)
   expect(screen.getByRole('heading', { level: 1, name: 'Your plan' })).toBeTruthy()
   expect(within(currentCard()).getByText('$4.99 a month · Renews on Nov 11')).toBeTruthy()
+  // The wait ended: the status region is gone (the heading alone no longer
+  // tells the two pages apart since CK-74.1).
+  expect(screen.queryByRole('status')).toBeNull()
   expect(screen.queryByText(/Setting up your plan/)).toBeNull()
   // The query string is cleared, so a reload is the ordinary screen.
   expect(screen.getByTestId('location').textContent).toBe('/plan')
@@ -560,6 +593,12 @@ test('a slow webhook is a wait, never an error: 10 s polls and the slow line aft
   )
   expect(screen.getByRole('status').textContent).toContain('Setting up your plan…')
   expect(screen.queryByRole('alert')).toBeNull()
+  // CK-74.1: the heading and the way back stand in the slow state too, and
+  // both outside the status region.
+  expect(screen.getByRole('heading', { level: 1, name: 'Your plan' })).toBeTruthy()
+  expect(screen.getByRole('link', { name: 'Back to settings' }).getAttribute('href')).toBe('/settings')
+  expect(within(screen.getByRole('status')).queryByRole('heading')).toBeNull()
+  expect(within(screen.getByRole('status')).queryByRole('link')).toBeNull()
   await act(async () => {
     await vi.advanceTimersByTimeAsync(9_000)
   })
@@ -592,13 +631,58 @@ test('a cancelled Checkout returns to the ordinary screen with nothing changed a
   expectClean()
 })
 
-test('a failed read says so and offers a way back; the copy ban holds there too', async () => {
-  stubRoutes([{ method: 'GET', match: endsWith('/billing'), response: () => json(500, {}) }])
+test('a failed read says so and can be retried: Try again re-reads once per press, back through the loading state, and a read that succeeds renders the screen', async () => {
+  // CK-74.1: the sentence lost its "Try again." — the button carries it,
+  // and until then there was nothing to press — so the literal pin moved
+  // from the two-sentence line to the one, and the alert is pinned EXACT.
+  const gate: { release?: () => void } = {}
+  const mock = vi.fn(async (url: string, init?: RequestInit) => {
+    if ((init?.method ?? 'GET') !== 'GET' || !String(url).endsWith('/billing')) {
+      throw new Error(`no stub for ${String(url)}`)
+    }
+    const read = mock.mock.calls.length
+    // The second read is held until the test releases it, so the loading
+    // state between the press and the answer can be seen.
+    if (read === 2) {
+      await new Promise<void>((resolve) => {
+        gate.release = resolve
+      })
+    }
+    return read >= 3 ? json(200, body()) : json(500, {})
+  })
+  vi.stubGlobal('fetch', mock)
   renderPlan()
-  expect((await screen.findByRole('alert')).textContent).toContain(
-    'Something went wrong loading your plan. Try again.',
-  )
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent?.trim()).toBe('Something went wrong loading your plan.')
+  expect(screen.getByRole('heading', { level: 1, name: 'Your plan' })).toBeTruthy()
   expect(screen.getByRole('link', { name: 'Back to settings' }).getAttribute('href')).toBe('/settings')
+  expect(mock).toHaveBeenCalledTimes(1)
+  expectClean()
+
+  // One press, one read — through the loading state while it is pending.
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  await waitFor(() => expect(mock).toHaveBeenCalledTimes(2))
+  expect(screen.getByText('Loading your plan…')).toBeTruthy()
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+  await act(async () => {
+    gate.release?.()
+  })
+  // That read failed too: the failed state again, and nothing more read
+  // until the next press.
+  expect((await screen.findByRole('alert')).textContent?.trim()).toBe(
+    'Something went wrong loading your plan.',
+  )
+  expect(mock).toHaveBeenCalledTimes(2)
+  expectClean()
+
+  // A press whose read succeeds renders the screen.
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  await screen.findByRole('region', { name: /current plan/i })
+  expect(within(currentCard()).getByText('1,240 of 10,000 photos')).toBeTruthy()
+  expect(mock).toHaveBeenCalledTimes(3)
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
   expectClean()
 })
 

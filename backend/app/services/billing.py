@@ -382,10 +382,27 @@ async def ensure_customer(db: AsyncSession, account: Account, email: Optional[st
 async def checkout_url(customer_id: str, price_id: str, account_id: UUID) -> str:
     """A Checkout Session to buy ONE plan (record §11): subscription mode,
     one line item, the account id as `client_reference_id` AND as the
-    subscription's metadata, the two return URLs on the frontend (CK-74
-    builds `/plan`; until then the return lands on the app's not-found
-    screen). No promotion codes and no automatic tax — tax is undecided
-    (record §13) and a default here would decide it."""
+    subscription's metadata, the two return URLs on the frontend's `/plan`
+    (CK-74). No promotion codes and no automatic tax — tax is undecided
+    (record §13) and a default here would decide it.
+
+    CARDS ONLY — `allowed_payment_method_types: ["card"]` (CK-74.1). Stripe
+    Link is OFF, by Steven's decision of 2026-10-21: Checkout's "Save my
+    information with Link" box comes pre-ticked, and ticking it adds a
+    phone-number field and opens a Link account under Stripe's own terms,
+    while this product makes people opt in themselves (the notice checkbox
+    starts unticked on purpose) — a pre-ticked box is not a choice the
+    product made. It is decided HERE, in code, so the sandbox and the live
+    setup cannot drift: nothing in either Dashboard needs setting for it.
+    Why this key and not the other: the installed SDK (`stripe` 16.0.0,
+    API `2026-09-30.endive`) has no `payment_method_types` on
+    `SessionCreateParams`; `allowed_payment_method_types` is "a filter on
+    the dynamically computed set of eligible payment methods", whose
+    literals include both `card` and `link`, so it can leave Link out;
+    `excluded_payment_method_types` cannot name `link` at all. Apple Pay
+    and Google Pay are wallets that ride `card` — neither list names them —
+    and they stay. The notice's "your card never reaches CoveyKeep" is true
+    either way."""
     params = {
         "mode": "subscription",
         "customer": customer_id,
@@ -394,6 +411,7 @@ async def checkout_url(customer_id: str, price_id: str, account_id: UUID) -> str
         "subscription_data": {"metadata": {"account_id": str(account_id)}},
         "success_url": f"{settings.app_base_url}/plan?checkout=complete",
         "cancel_url": f"{settings.app_base_url}/plan?checkout=cancelled",
+        "allowed_payment_method_types": ["card"],
     }
     return await asyncio.to_thread(_create_checkout_session, params)
 

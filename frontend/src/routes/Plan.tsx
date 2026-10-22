@@ -22,6 +22,17 @@
 // Built in the app's current styles: the prototype's look belongs to the
 // theming phase, and the honey colour is not registered yet, so nothing
 // here may use it.
+//
+// CK-74.1 — the screen says only what is true. On a plan that is ending
+// the Free card carries no "To go back to free, cancel in Manage your
+// plan." — the plan is already cancelled, and the current card above it
+// says so and what free means — while the other paid card still offers
+// the portal (on a cancelling plan it still offers Update subscription
+// beside Don't cancel subscription; seen on the deploy, 2026-10-21). A
+// failed read can be retried: Try again re-reads GET /billing, back
+// through the loading state. The waiting page carries the heading above
+// its status region and the way back beneath it; leaving stops the
+// polling, and the plan lands anyway when the webhook writes the row.
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
@@ -174,21 +185,28 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
   if (mode === 'waiting') {
     return (
       <main className="auth-screen">
+        <h1>Your plan</h1>
         <section className="plan-wait" role="status">
           <p>{WAITING_LINE}</p>
           {slow && <p className="field-hint">{SLOW_LINE}</p>}
         </section>
+        <Link to="/settings">Back to settings</Link>
       </main>
     )
   }
 
   if (mode === 'failed') {
+    // Try again is the ordinary read over again: back to `loading`, whose
+    // effect re-reads, then the screen or this state once more.
     return (
       <main className="auth-screen">
         <h1>Your plan</h1>
         <p className="form-error" role="alert">
-          Something went wrong loading your plan. Try again.
+          Something went wrong loading your plan.
         </p>
+        <button type="button" onClick={() => setMode('loading')}>
+          Try again
+        </button>
         <Link to="/settings">Back to settings</Link>
       </main>
     )
@@ -281,7 +299,12 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
                     {SWITCH_LABEL}
                   </button>
                 )}
-                {offer.plan === null && <p className="field-hint">{BACK_TO_FREE_LINE}</p>}
+                {/* Not on a plan that is ending: it is already cancelled, and
+                    the current card says so. The other paid card's Switch
+                    stays — the portal still offers it there. */}
+                {offer.plan === null && !ending && (
+                  <p className="field-hint">{BACK_TO_FREE_LINE}</p>
+                )}
                 {refusal?.at === key && (
                   <p className="form-error" role="alert">
                     {refusal.message}

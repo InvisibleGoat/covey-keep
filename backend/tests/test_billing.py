@@ -1084,9 +1084,20 @@ async def test_two_concurrent_checkouts_make_one_customer(client, capsys, db_ses
     assert len(await _customer_rows(db_session_factory)) == 1
 
 
-async def test_the_checkout_session_carries_the_mode_the_price_the_account_and_the_two_urls_and_nothing_else(
+async def test_the_checkout_session_carries_the_mode_the_price_the_account_the_two_urls_and_card_only_and_nothing_else(
     client, capsys, db_session_factory, monkeypatch
 ):
+    # CK-74.1: the dict gains `allowed_payment_method_types: ["card"]` — Link
+    # is off by Steven's decision of 2026-10-21, because Checkout's "Save my
+    # information with Link" box comes pre-ticked and adds a phone-number
+    # field, and this product makes people opt in themselves. It is the
+    # `allowed_` key and not `excluded_`: the installed SDK (stripe 16.0.0,
+    # API 2026-09-30.endive) documents `allowed_payment_method_types` as a
+    # FILTER on the dynamically computed set, with `link` among its literals,
+    # while `excluded_payment_method_types` cannot name `link` at all, and
+    # `payment_method_types` is not a key of SessionCreateParams. Apple Pay
+    # and Google Pay are card wallets, not entries in either list, and stay.
+    # The dict is still exact: "and nothing else" still holds.
     address = "params@example.com"
     headers = await _signed_in_headers(client, capsys, address)
     _stub_customer_create(monkeypatch, "cus_params")
@@ -1106,9 +1117,15 @@ async def test_the_checkout_session_carries_the_mode_the_price_the_account_and_t
             "subscription_data": {"metadata": {"account_id": str(account.id)}},
             "success_url": "http://localhost:5173/plan?checkout=complete",
             "cancel_url": "http://localhost:5173/plan?checkout=cancelled",
+            "allowed_payment_method_types": ["card"],
         }
     ]
     assert "allow_promotion_codes" not in captured[0] and "automatic_tax" not in captured[0]
+    # Cards only, in code: no Link, and no other key that could let it back in.
+    assert "link" not in captured[0]["allowed_payment_method_types"]
+    assert "excluded_payment_method_types" not in captured[0]
+    assert "payment_method_configuration" not in captured[0]
+    assert "payment_method_types" not in captured[0]
     # And the other plan asks for the other key.
     asked.clear()
     await client.post("/billing/checkout", json={"plan": "photos_100k"}, headers=headers)
