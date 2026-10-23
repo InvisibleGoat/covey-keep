@@ -1,5 +1,6 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Route, Routes } from 'react-router-dom'
 import './App.css'
+import { AppUpdateProvider } from './components/AppUpdateProvider'
 import { PwaUpdatePrompt } from './components/PwaUpdatePrompt'
 import { RequireAuth } from './components/RequireAuth'
 import { AccountDeleted } from './routes/AccountDeleted'
@@ -10,6 +11,7 @@ import { GatheringNew } from './routes/GatheringNew'
 import { Gatherings } from './routes/Gatherings'
 import { Home } from './routes/Home'
 import { InvitationAccept } from './routes/InvitationAccept'
+import { PageNotAvailable } from './routes/PageNotAvailable'
 import { Plan } from './routes/Plan'
 import { Settings } from './routes/Settings'
 import { SignIn } from './routes/SignIn'
@@ -17,7 +19,7 @@ import { Tos } from './routes/Tos'
 
 function App() {
   return (
-    <>
+    <AppUpdateProvider>
       <PwaUpdatePrompt />
       <Routes>
         <Route path="/" element={<SignIn />} />
@@ -78,9 +80,15 @@ function App() {
         <Route path="/tos" element={<Tos />} />
         <Route path="/email-change" element={<EmailChangeResult />} />
         <Route path="/account-deleted" element={<AccountDeleted />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        {/* The catch-all NEVER navigates (CK-75.1): it renders a screen and
+            keeps the address — path, query and fragment — exactly as it
+            arrived, asks the service worker for an update, and offers a
+            reload when a newer version is waiting. Until CK-75.1 this was
+            `<Navigate to="/" replace />`, which discarded the address, a
+            fragment-carried token included (CK-75's finding 1). */}
+        <Route path="*" element={<PageNotAvailable />} />
       </Routes>
-    </>
+    </AppUpdateProvider>
   )
 }
 

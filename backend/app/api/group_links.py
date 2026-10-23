@@ -26,8 +26,12 @@ path** — not the token, not a URL carrying it (the presigned-URL
 discipline; pinned with the root at DEBUG). It rides the URL FRAGMENT
 (`${APP_BASE_URL}/groups/join#token=…`), never a query string, and the two
 endpoints that take it are POSTs so it stays out of access logs (CK-25's
-reason). The frontend route does not exist yet (Groups 3), so the URL lands
-on the app's not-found screen until then — the CK-73 `/plan` precedent.
+reason). The frontend route does not exist yet (Groups 3). Since CK-75.1 the
+app's catch-all keeps such an address — path and fragment, the token with
+it — and says the page isn't available, offering a reload when a newer
+bundle is waiting; before CK-75.1 it redirected to `/` and dropped the
+fragment (CK-75's finding 1). What this router knows is only that the route
+does not exist yet, never where the link lands.
 
 THE REQUEST. A person who follows the link signs in through the UNMODIFIED
 path — /auth/verify stays the one place a person, their account and their

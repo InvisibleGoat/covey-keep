@@ -351,6 +351,31 @@
   cursor: pointer;
 }
 
+/* The catch-all's newer-version line (CK-75.1): the update notice's idiom,
+   but static and inline above the heading — the screen it sits on has no
+   primary action for a fixed corner to stay clear of. */
+.newer-version {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #888;
+  border-radius: 0.5rem;
+  background: #fff;
+}
+
+.newer-version p {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.auth-screen .newer-version button {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.9375rem;
+}
+
 /* The words on a photograph (CK-40): tags as text chips, the per-row editor,
    and the search box. A chip is text — never a link. */
 .media-tags {
