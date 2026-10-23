@@ -27,7 +27,7 @@ from app.models import (
 from app.security import hash_token
 from app.services import billing
 from app.services.email import send_email
-from app.services.groups import relinquish_group_admin
+from app.services.groups import lapse_group_roles
 from app.services.keeping import lapse_kept_statuses
 from app.services.retention import purge_stale
 
@@ -384,14 +384,16 @@ async def delete_account(
     # (The accounts row itself is retained: it carries no PII, and the
     # person's gatherings and contributions still reference it.)
     await lapse_kept_statuses(db, person.account_id, now=now)
-    # Group admin is relinquished (CK-45, services/groups.py): a former
-    # member administers nothing — `admin_person_id` and
-    # `backup_admin_person_id` set NULL wherever this person held them, the
-    # backup never promoted; memberships RETAINED, attributed to the
-    # anonymized row like every contribution. A PERSON fact, beside the
-    # account-spine lapse above — the two are keyed on different ids on
-    # purpose.
-    await relinquish_group_admin(db, person.id)
+    # The person's group roles lapse (CK-45, succession since CK-75;
+    # services/groups.py): a former member administers nothing — on each
+    # group this person administered the longest-serving co-admin becomes
+    # the admin, or `admin_person_id` goes NULL where there is none; the
+    # person's co-admin rows and OPEN join requests are deleted; the retired
+    # `backup_admin_person_id` is NULLed wherever held; memberships
+    # RETAINED, attributed to the anonymized row like every contribution. A
+    # PERSON fact, beside the account-spine lapse above — the two are keyed
+    # on different ids on purpose.
+    await lapse_group_roles(db, person.id)
     # The billing rows (CK-73): Stripe's customer is already gone (above),
     # so the ids here name nothing and the rows describe nobody — deleted,
     # not retained (no billing row survives an account's deletion;
@@ -403,6 +405,6 @@ async def delete_account(
     )
 
     # One commit = one transaction: anonymization, auth-material deletion,
-    # the kept-status lapse, the group-admin relinquishment and the
-    # billing rows' deletion land together or not at all.
+    # the kept-status lapse, the group roles' lapse and the billing rows'
+    # deletion land together or not at all.
     await db.commit()

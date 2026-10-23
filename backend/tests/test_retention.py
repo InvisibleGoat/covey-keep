@@ -148,12 +148,19 @@ async def test_purge_stale_refuses_a_content_table_without_a_criterion(db_sessio
     # `media` holds published photographs beside abandoned intents, and age
     # alone cannot tell them apart: a criterion-free purge would delete
     # READY rows. The mechanism refuses BEFORE executing anything. The
-    # allowlist is exactly the four tables whose every row is ephemeral.
+    # allowlist is exactly the seven tables whose every row is ephemeral —
+    # the group's three since CK-75 (the pin moved with its reason): the
+    # emailed invitation and the link keyed off expires_at, the join
+    # request off decided_at, which an open request lacks, so it is never
+    # reaped by age.
     assert EPHEMERAL_TABLES == {
         "magic_link_tokens",
         "email_change_requests",
         "webauthn_challenges",
         "gathering_invitations_pending",
+        "group_invitations_pending",
+        "group_links",
+        "group_join_requests",
     }
     async with db_session_factory() as db:
         with pytest.raises(ValueError, match="not an ephemeral table"):

@@ -5,6 +5,8 @@ from app.api.auth import router as auth_router
 from app.api.billing import router as billing_router
 from app.api.co_hosts import router as co_hosts_router
 from app.api.gatherings import router as gatherings_router
+from app.api.group_invitations import router as group_invitations_router
+from app.api.group_links import router as group_links_router
 from app.api.groups import router as groups_router
 from app.api.invitations import router as invitations_router
 from app.api.media import router as media_router
@@ -35,6 +37,8 @@ app.include_router(invitations_router)
 app.include_router(rsvps_router)
 app.include_router(media_router)
 app.include_router(groups_router)
+app.include_router(group_links_router)
+app.include_router(group_invitations_router)
 app.include_router(co_hosts_router)
 app.include_router(billing_router)
 

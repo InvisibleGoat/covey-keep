@@ -1128,25 +1128,29 @@ async def test_the_verifier_asserts_a_destroying_row_that_spent_an_attempt_and_i
     # predicate, the FKs, and four invariants), so 258; CK-73.1 added
     # three (subscriptions.cancel_at's shape), so 261; CK-73.2 added ten
     # (the scheduled change's two columns, their CHECK, the pair invariant
-    # and two never-stored allowance columns asserted absent), so 271.
+    # and two never-stored allowance columns asserted absent), so 271;
+    # CK-75 added sixty-five (the four group tables' shapes, their CHECKs,
+    # the group invitation's normalization line and five membership
+    # invariants, with CK-45's at-least-one-membership line replaced), so
+    # 336.
     await plant(1, False, None)
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (270, 1, 1), out
+    assert (passed, failed, code) == (335, 1, 1), out
     assert f"FAIL  {label}" in out and "1 destroying media row(s)" in out
 
     # Passes with the reason present — what the release now writes.
     await plant(1, False, ingest.ERROR_CREDENTIAL_REJECTED)
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (271, 0, 0), out
+    assert (passed, failed, code) == (336, 0, 0), out
     assert f"PASS  {label}" in out
 
     # Must NOT fire on a fresh mark (attempts 0, no reason: nothing is
     # wrong with it) ...
     await plant(0, False, None)
-    assert _verifier()[:3] == (271, 0, 0)
+    assert _verifier()[:3] == (336, 0, 0)
     # ... nor on a held row: the claim writes no reason, the outcome will.
     await plant(1, True, None)
-    assert _verifier()[:3] == (271, 0, 0)
+    assert _verifier()[:3] == (336, 0, 0)
 
 
 async def test_a_stalled_destruction_is_reclaimed_and_the_abandoned_attempt_counted(

@@ -135,8 +135,10 @@ BOTH_INDEXES = {"ix_gatherings_keeper_account_id", "ix_groups_keeper_account_id"
 # CK-73.1, adds one nullable column on subscriptions — `cancel_at` — and
 # touches neither; 0031, CK-73.2, adds two nullable columns on
 # subscriptions — `scheduled_plan`, `scheduled_plan_at` — and their CHECK,
-# and touches neither.)
-HEAD = "0031"
+# and touches neither; 0032, CK-75, creates the four group tables and the
+# `join_request_outcome` type and backfills `groups.keeper_account_id`, and
+# touches neither.)
+HEAD = "0032"
 
 
 async def test_0024_round_trip_backfills_the_count_and_the_downgrade_is_genuine(db_session_factory, capsys):

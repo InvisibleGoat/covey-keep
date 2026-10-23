@@ -306,11 +306,15 @@ async def test_deletion_lapses_kept_statuses(client, capsys, db_session_factory)
 async def test_deletion_relinquishes_group_admin_and_retains_memberships(
     client, capsys, db_session_factory
 ):
-    """CK-45: the sixth deletion-path integration. A former member administers
-    nothing — `admin_person_id` and `backup_admin_person_id` are set NULL
-    wherever the deleted person held them (the nullable columns' documented
-    "needs an admin" state, reachable for the first time), the backup admin
-    is NOT promoted, and every `memberships` row is RETAINED, still
+    """CK-45: the sixth deletion-path integration — `services/groups.py::
+    lapse_group_roles` since CK-75 (`relinquish_group_admin` until then,
+    renamed for what it now does). A former member administers nothing:
+    with NO co-admin to promote (succession — the longest-serving co-admin
+    becomes the admin — is pinned in test_group_membership.py),
+    `admin_person_id` is set NULL wherever the deleted person held it (the
+    "needs an admin" state), the retired `backup_admin_person_id` is NULLed
+    too (nothing writes it; the drop is a later phase), and every
+    `memberships` row is RETAINED, still
     attributed to the anonymized person — the retention default: nothing
     cascades from a person. `updated_at` is untouched: a relinquishment is
     not a rename. Since CK-49b the same leg relinquishes the group's KEEPER
@@ -345,14 +349,14 @@ async def test_deletion_relinquishes_group_admin_and_retains_memberships(
                 select(CapabilityProfile).where(CapabilityProfile.name == "household-default")
             )
         ).scalars().one()
-        # The person keeps the group they created — the 0022 backfill's
-        # shape (the creator is the first keeper); the router writes no
-        # keeper yet, so it is set here.
+        # The person keeps the group they created — WRITTEN BY THE ROUTER at
+        # creation since CK-75 (the 0022 backfill's shape: the creator is the
+        # first keeper); until then nothing wrote it and this test set it.
         own = (await db.execute(select(Group).where(Group.id == own_group_id))).scalars().one()
-        own.keeper_account_id = account_id
+        assert own.keeper_account_id == account_id
         # (2) A group someone else administers AND keeps, with the person as
-        # BACKUP admin and a member — constructed directly (nothing sets the
-        # backup column or adds a second member through the API yet).
+        # BACKUP admin and a member — constructed directly (nothing has ever
+        # set the retired backup column; the membership row is planted).
         backed = Group(
             group_type=GroupType.HOUSEHOLD,
             capability_profile_id=profile.id,

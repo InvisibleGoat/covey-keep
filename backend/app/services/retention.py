@@ -19,6 +19,13 @@ the same one-line call and no table grows a private copy. Customers:
   migrated here; same semantics, same grace.
 - `gathering_invitations_pending` (CK-25) — the fourth customer, keyed off
   `expires_at` at the top of the invitation-create endpoint.
+- `group_invitations_pending`, `group_links` and `group_join_requests`
+  (CK-75) — the group's three: the emailed invitation and the link keyed
+  off `expires_at`, the join request off `decided_at` (an open request has
+  none and is never reaped by age), each at the top of the endpoints that
+  write it. The tally arithmetic holds for every one: a decided request is
+  reaped an hour after its decision, and the decision is never before its
+  creation, so every row counted in a window outlives the window.
 - `media` rows still in `pending_upload` (CK-34) — the fifth customer, and
   THE FIRST ROW OF A CONTENT TABLE this mechanism has ever touched. An
   upload intent whose PUT never happened (a cancelled upload, a dropped
@@ -156,6 +163,19 @@ EPHEMERAL_TABLES = frozenset(
         "email_change_requests",
         "webauthn_challenges",
         "gathering_invitations_pending",
+        # CK-75 — the group's three (joining-a-group record §2): an emailed
+        # invitation to a group (keyed off `expires_at`, the CK-25 shape), the
+        # group's link (keyed off `expires_at` — the row carries no token, and
+        # an expired or replaced link has nothing left to say), and a join
+        # request (keyed off `decided_at`: an OPEN request has none and never
+        # expires, so the age test — `NULL < x` is NULL — never selects it;
+        # a decided one is stamped, never deleted by any endpoint, keeps
+        # counting toward the per-group rate limit until the grace is past,
+        # and goes an hour after the decision). Each table is reaped at the
+        # top of the endpoints that write it.
+        "group_invitations_pending",
+        "group_links",
+        "group_join_requests",
     }
 )
 

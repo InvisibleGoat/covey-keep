@@ -389,10 +389,11 @@ class GatheringCoHost(Base):
     HOSTLESS gathering persists and still grants the delegable set
     (co-hosts §7's first item, answered provisionally at CK-68). Not built:
     a co-host removing another co-host (§7's second item, open — the answer
-    built is no), any GROUP's co-hosts (the group-roles phase;
-    `groups.admin_person_id` is untouched), and the managed-profile
-    exclusion (no account kind for a managed profile exists in code, so
-    there is nothing yet to exclude)."""
+    built is no), and the managed-profile exclusion (no account kind for a
+    managed profile exists in code, so there is nothing yet to exclude). A
+    GROUP's co-hosts are its CO-ADMINS — built at CK-75 as a relation of
+    their own in this shape, keyed on the PERSON (`group_co_admins`,
+    models/group.py), with `groups.admin_person_id` keeping its shape."""
 
     __tablename__ = "gathering_co_hosts"
 

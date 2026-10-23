@@ -206,6 +206,23 @@ class BillingPlan(str, Enum):
     PHOTOS_300K = "photos_300k"
 
 
+class JoinRequestOutcome(str, Enum):
+    """How an open request to join a group through its link was decided
+    (CK-75, migration 0032; joining-a-group record §2). Set together with
+    `group_join_requests.decided_at` (the CHECK) and never on an open row:
+    `approved` — by the admin or a co-admin, or by the person's own
+    acceptance of an emailed invitation (then `decided_by_person_id` is
+    NULL); `declined` — by the admin or a co-admin. A decided row is
+    ephemeral and reaped. Design-fixed, so a native enum (database-schema
+    decision 2): a third outcome is a decision record, never a value that
+    grows as data. Made by CREATE TYPE at 0032, so its labels are usable in
+    the migration that creates it (the CK-71 rule) — not that 0032 names
+    one."""
+
+    APPROVED = "approved"
+    DECLINED = "declined"
+
+
 # Single shared sa.Enum instance per Postgres type — several tables reference the
 # same type, and duplicating instances would mean duplicate CREATE TYPE attempts.
 ACCOUNT_KIND = db_enum(AccountKind, "account_kind")
@@ -220,3 +237,4 @@ MEDIA_FAILURE_REASON = db_enum(MediaFailureReason, "media_failure_reason")
 PUBLICATION_STATE = db_enum(PublicationState, "publication_state")
 BILLING_PROVIDER = db_enum(BillingProvider, "billing_provider")
 BILLING_PLAN = db_enum(BillingPlan, "billing_plan")
+JOIN_REQUEST_OUTCOME = db_enum(JoinRequestOutcome, "join_request_outcome")

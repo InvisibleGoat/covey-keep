@@ -22,6 +22,7 @@ from app.models.enums import (
     GatheringType,
     GroupType,
     InvitationChannel,
+    JoinRequestOutcome,
     MediaFailureReason,
     MediaLayer,
     MediaStatus,
@@ -36,7 +37,14 @@ from app.models.gathering import (
     GatheringInvitationPending,
     Occurrence,
 )
-from app.models.group import Group, SubGroup
+from app.models.group import (
+    Group,
+    GroupCoAdmin,
+    GroupInvitationPending,
+    GroupJoinRequest,
+    GroupLink,
+    SubGroup,
+)
 from app.models.household import Household, Person
 from app.models.items import ItemClaim, ItemSlot
 from app.models.media import Media, MediaDerivative, MediaTag
@@ -63,10 +71,15 @@ __all__ = [
     "GatheringInvitationPending",
     "GatheringType",
     "Group",
+    "GroupCoAdmin",
+    "GroupInvitationPending",
+    "GroupJoinRequest",
+    "GroupLink",
     "GroupType",
     "Household",
     "InvitationChannel",
     "ItemClaim",
+    "JoinRequestOutcome",
     "ItemSlot",
     "MagicLinkToken",
     "Media",

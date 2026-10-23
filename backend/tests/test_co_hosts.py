@@ -945,7 +945,10 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
     thirty-nine billing lines, 261 since CK-73.1's three — the shape
     of subscriptions.cancel_at — and 271 since CK-73.2's ten, the
     scheduled change's two columns, their CHECK, the pair invariant and
-    two never-stored allowance columns asserted absent).
+    two never-stored allowance columns asserted absent; and 336 since CK-75's sixty-five — the four group
+    tables' shapes, their CHECKs, the group invitation's normalization
+    line and five membership invariants, with CK-45's
+    at-least-one-membership line replaced).
     A PLANT IS NOT
     EVIDENCE UNTIL SOMETHING
     INDEPENDENT OF THE ASSERTION CONFIRMS THE ROW EXISTS (CK-56's lesson)."""
@@ -955,7 +958,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
         host_account = (await _account_for(db, HOST)).id
 
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (271, 0, 0), out
+    assert (passed, failed, code) == (336, 0, 0), out
     for line in (
         "table gathering_co_hosts exists",
         "gathering_co_hosts primary key is (gathering_id, account_id)",
@@ -983,7 +986,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
         )
         assert planted == 1, "the plant did not land"
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (270, 1, 1), out
+    assert (passed, failed, code) == (335, 1, 1), out
     assert f"FAIL  {exclusive}" in out and "1 co-host row(s) naming the gathering's host" in out
 
     async with db_session_factory() as db:
@@ -992,7 +995,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
             {"g": UUID(cast.gathering_id), "a": host_account},
         )
         await db.commit()
-    assert _verifier()[:3] == (271, 0, 0)
+    assert _verifier()[:3] == (336, 0, 0)
 
 
 async def test_co_host_management_logs_nothing_at_debug(client, capsys, db_session_factory, caplog):

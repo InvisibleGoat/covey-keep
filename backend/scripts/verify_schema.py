@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0031"
+EXPECTED_REVISION = "0032"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -750,19 +750,27 @@ async def verify(conn, ck: Checks) -> None:
             "every group's capability profile is of the group's own type",
             f"{mismatched_profiles} group(s) wearing a profile of another type",
         )
-        # (2) A group never exists with zero members. Its failing write is
-        # real and named: a create path that committed the group before the
-        # membership — the ordering the creation transaction exists to
-        # prevent (creator = admin + first member, one commit).
-        memberless_groups = await scalar(
+        # (2) Every group whose admin is set has a membership for that
+        # admin. REPLACES CK-45's "every group has at least one membership"
+        # at CK-75: an admin who is the only member may now leave, which
+        # legitimately leaves a group with no membership at all (admin
+        # NULL — the archive record §5's abandoned state), so that line
+        # would fail on a correct state. This line still catches the CK-45
+        # failure — a create path that committed the group before its
+        # creator's membership (the ordering the creation transaction
+        # exists to prevent) — and the CK-75 one: a hand-over to someone
+        # who is not a member (the endpoint refuses it with not_a_member).
+        admin_without_membership = await scalar(
             conn,
             "SELECT count(*) FROM groups g "
-            "WHERE NOT EXISTS (SELECT 1 FROM memberships m WHERE m.group_id = g.id)",
+            "WHERE g.admin_person_id IS NOT NULL AND NOT EXISTS ("
+            "SELECT 1 FROM memberships m "
+            "WHERE m.group_id = g.id AND m.person_id = g.admin_person_id)",
         )
         ck.check(
-            memberless_groups == 0,
-            "every group has at least one membership",
-            f"{memberless_groups} group(s) with no membership row",
+            admin_without_membership == 0,
+            "every group whose admin is set has a membership for that admin",
+            f"{admin_without_membership} group(s) whose admin holds no membership row",
         )
         # DELIBERATELY NOT ASSERTED: "every group is HOUSEHOLD." True the
         # instant CK-45 ships and legitimately breakable by the phase that
@@ -772,6 +780,217 @@ async def verify(conn, ck: Checks) -> None:
     else:
         ck.check(
             False, "groups integrity", "groups / memberships / capability_profiles missing"
+        )
+
+    print("\n-- groups: joining, co-admins, the link (0032, CK-75) --")
+    # Four tables (decisions/2026-10-23-joining-a-group-and-co-admins.md §2,
+    # §3, §6): the co-admin relation beside the one admin, keyed on the
+    # PERSON (group administration is a person fact — CK-45 §3); the
+    # emailed invitation to a group, 0011's shape re-targeted — a sibling
+    # table, never a widened target; the group's link, with NO TOKEN COLUMN
+    # (the token is derived from the row's id with the session secret, so a
+    # leaked database yields no working link); and the join request, open
+    # while undecided and ephemeral once decided. Every line is the 0032
+    # shape read back from the catalog — the 0022 idiom. No delete rule on
+    # any FK: nothing cascades from a person or a group (decision 15); the
+    # deletion leg (services/groups.py) removes rows explicitly.
+    ck.check("group_co_admins" in tables, "table group_co_admins exists", "table missing")
+    assert_columns(
+        ck,
+        columns,
+        "group_co_admins",
+        not_null=("group_id", "person_id", "added_by_person_id", "created_at"),
+    )
+    co_admin_pk = await pk_columns(conn, "pk_group_co_admins")
+    ck.check(
+        co_admin_pk == ["group_id", "person_id"],
+        "group_co_admins primary key is (group_id, person_id) — a person co-administers a group once",
+        f"found {co_admin_pk!r}",
+    )
+    for table, column, target, conname in (
+        ("group_co_admins", "group_id", "groups", "fk_group_co_admins_group_id"),
+        ("group_co_admins", "person_id", "people", "fk_group_co_admins_person_id"),
+        ("group_co_admins", "added_by_person_id", "people", "fk_group_co_admins_added_by_person_id"),
+        ("group_invitations_pending", "group_id", "groups", "fk_group_invitations_pending_group_id"),
+        ("group_invitations_pending", "invited_by_person_id", "people", "fk_group_invitations_pending_invited_by_person_id"),
+        ("group_links", "group_id", "groups", "fk_group_links_group_id"),
+        ("group_links", "created_by_person_id", "people", "fk_group_links_created_by_person_id"),
+        ("group_join_requests", "group_id", "groups", "fk_group_join_requests_group_id"),
+        ("group_join_requests", "person_id", "people", "fk_group_join_requests_person_id"),
+        ("group_join_requests", "decided_by_person_id", "people", "fk_group_join_requests_decided_by_person_id"),
+    ):
+        fk = await fk_rule(conn, conname)
+        ck.check(
+            fk is not None and fk[0] == target,
+            f"{table}.{column} references {target}",
+            f"found {fk!r}",
+        )
+        ck.check(
+            fk is not None and fk[1] == "a",
+            f"{table}.{column} has no delete rule (nothing cascades from a person or a group)",
+            f"delete rule is {fk[1] if fk else None!r}",
+        )
+    co_admin_index = await index_shape(conn, "ix_group_co_admins_person_id")
+    ck.check(
+        co_admin_index is not None
+        and co_admin_index[0] == "group_co_admins"
+        and "(person_id)" in co_admin_index[1],
+        "index ix_group_co_admins_person_id exists on group_co_admins.person_id",
+        "index missing" if co_admin_index is None else f"found on {co_admin_index[0]!r}: {co_admin_index[1]}",
+    )
+
+    ck.check(
+        "group_invitations_pending" in tables, "table group_invitations_pending exists", "table missing"
+    )
+    assert_columns(
+        ck,
+        columns,
+        "group_invitations_pending",
+        not_null=("channel", "destination", "token_hash", "expires_at", "invited_by_person_id"),
+        nullable=("consumed_at", "revoked_at"),
+        # The destination lives HERE, ephemerally — never as an email column
+        # anywhere, and never as a pre-created people row (CK-25's rule).
+        absent=("email", "person_id"),
+    )
+    token_hash_unique = await index_shape(conn, "uq_group_invitations_pending_token_hash")
+    ck.check(
+        token_hash_unique is not None and "UNIQUE" in token_hash_unique[1].upper(),
+        "group_invitations_pending.token_hash is UNIQUE",
+        "unique index missing" if token_hash_unique is None else token_hash_unique[1],
+    )
+    live_destination = await index_shape(conn, "uq_group_invitations_pending_live_destination")
+    ck.check(
+        live_destination is not None
+        and "UNIQUE" in live_destination[1].upper()
+        and "consumed_at IS NULL" in live_destination[1]
+        and "revoked_at IS NULL" in live_destination[1],
+        "uq_group_invitations_pending_live_destination is UNIQUE on (group_id, channel, destination) WHERE live",
+        "index missing" if live_destination is None else live_destination[1],
+    )
+
+    ck.check("group_links" in tables, "table group_links exists", "table missing")
+    assert_columns(
+        ck,
+        columns,
+        "group_links",
+        not_null=("group_id", "created_by_person_id", "created_at", "expires_at"),
+        nullable=("revoked_at",),
+        # NO TOKEN COLUMN, EVER (record §2): the token is derived, never
+        # stored, so a leaked database admits nobody.
+        absent=("token", "token_hash"),
+    )
+    live_link = await index_shape(conn, "uq_group_links_live")
+    ck.check(
+        live_link is not None
+        and "UNIQUE" in live_link[1].upper()
+        and "revoked_at IS NULL" in live_link[1],
+        "uq_group_links_live is UNIQUE on (group_id) WHERE revoked_at IS NULL — at most one unrevoked link per group",
+        "index missing" if live_link is None else live_link[1],
+    )
+
+    ck.check("group_join_requests" in tables, "table group_join_requests exists", "table missing")
+    assert_columns(
+        ck,
+        columns,
+        "group_join_requests",
+        not_null=("group_id", "person_id", "created_at"),
+        nullable=("decided_at", "outcome", "decided_by_person_id"),
+    )
+    outcome_labels = await enum_labels(conn, "join_request_outcome")
+    ck.check(
+        outcome_labels == ["approved", "declined"],
+        "join_request_outcome carries exactly 'approved', 'declined'",
+        f"found {outcome_labels!r}",
+    )
+    open_request = await index_shape(conn, "uq_group_join_requests_open")
+    ck.check(
+        open_request is not None
+        and "UNIQUE" in open_request[1].upper()
+        and "decided_at IS NULL" in open_request[1],
+        "uq_group_join_requests_open is UNIQUE on (group_id, person_id) WHERE decided_at IS NULL",
+        "index missing" if open_request is None else open_request[1],
+    )
+
+    print("\n-- group membership integrity (CK-75) --")
+    # Guarded on the TABLES (the CK-43 lesson): at 0031 a query over a
+    # relation that does not exist is a crash, not a FAIL.
+    if {"groups", "memberships", "people", "group_co_admins", "group_join_requests"} <= tables:
+        # (1) EVERY CO-ADMIN IS A MEMBER (record §6): the add names a
+        # membership of the group, and leaving or removal deletes the
+        # co-admin row with the membership. The failing write is a row
+        # planted around the endpoints, or a removal that forgot the row.
+        co_admin_not_member = await scalar(
+            conn,
+            "SELECT count(*) FROM group_co_admins c "
+            "WHERE NOT EXISTS (SELECT 1 FROM memberships m "
+            "WHERE m.group_id = c.group_id AND m.person_id = c.person_id)",
+        )
+        ck.check(
+            co_admin_not_member == 0,
+            "every co-admin holds a membership in the group",
+            f"{co_admin_not_member} co-admin row(s) with no membership",
+        )
+        # (2) ADMIN AND CO-ADMIN ARE EXCLUSIVE: the add refuses the admin
+        # (is_admin), a hand-over deletes the new admin's row, and the
+        # deletion leg deletes the promoted successor's row. The failing
+        # write is a hand-over or a promotion that did not clear the row.
+        admin_as_co_admin = await scalar(
+            conn,
+            "SELECT count(*) FROM group_co_admins c "
+            "JOIN groups g ON g.id = c.group_id "
+            "WHERE g.admin_person_id = c.person_id",
+        )
+        ck.check(
+            admin_as_co_admin == 0,
+            "no co-admin row names its group's own admin (admin and co-admin are exclusive)",
+            f"{admin_as_co_admin} co-admin row(s) naming the group's admin",
+        )
+        # (3) An anonymized person holds no role and no open request: the
+        # deletion leg deletes both in the anonymization transaction, and
+        # the add and the join refuse them afterwards.
+        anonymized_co_admin = await scalar(
+            conn,
+            "SELECT count(*) FROM group_co_admins c "
+            "JOIN people p ON p.id = c.person_id WHERE p.anonymized_at IS NOT NULL",
+        )
+        ck.check(
+            anonymized_co_admin == 0,
+            "no co-admin row names an anonymized person",
+            f"{anonymized_co_admin} co-admin row(s) on a deleted account",
+        )
+        anonymized_request = await scalar(
+            conn,
+            "SELECT count(*) FROM group_join_requests r "
+            "JOIN people p ON p.id = r.person_id "
+            "WHERE r.decided_at IS NULL AND p.anonymized_at IS NOT NULL",
+        )
+        ck.check(
+            anonymized_request == 0,
+            "no open join request names an anonymized person",
+            f"{anonymized_request} open request(s) from a deleted account",
+        )
+        # (4) THE RETIRED BACKUP SLOT IS NULL ON EVERY ROW (record §6): the
+        # co-admin relation replaced it, nothing ever wrote it, it left
+        # every body at CK-75, and the column itself is dropped by a later
+        # contract step — until then this line is what says it is dead.
+        backup_set = await scalar(
+            conn, "SELECT count(*) FROM groups WHERE backup_admin_person_id IS NOT NULL"
+        )
+        ck.check(
+            backup_set == 0,
+            "groups.backup_admin_person_id is NULL on every row (retired at CK-75; dropped later)",
+            f"{backup_set} group(s) with a backup admin set",
+        )
+        # DELIBERATELY NOT ASSERTED: "every group's keeper is its admin's
+        # account." True of every group created through the API until the
+        # first hand-over, and false the moment one happens — the keeper
+        # does not move with the role (record §7). The backfill's count is
+        # on 0032's INFO line, and check (jl) reads it once.
+    else:
+        ck.check(
+            False,
+            "group membership integrity",
+            "groups / memberships / people / group_co_admins / group_join_requests missing",
         )
 
     print("\n-- the keeper shape (0022, CK-49a; the truth since CK-49b; alone since 0023) --")
@@ -882,6 +1101,10 @@ async def verify(conn, ck: Checks) -> None:
         "ck_gatherings_memorial_decedent_name",
         "ck_gathering_invitations_exactly_one_target",
         "ck_gathering_invitations_pending_consumed_or_revoked",
+        # CK-75 (0032): the group invitation's state machine, and the join
+        # request's decided-means-both.
+        "ck_group_invitations_pending_consumed_or_revoked",
+        "ck_group_join_requests_decided_with_outcome",
     ):
         ck.check(name in check_constraints, f"CHECK {name} exists", "constraint missing")
 
@@ -1864,7 +2087,22 @@ async def verify(conn, ck: Checks) -> None:
     else:
         ck.check(False, "media words integrity", "media/media_tags missing")
 
-    print("\n-- pending invitation integrity (CK-25) --")
+    print("\n-- pending invitation integrity (CK-25; the group's since CK-75) --")
+    if "group_invitations_pending" in tables:
+        # The same property on the group table (0032): an EMAIL destination
+        # stored normalized; a count only, never an address.
+        group_unnormalized = await scalar(
+            conn,
+            "SELECT count(*) FROM group_invitations_pending "
+            "WHERE channel = 'EMAIL' AND destination <> lower(btrim(destination))",
+        )
+        ck.check(
+            group_unnormalized == 0,
+            "every EMAIL group-invitation destination is stored normalized",
+            f"{group_unnormalized} pending row(s) with an unnormalized destination",
+        )
+    else:
+        ck.check(False, "group invitation integrity", "group_invitations_pending missing")
     if "gathering_invitations_pending" in tables:
         # An EMAIL destination is stored normalized (trimmed + lowercased) by
         # the API validator — a row that isn't means something wrote around
@@ -2156,6 +2394,11 @@ async def verify(conn, ck: Checks) -> None:
         "groups",
         "memberships",
         "gathering_co_hosts",
+        # `group_co_admins` joins at CK-75 (0032): a count is the baseline to
+        # record — zero on the deploy until (jp) makes the first co-admin.
+        # The three reaped group tables deliberately do NOT join: a count of
+        # an ephemeral table flaps on an idle database (the CK-24 rule).
+        "group_co_admins",
         "billing_customers",
         "subscriptions",
     ):

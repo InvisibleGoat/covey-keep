@@ -10,7 +10,9 @@ refusal is a field-level 422 naming rung 2 that leaves no row; a missing
 profile row fails loudly and creates nothing; non-permitted access is a 404
 byte-identical to a missing id; updated_at is NULL until the first rename
 and stamped by renames alone; the list is ONE statement; no body carries a
-roster, an email, or a person id beyond the two admin columns; and the
+roster, an email, or a person id beyond the admin column (since CK-75 the
+retired `backup_admin_person_id` is in no body and `caller_role` rides every
+one — the membership half is tests/test_group_membership.py); and the
 router logs no name.
 """
 
@@ -30,8 +32,11 @@ BODY_KEYS = {
     "name",
     "group_type",
     "admin_person_id",
-    "backup_admin_person_id",
+    # CK-75: `backup_admin_person_id` left every body (retired by the
+    # co-admin relation; the column stays until a later contract step) and
+    # `caller_role` joined (`admin` | `co_admin` | `member`).
     "member_count",
+    "caller_role",
     "created_at",
     "updated_at",
 }
@@ -97,13 +102,15 @@ async def test_create_births_group_admin_and_first_member_together(
     created = response.json()
 
     # The body: exactly the eight fields — no roster, no email, no person id
-    # beyond the two admin columns — and the name trimmed.
+    # beyond the admin column — and the name trimmed. (Moved at CK-75: the
+    # retired backup column is in no body, and the creator's role rides it.)
     assert set(created) == BODY_KEYS
     assert created["name"] == "Finch family"
     assert created["group_type"] == "HOUSEHOLD"
     assert created["member_count"] == 1
     assert created["updated_at"] is None
-    assert created["backup_admin_person_id"] is None
+    assert "backup_admin_person_id" not in created
+    assert created["caller_role"] == "admin"
     assert address not in response.text
 
     async with db_session_factory() as db:
@@ -371,7 +378,7 @@ async def test_rename_stamps_updated_at_and_only_a_rename_stamps_it(
         assert group.updated_at == second_stamp
 
 
-async def test_rename_is_the_admins_alone_and_the_refusal_is_the_group_404(
+async def test_rename_is_refused_to_an_ordinary_member_with_the_group_404(
     client, capsys, db_session_factory
 ):
     address_admin = "admin@example.com"
@@ -381,8 +388,11 @@ async def test_rename_is_the_admins_alone_and_the_refusal_is_the_group_404(
     headers_stranger = await _signed_in_headers(client, capsys, "stranger@example.com")
     created = await _create(client, headers_admin)
     group_id = created["id"]
-    # A member who is not the admin — constructed directly (membership of
-    # anyone but the creator has no surface yet).
+    # A member who is not the admin — a planted membership row (the shape
+    # both ways in write since CK-75). Renaming is DELEGABLE since CK-75 —
+    # a co-admin's rename is pinned in test_group_membership.py — and an
+    # ORDINARY member is still refused, which is what this test pins
+    # (renamed at CK-75 from "the admin's alone", with this reason).
     async with db_session_factory() as db:
         db.add(Membership(group_id=created["id"], person_id=await _person_id(db, address_member)))
         await db.commit()
