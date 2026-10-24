@@ -1,7 +1,8 @@
 """CK-49a — the keeper shape; CK-49b — the cutover onto it; CK-49c — the
 only representation left.
 
-Migration 0022 (CK-49a) added `gatherings.owning_group_id` (no writer),
+Migration 0022 (CK-49a) added `gatherings.owning_group_id` (no writer until
+CK-76),
 `groups.keeper_account_id` and `gatherings.keeper_account_id`, backfilled the
 two keeper columns once from the old kept relation, and added the CHECK that
 keeps a group gathering's keeper out of its own row; `services/keeping.py`
@@ -20,7 +21,9 @@ is set is fully visible to its keeper through the keeper rung ALONE; the
 SQL form of the ladder agrees with the Python
 resolver on every legal shape and correlates correctly with a `Gathering`
 in the outer FROM; and a gathering that belongs to a group (constructed —
-`owning_group_id` still has no writer) is seen, listed and counted by the
+written here by hand; the API's write path is CK-76's and pinned in
+tests/test_group_gatherings.py, this subject kept so the pin stays on the
+resolver alone) is seen, listed and counted by the
 group's keeper and by nobody through its own NULL column.
 """
 
@@ -419,9 +422,12 @@ async def test_the_sql_ladder_agrees_with_the_resolver_on_every_legal_shape(
 async def test_a_group_gathering_is_seen_listed_and_counted_by_the_groups_keeper(
     client, capsys, db_session_factory
 ):
-    # The resolver's first rung, live for the first time — against a
-    # constructed subject, because `owning_group_id` still has no writer
-    # (Arc B's). A gathering created through the API is moved into a group
+    # The resolver's first rung, live for the first time (at CK-49b) —
+    # against a constructed subject, because `owning_group_id` had no
+    # writer until CK-76 (the API-created shape is pinned in
+    # tests/test_group_gatherings.py; this one stays so the pin is on the
+    # resolver and not the create path). A gathering created through the
+    # API is moved into a group
     # whose keeper is a second account, its own keeper column NULLed (the
     # CHECK insists) and its host NULLed so nothing but the group rung can
     # admit anyone: the group's keeper reads it, lists it and is charged

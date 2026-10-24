@@ -90,6 +90,7 @@ from app.models import (
 )
 from app.security import hash_token
 from app.services.email import send_email
+from app.services.groups import invite_newcomer_to_upcoming_gatherings
 from app.services.retention import purge_stale
 
 router = APIRouter(prefix="", tags=["group-invitations"])
@@ -364,6 +365,15 @@ async def accept_group_invitation(
     member = await _is_member(db, group_id, ctx.person.id)
     if not member:
         db.add(Membership(group_id=group_id, person_id=ctx.person.id))
+        # THE NEWCOMER'S PLACES (CK-76; the 2026-10-04 record §9): a row on
+        # each of the group's UPCOMING gatherings they hold none for,
+        # `invited_by_person_id` NULL — the group's rule invited them — in
+        # the transaction that writes the membership. Past gatherings are
+        # never written. The one helper both admission paths call
+        # (api/group_links.py's approve is the other).
+        await invite_newcomer_to_upcoming_gatherings(
+            db, group_id=group_id, person_id=ctx.person.id, now=now
+        )
     # The acceptance decides any open request of theirs: approved, by nobody.
     await db.execute(
         update(GroupJoinRequest)
@@ -378,8 +388,9 @@ async def accept_group_invitation(
         await db.commit()
     except IntegrityError:
         # Two accepts for the same (group, person) racing — or an approval
-        # landing meanwhile: the membership exists, so consume the token in
-        # a fresh transaction and report the idempotent outcome.
+        # landing meanwhile: the membership exists (and whichever path
+        # wrote it wrote the newcomer's places), so consume the token in a
+        # fresh transaction and report the idempotent outcome.
         await db.rollback()
         fresh = await db.get(GroupInvitationPending, row.id)
         if fresh is not None and fresh.consumed_at is None and fresh.revoked_at is None:

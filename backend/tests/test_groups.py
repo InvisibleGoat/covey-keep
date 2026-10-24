@@ -122,7 +122,13 @@ async def test_create_births_group_admin_and_first_member_together(
         # Creator = admin, on the PERSON spine.
         assert group.admin_person_id == person_id
         assert created["admin_person_id"] == str(person_id)
-        assert group.backup_admin_person_id is None
+        # The retired backup column: NULL in the database, and UNMAPPED since
+        # CK-76 — read by raw SQL, never through the model.
+        assert (
+            await db.scalar(
+                text("SELECT backup_admin_person_id FROM groups WHERE id = :g"), {"g": group.id}
+            )
+        ) is None
         assert group.organization_id is None
         assert group.group_type == GroupType.HOUSEHOLD
         # The profile resolved by lookup, of the group's own type.

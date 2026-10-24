@@ -477,7 +477,7 @@ from app.api.deps import AuthContext, get_auth_context, get_db
 from app.api.gatherings import (
     _field_422,
     _gathering_for_read,
-    _host_kind,
+    _home_facts,
     administers_gathering,
     is_host,
 )
@@ -2321,11 +2321,15 @@ async def _gate_destination(db: AsyncSession, gathering: Gathering) -> dict:
     (CK-63) and the co-host's (CK-68) shared answer: the gate, resolved
     NOW — at restore time, never from what the row was before it was
     removed, never from a parameter (CK-41's rule applied to the second act
-    that publishes). The gathering's own setting and the host account's
-    kind are read exactly as the worker's publish step reads them."""
+    that publishes). The gathering's own setting, the host account's kind
+    and — since CK-76 — the home group's template (rung 3) are read exactly
+    as the worker's publish step reads them, through the gatherings
+    router's one facts read."""
+    facts = await _home_facts(db, gathering)
     gate = publication.resolve_gathering(
         host_setting=gathering.requires_approval,
-        host_kind=await _host_kind(db, gathering),
+        host_kind=facts.host_kind,
+        template_default=facts.template_default,
     )
     if gate.requires_approval:
         # Back to the host's queue, both stamps cleared: a pending row

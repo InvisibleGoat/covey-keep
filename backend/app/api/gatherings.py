@@ -6,6 +6,32 @@ occurrences, and the creator written as its keeper are born TOGETHER
 never exist with zero keepers, not even transiently within the request, so
 creation routes through services/keeping.py::keep and commits once.
 
+A GATHERING IN A GROUP (CK-76 — the belongs-to link,
+decisions/2026-09-02-groups-as-homes.md §3; decisions/2026-10-23-joining-a-
+group-and-co-admins.md §4; decisions/2026-10-04-a-groups-gathering-stays-in-
+the-group.md §4, §9): `POST /gatherings` with a `group_id` — the caller a
+MEMBER of that group (the person spine, `member_of`; anyone else draws the
+group's 404 byte-identical to a missing group) and the group a HOUSEHOLD
+(any other type a field-level 422 at `group_id`, the rung-2 gate's shape) —
+writes `owning_group_id`, NO keeper of the gathering's own (the CHECK
+forbids both, and `keep()` does not run: the group's keeper answers,
+through services/keeping.py's resolver, from the first row), the caller as
+creator and host, its occurrences, AND one person-targeted
+`gathering_invitations` row for every other member whose person is not
+anonymized, `invited_by_person_id` the creator — all in the one
+transaction (services/groups.py::invite_group_members). EVERY MEMBER'S
+PLACE IS A ROW, never computed from membership at read time (the archive
+record §6.1: removing someone from the group must never silently revoke
+their gatherings); a newcomer's rows for the group's UPCOMING gatherings
+are written when they join (services/groups.py, called by the two
+admission paths). In this phase every member's place is INVITED; the
+host's choice — shared with, left out — is CK-77's. A group gathering never
+moves between groups and never gains a group after creation (the archive
+record §9; `GatheringPatch` forbids the field). It is MEMBERS ONLY until
+sharing outside the group ships: api/invitations.py refuses an emailed
+invitation to it with a 409 `members_only`. Every gathering body carries
+`group` — `{"id", "name"}` or null.
+
 Authorization, applied uniformly: mutations require the caller to ORGANISE
 the gathering — the host (`host_account_id`, the admin column renamed at
 CK-28 ahead of co-hosts) OR, since CK-68, a co-host: a row in
@@ -23,6 +49,13 @@ the read audience), OR host. The checks are written against the
 keeper/host/invitation facts, never "is creator" — a creator-shaped check
 would already be wrong now that invitees read. Non-permitted access is a
 404, never a 403: the existence of a gathering is not public information.
+THE LIST IS THE READ AUDIENCE SINCE CK-76 — kept OR invited OR host OR
+co-host, still ONE statement: until then it listed kept-or-invited and not
+what the caller HOSTS (the gap CK-68 recorded), which a group gathering made
+real — its creator is neither its keeper (the group's is) nor an invitee,
+so every member who created one without keeping the group lost it from
+their own list. `GET /groups/{id}/gatherings` is the same statement over
+one group's gatherings, for the group's members.
 
 The publication gate (CK-41; decisions/2026-09-09-consent-gate-defaults.md
 2.0.0): `requires_approval` is RESOLVED, never set. Creation writes nothing
@@ -71,6 +104,7 @@ in the request body. Blank is NOT a clear: `""` keeps its field-level 422
 (decisions/2026-08-27-optional-field-clearing.md).
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlsplit
@@ -82,19 +116,24 @@ from sqlalchemy import case, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, get_auth_context, get_db
+from app.api.groups import _group_for_read, _not_found as _group_not_found, member_of
 from app.models import (
     Account,
     AccountKind,
+    CapabilityProfile,
     Gathering,
     GatheringCoHost,
     GatheringInvitation,
     GatheringType,
+    Group,
+    GroupType,
     Occurrence,
     PublicationState,
     RSVP,
     RSVPListVisibility,
 )
 from app.services import publication
+from app.services.groups import invite_group_members
 from app.services.keeping import keep, keeps_gathering, resolved_keeper_of
 
 router = APIRouter(prefix="", tags=["gatherings"])
@@ -126,6 +165,18 @@ CONFIRMATION_REQUIRED = "confirmation_required"
 # api/co_hosts.py's, readable by the host and the co-hosts alone.
 ROLE_HOST = "host"
 ROLE_CO_HOST = "co_host"
+
+# One message for a gathering created in a group of a refused type — the
+# groups router's own gate (api/groups.py::GROUP_TYPE_GATE_MESSAGE) in the
+# gathering's words: it names the gate rather than the type, so a reader
+# learns what would have to exist first. Unreachable today — every group is
+# a HOUSEHOLD, because the group create refuses the other three — and kept
+# so the rule is written where the rows are, not remembered.
+GROUP_GATHERING_TYPE_GATE_MESSAGE = (
+    "a gathering can belong to a HOUSEHOLD group only — TEAM, CONGREGATION and "
+    "CLUB groups wait for the home group's publication default (rung 2 of the "
+    "publication ladder)"
+)
 
 
 def _not_found() -> HTTPException:
@@ -257,6 +308,13 @@ class GatheringCreate(BaseModel):
     # would otherwise catch as an IntegrityError-turned-500.
     memorial_decedent_name: Optional[str] = Field(default=None, validate_default=True)
     occurrences: list[OccurrenceIn] = Field(min_length=1)
+    # The belongs-to link (CK-76): the group this gathering is created IN,
+    # or absent for a standalone gathering — creation then is exactly what
+    # it was. The membership and the HOUSEHOLD checks need the database and
+    # live in the endpoint; this field is only the id. Set ONCE, here: a
+    # gathering never gains a group later and never moves between groups
+    # (`GatheringPatch` forbids the field — the archive record §9).
+    group_id: Optional[UUID] = None
 
     @field_validator("title")
     @classmethod
@@ -300,7 +358,11 @@ class GatheringPatch(BaseModel):
     # later phase's surface. `requires_approval` — the EFFECTIVE value the
     # body carries — is deliberately NOT here: it is resolved, never
     # written, and a second writable representation of the gate is the
-    # defect class database-schema decision 20 exists to prevent.
+    # defect class database-schema decision 20 exists to prevent. Nor is
+    # `group_id` (CK-76): a gathering never moves between groups and never
+    # gains one after creation — the archive record §9, a consent reason
+    # (a move would change the default it inherits at rung 2) — so the
+    # field draws the unknown-field 422 here, pinned.
     #
     # `requires_approval_override` (CK-44; consent-gate-defaults §10.3, §5)
     # is rung 1 of the publication ladder — the host's own choice, the one
@@ -430,19 +492,68 @@ def _occurrence_body(occurrence: Occurrence) -> dict:
     }
 
 
-async def _host_kind(db: AsyncSession, gathering: Gathering) -> Optional[AccountKind]:
-    """The host account's kind — the publication ladder's backstop fact.
-    None for a hostless (claimable) gathering."""
-    if gathering.host_account_id is None:
-        return None
-    return await db.scalar(select(Account.kind).where(Account.id == gathering.host_account_id))
+@dataclass(frozen=True)
+class HomeFacts:
+    """The three facts a gathering body needs beyond its own row, read
+    together (CK-76): the host account's kind — the publication ladder's
+    backstop fact, None for a hostless (claimable) gathering; the home
+    group as the body carries it — `{"id", "name"}`, or None for a
+    standalone gathering; and the home group's TEMPLATE —
+    `capability_profiles.requires_approval` through
+    `groups.capability_profile_id`, rung 3 of the ladder, None where there
+    is no group so the rung is passed over exactly as before."""
+
+    host_kind: Optional[AccountKind]
+    group: Optional[dict]
+    template_default: Optional[bool]
+
+
+def _group_ref(group_id: Optional[UUID], name: Optional[str]) -> Optional[dict]:
+    """`group` on every gathering body: the home group's id and name, or
+    null — the two facts a member already reads on the group itself, and
+    nothing else about it (never its keeper, its admin or its roster)."""
+    return {"id": str(group_id), "name": name} if group_id is not None else None
+
+
+def _home_joins(statement):
+    """The outer joins every body's facts ride — to `accounts` for the
+    host's kind (CK-41), to `groups` for the home group and to
+    `capability_profiles` for its template (CK-76) — added to a statement
+    whose FROM already has `Gathering`. One shape, three callers: the
+    per-row read below, the list's one statement, and (in its own words)
+    the worker's step-4 gate read."""
+    return (
+        statement.outerjoin(Account, Account.id == Gathering.host_account_id)
+        .outerjoin(Group, Group.id == Gathering.owning_group_id)
+        .outerjoin(CapabilityProfile, CapabilityProfile.id == Group.capability_profile_id)
+    )
+
+
+async def _home_facts(db: AsyncSession, gathering: Gathering) -> HomeFacts:
+    """The three facts for one loaded row, in ONE statement (until CK-76
+    this was `_host_kind`, one fact in one statement; the group and its
+    template ride the same read now). api/media.py's restore reads the
+    gate's two facts through this too, so the three places the ladder is
+    asked read the same joins."""
+    host_kind, group_id, group_name, template = (
+        await db.execute(
+            _home_joins(
+                select(
+                    Account.kind, Group.id, Group.name, CapabilityProfile.requires_approval
+                ).select_from(Gathering)
+            ).where(Gathering.id == gathering.id)
+        )
+    ).one()
+    return HomeFacts(
+        host_kind=host_kind, group=_group_ref(group_id, group_name), template_default=template
+    )
 
 
 def _gathering_body(
     gathering: Gathering,
     occurrences: Optional[list[Occurrence]] = None,
     *,
-    host_kind: Optional[AccountKind],
+    facts: HomeFacts,
     caller_role: Optional[str],
 ) -> dict:
     # The gate, resolved for this body (CK-41): `requires_approval` is the
@@ -451,16 +562,22 @@ def _gathering_body(
     # `requires_approval_override` is the host's own setting, null when
     # inherited — the switch CK-44 renders (two-state at the surface: it
     # writes true and null; false is accepted and produced by nothing until
-    # rung 2 exists). The resolver's `source` is deliberately NOT exposed:
-    # CK-44's accuracy statement turned out not to need it — what the
-    # turning-off path has to state is what INHERIT resolves to, which the
-    # source does not say when the source is HOST — and it needed nothing
-    # today, because every gathering the switch can render on (a person's,
-    # groupless, privately joined) inherits open. The trigger for exposing
-    # the inherited answer here is the share link or rung 2, whichever
-    # arrives first (consent-gate-defaults 2.3.0 §8).
+    # rung 2 exists). Since CK-76 the home group's template is a fact too
+    # (rung 3): a household group's gathering resolves open from TEMPLATE
+    # where a groupless one resolves open from JOIN_SHAPE — the same
+    # answer, one rung higher. The resolver's `source` is deliberately NOT
+    # exposed: CK-44's accuracy statement turned out not to need it — what
+    # the turning-off path has to state is what INHERIT resolves to, which
+    # the source does not say when the source is HOST — and it needed
+    # nothing today, because every gathering the switch can render on (a
+    # person's, privately joined, groupless or in a household group)
+    # inherits open. The trigger for exposing the inherited answer here is
+    # the share link or rung 2, whichever arrives first
+    # (consent-gate-defaults 2.3.0 §8).
     gate = publication.resolve_gathering(
-        host_setting=gathering.requires_approval, host_kind=host_kind
+        host_setting=gathering.requires_approval,
+        host_kind=facts.host_kind,
+        template_default=facts.template_default,
     )
     body = {
         "id": str(gathering.id),
@@ -475,6 +592,11 @@ def _gathering_body(
         "host_account_id": (
             str(gathering.host_account_id) if gathering.host_account_id else None
         ),
+        # The home group (CK-76): `{"id", "name"}` for a gathering that
+        # belongs to a group, else null — on create, detail, list and
+        # patch alike. The id and the name are what every member already
+        # reads on the group; nothing else about the group rides here.
+        "group": facts.group,
         # What the caller IS to this gathering (CK-68): `host`, `co_host`,
         # or null — a fact about the caller, decided by `is_host` and the
         # co-host row, never re-derived by a consumer from the ids above
@@ -491,7 +613,7 @@ def _gathering_body(
 
 def _list_item(
     gathering: Gathering,
-    host_kind: Optional[AccountKind],
+    facts: HomeFacts,
     occurrence_id: Optional[UUID],
     starts_at: Optional[datetime],
     occurrence_count: Optional[int],
@@ -500,10 +622,11 @@ def _list_item(
     """A GET /gatherings item: the gathering body plus the occurrence summary.
     The LIST's own shape, deliberately — the detail body carries full
     occurrences, and overloading one builder with both would couple the two
-    surfaces (CK-20). The host's kind rides the list's one statement, and so
-    does the caller's co-host fact (CK-68): the role is computed from the
-    row and that one boolean, never from a second query."""
-    item = _gathering_body(gathering, host_kind=host_kind, caller_role=caller_role)
+    surfaces (CK-20). The host's kind, the home group and its template ride
+    the list's one statement, and so does the caller's co-host fact (CK-68):
+    the role is computed from the row and that one boolean, never from a
+    second query."""
+    item = _gathering_body(gathering, facts=facts, caller_role=caller_role)
     item["next_occurrence"] = (
         {"id": str(occurrence_id), "starts_at": starts_at.isoformat()}
         if occurrence_id is not None and starts_at is not None
@@ -746,14 +869,57 @@ async def create_gathering(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """One transaction, and the ordering is the point: the gathering, its
-    occurrences, and the creator's kept row land together or not at all — a
-    gathering must never exist with zero keepers, even transiently."""
+    occurrences, and the creator's keeping land together or not at all — a
+    gathering must never exist with zero keepers, even transiently.
+
+    IN A GROUP (CK-76; the module docstring): with `group_id`, the caller's
+    PERSON must be a member of the group — `member_of`, the person spine
+    (CK-45 §3) — else the GROUP's 404, byte-identical to a missing group
+    (the existence of a group is not public information; a non-member
+    learns nothing, and nothing is written); the group must be a HOUSEHOLD
+    (a field-level 422 at `group_id` otherwise — the rung-2 gate's shape;
+    unreachable today, every group being one). Then the same one
+    transaction writes the gathering WITH `owning_group_id` and WITHOUT a
+    keeper of its own — the CHECK forbids both, `keep()` does not run, and
+    the group's keeper answers through the resolver from the first row
+    (`keeps_gathering` admits them to the read audience and the upload
+    gate charges them) — the creator as creator and host exactly as for a
+    standalone gathering, its occurrences, and one person-targeted
+    invitation row per other live member, `invited_by_person_id` the
+    creator (services/groups.py::invite_group_members). The body's
+    `caller_role` is `host` either way, and its `requires_approval` is
+    resolved through the home group's template (rung 3) — open, for a
+    household. Without `group_id`, creation is exactly today's."""
     account = await db.get(Account, ctx.person.account_id)
     now = datetime.now(timezone.utc)
+
+    group: Optional[Group] = None
+    template_default: Optional[bool] = None
+    if body.group_id is not None:
+        group = await db.get(Group, body.group_id)
+        if group is None or not await db.scalar(select(member_of(ctx.person.id, group.id))):
+            # One body for "no such group" and "not yours to create in" —
+            # the groups router's own 404, so a probe tells them apart by
+            # nothing (api/groups.py::_not_found).
+            raise _group_not_found()
+        if group.group_type != GroupType.HOUSEHOLD:
+            raise _field_422("group_id", GROUP_GATHERING_TYPE_GATE_MESSAGE)
+        # Rung 3's fact (services/publication.py): the home group's
+        # template, read once here for the body — the same join every
+        # later body's `_home_facts` makes.
+        template_default = await db.scalar(
+            select(CapabilityProfile.requires_approval).where(
+                CapabilityProfile.id == group.capability_profile_id
+            )
+        )
 
     gathering = Gathering(
         created_by_account_id=account.id,
         host_account_id=account.id,
+        # The belongs-to link (CK-76), or NULL for a standalone gathering.
+        # Written here and nowhere else: a gathering never moves between
+        # groups and never gains one later.
+        owning_group_id=group.id if group is not None else None,
         gathering_type=body.gathering_type,
         title=body.title,
         memorial_decedent_name=body.memorial_decedent_name,
@@ -790,36 +956,48 @@ async def create_gathering(
     ]
     db.add_all(occurrences)
 
-    # Creator = first keeper + host together (keeper record §9.2). keep()
-    # flushes; the single commit below is what makes the whole birth atomic.
-    await keep(db, account, gathering, now=now)
+    if group is None:
+        # Creator = first keeper + host together (keeper record §9.2).
+        # keep() flushes; the single commit below is what makes the whole
+        # birth atomic.
+        await keep(db, account, gathering, now=now)
+    else:
+        # A group gathering has NO keeper of its own (the CHECK; keeper
+        # record v2 §3.1) — the group's keeper answers through the
+        # resolver — and every other live member is INVITED by a row, in
+        # this same transaction (the archive record §6.1). The creator,
+        # the host, needs no invitation.
+        await db.flush()
+        await invite_group_members(
+            db,
+            gathering_id=gathering.id,
+            group_id=group.id,
+            invited_by_person_id=ctx.person.id,
+        )
     await db.commit()
 
     occurrences.sort(key=lambda o: o.starts_at)
     return _gathering_body(
-        gathering, occurrences, host_kind=account.kind, caller_role=ROLE_HOST
+        gathering,
+        occurrences,
+        facts=HomeFacts(
+            host_kind=account.kind,
+            group=_group_ref(group.id, group.name) if group is not None else None,
+            template_default=template_default,
+        ),
+        caller_role=ROLE_HOST,
     )
 
 
-@router.get("/gatherings")
-async def list_gatherings(
-    ctx: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    """The gatherings the caller keeps OR holds an accepted invitation to
-    (CK-25 — without the invited half an invitee could reach a gathering only
-    through the emailed link, forever), newest first — each with an occurrence
-    summary (CK-20): `next_occurrence` is the earliest occurrence at or after
-    now, or, when every date has passed, the latest past one (the
-    next-or-most-recent rule — a display decision that lives HERE so the list
-    view needs no per-gathering detail fetch), plus `occurrence_count`.
-
-    ONE query, deliberately: the lead occurrence and the count come from a
-    DISTINCT ON subquery with a window count, joined to the caller's
-    gatherings (kept-or-invited via EXISTS, which also dedupes a person who
-    is somehow both) — moving CK-17's client-side N+1 into a server-side loop
-    would not have been a fix (pinned by a query-count test)."""
-    now = datetime.now(timezone.utc)
+def _list_statement(ctx: AuthContext, now: datetime):
+    """THE LIST'S ONE STATEMENT — the read audience's gatherings with their
+    occurrence summary, newest first (CK-20's shape; the audience widened
+    at CK-25 to invitees and at CK-76 to the host and co-hosts). Two
+    callers: `GET /gatherings` as it stands, and `GET /groups/{id}/
+    gatherings` with one more WHERE term — the same rows in the same shape,
+    narrowed to one group. Returns a select; each caller executes it once
+    (the CK-20 statement-count pin)."""
+    account_id = ctx.person.account_id
     upcoming = Occurrence.starts_at >= now
     # One row per gathering: upcoming rows outrank past ones, the earliest
     # upcoming wins among those (the CASE key is NULL for past rows), and the
@@ -846,51 +1024,133 @@ async def list_gatherings(
     # The resolver's ladder as SQL (CK-49b): the gathering resolves to the
     # caller's account — through its group's keeper, else its own. Still an
     # EXISTS inside the one statement (the statement-count pin holds).
-    kept_by_caller = keeps_gathering(ctx.person.account_id, Gathering.id)
+    kept_by_caller = keeps_gathering(account_id, Gathering.id)
     # The caller's co-host fact, as a column of the same one statement
     # (CK-68): `caller_role` on every item with no second query — the host
-    # half is the row's own `host_account_id`, already fetched.
-    co_hosted = co_hosts_gathering(ctx.person.account_id, Gathering.id)
+    # half is the row's own `host_account_id`, already fetched. Since CK-76
+    # the same EXISTS is a term of the WHERE too (below).
+    co_hosted = co_hosts_gathering(account_id, Gathering.id)
     invited_person = exists(
         select(GatheringInvitation.id).where(
             GatheringInvitation.person_id == ctx.person.id,
             GatheringInvitation.gathering_id == Gathering.id,
         )
     )
-    rows = (
-        await db.execute(
-            select(
-                Gathering,
-                Account.kind,
-                lead.c.occurrence_id,
-                lead.c.starts_at,
-                lead.c.occurrence_count,
-                co_hosted.label("co_host"),
-            )
-            # Outer join is defensive only: creation requires an occurrence and
-            # the last one is undeletable, so a NULL next_occurrence should not
-            # occur — but the list must not silently drop a row if it ever does.
-            .outerjoin(lead, lead.c.gathering_id == Gathering.id)
-            # The host's kind for the publication ladder (CK-41), in the same
-            # one statement — a hostless gathering reads NULL.
-            .outerjoin(Account, Account.id == Gathering.host_account_id)
-            .where(or_(kept_by_caller, invited_person))
-            .order_by(Gathering.created_at.desc(), Gathering.id)
+    # THE AUDIENCE IS THE READ AUDIENCE (CK-76): kept OR invited OR host OR
+    # co-host. The host term closes the gap CK-68 recorded — a host who is
+    # not the keeper did not see their own gathering — which a group
+    # gathering made real: its creator is neither its keeper (the group's
+    # is) nor an invitee. The co-host term is its companion: a co-host
+    # holds an accepted invitation by construction (CK-68's handle), so it
+    # admits nobody new today and keeps the list's criterion the audience's
+    # whole. Four terms, one WHERE, one statement.
+    hosted = Gathering.host_account_id == account_id
+    statement = (
+        select(
+            Gathering,
+            Account.kind,
+            Group.id,
+            Group.name,
+            CapabilityProfile.requires_approval,
+            lead.c.occurrence_id,
+            lead.c.starts_at,
+            lead.c.occurrence_count,
+            co_hosted.label("co_host"),
         )
-    ).all()
-    return {
-        "gatherings": [
-            _list_item(
-                gathering,
-                host_kind,
-                occurrence_id,
-                starts_at,
-                occurrence_count,
-                _role_from_facts(gathering, ctx, co_host=co_host),
-            )
-            for gathering, host_kind, occurrence_id, starts_at, occurrence_count, co_host in rows
-        ]
-    }
+        # Outer join is defensive only: creation requires an occurrence and
+        # the last one is undeletable, so a NULL next_occurrence should not
+        # occur — but the list must not silently drop a row if it ever does.
+        .outerjoin(lead, lead.c.gathering_id == Gathering.id)
+    )
+    # The host's kind for the publication ladder (CK-41) — a hostless
+    # gathering reads NULL — and, since CK-76, the home group's id and name
+    # for `group` and its template for rung 3, every one an outer join in
+    # the same one statement; a standalone gathering reads NULL for all.
+    return (
+        _home_joins(statement)
+        .where(or_(kept_by_caller, invited_person, hosted, co_hosted))
+        .order_by(Gathering.created_at.desc(), Gathering.id)
+    )
+
+
+def _list_items(rows, ctx: AuthContext) -> list[dict]:
+    return [
+        _list_item(
+            gathering,
+            HomeFacts(
+                host_kind=host_kind,
+                group=_group_ref(group_id, group_name),
+                template_default=template,
+            ),
+            occurrence_id,
+            starts_at,
+            occurrence_count,
+            _role_from_facts(gathering, ctx, co_host=co_host),
+        )
+        for (
+            gathering,
+            host_kind,
+            group_id,
+            group_name,
+            template,
+            occurrence_id,
+            starts_at,
+            occurrence_count,
+            co_host,
+        ) in rows
+    ]
+
+
+@router.get("/gatherings")
+async def list_gatherings(
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """The gatherings the caller KEEPS, holds an accepted INVITATION to
+    (CK-25 — without the invited half an invitee could reach a gathering only
+    through the emailed link, forever), HOSTS or CO-HOSTS (CK-76 — the read
+    audience; the host term closes the CK-68 gap, which a group gathering's
+    creator fell through), newest first — each with an occurrence summary
+    (CK-20): `next_occurrence` is the earliest occurrence at or after now,
+    or, when every date has passed, the latest past one (the
+    next-or-most-recent rule — a display decision that lives HERE so the list
+    view needs no per-gathering detail fetch), plus `occurrence_count`; and
+    since CK-76 `group`, the home group's id and name or null.
+
+    ONE query, deliberately: the lead occurrence and the count come from a
+    DISTINCT ON subquery with a window count, joined to the caller's
+    gatherings (the four audience terms via EXISTS and the row's own host
+    column, which also dedupes a person who is several of them) — moving
+    CK-17's client-side N+1 into a server-side loop would not have been a
+    fix (pinned by a query-count test)."""
+    rows = (await db.execute(_list_statement(ctx, datetime.now(timezone.utc)))).all()
+    return {"gatherings": _list_items(rows, ctx)}
+
+
+@router.get("/groups/{group_id}/gatherings")
+async def list_group_gatherings(
+    group_id: UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """THE GROUP'S GATHERINGS (CK-76): for a member of the group — the
+    group's read audience, `_group_for_read` (a member or the admin);
+    everyone else draws the group's 404 byte-identical to a missing group.
+    The gatherings that BELONG TO the group (`owning_group_id`) that the
+    caller can read — the list's own criterion, kept OR invited OR host OR
+    co-host, ANDed with the group — in the list's item shape, ordered as
+    the list is, in ONE statement: `_list_statement` with one more WHERE
+    term. In this phase every member is invited to every one of the
+    group's gatherings, so a member reads them all; CK-77's shared-with and
+    left-out places will narrow what this returns, through the same
+    criterion. A gathering the group was merely INVITED to (a group-targeted
+    invitation row) is not the group's and is not here."""
+    group = await _group_for_read(db, ctx, group_id)
+    statement = _list_statement(ctx, datetime.now(timezone.utc)).where(
+        Gathering.owning_group_id == group.id
+    )
+    rows = (await db.execute(statement)).all()
+    return {"gatherings": _list_items(rows, ctx)}
 
 
 @router.get("/gatherings/{gathering_id}")
@@ -910,7 +1170,7 @@ async def get_gathering(
     return _gathering_body(
         gathering,
         list(occurrences),
-        host_kind=await _host_kind(db, gathering),
+        facts=await _home_facts(db, gathering),
         caller_role=await _role_of(db, gathering, ctx),
     )
 
@@ -973,7 +1233,7 @@ async def patch_gathering(
     await db.commit()
     return _gathering_body(
         gathering,
-        host_kind=await _host_kind(db, gathering),
+        facts=await _home_facts(db, gathering),
         # The organiser loader admitted the caller: the host, or else a
         # co-host — no second lookup.
         caller_role=ROLE_HOST if is_host(gathering, ctx) else ROLE_CO_HOST,

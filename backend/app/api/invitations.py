@@ -45,7 +45,19 @@ relaxation is a GROUP-TYPE rule (ON for TEAM/CONGREGATION-sourced invites,
 OFF for HOUSEHOLD/CLUB) and this phase ships no group-targeted invitations,
 so a person-targeted invite has no inviting context to default from. It
 stays hard-coded True at creation; the trigger waits for group-targeted
-invitations.
+invitations. (Overtaken at CK-41: the gate is resolved through a ladder and
+creation writes nothing — api/gatherings.py; and since CK-76 a gathering in
+a group reaches rung 3 through its home group. This paragraph stands as
+CK-25's history.)
+
+A GATHERING THAT BELONGS TO A GROUP IS MEMBERS ONLY (CK-76 — MEMBERS_ONLY
+below): its members are invited by person-targeted rows that
+services/groups.py writes at create and at join, never through this router,
+and an emailed invitation to it is refused with a 409 before anything is
+written or sent. The other routes here still apply to it: the organisers
+read its accepted list (every member's row, the handle api/co_hosts.py
+takes — so a member CAN be made a co-host of a group gathering), and the
+pending list is simply empty.
 
 DATA-HANDLING: `destination` is an address supplied by one person ABOUT
 another — the invitee did not type it. The row is ephemeral (expires,
@@ -100,6 +112,20 @@ MAX_INVITATIONS_PER_INVITER = 20
 SMS_UNAVAILABLE_MESSAGE = (
     "text-message invitations aren't available yet — invite by email for now"
 )
+
+# The stable code on the one 409 of the create route (CK-76; the CK-30
+# marker precedent — a code the screens switch on, never wording): a
+# gathering that BELONGS TO a group reaches its group's members only, each
+# by a row written at create or at join (services/groups.py), until sharing
+# outside the group ships as a phase of its own
+# (decisions/2026-10-23-joining-a-group-and-co-admins.md §9;
+# decisions/2026-10-04-a-groups-gathering-stays-in-the-group.md §5). So an
+# emailed invitation to such a gathering is refused OUTRIGHT, before
+# anything is written or sent — and NEVER by matching the destination
+# against the members, which would say who holds an account (the CK-25
+# non-enumeration rule): the refusal reads the gathering's one column and
+# looks nothing up.
+MEMBERS_ONLY = "members_only"
 
 
 def _not_found() -> HTTPException:
@@ -180,6 +206,24 @@ async def create_invitation(
 ) -> dict:
     gathering = await _gathering_for_organiser(db, ctx, gathering_id)
     now = datetime.now(timezone.utc)
+
+    if gathering.owning_group_id is not None:
+        # MEMBERS ONLY (CK-76): a group's gathering reaches the group's
+        # members by rows, and nobody outside the group until sharing
+        # outside it ships. Refused first — before the channel check, the
+        # reap, the tallies, the supersession and the send — with a 409
+        # carrying the stable code, so nothing is written or sent and the
+        # destination is never looked up (the constant's comment).
+        raise HTTPException(
+            409,
+            detail={
+                "code": MEMBERS_ONLY,
+                "message": (
+                    "this gathering belongs to a group and reaches the group's "
+                    "members only — invite someone by adding them to the group"
+                ),
+            },
+        )
 
     if body.channel is InvitationChannel.SMS:
         # Accepted by the schema, refused by the endpoint — a clear field-level

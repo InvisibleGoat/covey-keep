@@ -3,11 +3,13 @@ through a ladder (CK-41; decisions/2026-09-09-consent-gate-defaults.md
 2.0.0, §1).
 
 No database, no network, no logging — the processing.py mould: this module
-takes facts and returns an answer, and the two callers read the facts and
+takes facts and returns an answer, and the three callers read the facts and
 apply the answer. The worker's publish transaction (services/ingest.py,
 step 4) applies it to `media.publication_state` — `ready → live` where the
 gathering resolves open, `ready` and still `pending` where it resolves
-gated. The gatherings router applies it to every gathering body, so
+gated; the restore (api/media.py::_gate_destination) applies it the same
+way to a photograph put back by someone other than the host. The
+gatherings router applies it to every gathering body, so
 `requires_approval` there is the EFFECTIVE value and no consumer ever
 handles a null.
 
@@ -38,13 +40,15 @@ answer wins, and a rung with no producer answers None and is passed over.
                    the discriminator the record's §1 was reaching for with
                    the account kind and the SEASON type: the group is the
                    only thing that can tell a team's season from a family's.
-                   ALWAYS None TODAY — no gathering has a home group, and
-                   the `groups` column that will carry the default is
-                   deliberately NOT added by CK-41: a column with no producer
-                   and no reach smuggles a feature in as a schema detail
-                   (the media_tags.person_id argument, applied to a
-                   different table). Producer: groups-as-homes plus a
-                   per-group override column.
+                   ALWAYS None TODAY — since CK-76 a gathering CAN have a
+                   home group (`gatherings.owning_group_id`, written at
+                   create), but the `groups` column that will carry the
+                   group's OWN default is still deliberately not added: a
+                   column with no producer and no reach smuggles a feature
+                   in as a schema detail (the media_tags.person_id
+                   argument, applied to a different table). Producer: the
+                   TEAM / CONGREGATION types, with a per-group override
+                   column.
 
      BACKSTOP      An ORGANIZATION host with no group default → gated.
                    Belt and braces on the one case where the stakes are
@@ -71,9 +75,18 @@ answer wins, and a rung with no producer answers None and is passed over.
                    in scope — the profile is group-type-keyed and reachable
                    only through a home group, so it answers "what does this
                    kind of group usually do", not "does this gathering
-                   wait". Rung 3 of four, not the whole rule. None today for
-                   the same reason as rung 2. Producer: the templates work,
-                   which adds TEAM / CONGREGATION rows carrying true.
+                   wait". Rung 3 of four, not the whole rule. REACHED SINCE
+                   CK-76 through the home group: the three callers read
+                   `capability_profiles.requires_approval` through
+                   `groups.capability_profile_id` as an outer join in the
+                   statement each already runs, and hand it to
+                   `resolve_gathering` as `template_default` — None for a
+                   groupless gathering (the rung passed over, as before),
+                   `false` for a household group's gathering, which
+                   therefore resolves OPEN with source TEMPLATE: the same
+                   answer a groupless gathering gets at rung 4, from one
+                   rung higher. Producer of a `true`: the templates work,
+                   which adds TEAM / CONGREGATION rows carrying it.
 
   4. JOIN_SHAPE    How a person gets in — the only rung with a producer.
                    PRIVATE (a specific invitation, or membership of an
@@ -86,9 +99,11 @@ answer wins, and a rung with no producer answers None and is passed over.
                    because the rule has two halves and a half-written rule
                    is worse than a late one.
 
-Every gathering in the database today is groupless, person-hosted (or
-hostless) and privately joined, so every one resolves OPEN at rung 4 — and
-`live`, a state no media row had ever held before 0019, is reachable.
+Every gathering in the database is privately joined and person-hosted (or
+hostless); a groupless one resolves OPEN at rung 4, and since CK-76 a
+gathering in a household group resolves OPEN at rung 3 — so every one
+resolves open, and `live`, a state no media row had ever held before 0019,
+is reachable.
 
 What "open" means, and does not (record §6, §9): open means `ready → live`
 on processing completion. It does not mean reviewed. A gathering that
@@ -182,18 +197,39 @@ def resolve(
 
 
 def resolve_gathering(
-    *, host_setting: Optional[bool], host_kind: Optional[AccountKind]
+    *,
+    host_setting: Optional[bool],
+    host_kind: Optional[AccountKind],
+    template_default: Optional[bool],
 ) -> Resolution:
-    """The ladder applied to a gathering as gatherings exist today: no home
-    group (so rungs 2 and 3 have nothing to say) and privately joined (no
-    public join mechanism exists — record §7). Both callers — the worker's
-    publish transaction and the gatherings router's bodies — go through
-    here, so when the home group arrives it is wired in ONE place: this
-    function grows a group parameter, and `resolve` does not change."""
+    """The ladder applied to a gathering as gatherings exist today: privately
+    joined (no public join mechanism exists — record §7), with the home
+    group's TEMPLATE reachable since CK-76 and the home group's own DEFAULT
+    still not. The three callers — the worker's publish transaction
+    (services/ingest.py step 4), the restore's gate read
+    (api/media.py::_gate_destination) and the gatherings router's bodies —
+    go through here, so the home group was wired in ONE place: this
+    function grew `template_default`, and `resolve` did not change.
+
+    template_default  rung 3 — the home group's type's template,
+                      `capability_profiles.requires_approval` read through
+                      `groups.capability_profile_id` (CK-76); None for a
+                      groupless gathering, so the rung is passed over
+                      exactly as before. The household template is
+                      `false`, so a group gathering resolves OPEN with
+                      source TEMPLATE where a groupless one resolves open at
+                      JOIN_SHAPE: the answer does not change, only the rung
+                      that gave it. REQUIRED, not defaulted, so a fourth
+                      caller cannot forget the group (a caller that cannot
+                      know it passes None and says so).
+    Rung 2 — the group's OWN default — stays None: no `groups` column
+    exists for it, and it arrives with the TEAM / CONGREGATION types
+    (record §8's closing condition).
+    """
     return resolve(
         host_setting=host_setting,
         group_default=None,
-        template_default=None,
+        template_default=template_default,
         join_shape=JoinShape.PRIVATE,
         host_kind=host_kind,
     )

@@ -41,8 +41,10 @@ seeded role ladder (`memberships.role_id` stays unread — one of its rungs is
 permission matrix. Every co-admin is a member, and leaving or removal
 deletes the co-admin row with the membership; an admin is never also a
 co-admin (the add refuses the admin; a hand-over deletes the new admin's
-row). The retired `backup_admin_person_id` leaves every body here and is
-written by nothing; it stays mapped until a later contract step drops it.
+row). The retired `backup_admin_person_id` left every body at CK-75 and is
+written by nothing; UNMAPPED at CK-76 (models/group.py — the model no
+longer carries it), the column itself dropped by CK-77's migration, the
+contract step after the release that stops reading it.
 
 HOUSEHOLD ONLY, AND THAT IS BINDING, NOT A SIMPLIFICATION. `group_type` is
 schema-valid for four values and the create endpoint accepts one: TEAM,
@@ -71,8 +73,13 @@ admin role, a co-admin's promotion at account deletion, leaving and removal
 all leave `keeper_account_id` where it is: a keeper who leaves still keeps
 the group, a group can be kept by someone outside it, and keeping never
 falls back to the admin. Keeping moves only by the keeping flows (unbuilt).
-No gathering belongs to a group yet, so no group holds a photograph, and
-nothing is charged.
+Since CK-76 a gathering CAN belong to a group (`POST /gatherings` with a
+`group_id`, api/gatherings.py — any member, in a HOUSEHOLD group), and
+then the group's keeper is charged its photographs through the resolver's
+first rung; nothing in THIS router changes for it, because running a
+group and keeping it never touch. The group's gatherings are listed by
+`GET /groups/{id}/gatherings` (api/gatherings.py — the group's read
+audience, the gathering list's criterion and shape).
 
 BODIES: `member_count` is computed at read time, never stored (store who,
 compute how many — database-schema decision 27), and counts members whose
@@ -503,7 +510,8 @@ async def create_group(
         # The creator is the first keeper (record §8) — an ACCOUNT fact on a
         # row whose other facts are people, and it authorizes nothing here.
         keeper_account_id=ctx.person.account_id,
-        # backup_admin_person_id stays NULL: retired, written by nothing.
+        # backup_admin_person_id stays NULL in the database: retired,
+        # written by nothing, and UNMAPPED since CK-76 (models/group.py).
         # organization_id stays NULL: a household has no organization.
     )
     db.add(group)

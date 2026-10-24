@@ -79,6 +79,7 @@ from app.api.invitations import INVITATION_TTL, TokenBody
 from app.config import settings
 from app.models import Group, GroupJoinRequest, GroupLink, JoinRequestOutcome, Membership, Person
 from app.security import group_link_token, parse_group_link_token
+from app.services.groups import invite_newcomer_to_upcoming_gatherings
 from app.services.retention import purge_stale
 
 router = APIRouter(prefix="", tags=["group-links"])
@@ -379,11 +380,21 @@ async def _decide(
         )
         if member is None:
             db.add(Membership(group_id=group.id, person_id=person_id))
+            # THE NEWCOMER'S PLACES (CK-76; the 2026-10-04 record §9): a row
+            # on each of the group's UPCOMING gatherings they hold none for,
+            # `invited_by_person_id` NULL — the group's rule invited them —
+            # in the transaction that writes the membership, so the two
+            # land together or not at all. Past gatherings are never
+            # written. The one helper both admission paths call.
+            await invite_newcomer_to_upcoming_gatherings(
+                db, group_id=group.id, person_id=person_id, now=now
+            )
     try:
         await db.commit()
     except IntegrityError:
         # The membership landed by another path between our check and our
-        # commit (an acceptance): the decision stands on its own.
+        # commit (an acceptance, which wrote the newcomer's places itself):
+        # the decision stands on its own.
         await db.rollback()
         if await decide() != 1:
             await db.rollback()

@@ -57,7 +57,7 @@ from tests.test_account_deletion import DELETE_BODY
 from tests.test_destruction import _verifier
 from tests.test_gatherings import _account_for
 from tests.test_groups import BODY_KEYS, MISSING, _create, _signed_in_headers
-from tests.test_photo_count import _migrate
+from tests.test_photo_count import _migrate, at_head_afterwards  # noqa: F401 — the fixture
 
 ADMIN = "admin@example.com"
 CO_ADMIN = "coadmin@example.com"
@@ -72,8 +72,11 @@ ENTRY_KEYS = {"membership_id", "display_name", "role", "is_self"}
 # uniques and the token-hash unique by name, the new type's labels), the
 # two CHECKs, the group invitation's normalization line, and five
 # invariants — with CK-45's at-least-one-membership line REPLACED by
-# admin-has-membership (net zero).
-VERIFIER_TOTAL = 336
+# admin-has-membership (net zero); and 339 since CK-76's three lines —
+# the index on gatherings.owning_group_id, no pending invitation on a
+# gathering that belongs to a group, every group gathering under a
+# HOUSEHOLD group.
+VERIFIER_TOTAL = 339
 
 
 def _now() -> datetime:
@@ -171,6 +174,17 @@ async def _co_admin_rows(db_session_factory, group_id: str) -> list[tuple[UUID, 
 async def _group_row(db_session_factory, group_id: str) -> Group:
     async with db_session_factory() as db:
         return await db.get(Group, UUID(group_id))
+
+
+async def _backup_admin_column(db_session_factory, group_id: str):
+    """`groups.backup_admin_person_id` for one group, by raw SQL: the column
+    exists in the database and is UNMAPPED since CK-76 (nothing writes it,
+    nothing reads it through the model; the verifier asserts it NULL the
+    same way until CK-77 drops it)."""
+    async with db_session_factory() as db:
+        return await db.scalar(
+            text("SELECT backup_admin_person_id FROM groups WHERE id = :g"), {"g": UUID(group_id)}
+        )
 
 
 async def _membership_people(db_session_factory, group_id: str) -> set[UUID]:
@@ -293,8 +307,11 @@ async def test_every_body_carries_caller_role_and_no_backup_column(
     assert patched.status_code == 200, patched.text
     assert patched.json()["caller_role"] == "co_admin"
     assert set(patched.json()) == BODY_KEYS
-    # The retired column is still on the row, NULL, and in no body.
-    assert (await _group_row(db_session_factory, cast.group_id)).backup_admin_person_id is None
+    # The retired column is still on the ROW, NULL, and in no body — read
+    # by raw SQL since CK-76, because the model no longer maps it (the
+    # unmap is the step before CK-77's drop; the attribute read here until
+    # CK-76 would now be an AttributeError).
+    assert await _backup_admin_column(db_session_factory, cast.group_id) is None
 
 
 async def test_the_member_list_and_the_count_exclude_a_deleted_account_and_carry_no_contact_detail(
@@ -815,7 +832,7 @@ BACKFILL_PREFIX = "0032 backfilled groups.keeper_account_id from the admin's acc
 
 
 async def test_0032_round_trip_backfills_the_keeper_and_the_downgrade_is_genuine(
-    db_session_factory, capsys
+    db_session_factory, capsys, at_head_afterwards
 ):
     """Down to 0031 — the four tables and the type gone. Four groups planted
     THERE by raw SQL: (1) a NULL keeper and a live admin → backfilled to

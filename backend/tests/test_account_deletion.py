@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.api.profile import ANONYMIZED_DISPLAY_NAME
 from app.models import (
@@ -312,17 +312,23 @@ async def test_deletion_relinquishes_group_admin_and_retains_memberships(
     with NO co-admin to promote (succession — the longest-serving co-admin
     becomes the admin — is pinned in test_group_membership.py),
     `admin_person_id` is set NULL wherever the deleted person held it (the
-    "needs an admin" state), the retired `backup_admin_person_id` is NULLed
-    too (nothing writes it; the drop is a later phase), and every
-    `memberships` row is RETAINED, still
+    "needs an admin" state), and every `memberships` row is RETAINED, still
     attributed to the anonymized person — the retention default: nothing
     cascades from a person. `updated_at` is untouched: a relinquishment is
     not a rename. Since CK-49b the same leg relinquishes the group's KEEPER
     (`groups.keeper_account_id`, an account fact) wherever the deleted
     account held it — an anonymized account cannot answer for a home's
     bytes — and writes no stamp on the group (where a group's lapse stamp
-    lives is Arc B's, with the first gathering that resolves through one);
-    a group someone else keeps is untouched."""
+    lives is still open — CK-76 wrote the first gathering that resolves
+    through a group and decided nothing about the stamp); a group someone
+    else keeps is untouched. THE RETIRED `backup_admin_person_id` (moved at
+    CK-76, with its reason): until CK-76 this test planted the deleted
+    person as the other group's backup admin and asserted the leg NULLed
+    it; the column is UNMAPPED since CK-76 (nothing writes it, the leg no
+    longer touches it, CK-77 drops it), so the plant is gone — nothing has
+    ever written that column in production — and the column is read by raw
+    SQL as NULL on both groups before and after, the state the verifier
+    asserts on every deployed row."""
     address = "groupadmin@example.com"
     other_address = "othermember@example.com"
     headers = await _signed_in_headers(client, capsys, address)
@@ -355,14 +361,14 @@ async def test_deletion_relinquishes_group_admin_and_retains_memberships(
         own = (await db.execute(select(Group).where(Group.id == own_group_id))).scalars().one()
         assert own.keeper_account_id == account_id
         # (2) A group someone else administers AND keeps, with the person as
-        # BACKUP admin and a member — constructed directly (nothing has ever
-        # set the retired backup column; the membership row is planted).
+        # an ordinary member — constructed directly (the membership row is
+        # planted). The retired backup column is NOT planted (the docstring):
+        # it is unmapped since CK-76, and nothing has ever written it.
         backed = Group(
             group_type=GroupType.HOUSEHOLD,
             capability_profile_id=profile.id,
             name="Other family",
             admin_person_id=other_id,
-            backup_admin_person_id=person_id,
             keeper_account_id=other_account_id,
         )
         db.add(backed)
@@ -376,7 +382,20 @@ async def test_deletion_relinquishes_group_admin_and_retains_memberships(
         await db.commit()
         backed_id = backed.id
 
+    async def backup_columns() -> list:
+        # The unmapped column, by raw SQL: NULL on both groups, before and
+        # after — nothing writes it, and the leg no longer touches it.
+        async with db_session_factory() as db:
+            return (
+                await db.scalars(
+                    text("SELECT backup_admin_person_id FROM groups WHERE id IN (:a, :b)"),
+                    {"a": own_group_id, "b": backed_id},
+                )
+            ).all()
+
+    assert await backup_columns() == [None, None]
     assert (await client.post("/me/delete", json=DELETE_BODY, headers=headers)).status_code == 204
+    assert await backup_columns() == [None, None]
 
     async with db_session_factory() as db:
         own = (await db.execute(select(Group).where(Group.id == own_group_id))).scalars().one()
@@ -384,14 +403,12 @@ async def test_deletion_relinquishes_group_admin_and_retains_memberships(
         # by "a former member" — and kept by nobody: the unkept state, with
         # no stamp anywhere on the group to say when.
         assert own.admin_person_id is None
-        assert own.backup_admin_person_id is None
         assert own.keeper_account_id is None
         assert own.updated_at is None
         backed_row = (await db.execute(select(Group).where(Group.id == backed_id))).scalars().one()
-        # The other person's admin and keeper stand; the deleted person's
-        # backup slot is cleared and NOT promoted into anything.
+        # The other person's admin and keeper stand; the deleted person was
+        # an ordinary member and is promoted into nothing.
         assert backed_row.admin_person_id == other_id
-        assert backed_row.backup_admin_person_id is None
         assert backed_row.keeper_account_id == other_account_id
         assert backed_row.updated_at is None
         # Every membership row retained, still attributed to the anonymized

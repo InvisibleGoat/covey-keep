@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0032"
+EXPECTED_REVISION = "0033"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -1002,7 +1002,8 @@ async def verify(conn, ck: Checks) -> None:
     # group"), no server default (one would invent a keeper), each an FK
     # with no delete rule (an account is anonymized and never deleted, a
     # group is archived and never deleted — nothing cascades from either).
-    # `owning_group_id` has NO WRITER: Arc B's, and every row is NULL.
+    # `owning_group_id` is WRITTEN since CK-76 (a gathering created in a
+    # group); its own lines are the "a gathering in a group" block below.
     for table, column, target in (
         ("gatherings", "owning_group_id", "groups"),
         ("groups", "keeper_account_id", "accounts"),
@@ -1046,9 +1047,10 @@ async def verify(conn, ck: Checks) -> None:
     # groups.keeper_account_id = :account`). Owed since 0023 (whose kickoff
     # was the re-run and the drop alone), re-homed past CK-50 ("no
     # migration"), landed at 0024. Named as the models' index=True names
-    # them, so `alembic check` and this line agree. `owning_group_id` has
-    # no index on purpose: it has no writer yet, and its reader looks the
-    # group up by primary key.
+    # them, so `alembic check` and this line agree. (`owning_group_id` was
+    # left unindexed here on purpose — no writer, its reader looking the
+    # group up by primary key — and gained its index at 0033, CK-76, with
+    # its first readers BY the column; the block below.)
     for table, name in (
         ("gatherings", "ix_gatherings_keeper_account_id"),
         ("groups", "ix_groups_keeper_account_id"),
@@ -1087,13 +1089,90 @@ async def verify(conn, ck: Checks) -> None:
         # the CK-41 (dy) / CK-45 run-once precedent), frozen at nine the
         # moment CK-49b stopped writing the relation, and since 0023
         # dropped it there is nothing left to compare against. Nor "every
-        # owning_group_id is NULL": true today, legitimately broken by
-        # Arc B, the same precedent.
+        # owning_group_id is NULL": true until CK-76 wrote the column, and
+        # legitimately false since — the same precedent.
     else:
         ck.check(
             False,
             "keeper shape integrity",
             "gatherings table or its owning_group_id / keeper_account_id columns missing",
+        )
+
+    print("\n-- a gathering in a group (0033, CK-76) --")
+    # The belongs-to link, written at last (decisions/2026-10-23-joining-a-
+    # group-and-co-admins.md §4; the 2026-10-04 record §4, §9; the archive
+    # record §6.1, §9): any member creates a gathering IN a household group,
+    # `owning_group_id` set and the gathering's own keeper NULL (the CHECK
+    # above), every other member invited by a person-targeted row at create
+    # and a newcomer by rows at join. Three lines — the index and two
+    # properties of the data.
+    # (1) The index, by name, on its table and column (0033 — an index
+    # arrives with its reader, and the column's first readers BY the column
+    # are `GET /groups/{id}/gatherings` and the newcomer rows).
+    owning_group_index = await index_shape(conn, "ix_gatherings_owning_group_id")
+    ck.check(
+        owning_group_index is not None
+        and owning_group_index[0] == "gatherings"
+        and "(owning_group_id)" in owning_group_index[1],
+        "index ix_gatherings_owning_group_id exists on gatherings.owning_group_id",
+        "index missing"
+        if owning_group_index is None
+        else f"found on {owning_group_index[0]!r}: {owning_group_index[1]}",
+    )
+    # Guarded on the tables and the column (the CK-43 lesson): below 0022
+    # the column does not exist, and a query over it is a crash, not a FAIL.
+    if {"gatherings", "groups", "gathering_invitations_pending"} <= tables and "owning_group_id" in set(
+        columns["gatherings"]
+    ):
+        # (2) MEMBERS ONLY, AS DATA (record §9): a group's gathering reaches
+        # the group's members by rows and nobody outside the group until
+        # sharing outside it ships, so no pending (destination) invitation
+        # may sit on a gathering that belongs to a group — the create route
+        # refuses one with a 409 `members_only` before anything is written,
+        # and this is the deployed backstop. The failing write is a
+        # destination row written around the refusal.
+        pending_on_group_gathering = await scalar(
+            conn,
+            "SELECT count(*) FROM gathering_invitations_pending p "
+            "JOIN gatherings g ON g.id = p.gathering_id "
+            "WHERE g.owning_group_id IS NOT NULL",
+        )
+        ck.check(
+            pending_on_group_gathering == 0,
+            "no pending (destination) invitation sits on a gathering that belongs to a group",
+            f"{pending_on_group_gathering} pending invitation row(s) on a group gathering",
+        )
+        # (3) EVERY GATHERING THAT BELONGS TO A GROUP BELONGS TO A HOUSEHOLD
+        # GROUP (record §4: household groups only; the create route refuses
+        # any other type with a field-level 422 at `group_id` — the rung-2
+        # gate, consent-gate-defaults 2.0.0 §8's closing condition: no
+        # gathering under a TEAM or CONGREGATION group ships before the home
+        # group's default exists). Unreachable while every group is a
+        # HOUSEHOLD; this line is what says so on every deployed row once
+        # the other types arrive.
+        non_household_group_gathering = await scalar(
+            conn,
+            "SELECT count(*) FROM gatherings g JOIN groups gr ON gr.id = g.owning_group_id "
+            "WHERE gr.group_type <> 'HOUSEHOLD'",
+        )
+        ck.check(
+            non_household_group_gathering == 0,
+            "every gathering that belongs to a group belongs to a HOUSEHOLD group",
+            f"{non_household_group_gathering} group gathering(s) under a non-HOUSEHOLD group",
+        )
+        # DELIBERATELY NOT ASSERTED: "every member of a group holds an
+        # invitation to each of its upcoming gatherings." True in this phase
+        # — every member's place is INVITED, written at create and at join
+        # — and broken ON PURPOSE by CK-77's shared-with and left-out places
+        # (the 2026-10-04 record §4), which are rows of another kind, or no
+        # row at all; a line here would fail correctly the day they ship.
+        # The CK-41 (dy) / CK-45 run-once precedent: a check for the deploy,
+        # never a script that will fail correctly later.
+    else:
+        ck.check(
+            False,
+            "group gathering integrity",
+            "gatherings / groups / gathering_invitations_pending or the owning_group_id column missing",
         )
 
     print("\n-- named CHECK constraints --")

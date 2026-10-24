@@ -142,23 +142,27 @@ def test_a_season_created_by_a_person_groupless_and_private_resolves_open():
         publication_state=PublicationState.LIVE,
     )
     assert season.requires_approval is None  # create writes nothing here
-    assert resolve_gathering(host_setting=season.requires_approval, host_kind=PERSON) == Resolution(
+    assert resolve_gathering(host_setting=season.requires_approval, host_kind=PERSON, template_default=None) == Resolution(
         False, Source.JOIN_SHAPE
     )
 
 
 def test_resolve_gathering_is_todays_facts_no_group_no_template_private():
-    # Every gathering in the database today: groupless, privately joined —
-    # so a person's resolves open at rung 4, an organisation's gates at the
-    # backstop, and a host's own setting wins over either.
-    assert resolve_gathering(host_setting=None, host_kind=PERSON) == Resolution(
+    # A groupless gathering (every gathering until CK-76, and every
+    # standalone one since): privately joined, no template — so a person's
+    # resolves open at rung 4, an organisation's gates at the backstop, and
+    # a host's own setting wins over either. `template_default` is REQUIRED
+    # since CK-76 (a caller that cannot know the group passes None and says
+    # so); the six calls here moved from two keywords to three with that
+    # reason, every answer unchanged.
+    assert resolve_gathering(host_setting=None, host_kind=PERSON, template_default=None) == Resolution(
         False, Source.JOIN_SHAPE
     )
-    assert resolve_gathering(host_setting=None, host_kind=ORG) == Resolution(
+    assert resolve_gathering(host_setting=None, host_kind=ORG, template_default=None) == Resolution(
         True, Source.ORG_BACKSTOP
     )
-    assert resolve_gathering(host_setting=True, host_kind=PERSON) == Resolution(True, Source.HOST)
-    assert resolve_gathering(host_setting=False, host_kind=ORG) == Resolution(False, Source.HOST)
-    assert resolve_gathering(host_setting=None, host_kind=None) == Resolution(
+    assert resolve_gathering(host_setting=True, host_kind=PERSON, template_default=None) == Resolution(True, Source.HOST)
+    assert resolve_gathering(host_setting=False, host_kind=ORG, template_default=None) == Resolution(False, Source.HOST)
+    assert resolve_gathering(host_setting=None, host_kind=None, template_default=None) == Resolution(
         False, Source.JOIN_SHAPE
     )

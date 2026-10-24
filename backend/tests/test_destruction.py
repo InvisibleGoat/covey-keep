@@ -1132,25 +1132,27 @@ async def test_the_verifier_asserts_a_destroying_row_that_spent_an_attempt_and_i
     # CK-75 added sixty-five (the four group tables' shapes, their CHECKs,
     # the group invitation's normalization line and five membership
     # invariants, with CK-45's at-least-one-membership line replaced), so
-    # 336.
+    # 336; CK-76 added three (the index on gatherings.owning_group_id, no
+    # pending invitation on a group gathering, every group gathering under
+    # a HOUSEHOLD group), so 339.
     await plant(1, False, None)
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (335, 1, 1), out
+    assert (passed, failed, code) == (338, 1, 1), out
     assert f"FAIL  {label}" in out and "1 destroying media row(s)" in out
 
     # Passes with the reason present — what the release now writes.
     await plant(1, False, ingest.ERROR_CREDENTIAL_REJECTED)
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (336, 0, 0), out
+    assert (passed, failed, code) == (339, 0, 0), out
     assert f"PASS  {label}" in out
 
     # Must NOT fire on a fresh mark (attempts 0, no reason: nothing is
     # wrong with it) ...
     await plant(0, False, None)
-    assert _verifier()[:3] == (336, 0, 0)
+    assert _verifier()[:3] == (339, 0, 0)
     # ... nor on a held row: the claim writes no reason, the outcome will.
     await plant(1, True, None)
-    assert _verifier()[:3] == (336, 0, 0)
+    assert _verifier()[:3] == (339, 0, 0)
 
 
 async def test_a_stalled_destruction_is_reclaimed_and_the_abandoned_attempt_counted(

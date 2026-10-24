@@ -35,6 +35,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import event, text
@@ -94,6 +95,24 @@ async def _migrate(direction: str, target: str, capsys) -> list[str]:
     ]
 
 
+@pytest.fixture
+async def at_head_afterwards(capsys):
+    """THE ROUND-TRIP RIDER (CK-76; the Backlog item CK-75 filed): every
+    migration round-trip test takes this fixture, whose TEARDOWN upgrades
+    the shared test database back to head whatever the test did — so a
+    round trip that fails mid-way (an assertion tripped between the
+    downgrade and the upgrade) stays ONE failure, instead of leaving the
+    schema downgraded for every test after it. CK-75's first full run read
+    97 failed from one stale literal in test_billing.py's 0030 round trip
+    for exactly this reason. A fixture's teardown runs on failure as a
+    `finally` would, and importing this name into a test module is what
+    makes it available there (the `worker` fixture's precedent). Proved at
+    CK-76 by breaking an assertion mid-round-trip locally and showing the
+    next test green at head (the CK-76 report)."""
+    yield
+    await _migrate("upgrade", "head", capsys)
+
+
 async def _schema(db) -> tuple[str, bool, set[str]]:
     """(alembic head, photo_count present, the keeper-column indexes present)."""
     head = (await db.execute(text("SELECT version_num FROM alembic_version"))).scalar_one()
@@ -137,11 +156,14 @@ BOTH_INDEXES = {"ix_gatherings_keeper_account_id", "ix_groups_keeper_account_id"
 # subscriptions — `scheduled_plan`, `scheduled_plan_at` — and their CHECK,
 # and touches neither; 0032, CK-75, creates the four group tables and the
 # `join_request_outcome` type and backfills `groups.keeper_account_id`, and
-# touches neither.)
-HEAD = "0032"
+# touches neither; 0033, CK-76, adds the index on
+# `gatherings.owning_group_id` and touches neither.)
+HEAD = "0033"
 
 
-async def test_0024_round_trip_backfills_the_count_and_the_downgrade_is_genuine(db_session_factory, capsys):
+async def test_0024_round_trip_backfills_the_count_and_the_downgrade_is_genuine(
+    db_session_factory, capsys, at_head_afterwards
+):
     """Down to 0023 — the column and both indexes gone. Rows planted THERE by
     raw SQL, so the backfill has subjects the column never saw: A holds two
     ready+pending rows, one ready+REMOVED row (it counts: the criterion is

@@ -39,6 +39,29 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# THE ONE COLUMN THE MODELS NO LONGER MAP THAT THE DATABASE STILL HOLDS (CK-76).
+# `groups.backup_admin_person_id` was retired at CK-75 (in no body, written by
+# nothing, asserted NULL on every row by scripts/verify_schema.py through raw
+# SQL), UNMAPPED at CK-76 (models/group.py — so the instance serving during
+# CK-77's pre-deploy window selects it nowhere), and is DROPPED by CK-77's
+# migration — the contract step after the release that stops reading it. In
+# between, autogenerate's comparison would read the column and its FK as a
+# diff ("remove_column", "remove_fk") and `alembic check` would fail at head
+# for a state that is exactly as designed; so the comparison is told to pass
+# the column and its constraint over. CK-77 deletes this hook with the
+# column. Nothing else is filtered: a second entry here is a second column
+# living outside the models, which is the defect this hook must not hide.
+UNMAPPED_COLUMNS = {("groups", "backup_admin_person_id")}
+UNMAPPED_CONSTRAINTS = {"fk_groups_backup_admin_person_id"}
+
+
+def include_object(obj, name, type_, reflected, compare_to):
+    if type_ == "column" and (obj.table.name, name) in UNMAPPED_COLUMNS:
+        return False
+    if type_ == "foreign_key_constraint" and name in UNMAPPED_CONSTRAINTS:
+        return False
+    return True
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
@@ -61,6 +84,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -70,7 +94,9 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection, target_metadata=target_metadata, include_object=include_object
+    )
 
     with context.begin_transaction():
         context.run_migrations()

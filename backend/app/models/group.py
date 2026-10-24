@@ -41,17 +41,17 @@ class Group(Base):
     admin_person_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("people.id"), nullable=True
     )
-    # RETIRED at CK-75 by the co-admin relation (joining-a-group record §6:
-    # a backup slot beside co-admins is two representations of "who else
-    # administers"). Nothing has ever written it; it leaves every group body
-    # at CK-75; the verifier asserts it NULL on every row. NOT dropped here:
-    # the instance still serving during the pre-deploy migration (CK-74.2's
-    # code) selects it in every group body, so the drop is a later contract
-    # step. Keep it mapped and unwritten until then; the deletion leg's
-    # NULLing stays, harmlessly, because the column stays.
-    backup_admin_person_id: Mapped[Optional[UUID]] = mapped_column(
-        ForeignKey("people.id"), nullable=True
-    )
+    # `backup_admin_person_id` IS NOT MAPPED HERE, ON PURPOSE (CK-76). The
+    # column still exists in the database: RETIRED at CK-75 by the co-admin
+    # relation (joining-a-group record §6 — a backup slot beside co-admins
+    # is two representations of "who else administers"), never written by
+    # anything, out of every group body since CK-75, and asserted NULL on
+    # every row by the verifier through raw SQL. CK-75 kept it mapped
+    # because the instance serving during its pre-deploy window still
+    # selected it; CK-76 unmaps it (the model no longer selects it, the
+    # deletion leg no longer NULLs it), and the DROP is the next contract
+    # step — CK-77's migration — after the release that stops reading it.
+    # Do not map it back, and do not drop it here.
     # The group's KEEPER — an account, where the two admin columns above are
     # people (0022, CK-49a; keeper record v2 §3.1, §7: administering is a
     # relationship with the people, keeping is a relationship with the bill,
@@ -71,11 +71,16 @@ class Group(Base):
     # keeper who leaves still keeps the group, and a group can be kept by
     # someone outside it, until the keeping flows move it (unbuilt).
     # Every gathering that belongs to this
-    # group (gatherings.owning_group_id — no writer yet) is kept by this
-    # account and has no keeper of its own; an ARCHIVED group still keeps
-    # its gatherings, and the resolver never reads the archive state (§3.1).
-    # No lapse stamp lives here yet: where a group's stamp lives is v2 §12
-    # item 9's group half, Arc B's to decide with its first subject.
+    # group (gatherings.owning_group_id — written since CK-76 by any
+    # member creating a gathering in a HOUSEHOLD group) is kept by this
+    # account and has no keeper of its own; the first rung is live, and
+    # the upload gate charges this account for a group gathering's
+    # photographs (CK-50's resolver, its first real subject at CK-76); an
+    # ARCHIVED group still keeps its gatherings, and the resolver never
+    # reads the archive state (§3.1). No lapse stamp lives here yet: where
+    # a group's stamp lives is v2 §12 item 9's group half, still open —
+    # CK-76 writes the first gathering that resolves through a group and
+    # decides nothing about the stamp.
     # Indexed since 0024 (CK-51a; `ix_groups_keeper_account_id`), with the
     # gatherings one: account_usage's WHERE names both.
     keeper_account_id: Mapped[Optional[UUID]] = mapped_column(

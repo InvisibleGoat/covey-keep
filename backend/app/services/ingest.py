@@ -344,7 +344,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     Account,
+    CapabilityProfile,
     Gathering,
+    Group,
     Media,
     MediaDerivative,
     MediaFailureReason,
@@ -761,17 +763,27 @@ async def handle_claimed(
     #
     # THE GATE, resolved here and now — at publish time, never snapshotted
     # at intent (CK-41; see the module docstring). The read is the first
-    # statement of this transaction: the gathering's own setting and the
-    # host account's kind in one join (a hostless gathering reads NULL for
-    # the kind, and the ladder lets the join shape answer).
-    host_setting, host_kind = (
+    # statement of this transaction: the gathering's own setting, the host
+    # account's kind (a hostless gathering reads NULL for the kind, and the
+    # ladder lets the join shape answer) and — since CK-76 — the home
+    # group's TEMPLATE, `capability_profiles.requires_approval` through
+    # `groups.capability_profile_id`, rung 3 of the ladder, in the same
+    # one statement as two more outer joins; a groupless gathering reads
+    # NULL and the rung is passed over as before. The household template
+    # is `false`, so a group gathering resolves open from TEMPLATE where a
+    # groupless one resolves open from JOIN_SHAPE: the same `live`.
+    host_setting, host_kind, template_default = (
         await db.execute(
-            select(Gathering.requires_approval, Account.kind)
+            select(Gathering.requires_approval, Account.kind, CapabilityProfile.requires_approval)
             .outerjoin(Account, Account.id == Gathering.host_account_id)
+            .outerjoin(Group, Group.id == Gathering.owning_group_id)
+            .outerjoin(CapabilityProfile, CapabilityProfile.id == Group.capability_profile_id)
             .where(Gathering.id == row.gathering_id)
         )
     ).one()
-    gate = publication.resolve_gathering(host_setting=host_setting, host_kind=host_kind)
+    gate = publication.resolve_gathering(
+        host_setting=host_setting, host_kind=host_kind, template_default=template_default
+    )
     values: dict = dict(
         status=MediaStatus.READY,
         claimed_at=None,

@@ -670,9 +670,12 @@ async def test_a_keeperless_gathering_refuses_uploads(client, capsys, db_session
 async def test_a_group_gathering_charges_the_groups_keeper(
     client, capsys, db_session_factory, monkeypatch
 ):
-    # The resolver's first rung reaching the quota gate for the first time.
-    # A constructed subject, because `owning_group_id` still has no writer
-    # (Arc B's): the creator's gathering is moved into a group whose keeper
+    # The resolver's first rung reaching the quota gate for the first time
+    # (CK-50). A constructed subject, because `owning_group_id` had no
+    # writer until CK-76 — the API-created group gathering charging the
+    # group's keeper is pinned in tests/test_group_gatherings.py, and this
+    # one stays so the gate's pin does not depend on the create path: the
+    # creator's gathering is moved into a group whose keeper
     # is a second account, its own keeper column NULLed (the CHECK
     # insists), its host left as the creator so the creator still uploads
     # through the read audience. The GROUP's keeper's headroom decides.

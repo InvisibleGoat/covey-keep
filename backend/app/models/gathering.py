@@ -29,13 +29,18 @@ from app.models.enums import (
 
 
 class Gathering(Base):
-    """The one keepable object (keeper record §9.2). A gathering is never
-    owned by a group: groups are invite lists, and the only gathering↔group
-    link is a GatheringInvitation row. A season and a memorial are gathering
-    types, not separate objects; nothing in the schema may treat them
-    specially — except the memorial exemptions below, which are keyed on the
-    TYPE, never a flag. Look Back stays derived (every occurrence already
-    past at creation), no column.
+    """The one keepable object (keeper record §9.2). A gathering may BELONG
+    TO one group (`owning_group_id` below — written since CK-76, the
+    belongs-to link of decisions/2026-09-02-groups-as-homes.md §3): created
+    inside the group by any of its members, kept by the group's keeper,
+    every other member invited by a real GatheringInvitation row at create,
+    and never moved to another group or given one later. A group may ALSO
+    be merely invited to a gathering (a group-targeted GatheringInvitation
+    row) — the two links are different facts. A season and a memorial are
+    gathering types, not separate objects; nothing in the schema may treat
+    them specially — except the memorial exemptions below, which are keyed
+    on the TYPE, never a flag. Look Back stays derived (every occurrence
+    already past at creation), no column.
 
     Lifecycle (CK-13; the keeper a column since CK-49b, and the ONLY
     representation since CK-49c): who keeps a gathering is
@@ -95,20 +100,26 @@ class Gathering(Base):
     host_account_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("accounts.id"), nullable=True
     )
-    # The belongs-to link (decisions/2026-09-02-groups-as-homes.md §3) as a
-    # COLUMN WITH NO WRITER (0022, CK-49a). It exists so the CHECK in
-    # __table_args__ is honest and the keeper resolver's group rung is real:
+    # The belongs-to link (decisions/2026-09-02-groups-as-homes.md §3).
+    # Arrived at 0022 (CK-49a) as a COLUMN WITH NO WRITER, so the CHECK in
+    # __table_args__ was honest and the keeper resolver's group rung real;
     # since CK-49b the resolver READS it (services/keeping.py —
     # resolved_keeper_of, keeps_gathering) to find the group whose keeper
-    # answers; the write path, the home-group default and publication rungs
-    # 2 and 3 are Arc B's and none of it is built. Every row is NULL and
-    # stays NULL until then — the 0019 precedent (requires_approval sat
-    # nullable with no writer until CK-44). The class docstring's "the only
-    # gathering↔group link is a GatheringInvitation row" is still true of
-    # every row in the database, and stops being true the day Arc B writes
-    # here; that phase amends the docstring, not this one.
+    # answers; WRITTEN SINCE CK-76 by `POST /gatherings` with a `group_id`
+    # (api/gatherings.py — the caller a member of a HOUSEHOLD group; the
+    # gathering's own keeper column NULL, the CHECK insisting; one
+    # person-targeted invitation row per other live member in the same
+    # transaction), and by nothing else: a gathering never moves between
+    # groups and never gains a group after creation (the archive record
+    # §9 — a consent reason: moving it would change the default it
+    # inherits at the publication ladder's rung 2). Publication rung 3
+    # (the type's template) is reached through this column since CK-76;
+    # rung 2 (the group's own default) is still not built — no `groups`
+    # column — and arrives with the TEAM / CONGREGATION types. Indexed
+    # since 0033 (`ix_gatherings_owning_group_id`): its readers look rows
+    # up BY the column — the group's gathering list and the newcomer rows.
     owning_group_id: Mapped[Optional[UUID]] = mapped_column(
-        ForeignKey("groups.id"), nullable=True
+        ForeignKey("groups.id"), nullable=True, index=True
     )
     # A standalone gathering's own keeper — an account (0022, CK-49a; keeper
     # record v2 §3.1). NULL when the gathering belongs to a group (the group's
@@ -241,9 +252,17 @@ class Occurrence(Base):
 
 class GatheringInvitation(Base):
     """The many-to-many between a gathering and its audience — a group, a
-    sub-group, or an individual person; exactly one per row. This is the ONLY
-    link between a gathering and a group (groups own nothing). A two-family
-    gathering is two rows."""
+    sub-group, or an individual person; exactly one per row. The INVITED
+    link between a gathering and a group (a group used as an invite list);
+    since CK-76 a gathering may also BELONG TO a group through
+    `Gathering.owning_group_id`, a different fact — and a group gathering's
+    members are invited by PERSON-targeted rows here, materialized at
+    create and at join, never computed from membership at read time (the
+    archive record §6.1: removing someone from the group must never
+    silently revoke their gatherings). A row written for a newcomer by the
+    group's rule carries a NULL `invited_by_person_id` — the rule invited
+    them, not a person (the publisher's NULL-means-the-rule shape, CK-43).
+    A two-family gathering is two rows."""
 
     __tablename__ = "gathering_invitations"
     __table_args__ = (
