@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { PasskeySection } from '../components/PasskeySection'
+import { ACCOUNT_DELETED_SIGNAL } from '../lib/accountDeleted'
 import { authFetch } from '../lib/api'
 import { planLine, readBilling, type Billing } from '../lib/billing'
-import { clearToken } from '../lib/session'
 import { detectTimeZone, groupedTimeZones, timeZoneLabel } from '../lib/timezone'
 import type { Person } from '../auth/context'
 
@@ -168,10 +168,17 @@ export function Settings() {
         body: JSON.stringify({ confirm: deleteConfirm }),
       })
       if (response.status === 204) {
-        // Batched with the navigation: the confirmation screen renders, not a
-        // RequireAuth bounce to the sign-in form with no explanation.
-        navigate('/account-deleted', { replace: true })
-        clearToken()
+        // Navigate, and ONLY navigate. The session is cleared by the
+        // confirmation screen once it has rendered, on the one-shot signal
+        // this state carries (lib/accountDeleted.ts; CK-76.1). Until CK-76.1
+        // `clearToken()` followed this line, counting on one batched render —
+        // but React Router 7 runs a navigation as a transition, so an urgent
+        // auth update made in the same tick renders FIRST, while the route is
+        // still /settings, and RequireAuth redirects to `/` before the
+        // navigation lands: the person saw the sign-in form with no
+        // explanation. Nothing here may end the session while this guarded
+        // route is still the one on screen.
+        navigate('/account-deleted', { replace: true, state: ACCOUNT_DELETED_SIGNAL })
       } else {
         setDeleteState('failed')
       }
