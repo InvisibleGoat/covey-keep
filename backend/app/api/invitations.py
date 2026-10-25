@@ -73,7 +73,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, field_validator
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -127,11 +128,28 @@ SMS_UNAVAILABLE_MESSAGE = (
 # looks nothing up.
 MEMBERS_ONLY = "members_only"
 
+# The stable code on the one 409 three create routes share since CK-77.2
+# (this one, the group invitation and the group link): two identical
+# requests at once make ONE row — the loser's INSERT ... ON CONFLICT writes
+# nothing and the loser reads the row that holds — and in the vanishingly
+# rare case where that row was withdrawn between the loser's two
+# statements, there is nothing to answer with, so the loser says so and
+# asks for another try. Never a 500.
+WITHDRAWN_MEANWHILE = "withdrawn_meanwhile"
+
 
 def _not_found() -> HTTPException:
     # One body for "does not exist" and "not yours to touch" — the existence
     # of an invitation is not public information (the gatherings posture).
     return HTTPException(404, "No such invitation.")
+
+
+def _withdrawn_meanwhile(message: str) -> HTTPException:
+    # The 409 the three create routes share (WITHDRAWN_MEANWHILE's comment):
+    # the second of two requests at once found the row that held gone again
+    # before it could answer with it. Imported by api/group_invitations.py
+    # and api/group_links.py — one code, one shape.
+    return HTTPException(409, detail={"code": WITHDRAWN_MEANWHILE, "message": message})
 
 
 class InvitationCreate(BaseModel):
@@ -279,15 +297,56 @@ async def create_invitation(
     )
 
     raw_token = secrets.token_urlsafe(32)
-    row = GatheringInvitationPending(
-        gathering_id=gathering.id,
-        channel=body.channel,
-        destination=body.destination,
-        token_hash=hash_token(raw_token),
-        expires_at=now + INVITATION_TTL,
-        invited_by_person_id=ctx.person.id,
-    )
-    db.add(row)
+    # TWO REQUESTS AT ONCE GET ONE ANSWER (CK-77.2). Under READ COMMITTED
+    # each request's supersession sees only what was committed when it ran,
+    # so two invites to one destination at once each supersede nothing new
+    # and then insert beside each other — the second used to violate the
+    # live-destination partial unique at its commit, a 500 (before its
+    # send). The insert is an INSERT … ON CONFLICT on that unique: a conflict
+    # writes nothing, the loser answers with the pending row that holds —
+    # one row — and SENDS NOTHING: its token was never stored, and mailing
+    # it would send a dead link. One email in all. Nothing here is caught
+    # and nothing rolls back.
+    row = (
+        await db.execute(
+            pg_insert(GatheringInvitationPending)
+            .values(
+                gathering_id=gathering.id,
+                channel=body.channel,
+                destination=body.destination,
+                token_hash=hash_token(raw_token),
+                expires_at=now + INVITATION_TTL,
+                invited_by_person_id=ctx.person.id,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["gathering_id", "channel", "destination"],
+                index_where=and_(
+                    GatheringInvitationPending.consumed_at.is_(None),
+                    GatheringInvitationPending.revoked_at.is_(None),
+                ),
+            )
+            .returning(GatheringInvitationPending)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = await db.scalar(
+            select(GatheringInvitationPending).where(
+                GatheringInvitationPending.gathering_id == gathering.id,
+                GatheringInvitationPending.channel == body.channel,
+                GatheringInvitationPending.destination == body.destination,
+                GatheringInvitationPending.consumed_at.is_(None),
+                GatheringInvitationPending.revoked_at.is_(None),
+            )
+        )
+        if row is None:
+            # The row that won was withdrawn or accepted between the two
+            # statements above (vanishingly rare): nothing to answer with,
+            # nothing to send, never a 500.
+            raise _withdrawn_meanwhile(
+                "the outstanding invitation to that address changed just now — try again"
+            )
+        await db.commit()
+        return _pending_body(row)
     # Commit before the send, the request_link precedent: the pending record
     # exists whether or not delivery works.
     await db.commit()

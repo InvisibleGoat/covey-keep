@@ -69,13 +69,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import RATE_WINDOW
 from app.api.deps import AuthContext, get_auth_context, get_db
 from app.api.groups import _group_for_organiser, _group_for_read, is_group_admin
-from app.api.invitations import INVITATION_TTL, TokenBody
+from app.api.invitations import INVITATION_TTL, TokenBody, _withdrawn_meanwhile
 from app.config import settings
 from app.models import Group, GroupJoinRequest, GroupLink, JoinRequestOutcome, Membership, Person
 from app.security import group_link_token, parse_group_link_token
@@ -165,17 +166,41 @@ async def make_link(
     `revoked` from then on), then one row is inserted with `expires_at` =
     now + LINK_TTL. **201** `{"url", "expires_at"}` — the URL with the
     token in its fragment, which appears in this body and nowhere else.
-    The reaper runs first: expired rows an hour past expiry go."""
+    The reaper runs first: expired rows an hour past expiry go. Two makes at
+    once answer the SAME link (CK-77.2): the loser's insert writes nothing and
+    it reads the link that holds — never a fresh link the other request
+    revokes a moment later; **409** `withdrawn_meanwhile` only when that link
+    was withdrawn again before the loser could answer with it (another try
+    makes one)."""
     group = await _group_for_organiser(db, ctx, group_id)
     now = datetime.now(timezone.utc)
     await purge_stale(db, GroupLink, GroupLink.expires_at, now)
     await _revoke_links(db, group.id, now)
-    row = GroupLink(
-        group_id=group.id, created_by_person_id=ctx.person.id, expires_at=now + LINK_TTL
-    )
-    db.add(row)
+    # TWO REQUESTS AT ONCE GET ONE ANSWER (CK-77.2). Under READ COMMITTED
+    # each request's revoke sees only what was committed when it ran, so two
+    # makes at once each revoke nothing new and then insert beside each
+    # other — the second used to violate `uq_group_links_live` at its
+    # commit, a 500. The insert is an INSERT … ON CONFLICT on that partial
+    # unique: a conflict writes nothing, and the loser answers with the link
+    # that holds — the same link, never a fresh one the other request
+    # revokes a moment later. Nothing here is caught and nothing rolls back.
+    row = (
+        await db.execute(
+            pg_insert(GroupLink)
+            .values(group_id=group.id, created_by_person_id=ctx.person.id, expires_at=now + LINK_TTL)
+            .on_conflict_do_nothing(index_elements=["group_id"], index_where=GroupLink.revoked_at.is_(None))
+            .returning(GroupLink)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = await db.scalar(
+            select(GroupLink).where(GroupLink.group_id == group.id, GroupLink.revoked_at.is_(None))
+        )
+        if row is None:
+            # The link that won was withdrawn between the two statements
+            # above (vanishingly rare): nothing to answer with, never a 500.
+            raise _withdrawn_meanwhile("this group's link was withdrawn just now — try again")
     await db.commit()
-    await db.refresh(row)
     return _link_body(row)
 
 

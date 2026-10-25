@@ -63,7 +63,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, field_validator
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -77,6 +78,7 @@ from app.api.invitations import (
     MAX_INVITATIONS_PER_INVITER,
     SMS_UNAVAILABLE_MESSAGE,
     TokenBody,
+    _withdrawn_meanwhile,
 )
 from app.brand import PRODUCT_NAME
 from app.config import settings
@@ -184,7 +186,10 @@ async def create_group_invitation(
     either rate limit. A fresh invite to a destination with a live pending
     row supersedes it. The email carries the group's name, the inviter's
     display name and the link; console mode prints it, as every send
-    does."""
+    does. Two invites to one destination at once make ONE row and send ONE
+    email (CK-77.2): the loser's insert writes nothing, it answers with the
+    row that holds and sends nothing; **409** `withdrawn_meanwhile` only when
+    that row was withdrawn again before the loser could answer with it."""
     group = await _group_for_organiser(db, ctx, group_id)
     now = datetime.now(timezone.utc)
 
@@ -231,15 +236,53 @@ async def create_group_invitation(
     )
 
     raw_token = secrets.token_urlsafe(32)
-    row = GroupInvitationPending(
-        group_id=group.id,
-        channel=body.channel,
-        destination=body.destination,
-        token_hash=hash_token(raw_token),
-        expires_at=now + INVITATION_TTL,
-        invited_by_person_id=ctx.person.id,
-    )
-    db.add(row)
+    # TWO REQUESTS AT ONCE GET ONE ANSWER (CK-77.2) — api/invitations.py's
+    # shape exactly: the insert is an INSERT … ON CONFLICT on the
+    # live-destination partial unique, a conflict writes nothing, the loser
+    # answers with the pending row that holds and SENDS NOTHING (its token
+    # was never stored). Before CK-77.2 the second insert violated the
+    # unique at its commit — a 500, before its send. Nothing here is caught
+    # and nothing rolls back.
+    row = (
+        await db.execute(
+            pg_insert(GroupInvitationPending)
+            .values(
+                group_id=group.id,
+                channel=body.channel,
+                destination=body.destination,
+                token_hash=hash_token(raw_token),
+                expires_at=now + INVITATION_TTL,
+                invited_by_person_id=ctx.person.id,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["group_id", "channel", "destination"],
+                index_where=and_(
+                    GroupInvitationPending.consumed_at.is_(None),
+                    GroupInvitationPending.revoked_at.is_(None),
+                ),
+            )
+            .returning(GroupInvitationPending)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = await db.scalar(
+            select(GroupInvitationPending).where(
+                GroupInvitationPending.group_id == group.id,
+                GroupInvitationPending.channel == body.channel,
+                GroupInvitationPending.destination == body.destination,
+                GroupInvitationPending.consumed_at.is_(None),
+                GroupInvitationPending.revoked_at.is_(None),
+            )
+        )
+        if row is None:
+            # The row that won was withdrawn or accepted between the two
+            # statements above (vanishingly rare): nothing to answer with,
+            # nothing to send, never a 500.
+            raise _withdrawn_meanwhile(
+                "the outstanding invitation to that address changed just now — try again"
+            )
+        await db.commit()
+        return _pending_body(row)
     # Commit before the send, the request_link precedent: the pending record
     # exists whether or not delivery works.
     await db.commit()

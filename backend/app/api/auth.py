@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, field_validator
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
@@ -223,16 +224,41 @@ async def verify(
     ):
         return _callback_redirect(_ERROR_FRAGMENT)
 
+    # Plain values from the token row, read once: the address and the ToS
+    # version the sign-in form sent. Nothing below rolls back, and nothing
+    # below reads the row object again.
+    email, tos_version = row.email, row.tos_version
+
+    # CONSUME FIRST, BY A GUARDED UPDATE (CK-77.2) — before the person is
+    # looked up or written. `row.consumed_at = now` on the row read above let
+    # ONE LINK OPENED TWICE AT ONCE be redeemed twice: both openings read it
+    # unconsumed, both assigned, both minted a session — a double click on
+    # the email's link, whose text says it can be used once. The guard makes
+    # the second opening's UPDATE wait on the first's row lock and then
+    # re-evaluate: the stamp is set, the rowcount is 0, and the answer is the
+    # uniform error, as for any used link. A link signs in once. (A return
+    # below without a commit — the pre-CK-6 refusal — rolls this stamp back
+    # with the session, leaving the row exactly as it was.)
+    consumed = await db.execute(
+        update(MagicLinkToken)
+        .where(
+            MagicLinkToken.id == row.id,
+            MagicLinkToken.consumed_at.is_(None),
+            MagicLinkToken.expires_at > now,
+        )
+        .values(consumed_at=now)
+    )
+    if consumed.rowcount != 1:
+        return _callback_redirect(_ERROR_FRAGMENT)
+
     person = (
-        await db.execute(select(Person).where(Person.email == row.email))
+        await db.execute(select(Person).where(Person.email == email))
     ).scalar_one_or_none()
-    if person is None and row.tos_version is None:
+    if person is None and tos_version is None:
         # Pre-CK-6 token: no consent was collected when it was minted, so no
         # account may be created from it. (Existing people are unaffected —
         # a returning sign-in records no new acceptance.)
         return _callback_redirect(_ERROR_FRAGMENT)
-
-    row.consumed_at = now
 
     if person is None:
         # New account: local-part placeholder display name; the ToS acceptance
@@ -243,21 +269,45 @@ async def verify(
         account = Account(kind=AccountKind.PERSON)
         db.add(account)
         await db.flush()
-        person = Person(
-            display_name=row.email.split("@", 1)[0],
-            email=row.email,
-            account_id=account.id,
-        )
-        db.add(person)
-        await db.flush()
-        db.add(
-            TosAcceptance(
-                person_id=person.id,
-                version=row.tos_version,
-                accepted_at=now,
-                accepted_ip=client_ip(request),
+        account_id = account.id
+        # TWO LINKS FOR ONE NEW ADDRESS AT ONCE (CK-77.2): each verify found
+        # no person and inserted one, and the second violated `people.email`
+        # at its flush — a 500. The person is written as an INSERT … ON
+        # CONFLICT (email) DO NOTHING RETURNING: nothing returned means the
+        # other link's verify created them first, so this request deletes the
+        # account row it just inserted (an account with no person is the
+        # orphan the verifier refuses — accounts == people + organizations),
+        # re-reads the person by the address, and signs in as them. No ToS
+        # row from this request: the one that created the person recorded it.
+        # Nothing here is caught and nothing rolls back.
+        person = (
+            await db.execute(
+                pg_insert(Person)
+                .values(display_name=email.split("@", 1)[0], email=email, account_id=account_id)
+                .on_conflict_do_nothing(index_elements=["email"])
+                .returning(Person)
             )
-        )
+        ).scalar_one_or_none()
+        if person is not None:
+            db.add(
+                TosAcceptance(
+                    person_id=person.id,
+                    version=tos_version,
+                    accepted_at=now,
+                    accepted_ip=client_ip(request),
+                )
+            )
+        else:
+            await db.execute(delete(Account).where(Account.id == account_id))
+            person = (
+                await db.execute(select(Person).where(Person.email == email))
+            ).scalar_one_or_none()
+            if person is None:
+                # The person who won is gone again already (deleted between
+                # the two statements above — vanishingly rare): nothing to
+                # sign in as. The uniform error; the session's close rolls the
+                # consume and the account back, so the link is untouched.
+                return _callback_redirect(_ERROR_FRAGMENT)
 
     jwt = await mint_session(db, person, request, now)
     await db.commit()

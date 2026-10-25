@@ -1616,8 +1616,11 @@ def _distinct_tags(tags: list[str]) -> list[str]:
     """The same tag twice on one photograph is refused — and `Tommy` and
     `tommy` are the same tag (case is preserved as typed; equality is
     case-insensitive, the way the search is). App-layer so the 422 lands
-    on the entry that repeats, not on the list; the UNIQUE on
-    (media_id, tag) is the exact-match backstop beneath it."""
+    on the entry that repeats, not on the list. The UNIQUE on
+    (media_id, tag) beneath it is an exact-match constraint, not a backstop
+    a request reaches: two saves at once take turns on the photograph's row
+    (patch_media's lock, CK-77.2), so a replacement never meets it — before
+    CK-77.2 a race did, as a 500."""
     seen: set[str] = set()
     for index, tag in enumerate(tags):
         key = tag.lower()
@@ -1658,7 +1661,9 @@ async def patch_media(
     photograph is a different power). The row must be visible to the
     caller under the read rule AND theirs: anyone else, the host included,
     draws the media 404 identical to a missing id. Nothing else on the row
-    moves — not `status`, not `publication_state`, not `filename`."""
+    moves — not `status`, not `publication_state`, not `filename`. Two saves
+    at once take turns on the row (CK-77.2): the second waits, then replaces
+    the first's whole list with its own — one list, the last writer's."""
     now = datetime.now(timezone.utc)
     row = (
         await db.execute(
@@ -1669,6 +1674,19 @@ async def patch_media(
                 _visible_media(ctx, now),
                 Media.uploader_person_id == ctx.person.id,
             )
+            # LOCKED FOR THE SAVE (CK-77.2; `_review_row`'s shape). The tag
+            # write below is a wholesale replacement — delete, then insert —
+            # which is not atomic under READ COMMITTED: two saves at once
+            # each delete only what they can see and insert beside each
+            # other, so an identical list met the UNIQUE as a 500, two
+            # different lists left their union, and `Tommy` beside `tommy`
+            # left the case twin the verifier forbids. No ON CONFLICT makes a
+            # replacement atomic; the two saves must take turns on the
+            # photograph's row, and the second then replaces the first's
+            # whole list with its own. (The companions' replacement is
+            # serialised by the RSVP row's own UPDATE, which always runs
+            # first; this save has no such write unless the caption changes.)
+            .with_for_update(of=Media)
         )
     ).scalar_one_or_none()
     if row is None:
@@ -1682,7 +1700,9 @@ async def patch_media(
         tags = _distinct_tags(body.tags)
         # Wholesale replacement: the list IS the value (the companions
         # shape). The Core delete executes immediately, before the inserts
-        # flush, so the unique never sees old and new rows together.
+        # flush, so the unique never sees this save's old and new rows
+        # together — and under the row lock above it never sees another
+        # save's rows either: the two take turns (CK-77.2).
         await db.execute(delete(MediaTag).where(MediaTag.media_id == row.id))
         for tag in tags:
             db.add(MediaTag(media_id=row.id, tag=tag, added_by_person_id=ctx.person.id))
