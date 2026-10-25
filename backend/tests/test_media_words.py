@@ -390,37 +390,39 @@ async def test_search_never_returns_a_photograph_the_caller_may_not_see(
     client, capsys, db_session_factory
 ):
     """THE LEAK TEST (the phase's §5): the search runs INSIDE the audience
-    filter. A keeper and an accepted invitee who may not see a pending
-    photograph get nothing for a term that matches its caption, its tag,
-    and its file name — the same nothing a term matching no photograph
-    returns — while the host, who may see it, finds it; a stranger draws
-    the gathering 404 byte-identical to a missing gathering. And the search
-    narrows without widening: a `live` photograph IS found by the keeper."""
+    filter. An accepted invitee who may not see a pending photograph gets
+    nothing for a term that matches its caption, its tag, and its file
+    name — the same nothing a term matching no photograph returns — while
+    the host, who may see it, finds it; a stranger draws the gathering 404
+    byte-identical to a missing gathering, and so does the keeper since
+    CK-77 (keeping lets no one in; until then the keeper searched beside
+    the invitee). And the search narrows without widening: a `live`
+    photograph IS found by the invitee."""
     cast = await _cast(client, capsys, db_session_factory)
     pending = (await _intent(client, cast.uploader, cast.gathering_id, filename="Tommy-at-the-park.jpg")).json()[
         "intents"
     ][0]["media"]["id"]
     await _patch(client, cast.uploader, pending, {"caption": "Tommy on the swings", "tags": ["Tommy"]})
 
-    for headers in (cast.keeper, cast.bystander):
-        for term in ("Tommy", "swings", "park", "tommy-at-the"):
-            found = await _search(client, headers, cast.gathering_id, term)
-            assert found.status_code == 200, term
-            assert found.json() == {"media": []}, term
-            # Indistinguishable from a term that matches nothing at all.
-            assert found.json() == (await _search(client, headers, cast.gathering_id, "zzz")).json()
+    for term in ("Tommy", "swings", "park", "tommy-at-the"):
+        found = await _search(client, cast.bystander, cast.gathering_id, term)
+        assert found.status_code == 200, term
+        assert found.json() == {"media": []}, term
+        # Indistinguishable from a term that matches nothing at all.
+        assert found.json() == (await _search(client, cast.bystander, cast.gathering_id, "zzz")).json()
     for headers in (cast.host, cast.uploader):
         assert _ids(await _search(client, headers, cast.gathering_id, "Tommy")) == [pending]
 
-    stranger = await _search(client, cast.stranger, cast.gathering_id, "Tommy")
-    assert stranger.status_code == 404
-    assert stranger.json() == (await _search(client, cast.stranger, MISSING_ID, "Tommy")).json()
+    for headers in (cast.stranger, cast.keeper):  # the keeper is outside the audience since CK-77
+        refused = await _search(client, headers, cast.gathering_id, "Tommy")
+        assert refused.status_code == 404
+        assert refused.json() == (await _search(client, headers, MISSING_ID, "Tommy")).json()
 
-    # Narrows, never widens: the keeper finds a live photograph by its tag,
-    # and still nothing of the pending one beside it.
+    # Narrows, never widens: the invitee finds a live photograph by its
+    # tag, and still nothing of the pending one beside it.
     live = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
     await _patch(client, cast.uploader, live, {"tags": ["Tommy"]})
-    assert _ids(await _search(client, cast.keeper, cast.gathering_id, "tommy")) == [live]
+    assert _ids(await _search(client, cast.bystander, cast.gathering_id, "tommy")) == [live]
     assert set(_ids(await _search(client, cast.uploader, cast.gathering_id, "tommy"))) == {live, pending}
 
 

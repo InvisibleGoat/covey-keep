@@ -260,14 +260,18 @@ async def test_a_destroyed_photograph_is_invisible_to_everyone_at_once(
         db_session_factory, cast, publication_state=PublicationState.LIVE
     )
     await _resync_counts(db_session_factory, cast.gathering_id)
-    for headers in (cast.host, cast.uploader, cast.keeper, cast.bystander):
+    # (The keeper is not in these loops since CK-77 — keeping lets no one
+    # in, so their list is the gathering 404 before and after; the URL
+    # below is the same media 404 for them either way.)
+    for headers in (cast.host, cast.uploader, cast.bystander):
         assert doomed in _ids(await _list(client, headers, cast.gathering_id))
 
     assert (await _destroy(client, cast.host, doomed)).status_code == 200
 
     missing = await client.get(f"/media/{MISSING_ID}/url", params={"layer": "web"}, headers=cast.host)
-    for headers in (cast.host, cast.uploader, cast.keeper, cast.bystander):
+    for headers in (cast.host, cast.uploader, cast.bystander):
         assert doomed not in _ids(await _list(client, headers, cast.gathering_id))
+    for headers in (cast.host, cast.uploader, cast.keeper, cast.bystander):
         gone = await _url(client, headers, doomed)
         # Byte-identical to a missing id — nobody learns it ever existed.
         assert (gone.status_code, gone.json()) == (404, missing.json())
@@ -325,8 +329,10 @@ async def test_a_destroyed_photograph_keeps_its_words_and_no_search_can_reach_th
         )
     assert tags == ["jenny", "rounders"]
     # And nobody can read any of it — the search runs inside the audience
-    # rule (CK-39), and the audience rule now excludes the rung.
-    for headers in (cast.uploader, cast.host, cast.keeper, cast.bystander):
+    # rule (CK-39), and the audience rule now excludes the rung. (The
+    # keeper is outside the audience since CK-77 and draws the gathering
+    # 404 on any search; not in this loop.)
+    for headers in (cast.uploader, cast.host, cast.bystander):
         for term in ("Jenny", "jenny", "rounders"):
             found = await client.get(
                 f"/gatherings/{cast.gathering_id}/media",
@@ -505,13 +511,15 @@ async def test_the_keeper_may_not_destroy_or_remove_a_photograph(
     # THE PIN THIS PHASE TURNS ON (bin record §7.1; the removal rule): a
     # keeper holds a REFERENCE, never a right to publish or destroy —
     # ownership governs provenance and retrieval, not an exclusive delete
-    # right. The keeper here is in the gathering's read audience and CAN
-    # see the photograph, so the 404 is the authorization rule and never a
-    # broken fixture.
+    # right. Until CK-77 the keeper here was in the gathering's read
+    # audience and COULD see the photograph, so the 404 was the
+    # authorization rule and not a broken fixture; since CK-77 keeping lets
+    # no one in and the keeper cannot even list it — the rule holds a
+    # fortiori, and the 404 is the same 404 a stranger draws.
     cast = await _cast(client, capsys, db_session_factory)
     live = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
     before = await _resync_counts(db_session_factory, cast.gathering_id)
-    assert live in _ids(await _list(client, cast.keeper, cast.gathering_id))
+    assert (await _list(client, cast.keeper, cast.gathering_id)).status_code == 404
 
     missing = await _destroy(client, cast.keeper, MISSING_ID)
     for act in (_destroy, _remove):
@@ -934,10 +942,12 @@ async def test_a_destruction_that_cannot_reach_the_store_climbs_the_ladder_and_s
     assert "may still exist" in row.last_error
     # Never claimed again — the predicate, not the rung, is what stops it.
     assert await poll_once(db_session_factory, worker) is Poll.IDLE
-    # Uncounted, and invisible to everyone, even now.
+    # Uncounted, and invisible to everyone, even now. (The keeper is
+    # outside the audience since CK-77 — their list is the gathering 404.)
     assert await _counts(db_session_factory, cast.gathering_id) == (0, 0)
-    for headers in (cast.host, cast.uploader, cast.keeper):
+    for headers in (cast.host, cast.uploader):
         assert _ids(await _list(client, headers, cast.gathering_id)) == []
+    assert (await _list(client, cast.keeper, cast.gathering_id)).status_code == 404
 
 
 async def test_a_rejected_credential_releases_a_destruction_unpenalized_and_says_why(
@@ -1134,25 +1144,28 @@ async def test_the_verifier_asserts_a_destroying_row_that_spent_an_attempt_and_i
     # invariants, with CK-45's at-least-one-membership line replaced), so
     # 336; CK-76 added three (the index on gatherings.owning_group_id, no
     # pending invitation on a group gathering, every group gathering under
-    # a HOUSEHOLD group), so 339.
+    # a HOUSEHOLD group), so 339; CK-77 added twenty-three (the places
+    # table's shape, the member_place labels, invitees_chosen and its CHECK,
+    # three data lines) and retired one (CK-75's backup-NULL line, replaced
+    # by the 0009 block's is-gone line), so 361.
     await plant(1, False, None)
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (338, 1, 1), out
+    assert (passed, failed, code) == (360, 1, 1), out
     assert f"FAIL  {label}" in out and "1 destroying media row(s)" in out
 
     # Passes with the reason present — what the release now writes.
     await plant(1, False, ingest.ERROR_CREDENTIAL_REJECTED)
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (339, 0, 0), out
+    assert (passed, failed, code) == (361, 0, 0), out
     assert f"PASS  {label}" in out
 
     # Must NOT fire on a fresh mark (attempts 0, no reason: nothing is
     # wrong with it) ...
     await plant(0, False, None)
-    assert _verifier()[:3] == (339, 0, 0)
+    assert _verifier()[:3] == (361, 0, 0)
     # ... nor on a held row: the claim writes no reason, the outcome will.
     await plant(1, True, None)
-    assert _verifier()[:3] == (339, 0, 0)
+    assert _verifier()[:3] == (361, 0, 0)
 
 
 async def test_a_stalled_destruction_is_reclaimed_and_the_abandoned_attempt_counted(

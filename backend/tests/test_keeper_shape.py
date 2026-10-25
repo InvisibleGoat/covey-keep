@@ -16,15 +16,23 @@ CK-49c (migration 0023) re-ran 0022's backfill under the release guard and
 dropped the relation, so the column is now the only representation there
 is. The pins at the bottom, from the cutover: creation and `keep()` write
 the column (the "and no kept row" half of each died with the table — there
-is no longer a second place a keep could land); a gathering whose keeper
-is set is fully visible to its keeper through the keeper rung ALONE; the
-SQL form of the ladder agrees with the Python
-resolver on every legal shape and correlates correctly with a `Gathering`
-in the outer FROM; and a gathering that belongs to a group (constructed —
-written here by hand; the API's write path is CK-76's and pinned in
-tests/test_group_gatherings.py, this subject kept so the pin stays on the
-resolver alone) is seen, listed and counted by the
-group's keeper and by nobody through its own NULL column.
+is no longer a second place a keep could land); the SQL form of the ladder
+agrees with the Python resolver on every legal shape and correlates
+correctly with a `Gathering` in the outer FROM (the SQL form has NO caller
+since CK-77 and is kept for the storage screen — this pin is what keeps it
+honest meanwhile).
+
+TWO PINS INVERTED AT CK-77 (keeping-explained §5.11, Steven 2026-10-24:
+KEEPING LETS NO ONE IN). From CK-49b to CK-77 "a gathering whose keeper is
+set is fully visible to its keeper through the keeper rung ALONE" was THE
+test the cutover's correctness depended on, and a constructed group
+gathering was "seen, listed and counted by the group's keeper". Since CK-77
+no audience criterion names a keeper column: a keeper who is neither host,
+co-host nor invited draws the gathering 404 byte-identical to a stranger's
+on the detail, the list, the media list and the upload intent — and is
+still CHARGED for the gathering's photographs, which is the half of each
+pin that survives. The resolver's rungs are unchanged; what changed is who
+asks it: the quota and the deletion lapse, and no read path.
 """
 
 import inspect
@@ -287,20 +295,23 @@ async def test_keep_writes_the_column_and_never_the_relation(db_session_factory)
         assert gathering.last_keeper_left_at is None
 
 
-async def test_a_keeper_with_no_kept_row_sees_everything(client, capsys, db_session_factory):
-    # THE test CK-49b's correctness depended on, and still the audience's
-    # spine. A gathering whose keeper_account_id is set — the state every
-    # gathering created since the cutover is in, and since CK-49c (0023)
-    # the only shape a kept gathering can have — is visible to its keeper
-    # through the resolver. First the deployed shape exactly
-    # (creator = host = keeper): the detail, the list, the
-    # media list and an upload intent all answer. Then the host is set to
-    # NULL — the claimable state, legal — so that ONLY the keeper rung can
-    # admit the creator, and the detail, the list and the media list
-    # (including a live photograph) still answer through it. And the
-    # audience did not widen: a signed-in account that keeps nothing, hosts
-    # nothing and was never invited draws the 404 byte-identical to a
-    # missing id, before and after.
+async def test_a_keeper_who_is_not_the_host_sees_nothing_through_keeping(
+    client, capsys, db_session_factory
+):
+    # INVERTED AT CK-77 — keeping lets no one in (keeping-explained §5.11).
+    # From CK-49b to CK-77 this was THE test the cutover's correctness
+    # depended on: a gathering whose keeper_account_id is set was fully
+    # visible to its keeper through the keeper rung ALONE — with the host
+    # NULLed, the detail, the list, the media list (a live photograph
+    # included) and an upload intent all answered the creator as its
+    # keeper. Since CK-77 no audience criterion names a keeper column, so
+    # part (2) now reads the OTHER way: with the host NULLed the creator —
+    # still the keeper, never invited — draws the 404 byte-identical to a
+    # missing id on the detail, the media list and the upload intent, finds
+    # nothing in the list, exactly as the outsider does; and is STILL
+    # CHARGED for the photograph (account_usage), which is the half of the
+    # old pin that survives. Part (1) — creator = host = keeper — still
+    # answers everything, AS THE HOST.
     address = "keeper-only@example.com"
     headers = await _signed_in_headers(client, capsys, address)
     outsider = await _signed_in_headers(client, capsys, "outsider@example.com")
@@ -360,13 +371,34 @@ async def test_a_keeper_with_no_kept_row_sees_everything(client, capsys, db_sess
     )
     assert intent.status_code == 201, intent.text
 
-    # (2) The keeper rung alone: host NULL (claimable), keeper still set.
+    # (2) Host NULL (claimable), keeper still set: the keeper rung alone —
+    # which since CK-77 admits NOBODY. The creator reads exactly what the
+    # outsider reads, and is still charged.
     async with db_session_factory() as db:
         gathering = await db.get(Gathering, gathering_id)
         gathering.host_account_id = None
+        gathering.photo_count = 1
         await db.commit()
-    await _everything_answers()
     await _the_outsider_is_refused()
+    outsider_missing = await client.get(f"/gatherings/{MISSING_ID}", headers=outsider)
+    for path in (f"/gatherings/{gathering_id}", f"/gatherings/{gathering_id}/media"):
+        refused = await client.get(path, headers=headers)
+        missing = await client.get(path.replace(gathering_id, MISSING_ID), headers=headers)
+        assert (refused.status_code, refused.content) == (404, missing.content), path
+    assert (await client.get("/gatherings", headers=headers)).json()["gatherings"] == []
+    assert (await client.get(f"/media/{photo_id}/url", params={"layer": "web"}, headers=headers)).status_code == 404
+    refused_intent = await client.post(
+        f"/gatherings/{gathering_id}/media/intents",
+        json={"items": [{"content_type": "image/jpeg", "size_bytes": 4096}]},
+        headers=headers,
+    )
+    assert refused_intent.status_code == 404
+    assert refused_intent.content == outsider_missing.content
+    async with db_session_factory() as db:
+        # Charged all the same — three photo-equivalents the keeper cannot
+        # see one of: the planted `photo_count`, the planted photograph (at
+        # `uploaded`, so in flight and counted as 1), and the intent from (1).
+        assert await account_usage(db, account) == 3
 
 
 async def test_the_sql_ladder_agrees_with_the_resolver_on_every_legal_shape(
@@ -419,7 +451,7 @@ async def test_the_sql_ladder_agrees_with_the_resolver_on_every_legal_shape(
             assert set(rows) == expected
 
 
-async def test_a_group_gathering_is_seen_listed_and_counted_by_the_groups_keeper(
+async def test_a_group_gathering_is_counted_by_the_groups_keeper_and_shown_to_nobody_through_keeping(
     client, capsys, db_session_factory
 ):
     # The resolver's first rung, live for the first time (at CK-49b) —
@@ -427,14 +459,16 @@ async def test_a_group_gathering_is_seen_listed_and_counted_by_the_groups_keeper
     # writer until CK-76 (the API-created shape is pinned in
     # tests/test_group_gatherings.py; this one stays so the pin is on the
     # resolver and not the create path). A gathering created through the
-    # API is moved into a group
-    # whose keeper is a second account, its own keeper column NULLed (the
-    # CHECK insists) and its host NULLed so nothing but the group rung can
-    # admit anyone: the group's keeper reads it, lists it and is charged
-    # its photographs (in photographs since CK-51b — the unit changed, the
-    # number below did not); the creator — not host, not keeper, never
-    # invited — draws the 404 byte-identical to a missing id and is
-    # charged nothing.
+    # API is moved into a group whose keeper is a second account, its own
+    # keeper column NULLed (the CHECK insists) and its host NULLed so
+    # nothing but the group rung could admit anyone: the group's keeper IS
+    # CHARGED its photographs (in photographs since CK-51b — the unit
+    # changed, the number below did not) and — INVERTED AT CK-77, keeping
+    # lets no one in — reads it, lists it and sees its media exactly as the
+    # creator does: not at all, the 404 byte-identical to a missing id.
+    # Until CK-77 the group's keeper read, listed and saw it through the
+    # rung alone; the creator — not host, not keeper, never invited — was
+    # refused then and is refused now, and is charged nothing.
     creator_address, keeper_address = "creator@example.com", "group-keeper@example.com"
     creator = await _signed_in_headers(client, capsys, creator_address)
     keeper = await _signed_in_headers(client, capsys, keeper_address)
@@ -466,14 +500,12 @@ async def test_a_group_gathering_is_seen_listed_and_counted_by_the_groups_keeper
         group.keeper_account_id = keeper_account.id
         await db.commit()
 
-    detail = await client.get(f"/gatherings/{gathering_id}", headers=keeper)
-    assert detail.status_code == 200, detail.text
-    assert [g["id"] for g in (await client.get("/gatherings", headers=keeper)).json()["gatherings"]] == [
-        gathering_id
-    ]
-    assert (await client.get(f"/gatherings/{gathering_id}/media", headers=keeper)).status_code == 200
-    missing = await client.get(f"/gatherings/{MISSING_ID}", headers=creator)
-    refused = await client.get(f"/gatherings/{gathering_id}", headers=creator)
-    assert missing.status_code == refused.status_code == 404
-    assert refused.content == missing.content
-    assert (await client.get("/gatherings", headers=creator)).json()["gatherings"] == []
+    for headers in (keeper, creator):
+        missing = await client.get(f"/gatherings/{MISSING_ID}", headers=headers)
+        refused = await client.get(f"/gatherings/{gathering_id}", headers=headers)
+        assert missing.status_code == refused.status_code == 404
+        assert refused.content == missing.content
+        assert (await client.get("/gatherings", headers=headers)).json()["gatherings"] == []
+        media_missing = await client.get(f"/gatherings/{MISSING_ID}/media", headers=headers)
+        media_refused = await client.get(f"/gatherings/{gathering_id}/media", headers=headers)
+        assert (media_refused.status_code, media_refused.content) == (404, media_missing.content)

@@ -219,8 +219,9 @@ async def test_the_host_makes_an_accepted_invitee_a_co_host_and_every_body_says_
     """One row — (gathering, the invitee's account), added by the host —
     and `caller_role` on the detail, the list and (below) the patch body:
     `host` for the host, `co_host` for the co-host, null for an invitee
-    who is not one and for the keeper. The list's role rides the one
-    statement (the CK-20 statement-count pin passes unedited)."""
+    who is not one. The list's role rides the one statement (the CK-20
+    statement-count pin passes unedited). The keeper — null here until
+    CK-77 — draws the gathering 404 since: keeping lets no one in."""
     cast, invitation_id = await _co_hosted(client, capsys, db_session_factory)
     async with db_session_factory() as db:
         host_account = (await _account_for(db, HOST)).id
@@ -231,21 +232,17 @@ async def test_the_host_makes_an_accepted_invitee_a_co_host_and_every_body_says_
         (cast.host, "host"),
         (cast.bystander, "co_host"),
         (cast.uploader, None),
-        (cast.keeper, None),
     ):
         detail = await _detail(client, headers, cast.gathering_id)
         assert detail.status_code == 200
         assert detail.json()["caller_role"] == role, role
-        if headers is cast.host:
-            # The list is kept-or-invited (CK-49b) and the cast's host is
-            # neither — the sponsorship shape moves the keeper column — so
-            # the host's own gathering is absent from THEIR list. A
-            # pre-existing gap of the list rule, not this phase's;
-            # recorded in the report.
-            continue
         listed = await client.get("/gatherings", headers=headers)
         (item,) = [g for g in listed.json()["gatherings"] if g["id"] == cast.gathering_id]
         assert item["caller_role"] == role, role
+    # The keeper (CK-77 — keeping lets no one in): the gathering 404, and
+    # nothing in their list. Until CK-77 this seat read `caller_role` null.
+    assert (await _detail(client, cast.keeper, cast.gathering_id)).status_code == 404
+    assert cast.gathering_id not in {g["id"] for g in (await client.get("/gatherings", headers=cast.keeper)).json()["gatherings"]}
     # The co-host list itself is NOT on the body, for anyone.
     assert "co_hosts" not in (await _detail(client, cast.host, cast.gathering_id)).json()
 
@@ -541,13 +538,20 @@ async def test_the_full_rsvp_list_is_the_organisers_view_in_every_mode(
             headers=cast.host,
         )
     ).status_code == 200
-    # A second attendee who is not an organiser: names withheld.
-    keeper_view = (await _get_rsvps(client, cast.keeper, occurrence_id)).json()
-    assert keeper_view["rsvps"] == []  # has not answered yes
-    assert (await _put_rsvp(client, cast.keeper, occurrence_id, {"response": "yes"})).status_code == 200
-    keeper_view = (await _get_rsvps(client, cast.keeper, occurrence_id)).json()
-    assert {r["companions"] for r in keeper_view["rsvps"] if r["companions"] is not None} == set()
-    assert [r["total"] for r in keeper_view["rsvps"] if r["total"] == 2] == [2]
+    # A second attendee who is not an organiser: names withheld. (The
+    # KEEPER took this seat until CK-77; since then keeping lets no one in,
+    # so a keeper who is not invited cannot RSVP at all — a fresh invitee
+    # takes it, and the keeper's own RSVP read is the 404.)
+    second = await _signed_in_headers(client, capsys, "second-attendee@example.com")
+    second_token = await _invite_token(client, capsys, cast.host, cast.gathering_id, "second-attendee@example.com")
+    await _accept(client, second, second_token)
+    second_view = (await _get_rsvps(client, second, occurrence_id)).json()
+    assert second_view["rsvps"] == []  # has not answered yes
+    assert (await _put_rsvp(client, second, occurrence_id, {"response": "yes"})).status_code == 200
+    second_view = (await _get_rsvps(client, second, occurrence_id)).json()
+    assert {r["companions"] for r in second_view["rsvps"] if r["companions"] is not None} == set()
+    assert [r["total"] for r in second_view["rsvps"] if r["total"] == 2] == [2]
+    assert (await _get_rsvps(client, cast.keeper, occurrence_id)).status_code == 404
     co_host_view = (await _get_rsvps(client, cast.bystander, occurrence_id)).json()
     assert co_host_view["own"] is None
     assert [r["companions"] for r in co_host_view["rsvps"] if r["companions"]] == [["Tommy"]]
@@ -766,7 +770,7 @@ async def test_a_co_hosts_restore_passes_through_the_gate(client, capsys, db_ses
     *_, published_at, publisher = await _state(db_session_factory, unstamped)
     assert published_at is not None and abs((published_at - t0).total_seconds()) < 60
     assert publisher is None  # the rule published it — never the co-host
-    for headers in (cast.uploader, cast.keeper, co_host, cast.host):
+    for headers in (cast.uploader, co_host, cast.host):  # the keeper is outside the audience since CK-77
         assert set(_ids(await _list(client, headers, cast.gathering_id))) == {stamped, unstamped}
     assert await _counts(db_session_factory, cast.gathering_id) == before
     await _stamp_invariants_hold(db_session_factory)
@@ -808,7 +812,10 @@ async def test_the_keeper_and_the_upload_are_unaffected(client, capsys, db_sessi
     is not affected and was never admin-gated"), and the reservation lands
     on the KEEPER's allowance, never the co-host's; the keeper gains
     nothing from co-hosts existing — no bin, no takedown, no list, no
-    patch — and keeps everything they had (the read, the upload)."""
+    patch. (Until CK-77 this test ended with the keeper keeping what they
+    had — the read and the upload; since CK-77 keeping lets no one in, so a
+    keeper who is neither host, co-host nor invited has neither, and is
+    still charged — tests/test_member_places.py pins the charge.)"""
     cast, _ = await _co_hosted(client, capsys, db_session_factory)
     co_host = cast.bystander
     live = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
@@ -835,10 +842,13 @@ async def test_the_keeper_and_the_upload_are_unaffected(client, capsys, db_sessi
     refused = await _remove(client, cast.keeper, live)
     assert (refused.status_code, refused.json()) == (404, (await _remove(client, cast.keeper, MISSING_ID)).json())
     assert (await _remove(client, co_host, live)).status_code == 200
+    # Since CK-77 the keeper by keeping is outside the audience: the
+    # gathering 404 on the bin view, the detail and the upload intent alike
+    # (each read 200 / 201 for the keeper until then).
     view = await _bin_view(client, cast.keeper, cast.gathering_id)
-    assert (view.status_code, _ids(view)) == (200, [])
-    assert (await _detail(client, cast.keeper, cast.gathering_id)).status_code == 200
-    assert (await _intents(client, cast.keeper, cast.gathering_id, [_item()])).status_code == 201
+    assert (view.status_code, view.json()) == (404, missing_404)
+    assert (await _detail(client, cast.keeper, cast.gathering_id)).status_code == 404
+    assert (await _intents(client, cast.keeper, cast.gathering_id, [_item()])).status_code == 404
 
 
 async def test_account_deletion_drops_the_deleted_accounts_co_host_rows_and_keeps_the_rows_it_added(
@@ -888,7 +898,9 @@ async def test_a_co_host_row_on_a_hostless_gathering_still_organises_and_nobody_
     """co-hosts §7's first item, provisionally: the host relinquished (the
     claimable state — NULL), the co-host still edits, invites and reads the
     list, while the FORMER host draws the gathering 404 on every organiser
-    route and `caller_role` reads null for them; and nobody is host — the
+    route — and since CK-77 on the detail too, because keeping lets no one
+    in (until then they still READ it as its keeper and `caller_role` read
+    null for them); and nobody is host — the
     switch is nobody's (the co-host's 422 stands), the co-host cannot add
     or remove co-hosts (the gathering 404 — the add is the host's alone),
     and nothing reserved is reachable."""
@@ -898,15 +910,16 @@ async def test_a_co_host_row_on_a_hostless_gathering_still_organises_and_nobody_
     async with db_session_factory() as db:
         gathering = await db.get(Gathering, UUID(cast.gathering_id))
         # The deploy's shape: the creator keeps the gathering and the host
-        # is relinquished — so the former host still READS it (as its
-        # keeper) and organises nothing. (The cast had moved the keeper
+        # is relinquished — so the former host still PAYS for it and, since
+        # CK-77, sees nothing of it: keeping lets no one in (until CK-77
+        # they still read it as its keeper). (The cast had moved the keeper
         # column to KEEPER; moved back for this test alone.)
         gathering.host_account_id = None
         gathering.keeper_account_id = (await _account_for(db, HOST)).id
         await db.commit()
 
     assert (await _detail(client, co_host, cast.gathering_id)).json()["caller_role"] == "co_host"
-    assert (await _detail(client, cast.host, cast.gathering_id)).json()["caller_role"] is None
+    assert (await _detail(client, cast.host, cast.gathering_id)).status_code == 404
     assert (await _patch_title(client, co_host, cast.gathering_id, "Carried on")).status_code == 200
     assert (await _invite(client, co_host, cast.gathering_id, "new@example.com")).status_code == 201
     assert (await _co_hosts(client, co_host, cast.gathering_id)).status_code == 200
@@ -960,7 +973,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
         host_account = (await _account_for(db, HOST)).id
 
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (339, 0, 0), out
+    assert (passed, failed, code) == (361, 0, 0), out
     for line in (
         "table gathering_co_hosts exists",
         "gathering_co_hosts primary key is (gathering_id, account_id)",
@@ -988,7 +1001,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
         )
         assert planted == 1, "the plant did not land"
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (338, 1, 1), out
+    assert (passed, failed, code) == (360, 1, 1), out
     assert f"FAIL  {exclusive}" in out and "1 co-host row(s) naming the gathering's host" in out
 
     async with db_session_factory() as db:
@@ -997,7 +1010,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
             {"g": UUID(cast.gathering_id), "a": host_account},
         )
         await db.commit()
-    assert _verifier()[:3] == (339, 0, 0)
+    assert _verifier()[:3] == (361, 0, 0)
 
 
 async def test_co_host_management_logs_nothing_at_debug(client, capsys, db_session_factory, caplog):

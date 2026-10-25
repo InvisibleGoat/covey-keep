@@ -41,17 +41,15 @@ class Group(Base):
     admin_person_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("people.id"), nullable=True
     )
-    # `backup_admin_person_id` IS NOT MAPPED HERE, ON PURPOSE (CK-76). The
-    # column still exists in the database: RETIRED at CK-75 by the co-admin
-    # relation (joining-a-group record §6 — a backup slot beside co-admins
-    # is two representations of "who else administers"), never written by
-    # anything, out of every group body since CK-75, and asserted NULL on
-    # every row by the verifier through raw SQL. CK-75 kept it mapped
-    # because the instance serving during its pre-deploy window still
-    # selected it; CK-76 unmaps it (the model no longer selects it, the
-    # deletion leg no longer NULLs it), and the DROP is the next contract
-    # step — CK-77's migration — after the release that stops reading it.
-    # Do not map it back, and do not drop it here.
+    # `backup_admin_person_id` NO LONGER EXISTS (dropped at 0034, CK-77 —
+    # the contract step). RETIRED at CK-75 by the co-admin relation
+    # (joining-a-group record §6 — a backup slot beside co-admins is two
+    # representations of "who else administers"), never written by
+    # anything, out of every group body since CK-75; UNMAPPED at CK-76 so
+    # the instance serving during 0034's pre-deploy window selected it
+    # nowhere; dropped at CK-77 with the alembic `include_object` hook that
+    # passed it over. The expand / migrate / contract split, applied to one
+    # column over three phases. Do not bring it back.
     # The group's KEEPER — an account, where the two admin columns above are
     # people (0022, CK-49a; keeper record v2 §3.1, §7: administering is a
     # relationship with the people, keeping is a relationship with the bill,

@@ -431,12 +431,13 @@ async def test_0009_constraint_names_and_no_steward_orphans(db_session_factory):
                 )
             )
         }
+        # `fk_groups_backup_admin_person_id` was in this set from 0009 to
+        # 0033: the column and its FK were dropped at 0034 (CK-77).
         assert constraints == {
             "ck_gatherings_memorial_decedent_name",
             "fk_gatherings_host_account_id",
             "fk_gatherings_created_by_account_id",
             "fk_groups_admin_person_id",
-            "fk_groups_backup_admin_person_id",
         }
         # Nothing orphaned from the renames: the old steward constraint names,
         # the old gatherings FK/index names, and the old columns are all gone.
@@ -466,6 +467,6 @@ async def test_0009_constraint_names_and_no_steward_orphans(db_session_factory):
             )
         }
         assert "admin_person_id" in group_columns
-        assert "backup_admin_person_id" in group_columns
+        assert "backup_admin_person_id" not in group_columns  # dropped at 0034 (CK-77)
         assert "steward_person_id" not in group_columns
         assert "backup_steward_person_id" not in group_columns

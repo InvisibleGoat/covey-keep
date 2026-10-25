@@ -7,10 +7,23 @@ belongs to a group has none of its own and is kept by the group's
 (`groups.keeper_account_id`, reached through `gatherings.owning_group_id`);
 both NULL is the Unkept rung (§5) — a state, never an error. `resolve_keeper`
 is the ladder, and EVERY consumer asks it: a caller holding a row goes
-through `resolved_keeper_of`, a WHERE clause that decides which rows are
-fetched at all goes through `keeps_gathering` (the same ladder as SQL — see
-its docstring for why that is safe and what pins it). Nothing reads the
-column directly, and nothing outside this module writes it.
+through `resolved_keeper_of`; `keeps_gathering` is the same ladder as SQL
+for a WHERE clause (see its docstring — since CK-77 it has no caller, and
+why). Nothing reads the column directly, and nothing outside this module
+writes it.
+
+KEEPING LETS NO ONE IN (CK-77; keeping-explained §5.11, Steven 2026-10-24).
+Who sees a gathering is its host, its co-hosts and the people it invites or
+shares with — never its keeper by keeping. From CK-49b to CK-77 the read
+audience (`_gathering_for_read`, the list statement, `_visible_media`'s
+`live` branch, and so the upload intent's interim audience) admitted the
+resolved keeper to every gathering they kept; since CK-77 no audience
+criterion names a keeper column or this module's resolver, and the
+consumers of the resolver are exactly the QUOTA (the gate and
+`account_usage` — the keeper is charged for every photograph in what they
+keep, a gathering they are left out of included) and the DELETION LAPSE. A
+keeper who is neither host, co-host, invited nor shared with draws the
+gathering's 404 like a stranger, and their usage figure names no gathering.
 
 THE OLD KEPT RELATION NO LONGER EXISTS (CK-49c, migration 0023). It stayed
 in the schema through CK-49b's deploy on purpose — Render runs the web
@@ -73,9 +86,7 @@ What is DERIVED, and never stored, is unchanged in its rule:
 
 Live callers: gathering creation (api/gatherings.py, CK-16) via keep — the
 creator becomes keeper in the same transaction that births the gathering —
-the read audience (api/gatherings.py::_gathering_for_read via
-resolved_keeper_of; the list statement and api/media.py::_visible_media via
-keeps_gathering), the account deletion path (profile.py) via
+the account deletion path (profile.py) via
 lapse_kept_statuses — which since CK-68 also ends the account's CO-HOSTING
 (its `gathering_co_hosts` rows deleted in the same transaction that
 relinquishes host; co-hosts §8), and the upload-intent endpoint (api/media.py, CK-34;
@@ -85,7 +96,10 @@ gathering_units; and the billing router (api/billing.py, CK-73) via
 paid_subscription / holds_paid_plan / account_quota — the paid half of the
 entitlement, read from the `subscriptions` row and NEVER from a provider
 (paid-tiers record §5: the quota path never calls Stripe, and this module
-never imports it — pinned). account_bin_count has NO route caller since CK-65 — the
+never imports it — pinned). THE READ AUDIENCE IS NOT A CALLER since CK-77
+(it was from CK-49b: `_gathering_for_read` via resolved_keeper_of, the list
+statement and api/media.py::_visible_media via keeps_gathering) — keeping
+lets no one in, above. account_bin_count has NO route caller since CK-65 — the
 refusal's bin clause, its one caller from CK-51b, is retired (the keeper
 empties no bin; see its docstring). Every function that
 writes leaves the commit to the caller, so the keeper write and its side
@@ -356,9 +370,10 @@ def resolve_keeper(
     exists to prevent; the resolver does not quietly prefer one copy.
 
     Called, since CK-49b, by everything in this module that needs the
-    keeper — through `resolved_keeper_of` for a loaded row and, as the same
-    ladder in SQL, through `keeps_gathering` for the audience criteria — and
-    by nothing that reads the column directly (record §3.1).
+    keeper — through `resolved_keeper_of` for a loaded row (the upload gate,
+    the usage sum) and, as the same ladder in SQL, through `keeps_gathering`
+    (the audience criteria from CK-49b to CK-77; no caller since) — and by
+    nothing that reads the column directly (record §3.1).
     """
     if group_keeper_account_id is not None and own_keeper_account_id is not None:
         raise ValueError(
@@ -379,9 +394,12 @@ async def resolved_keeper_of(db: AsyncSession, gathering: Gathering) -> KeeperRe
     """The resolver for a row the caller already holds — publication.py's
     `resolve_gathering` counterpart, the ONE place a loaded gathering's two
     facts are read and handed to `resolve_keeper`. The group's keeper is
-    fetched only when the gathering belongs to a group (no gathering does
-    until Arc B writes `owning_group_id`), so today this is no query at
-    all; when it is one, it is one indexed lookup."""
+    fetched only when the gathering belongs to a group (one indexed
+    lookup; none at all for a standalone gathering). Its callers since
+    CK-77 are the QUOTA's — api/media.py::_enforce_limits, the upload gate's
+    subject — and never a read loader: keeping lets no one in (the module
+    docstring), so `_gathering_for_read`'s keeper term, this function's
+    caller from CK-49b, is gone with the loader's rename."""
     group_keeper_account_id: Optional[UUID] = None
     if gathering.owning_group_id is not None:
         group_keeper_account_id = await db.scalar(
@@ -395,12 +413,25 @@ async def resolved_keeper_of(db: AsyncSession, gathering: Gathering) -> KeeperRe
 
 def keeps_gathering(account_id: UUID, gathering_id):
     """The resolver's ladder as ONE SQL criterion: TRUE when the gathering
-    whose id is `gathering_id` (a column expression — `Gathering.id` in the
-    list statement, `Media.gathering_id` in the media audience) resolves to
-    `account_id`. For the WHERE clauses that decide which rows are fetched
-    at all — the list's one statement (the CK-20 statement-count pin) and
-    `_visible_media`'s three-branch criterion (CK-37) — where a Python
-    function cannot sit.
+    whose id is `gathering_id` (a column expression) resolves to
+    `account_id`. For a WHERE clause that decides which rows are fetched at
+    all, where a Python function cannot sit.
+
+    NO CALLER SINCE CK-77, AND KEPT ON PURPOSE. From CK-49b to CK-77 the
+    list's one statement and `_visible_media`'s `live` branch named it — the
+    keeper read every gathering they kept — and CK-77 took the keeper out
+    of every audience criterion (keeping lets no one in, keeping-explained
+    §5.11): a keeper left out of a gathering in their own home must see no
+    trace of it. The function stays because its next reader is the STORAGE
+    SCREEN (keeper v2 §14 as amended: the gatherings a keeper holds, for the
+    keeper — a listing of what is charged, which is this criterion, and
+    not a grant of access), and because the agreement pin
+    (tests/test_keeper_shape.py) is what keeps the SQL ladder and the Python
+    resolver from drifting while nothing else exercises the SQL form. IT
+    MAY NEVER AGAIN APPEAR IN AN AUDIENCE CRITERION — pinned: no module
+    under app/api/ names it — and a storage-screen reader that lists what an
+    account keeps must gate every link it renders through the real read
+    audience, never through this.
 
     `coalesce(the group's keeper, the gathering's own)` IS the ladder — rung
     1, else rung 2 — and it is only safe because the CHECK

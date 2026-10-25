@@ -84,7 +84,8 @@ class Cast:
     date_id: str
     host: dict
     uploader: dict  # an accepted invitee who uploads
-    keeper: dict  # keeps the gathering; neither host nor uploader
+    keeper: dict  # keeps the gathering; neither host nor uploader — and since
+    # CK-77 OUTSIDE the audience altogether (keeping lets no one in)
     bystander: dict  # a second accepted invitee; uploads nothing
     stranger: dict
     uploader_person_id: UUID
@@ -132,12 +133,21 @@ async def _cast(client, capsys, db_session_factory) -> Cast:
         stranger=stranger,
         uploader_person_id=uploader_person_id,
     )
-    # The fixture is honest: the keeper and the bystander ARE in the
-    # gathering's read audience (they read the detail), so a 404 below is
-    # the rule and never a broken setup; the stranger is not.
-    for headers in (cast.keeper, cast.bystander, cast.uploader, cast.host):
+    # The fixture is honest: the bystander, the uploader and the host ARE in
+    # the gathering's read audience (they read the detail), so a 404 below
+    # is the rule and never a broken setup; the stranger is not — and
+    # NEITHER IS THE KEEPER, since CK-77 (keeping lets no one in,
+    # keeping-explained §5.11; until then the keeper rung admitted them, and
+    # this line read 200 for the keeper). The seat stays so every audience
+    # test still proves it: a keeper who is neither host, co-host nor invited
+    # draws the gathering 404 byte-identical to the stranger's, and is still
+    # charged.
+    for headers in (cast.bystander, cast.uploader, cast.host):
         assert (await client.get(f"/gatherings/{gathering_id}", headers=headers)).status_code == 200
-    assert (await client.get(f"/gatherings/{gathering_id}", headers=cast.stranger)).status_code == 404
+    stranger_404 = await client.get(f"/gatherings/{gathering_id}", headers=cast.stranger)
+    keeper_404 = await client.get(f"/gatherings/{gathering_id}", headers=cast.keeper)
+    assert stranger_404.status_code == keeper_404.status_code == 404
+    assert keeper_404.content == stranger_404.content
     return cast
 
 
@@ -243,14 +253,18 @@ async def test_a_pending_photograph_is_visible_to_its_uploader_and_the_host_and_
         assert _ids(await _list(client, headers, cast.gathering_id)) == [media_id]
         assert (await _url(client, headers, media_id)).status_code == 200
 
-    # A keeper who is neither, and an accepted invitee who is neither: the
-    # gathering is theirs to read (200 — an empty list), the photograph is
-    # not — and the per-object 404 is byte-identical to a missing id, for
-    # every layer, so nothing confirms the row exists.
-    missing = await _url(client, cast.keeper, MISSING_ID)
+    # An accepted invitee who is neither: the gathering is theirs to read
+    # (200 — an empty list), the photograph is not — and the per-object 404
+    # is byte-identical to a missing id, for every layer, so nothing
+    # confirms the row exists. The keeper (since CK-77 outside the audience
+    # altogether — keeping lets no one in; until then the list read 200 and
+    # empty for them): the gathering 404 on the list, and the same
+    # per-object 404.
+    missing = await _url(client, cast.bystander, MISSING_ID)
     assert missing.status_code == 404
+    assert _ids(await _list(client, cast.bystander, cast.gathering_id)) == []
+    assert (await _list(client, cast.keeper, cast.gathering_id)).status_code == 404
     for headers in (cast.keeper, cast.bystander):
-        assert _ids(await _list(client, headers, cast.gathering_id)) == []
         for layer in ("web", "thumbnail", "archival"):
             refused = await _url(client, headers, media_id, layer)
             assert refused.status_code == 404, layer
@@ -277,11 +291,15 @@ async def test_a_live_photograph_is_visible_to_the_whole_read_audience(
     publication phase never has to come back and widen an audience."""
     cast = await _cast(client, capsys, db_session_factory)
     media_id = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
-    for headers in (cast.uploader, cast.host, cast.keeper, cast.bystander):
+    for headers in (cast.uploader, cast.host, cast.bystander):
         assert _ids(await _list(client, headers, cast.gathering_id)) == [media_id]
         assert (await _url(client, headers, media_id)).status_code == 200
-    assert (await _list(client, cast.stranger, cast.gathering_id)).status_code == 404
-    assert (await _url(client, cast.stranger, media_id)).status_code == 404
+    # The stranger — and the keeper, since CK-77 (keeping lets no one in;
+    # until then the keeper was in this loop): the gathering 404 on the
+    # list, the media 404 on the URL.
+    for headers in (cast.stranger, cast.keeper):
+        assert (await _list(client, headers, cast.gathering_id)).status_code == 404
+        assert (await _url(client, headers, media_id)).status_code == 404
 
 
 async def test_a_removed_photograph_is_visible_to_its_uploader_alone_for_thirty_days(
@@ -325,10 +343,15 @@ async def test_a_removed_photograph_is_visible_to_its_uploader_alone_for_thirty_
     for gone in (past_bin, malformed, unattributed):
         assert (await _url(client, cast.uploader, gone)).status_code == 404
 
-    for headers in (cast.host, cast.keeper, cast.bystander):
+    for headers in (cast.host, cast.bystander):
         assert _ids(await _list(client, headers, cast.gathering_id)) == []
         for media_id in (in_bin, past_bin, malformed, unattributed):
             assert (await _url(client, headers, media_id)).status_code == 404
+    # The keeper (outside the audience since CK-77): the gathering 404 on
+    # the list, the media 404 on every row.
+    assert (await _list(client, cast.keeper, cast.gathering_id)).status_code == 404
+    for media_id in (in_bin, past_bin, malformed, unattributed):
+        assert (await _url(client, cast.keeper, media_id)).status_code == 404
 
 
 # --- the rungs and the layers ----------------------------------------------------

@@ -76,7 +76,7 @@ ENTRY_KEYS = {"membership_id", "display_name", "role", "is_self"}
 # the index on gatherings.owning_group_id, no pending invitation on a
 # gathering that belongs to a group, every group gathering under a
 # HOUSEHOLD group.
-VERIFIER_TOTAL = 339
+VERIFIER_TOTAL = 361  # 339 at CK-76; CK-77's twenty-three lines less the backup-NULL line it replaced
 
 
 def _now() -> datetime:
@@ -176,15 +176,20 @@ async def _group_row(db_session_factory, group_id: str) -> Group:
         return await db.get(Group, UUID(group_id))
 
 
-async def _backup_admin_column(db_session_factory, group_id: str):
-    """`groups.backup_admin_person_id` for one group, by raw SQL: the column
-    exists in the database and is UNMAPPED since CK-76 (nothing writes it,
-    nothing reads it through the model; the verifier asserts it NULL the
-    same way until CK-77 drops it)."""
+async def _backup_admin_column_exists(db_session_factory) -> bool:
+    """Whether `groups.backup_admin_person_id` is in the catalog at all:
+    unmapped at CK-76, DROPPED at 0034 (CK-77). (Until CK-77 this helper
+    read the column's value by raw SQL and the test below asserted it
+    NULL.)"""
     async with db_session_factory() as db:
-        return await db.scalar(
-            text("SELECT backup_admin_person_id FROM groups WHERE id = :g"), {"g": UUID(group_id)}
-        )
+        return (
+            await db.scalar(
+                text(
+                    "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' "
+                    "AND table_name = 'groups' AND column_name = 'backup_admin_person_id'"
+                )
+            )
+        ) == 1
 
 
 async def _membership_people(db_session_factory, group_id: str) -> set[UUID]:
@@ -311,7 +316,7 @@ async def test_every_body_carries_caller_role_and_no_backup_column(
     # by raw SQL since CK-76, because the model no longer maps it (the
     # unmap is the step before CK-77's drop; the attribute read here until
     # CK-76 would now be an AttributeError).
-    assert await _backup_admin_column(db_session_factory, cast.group_id) is None
+    assert await _backup_admin_column_exists(db_session_factory) is False  # dropped at 0034 (CK-77)
 
 
 async def test_the_member_list_and_the_count_exclude_a_deleted_account_and_carry_no_contact_detail(
@@ -911,11 +916,13 @@ async def test_the_verifier_asserts_the_shapes_and_the_membership_invariants(
     operator runs it — a fresh interpreter against the test database — on a
     clean baseline holding a real co-admin, then on the plant each
     invariant exists to catch, one at a time: a co-admin row with no
-    membership; a co-admin row naming the group's admin; a backup admin
-    set; a group whose admin holds no membership (the CK-45 failure, still
-    caught); a co-admin row on an anonymized person; an open join request
-    from an anonymized person. A PLANT IS NOT EVIDENCE UNTIL SOMETHING
-    INDEPENDENT OF THE ASSERTION CONFIRMS THE ROW EXISTS (CK-56's lesson)."""
+    membership; a co-admin row naming the group's admin; a group whose
+    admin holds no membership (the CK-45 failure, still caught); a co-admin
+    row on an anonymized person; an open join request from an anonymized
+    person. (The backup-admin plant stood here until CK-77, when 0034
+    dropped the column and the verifier's NULL line became an is-gone line
+    in the 0009 block.) A PLANT IS NOT EVIDENCE UNTIL SOMETHING INDEPENDENT
+    OF THE ASSERTION CONFIRMS THE ROW EXISTS (CK-56's lesson)."""
     cast = await _cast(client, capsys, db_session_factory)
     admin_person = await _person_id(db_session_factory, ADMIN)
     gone = "gone@example.com"
@@ -950,7 +957,7 @@ async def test_the_verifier_asserts_the_shapes_and_the_membership_invariants(
         "no co-admin row names its group's own admin (admin and co-admin are exclusive)",
         "no co-admin row names an anonymized person",
         "no open join request names an anonymized person",
-        "groups.backup_admin_person_id is NULL on every row (retired at CK-75; dropped later)",
+        "groups.backup_admin_person_id is gone",
         "every EMAIL group-invitation destination is stored normalized",
     ):
         assert f"PASS  {line}" in out, line
@@ -989,14 +996,9 @@ async def test_the_verifier_asserts_the_shapes_and_the_membership_invariants(
         "DELETE FROM group_co_admins WHERE group_id = :g AND person_id = :p",
         {"g": UUID(cast.group_id), "p": admin_person, "a": admin_person},
     )
-    # (3) The retired backup slot set (nothing writes it).
-    await plant(
-        "groups.backup_admin_person_id is NULL on every row (retired at CK-75; dropped later)",
-        "UPDATE groups SET backup_admin_person_id = :p WHERE id = :g",
-        "SELECT count(*) FROM groups WHERE id = :g AND backup_admin_person_id IS NOT NULL",
-        "UPDATE groups SET backup_admin_person_id = NULL WHERE id = :g",
-        {"g": UUID(cast.group_id), "p": stranger_person},
-    )
+    # (3) stood here until CK-77: the retired backup slot set. The column
+    # is dropped at 0034, so there is nothing to plant; its line is the 0009
+    # block's "is gone", asserted PASS above.
     # (4) A group whose admin holds no membership — the CK-45 failure
     # (a group committed before its creator's membership), still caught.
     async with db_session_factory() as db:

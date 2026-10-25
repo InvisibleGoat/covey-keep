@@ -220,17 +220,20 @@ async def test_a_keeper_an_invitee_and_a_stranger_see_nothing_in_either_view(
     theirs = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
     assert (await _remove(client, cast.host, theirs)).status_code == 200
 
-    for headers in (cast.keeper, cast.bystander):
-        assert _ids(await _list(client, headers, cast.gathering_id)) == []
-        view = await _bin_view(client, headers, cast.gathering_id)
-        assert (view.status_code, _ids(view)) == (200, [])
+    assert _ids(await _list(client, cast.bystander, cast.gathering_id)) == []
+    view = await _bin_view(client, cast.bystander, cast.gathering_id)
+    assert (view.status_code, _ids(view)) == (200, [])
+    assert (await _url(client, cast.bystander, theirs)).status_code == 404
+    # A stranger draws the gathering 404 one door earlier, on both views —
+    # and so does the keeper since CK-77 (keeping lets no one in; until
+    # then the keeper read the empty views beside the invitee).
+    for headers in (cast.stranger, cast.keeper):
+        for params in ({}, {"removed": "true"}):
+            refused = await client.get(
+                f"/gatherings/{cast.gathering_id}/media", params=params, headers=headers
+            )
+            assert refused.status_code == 404
         assert (await _url(client, headers, theirs)).status_code == 404
-    # A stranger draws the gathering 404 one door earlier, on both views.
-    for params in ({}, {"removed": "true"}):
-        refused = await client.get(
-            f"/gatherings/{cast.gathering_id}/media", params=params, headers=cast.stranger
-        )
-        assert refused.status_code == 404
 
 
 async def test_a_null_remover_row_is_in_nobodys_bin_view(client, capsys, db_session_factory):
@@ -249,8 +252,11 @@ async def test_a_null_remover_row_is_in_nobodys_bin_view(client, capsys, db_sess
 
     view = await _bin_view(client, cast.host, cast.gathering_id)
     assert (view.status_code, _ids(view)) == (200, [])
-    for headers in (cast.host, cast.uploader, cast.keeper, cast.bystander):
+    for headers in (cast.host, cast.uploader, cast.bystander):
         assert _ids(await _list(client, headers, cast.gathering_id)) == []
+    # (The keeper is outside the audience since CK-77 — their list is the
+    # gathering 404 — and draws the same media 404s on every act.)
+    for headers in (cast.host, cast.uploader, cast.keeper, cast.bystander):
         for act in (_url, _restore, _destroy):
             refused = await act(client, headers, legacy)
             missing = await act(client, headers, MISSING_ID)
@@ -402,11 +408,13 @@ async def test_host_restore_in_an_open_gathering_goes_live_with_the_stamps_kept(
     *_, published_at, publisher = await _state(db_session_factory, rule_published)
     assert (published_at, publisher) == (published, None)  # the pair kept WHOLE
 
-    # Live again for the whole read audience; the stranger still 404.
-    for headers in (cast.uploader, cast.host, cast.keeper, cast.bystander):
+    # Live again for the whole read audience; the stranger still 404 — and
+    # the keeper too, since CK-77 (keeping lets no one in).
+    for headers in (cast.uploader, cast.host, cast.bystander):
         assert set(_ids(await _list(client, headers, cast.gathering_id))) == {theirs, rule_published}
         assert (await _url(client, headers, theirs)).status_code == 200
-    assert (await _url(client, cast.stranger, theirs)).status_code == 404
+    for headers in (cast.stranger, cast.keeper):
+        assert (await _url(client, headers, theirs)).status_code == 404
     assert await _counts(db_session_factory, cast.gathering_id) == before
     await _invariants_hold(db_session_factory, cast.gathering_id)
     await _stamp_invariants_hold(db_session_factory)
@@ -445,8 +453,10 @@ async def test_host_restore_goes_live_even_where_the_gathering_is_gated(
     # Nothing waits: the queue is empty, and the row is live for the
     # gathering's read audience.
     assert _ids(await _queue(client, cast.host, cast.gathering_id)) == []
-    for headers in (cast.keeper, cast.bystander):
-        assert _ids(await _list(client, headers, cast.gathering_id)) == [theirs]
+    # (An invitee; the keeper stood beside them until CK-77 and is outside
+    # the audience since.)
+    assert _ids(await _list(client, cast.bystander, cast.gathering_id)) == [theirs]
+    assert (await _list(client, cast.keeper, cast.gathering_id)).status_code == 404
     assert await _counts(db_session_factory, cast.gathering_id) == before
     await _stamp_invariants_hold(db_session_factory)
 
@@ -476,7 +486,7 @@ async def test_host_restore_of_a_declined_never_published_row_stamps_now_with_th
     assert (removed_at, removed_by) == (None, None)
     assert published_at is not None and abs((published_at - t0).total_seconds()) < 60
     assert publisher == host_person  # a person published it, not the rule
-    for headers in (cast.uploader, cast.keeper, cast.bystander):
+    for headers in (cast.uploader, cast.bystander):  # the keeper is outside the audience since CK-77
         assert _ids(await _list(client, headers, cast.gathering_id)) == [waiting]
     assert await _counts(db_session_factory, cast.gathering_id) == before
     await _invariants_hold(db_session_factory, cast.gathering_id)

@@ -363,9 +363,13 @@ async def test_a_date_label_must_belong_to_this_gathering(client, capsys, db_ses
 # --- the audience: the read audience, and never keeping -------------------
 
 
-async def test_audience_is_the_read_audience_and_never_keeping(
+async def test_audience_is_the_invited_tier_and_never_keeping(
     client, capsys, db_session_factory
 ):
+    # The INVITED tier since CK-77 (the read audience until then): the host
+    # and an accepted invitee upload; a stranger — and, pinned below in the
+    # hostless test and in tests/test_member_places.py, a keeper by keeping
+    # — draws the gathering 404.
     headers_host, headers_invitee, created = await _host_and_invitee(
         client, capsys, "host@example.com", "cousin@example.com"
     )
@@ -597,9 +601,14 @@ async def test_the_keepers_headroom_decides_and_the_hosts_is_irrelevant(
     # Control: the same host on the gathering they keep THEMSELVES is
     # refused — there, their own headroom decides.
     assert (await _intents(client, headers_host, hosts_own["id"], [_item(1)])).status_code == 422
-    # And the keeper, who is not the host here, uploads to the barbecue
-    # against their own headroom like anyone else in the audience.
-    assert (await _intents(client, headers_keeper, barbecue["id"], [_item(MB)])).status_code == 201
+    # And the keeper, who is neither host nor invited here, is OUTSIDE the
+    # upload audience since CK-77 (keeping lets no one in — the gathering
+    # 404, byte-identical to a missing id; until CK-77 this was a 201).
+    refused = await _intents(client, headers_keeper, barbecue["id"], [_item(MB)])
+    assert (refused.status_code, refused.json()) == (
+        404,
+        (await _intents(client, headers_keeper, MISSING_ID, [_item(MB)])).json(),
+    )
 
 
 async def test_a_hostless_gathering_with_a_keeper_is_uploadable(
@@ -609,20 +618,29 @@ async def test_a_hostless_gathering_with_a_keeper_is_uploadable(
     # gate). Under v2 §6 the subject is the keeper, and the claimable state
     # (host NULL — v2 §9.2) has one: the upload is accepted and the
     # reservation lands on the keeper. The CK-34 refusal is closed by the
-    # gate, not by the claim flow.
+    # gate, not by the claim flow. THE SUBJECT MOVED AT CK-77: until then
+    # the keeper uploaded here themselves; since CK-77 keeping lets no one
+    # in, so an INVITEE uploads to the hostless gathering and the keeper —
+    # who hosts nothing and holds no invitation — is refused with the
+    # gathering 404, yet is charged.
     headers = await _signed_in_headers(client, capsys, "keeper@example.com")
-    created = await _create(client, headers)
+    _, headers_invitee, created = await _host_and_invitee(
+        client, capsys, "keeper@example.com", "cousin@example.com"
+    )
     async with db_session_factory() as db:
         await db.execute(
             update(Gathering).where(Gathering.id == created["id"]).values(host_account_id=None)
         )
         await db.commit()
-    response = await _intents(client, headers, created["id"], [_item(4 * MB)])
+    response = await _intents(client, headers_invitee, created["id"], [_item(4 * MB)])
     assert response.status_code == 201, response.text
     async with db_session_factory() as db:
         assert await _media_count(db) == 1
         account = await _account_for(db, "keeper@example.com")
         assert await keeping.account_usage(db, account) == 1
+    refused = await _intents(client, headers, created["id"], [_item(4 * MB)])
+    assert refused.status_code == 404, refused.text
+    assert refused.json() == (await _intents(client, headers, MISSING_ID, [_item(4 * MB)])).json()
 
 
 async def test_a_keeperless_gathering_refuses_uploads(client, capsys, db_session_factory):
@@ -1090,6 +1108,15 @@ async def test_a_host_who_is_not_the_keeper_reads_the_withheld_form(
     headers_keeper = await _signed_in_headers(client, capsys, keeper_addr)
     barbecue = await _create(client, headers_host, title="The barbecue")
     keepers_own = await _create(client, headers_keeper, title="Grandma's own")
+    # Since CK-77 keeping admits nobody, so grandma is INVITED to the
+    # barbecue — the invitation is what lets her upload to it at all
+    # (test_audience_is_the_invited_tier_and_never_keeping pins the 404
+    # without one); the keeper column still decides WHOSE ROOM is checked
+    # and what each uploader is told.
+    await _accept(
+        client, headers_keeper,
+        await _invite_token(client, capsys, headers_host, barbecue["id"], keeper_addr),
+    )
     async with db_session_factory() as db:
         keeper_account = await _account_for(db, keeper_addr)
         host_account = await _account_for(db, host_addr)

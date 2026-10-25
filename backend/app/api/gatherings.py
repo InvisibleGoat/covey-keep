@@ -24,13 +24,46 @@ PLACE IS A ROW, never computed from membership at read time (the archive
 record §6.1: removing someone from the group must never silently revoke
 their gatherings); a newcomer's rows for the group's UPCOMING gatherings
 are written when they join (services/groups.py, called by the two
-admission paths). In this phase every member's place is INVITED; the
-host's choice — shared with, left out — is CK-77's. A group gathering never
+admission paths). A group gathering never
 moves between groups and never gains a group after creation (the archive
 record §9; `GatheringPatch` forbids the field). It is MEMBERS ONLY until
 sharing outside the group ships: api/invitations.py refuses an emailed
 invitation to it with a 409 `members_only`. Every gathering body carries
 `group` — `{"id", "name"}` or null.
+
+THE HOST'S CHOICE — THREE PLACES (CK-77, Groups 2b; the 2026-10-04 record
+§4, §9, §10; the participation record §4). Each member of the group holds
+ONE of three places on a group's gathering, every one a row and never a
+lookup: INVITED — logistics and memory, today's `gathering_invitations` row,
+unchanged in meaning; SHARED WITH — memory only, the photographs and never
+the time, the place, the RSVP, the invitation list or an upload, a
+`gathering_member_places` row (`shared_with`); LEFT OUT — no trace, absent
+from every list, count and group listing until the host changes their
+place, a `gathering_member_places` row (`left_out`). THE TWO NEW PLACES ARE
+A SIBLING RELATION, NEVER A KIND ON `gathering_invitations`: every existing
+check that admits an invitee stays correct by construction, and a place row
+grants nothing until a read path opts in to it — `shared_with` is opted into
+by exactly `_gathering_for_memory` below and api/media.py::_visible_media's
+`live` branch; `left_out` by nothing. The host chooses at create (`POST
+/gatherings` with `group_id` takes `invited` and `left_out`, lists of
+MEMBERSHIP ids — CK-75's member handle; everyone else is shared with) or
+later (`GET`/`PUT /gatherings/{id}/places`, delegable — the host or a
+co-host), and whether they chose is a fact on the gathering,
+`invitees_chosen` — once chosen, chosen — which decides a newcomer's place
+(services/groups.py). A co-host, and a member who has answered a date,
+cannot be moved away from invited; the host's own membership has no place.
+
+KEEPING LETS NO ONE IN (CK-77; keeping-explained §5.11, Steven 2026-10-24).
+Who sees a gathering is its host, its co-hosts and the people it invites or
+shares with — never its keeper by keeping, and never the keeper of the group
+it belongs to: in a family group the keeper is often the very person a
+surprise is for, and a group can be kept by someone outside it (CK-75). From
+CK-49b to CK-77 every read loader and both list criteria admitted the
+resolved keeper; since CK-77 no audience criterion names a keeper column or
+services/keeping.py's resolver, and this module imports neither
+`keeps_gathering` nor `resolved_keeper_of` (pinned). The keeper is still
+charged for every photograph (api/media.py::_enforce_limits — the quota
+path, untouched).
 
 Authorization, applied uniformly: mutations require the caller to ORGANISE
 the gathering — the host (`host_account_id`, the admin column renamed at
@@ -41,21 +74,26 @@ for the reserved set, `may_administer` for the delegable one — and the
 audit that classified every check in the backend as one or the other,
 §5). The one exception on this router is the review switch,
 `requires_approval_override`, which stays the host's: a co-host sending it
-draws a field-level 422, never a silent drop. Reads require the caller's
-account to keep the
-gathering, OR the caller's person to hold an accepted invitation
-(a person-targeted gathering_invitations row — CK-25, the first widening of
-the read audience), OR host. The checks are written against the
-keeper/host/invitation facts, never "is creator" — a creator-shaped check
-would already be wrong now that invitees read. Non-permitted access is a
-404, never a 403: the existence of a gathering is not public information.
-THE LIST IS THE READ AUDIENCE SINCE CK-76 — kept OR invited OR host OR
-co-host, still ONE statement: until then it listed kept-or-invited and not
-what the caller HOSTS (the gap CK-68 recorded), which a group gathering made
-real — its creator is neither its keeper (the group's is) nor an invitee,
-so every member who created one without keeping the group lost it from
-their own list. `GET /groups/{id}/gatherings` is the same statement over
-one group's gatherings, for the group's members.
+draws a field-level 422, never a silent drop. READS HAVE TWO TIERS, two
+loaders named for the set they admit (the CK-68 idiom; CK-77): THE INVITED
+TIER — `_gathering_for_invited`: the host, a co-host, or a person holding a
+person-targeted `gathering_invitations` row — is logistics and memory, and
+is what the upload intent, RSVP (api/rsvps.py) and the publish batch take;
+THE MEMORY TIER — `_gathering_for_memory`: the invited tier OR a person
+holding a `shared_with` place row, answering which VIEW the caller gets,
+`full` or `memory` — is what the detail and the media list take. A
+`left_out` row admits nothing. Every body carries `caller_view`, and in the
+memory view `occurrences`, `rsvp_list_visibility`, `next_occurrence` and
+`occurrence_count` are NULL — withheld, never `[]` or 0, which would claim a
+gathering with no dates (the CK-30 precedent). The checks are written
+against the host/co-host/invitation/place facts, never "is creator" and
+never the keeper. Non-permitted access is a 404, never a 403: the existence
+of a gathering is not public information. THE LIST IS THE MEMORY TIER'S
+AUDIENCE — invited OR host OR co-host OR shared with, still ONE statement
+(CK-76 widened it to the host and co-hosts, closing the gap CK-68 recorded;
+CK-77 put the shared-with in and took the keeper out), the invited fact a
+column so each item knows its view. `GET /groups/{id}/gatherings` is the
+same statement over one group's gatherings, for the group's members.
 
 The publication gate (CK-41; decisions/2026-09-09-consent-gate-defaults.md
 2.0.0): `requires_approval` is RESOLVED, never set. Creation writes nothing
@@ -106,17 +144,23 @@ in the request body. Blank is NOT a clear: `""` keeps its field-level 422
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Literal, Optional
 from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import case, exists, func, or_, select
+from sqlalchemy import case, delete, exists, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, get_auth_context, get_db
-from app.api.groups import _group_for_read, _not_found as _group_not_found, member_of
+from app.api.groups import (
+    _group_for_read,
+    _no_such_member,
+    _not_found as _group_not_found,
+    member_of,
+)
 from app.models import (
     Account,
     AccountKind,
@@ -124,17 +168,24 @@ from app.models import (
     Gathering,
     GatheringCoHost,
     GatheringInvitation,
+    GatheringMemberPlace,
     GatheringType,
     Group,
     GroupType,
+    MemberPlace,
+    Membership,
     Occurrence,
+    Person,
     PublicationState,
     RSVP,
     RSVPListVisibility,
 )
 from app.services import publication
-from app.services.groups import invite_group_members
-from app.services.keeping import keep, keeps_gathering, resolved_keeper_of
+from app.services.groups import invite_group_members, place_group_members
+# `keep` alone: no keeper read here since CK-77 — keeping lets no one in, and
+# neither `keeps_gathering` nor `resolved_keeper_of` may be imported by a
+# router that decides an audience (pinned).
+from app.services.keeping import keep
 
 router = APIRouter(prefix="", tags=["gatherings"])
 
@@ -165,6 +216,31 @@ CONFIRMATION_REQUIRED = "confirmation_required"
 # api/co_hosts.py's, readable by the host and the co-hosts alone.
 ROLE_HOST = "host"
 ROLE_CO_HOST = "co_host"
+
+# The caller-relative VIEW on every gathering body (CK-77): `full` for the
+# invited tier — the host, a co-host, an invitee — and `memory` for a member
+# only shared with the gathering, who gets the photographs and none of the
+# logistics (the participation record §4). In the memory view the four
+# logistics fields are NULL — withheld, never empty.
+VIEW_FULL = "full"
+VIEW_MEMORY = "memory"
+
+# The three places a group member can hold on a group's gathering (CK-77).
+# `invited` is a `gathering_invitations` row and not a label on the places
+# table (models/enums.py::MemberPlace says why); the other two are.
+PLACE_INVITED = "invited"
+PlaceChoice = Literal["invited", "shared_with", "left_out"]
+
+# The stable codes on the places surface (the CK-30 marker precedent): the
+# frontend switches on these, never on wording. On the create's two lists
+# and the PUT, as the entry's or the field's `code`:
+NOT_A_MEMBER = "not_a_member"  # not a live member of this gathering's group
+IS_HOST = "is_host"  # the host's own membership — the host has no place
+DUPLICATE = "duplicate"  # an id twice, or in both lists
+# On the PUT, as a 409's `code`:
+IS_CO_HOST = "is_co_host"  # a co-host stays invited; remove them as one first
+HAS_ANSWERED = "has_answered"  # a member who answered a date stays invited
+NOT_IN_A_GROUP = "not_in_a_group"  # a standalone gathering has no places
 
 # One message for a gathering created in a group of a refused type — the
 # groups router's own gate (api/groups.py::GROUP_TYPE_GATE_MESSAGE) in the
@@ -315,6 +391,19 @@ class GatheringCreate(BaseModel):
     # gathering never gains a group later and never moves between groups
     # (`GatheringPatch` forbids the field — the archive record §9).
     group_id: Optional[UUID] = None
+    # The host's choice at create (CK-77; the 2026-10-04 record §4), each a
+    # list of MEMBERSHIP ids — the handle every member reads in `GET
+    # /groups/{id}/members` (CK-75), never a person id or an account id.
+    # `invited`: when present, EXACTLY these members are invited. `left_out`:
+    # these members are left out. Every other live member is shared with.
+    # `left_out` without `invited`: every member not left out is invited.
+    # Either list present sets `invitees_chosen` true; neither is CK-76's
+    # whole-group create, byte for byte. Either list without `group_id` is a
+    # 422 at the list. The membership checks need the database and live in
+    # the endpoint (item-level 422s with stable codes); these fields are only
+    # the ids.
+    invited: Optional[list[UUID]] = None
+    left_out: Optional[list[UUID]] = None
 
     @field_validator("title")
     @classmethod
@@ -555,6 +644,7 @@ def _gathering_body(
     *,
     facts: HomeFacts,
     caller_role: Optional[str],
+    caller_view: str,
 ) -> dict:
     # The gate, resolved for this body (CK-41): `requires_approval` is the
     # EFFECTIVE value — a plain boolean, the same field every consumer has
@@ -586,7 +676,13 @@ def _gathering_body(
         "memorial_decedent_name": gathering.memorial_decedent_name,
         "requires_approval": gate.requires_approval,
         "requires_approval_override": gathering.requires_approval,
-        "rsvp_list_visibility": gathering.rsvp_list_visibility.value,
+        # LOGISTICS, withheld in the memory view (CK-77; the participation
+        # record §4 — the RSVP list is logistics, and so is its setting):
+        # null, never a default the reader could mistake for the host's
+        # choice.
+        "rsvp_list_visibility": (
+            gathering.rsvp_list_visibility.value if caller_view == VIEW_FULL else None
+        ),
         "publication_state": gathering.publication_state.value,
         "created_by_account_id": str(gathering.created_by_account_id),
         "host_account_id": (
@@ -603,11 +699,21 @@ def _gathering_body(
         # (a co-host's account id appears in no body). The co-host LIST is
         # not here: it is api/co_hosts.py's, readable by the organisers.
         "caller_role": caller_role,
+        # What the caller GETS of this gathering (CK-77): `full` — logistics
+        # and memory, the invited tier — or `memory` — the photographs alone,
+        # a member only shared with it. A fact about the caller, decided by
+        # the loader that admitted them, never re-derived by a consumer.
+        "caller_view": caller_view,
         "created_at": gathering.created_at.isoformat(),
         "updated_at": gathering.updated_at.isoformat() if gathering.updated_at else None,
     }
     if occurrences is not None:
-        body["occurrences"] = [_occurrence_body(o) for o in occurrences]
+        # The dates are LOGISTICS: in the memory view the key is carried and
+        # NULL — withheld is not empty (the CK-30 precedent: `[]` would claim
+        # a gathering with no dates, a state this product does not have).
+        body["occurrences"] = (
+            [_occurrence_body(o) for o in occurrences] if caller_view == VIEW_FULL else None
+        )
     return body
 
 
@@ -618,15 +724,23 @@ def _list_item(
     starts_at: Optional[datetime],
     occurrence_count: Optional[int],
     caller_role: Optional[str],
+    caller_view: str,
 ) -> dict:
     """A GET /gatherings item: the gathering body plus the occurrence summary.
     The LIST's own shape, deliberately — the detail body carries full
     occurrences, and overloading one builder with both would couple the two
     surfaces (CK-20). The host's kind, the home group and its template ride
-    the list's one statement, and so does the caller's co-host fact (CK-68):
-    the role is computed from the row and that one boolean, never from a
-    second query."""
-    item = _gathering_body(gathering, facts=facts, caller_role=caller_role)
+    the list's one statement, and so do the caller's co-host fact (CK-68)
+    and invited fact (CK-77): the role and the view are computed from the
+    row and those two booleans, never from a second query. In the MEMORY
+    view the summary is NULL on both keys — the dates are logistics, and
+    withheld is not empty (the CK-30 precedent: 0 would claim a gathering
+    with no dates)."""
+    item = _gathering_body(gathering, facts=facts, caller_role=caller_role, caller_view=caller_view)
+    if caller_view != VIEW_FULL:
+        item["next_occurrence"] = None
+        item["occurrence_count"] = None
+        return item
     item["next_occurrence"] = (
         {"id": str(occurrence_id), "starts_at": starts_at.isoformat()}
         if occurrence_id is not None and starts_at is not None
@@ -764,36 +878,95 @@ async def _role_of(db: AsyncSession, gathering: Gathering, ctx: AuthContext) -> 
     return ROLE_CO_HOST if await is_co_host(db, gathering.id, ctx.person.account_id) else None
 
 
-async def _gathering_for_read(
-    db: AsyncSession, ctx: AuthContext, gathering_id: UUID
-) -> Gathering:
-    """Reads require the caller's account to keep the gathering, the caller's
-    person to hold an accepted invitation (CK-25 — an invitation grants
-    visibility, nothing more), or host. Checked against the
-    keeper/host/invitation facts, never creatorship. "Keep" is the
-    RESOLVED keeper (CK-49b — `services/keeping.py::resolved_keeper_of`:
-    the owning group's keeper, else the gathering's own; the old kept
-    relation is gone since 0023)."""
-    gathering = await db.get(Gathering, gathering_id)
-    if gathering is None:
-        raise _not_found()
-    account_id = ctx.person.account_id
-    if gathering.host_account_id == account_id:
-        return gathering
-    if (await resolved_keeper_of(db, gathering)).keeper_account_id == account_id:
-        return gathering
-    # Keeping is an ACCOUNT fact; an invitation targets the PERSON — the
-    # invitee never chose to keep anything, so the checks live on different
-    # spines deliberately.
-    invited = await db.scalar(
+async def _holds_invitation(db: AsyncSession, person_id: UUID, gathering_id: UUID) -> bool:
+    """A person-targeted `gathering_invitations` row — the INVITED place,
+    exactly what the product has understood since CK-25. One indexed
+    lookup on the partial unique."""
+    found = await db.scalar(
         select(GatheringInvitation.id).where(
-            GatheringInvitation.person_id == ctx.person.id,
+            GatheringInvitation.person_id == person_id,
             GatheringInvitation.gathering_id == gathering_id,
         )
     )
-    if invited is None:
+    return found is not None
+
+
+async def _holds_place(
+    db: AsyncSession, person_id: UUID, gathering_id: UUID, place: MemberPlace
+) -> bool:
+    """A `gathering_member_places` row of that place (CK-77) — one lookup on
+    the relation's primary key. Asked for `shared_with` by the memory
+    loader and by nothing else; NEVER asked for `left_out`, which no read
+    path opts into (a left-out member sees no trace — the 404 is the same
+    404 a stranger draws, one door earlier)."""
+    found = await db.scalar(
+        select(GatheringMemberPlace.gathering_id).where(
+            GatheringMemberPlace.gathering_id == gathering_id,
+            GatheringMemberPlace.person_id == person_id,
+            GatheringMemberPlace.place == place,
+        )
+    )
+    return found is not None
+
+
+async def _in_invited_tier(db: AsyncSession, gathering: Gathering, ctx: AuthContext) -> bool:
+    """THE INVITED TIER (CK-77): the host, a person holding an invitation
+    row, or a co-host — logistics and memory. The host from the row (no
+    query); the invitation one lookup; the co-host one more, made only when
+    both fail (a co-host holds an invitation by construction — CK-68's
+    handle — so the third term admits nobody new today and keeps the tier's
+    criterion whole, as the list's co-host term does). Keeping is NOT a
+    term: keeping lets no one in (the module docstring)."""
+    if is_host(gathering, ctx):
+        return True
+    # An invitation targets the PERSON; hosting and co-hosting are ACCOUNT
+    # facts — the checks live on different spines deliberately.
+    if await _holds_invitation(db, ctx.person.id, gathering.id):
+        return True
+    return await is_co_host(db, gathering.id, ctx.person.account_id)
+
+
+async def _gathering_for_invited(
+    db: AsyncSession, ctx: AuthContext, gathering_id: UUID
+) -> Gathering:
+    """THE INVITED TIER'S LOADER (CK-77; `_gathering_for_read` from CK-16 to
+    CK-77, renamed for the set it admits — the CK-68 idiom): the host, a
+    co-host, or a person holding an accepted invitation (CK-25 — an
+    invitation grants visibility, nothing more). Logistics and memory: the
+    upload intent (the attendee capability's interim audience —
+    api/media.py), RSVP read and write (api/rsvps.py) and the publish batch
+    take this. THE KEEPER TERM IS GONE: from CK-49b to CK-77 the resolved
+    keeper was admitted here (`resolved_keeper_of`), and keeping lets no one
+    in (keeping-explained §5.11) — a keeper who is neither host, co-host nor
+    invited draws the 404 byte-identical to a missing id, as a stranger
+    does, and is still charged for the gathering's photographs. Checked
+    against the host/co-host/invitation facts, never creatorship."""
+    gathering = await db.get(Gathering, gathering_id)
+    if gathering is None or not await _in_invited_tier(db, gathering, ctx):
         raise _not_found()
     return gathering
+
+
+async def _gathering_for_memory(
+    db: AsyncSession, ctx: AuthContext, gathering_id: UUID
+) -> tuple[Gathering, str]:
+    """THE MEMORY TIER'S LOADER (CK-77): the invited tier, OR a person
+    holding a `shared_with` place row — and WHICH, as the view the caller
+    gets: `full` for the former, `memory` (the photographs and nothing
+    else: no dates, no RSVP setting — the participation record §4) for the
+    latter. The detail and the media list take this. A `left_out` row
+    admits nothing, and nor does keeping: both draw the 404 byte-identical
+    to a missing id. The one place `shared_with` is opted into beside
+    api/media.py::_visible_media's `live` branch — a new reader of the
+    place table is a new disclosure and is decided, never assumed."""
+    gathering = await db.get(Gathering, gathering_id)
+    if gathering is None:
+        raise _not_found()
+    if await _in_invited_tier(db, gathering, ctx):
+        return gathering, VIEW_FULL
+    if await _holds_place(db, ctx.person.id, gathering.id, MemberPlace.SHARED_WITH):
+        return gathering, VIEW_MEMORY
+    raise _not_found()
 
 
 async def _gathering_for_organiser(
@@ -882,19 +1055,41 @@ async def create_gathering(
     transaction writes the gathering WITH `owning_group_id` and WITHOUT a
     keeper of its own — the CHECK forbids both, `keep()` does not run, and
     the group's keeper answers through the resolver from the first row
-    (`keeps_gathering` admits them to the read audience and the upload
-    gate charges them) — the creator as creator and host exactly as for a
-    standalone gathering, its occurrences, and one person-targeted
-    invitation row per other live member, `invited_by_person_id` the
-    creator (services/groups.py::invite_group_members). The body's
-    `caller_role` is `host` either way, and its `requires_approval` is
-    resolved through the home group's template (rung 3) — open, for a
-    household. Without `group_id`, creation is exactly today's."""
+    (the upload gate charges them; since CK-77 it admits them to NOTHING —
+    keeping lets no one in) — the creator as creator and host exactly as
+    for a standalone gathering, its occurrences, and EVERY OTHER LIVE
+    MEMBER'S PLACE AS A ROW: with neither `invited` nor `left_out`, one
+    person-targeted invitation row each, `invited_by_person_id` the creator
+    (services/groups.py::invite_group_members — the whole group, CK-76's
+    create byte for byte, `invitees_chosen` false); with either list (CK-77;
+    the 2026-10-04 record §4), the members in `invited` get that row, the
+    members in `left_out` a `left_out` place row, and every other live
+    member a `shared_with` place row, `set_by_person_id` the creator
+    (services/groups.py::place_group_members), and `invitees_chosen` is
+    true. The lists name MEMBERSHIP ids; an entry that is not a live member
+    of this group is `not_a_member`, the creator's own is `is_host`, an id
+    twice or in both lists is `duplicate` — each an item-level 422 on the
+    entry with its stable code, the batch refused whole, nothing written.
+    Either list without `group_id` is a 422 at the list. The body's
+    `caller_role` is `host` and its `caller_view` `full` either way, and its
+    `requires_approval` is resolved through the home group's template (rung
+    3) — open, for a household. Without `group_id`, creation is exactly
+    today's."""
     account = await db.get(Account, ctx.person.account_id)
     now = datetime.now(timezone.utc)
 
+    if body.group_id is None:
+        for field in ("invited", "left_out"):
+            if getattr(body, field) is not None:
+                raise _field_422(
+                    field,
+                    "only a gathering created in a group has members to choose from — "
+                    "send group_id, or leave the list out",
+                )
+
     group: Optional[Group] = None
     template_default: Optional[bool] = None
+    chosen: Optional[tuple[set[UUID], set[UUID]]] = None
     if body.group_id is not None:
         group = await db.get(Group, body.group_id)
         if group is None or not await db.scalar(select(member_of(ctx.person.id, group.id))):
@@ -912,6 +1107,8 @@ async def create_gathering(
                 CapabilityProfile.id == group.capability_profile_id
             )
         )
+        if body.invited is not None or body.left_out is not None:
+            chosen = await _resolve_chosen_members(db, group, ctx, body.invited, body.left_out)
 
     gathering = Gathering(
         created_by_account_id=account.id,
@@ -920,6 +1117,12 @@ async def create_gathering(
         # Written here and nowhere else: a gathering never moves between
         # groups and never gains one later.
         owning_group_id=group.id if group is not None else None,
+        # The host's choice, as a fact (CK-77): true when either list came,
+        # false for the whole-group create and for a standalone gathering
+        # (the CHECK insists). Set explicitly — the CK-16 discipline — though
+        # the server default says the same for a writer that does not know
+        # about choosing.
+        invitees_chosen=chosen is not None,
         gathering_type=body.gathering_type,
         title=body.title,
         memorial_decedent_name=body.memorial_decedent_name,
@@ -964,16 +1167,30 @@ async def create_gathering(
     else:
         # A group gathering has NO keeper of its own (the CHECK; keeper
         # record v2 §3.1) — the group's keeper answers through the
-        # resolver — and every other live member is INVITED by a row, in
-        # this same transaction (the archive record §6.1). The creator,
-        # the host, needs no invitation.
+        # resolver — and every other live member's PLACE is a row, in this
+        # same transaction (the archive record §6.1). The creator, the
+        # host, needs no row.
         await db.flush()
-        await invite_group_members(
-            db,
-            gathering_id=gathering.id,
-            group_id=group.id,
-            invited_by_person_id=ctx.person.id,
-        )
+        if chosen is None:
+            # The whole group invited (CK-76; the record §4's default).
+            await invite_group_members(
+                db,
+                gathering_id=gathering.id,
+                group_id=group.id,
+                invited_by_person_id=ctx.person.id,
+            )
+        else:
+            # The host chose (CK-77): the invited by invitation row, the
+            # left out by a place row, and the rest shared with.
+            invited_people, left_out_people = chosen
+            await place_group_members(
+                db,
+                gathering_id=gathering.id,
+                group_id=group.id,
+                chooser_person_id=ctx.person.id,
+                invited_person_ids=invited_people,
+                left_out_person_ids=left_out_people,
+            )
     await db.commit()
 
     occurrences.sort(key=lambda o: o.starts_at)
@@ -986,7 +1203,93 @@ async def create_gathering(
             template_default=template_default,
         ),
         caller_role=ROLE_HOST,
+        caller_view=VIEW_FULL,
     )
+
+
+def _list_422(field: str, index: int, code: str, message: str) -> HTTPException:
+    """An item-level 422 on one entry of the create's `invited` or
+    `left_out` list (CK-77) — `["body", <list>, <index>]`, carrying a STABLE
+    CODE beside the message (the CK-68 co-host shape; the frontend switches
+    on the code, never the wording). The batch is refused whole: nothing is
+    written on any refusal."""
+    return HTTPException(
+        422,
+        detail=[
+            {"loc": ["body", field, index], "msg": message, "type": "value_error", "code": code}
+        ],
+    )
+
+
+async def _resolve_chosen_members(
+    db: AsyncSession,
+    group: Group,
+    ctx: AuthContext,
+    invited: Optional[list[UUID]],
+    left_out: Optional[list[UUID]],
+) -> tuple[set[UUID], set[UUID]]:
+    """The create's two lists of MEMBERSHIP ids, checked and turned into two
+    sets of PERSON ids for services/groups.py::place_group_members. Each
+    entry must name a LIVE membership of THIS group (a membership of another
+    group, a missing id and a member who deleted their account are all
+    `not_a_member` — one code, so a probe learns nothing about other
+    groups), must not be the creator's own (`is_host` — the host has no
+    place), and must appear once across both lists (`duplicate`). The first
+    offending entry draws the item-level 422; nothing is written. With
+    `invited` absent and `left_out` present, every live member not left out
+    is invited."""
+    named = [*(invited or []), *(left_out or [])]
+    members = {
+        membership_id: person_id
+        for membership_id, person_id in (
+            await db.execute(
+                select(Membership.id, Membership.person_id)
+                .join(Person, Person.id == Membership.person_id)
+                .where(
+                    Membership.group_id == group.id,
+                    Membership.id.in_(named),
+                    Person.anonymized_at.is_(None),
+                )
+            )
+        ).all()
+    }
+    seen: set[UUID] = set()
+
+    def people_of(field: str, ids: Optional[list[UUID]]) -> set[UUID]:
+        people: set[UUID] = set()
+        for index, membership_id in enumerate(ids or []):
+            if membership_id in seen:
+                raise _list_422(field, index, DUPLICATE, "that member is listed twice")
+            seen.add(membership_id)
+            person_id = members.get(membership_id)
+            if person_id is None:
+                raise _list_422(field, index, NOT_A_MEMBER, "nobody is a member of this group by that id")
+            if person_id == ctx.person.id:
+                raise _list_422(
+                    field, index, IS_HOST, "you host this gathering — you don't need a place on it"
+                )
+            people.add(person_id)
+        return people
+
+    invited_people = people_of("invited", invited)
+    left_out_people = people_of("left_out", left_out)
+    if invited is None:
+        # `left_out` alone: everyone else is invited.
+        every_other = set(
+            (
+                await db.scalars(
+                    select(Membership.person_id)
+                    .join(Person, Person.id == Membership.person_id)
+                    .where(
+                        Membership.group_id == group.id,
+                        Membership.person_id != ctx.person.id,
+                        Person.anonymized_at.is_(None),
+                    )
+                )
+            ).all()
+        )
+        invited_people = every_other - left_out_people
+    return invited_people, left_out_people
 
 
 def _list_statement(ctx: AuthContext, now: datetime):
@@ -1021,14 +1324,11 @@ def _list_statement(ctx: AuthContext, now: datetime):
         )
         .subquery("lead_occurrence")
     )
-    # The resolver's ladder as SQL (CK-49b): the gathering resolves to the
-    # caller's account — through its group's keeper, else its own. Still an
-    # EXISTS inside the one statement (the statement-count pin holds).
-    kept_by_caller = keeps_gathering(account_id, Gathering.id)
-    # The caller's co-host fact, as a column of the same one statement
-    # (CK-68): `caller_role` on every item with no second query — the host
-    # half is the row's own `host_account_id`, already fetched. Since CK-76
-    # the same EXISTS is a term of the WHERE too (below).
+    # The caller's co-host fact and invited fact, as columns of the same one
+    # statement (CK-68; CK-77): `caller_role` and `caller_view` on every item
+    # with no second query — the host half is the row's own
+    # `host_account_id`, already fetched. Each EXISTS is a term of the
+    # WHERE too (below).
     co_hosted = co_hosts_gathering(account_id, Gathering.id)
     invited_person = exists(
         select(GatheringInvitation.id).where(
@@ -1036,14 +1336,26 @@ def _list_statement(ctx: AuthContext, now: datetime):
             GatheringInvitation.gathering_id == Gathering.id,
         )
     )
-    # THE AUDIENCE IS THE READ AUDIENCE (CK-76): kept OR invited OR host OR
-    # co-host. The host term closes the gap CK-68 recorded — a host who is
-    # not the keeper did not see their own gathering — which a group
-    # gathering made real: its creator is neither its keeper (the group's
-    # is) nor an invitee. The co-host term is its companion: a co-host
-    # holds an accepted invitation by construction (CK-68's handle), so it
-    # admits nobody new today and keeps the list's criterion the audience's
-    # whole. Four terms, one WHERE, one statement.
+    # The memory tier's fourth term (CK-77): a `shared_with` place row. NEVER
+    # `left_out` — no read path opts into it, so a left-out member's
+    # gathering is absent from this list exactly as a stranger's is.
+    shared_with = exists(
+        select(GatheringMemberPlace.gathering_id).where(
+            GatheringMemberPlace.person_id == ctx.person.id,
+            GatheringMemberPlace.gathering_id == Gathering.id,
+            GatheringMemberPlace.place == MemberPlace.SHARED_WITH,
+        )
+    )
+    # THE AUDIENCE IS THE MEMORY TIER'S (CK-77): invited OR host OR co-host OR
+    # shared with. The host term closes the gap CK-68 recorded (CK-76) — a
+    # host who is not the keeper did not see their own gathering — which a
+    # group gathering made real: its creator is neither its keeper (the
+    # group's is) nor an invitee. The co-host term is its companion: a
+    # co-host holds an accepted invitation by construction (CK-68's handle),
+    # so it admits nobody new today and keeps the criterion the tier's
+    # whole. THE KEEPER TERM IS GONE (CK-77): from CK-49b to CK-77
+    # `keeps_gathering` stood here, and keeping lets no one in. Four terms,
+    # one WHERE, one statement.
     hosted = Gathering.host_account_id == account_id
     statement = (
         select(
@@ -1056,6 +1368,7 @@ def _list_statement(ctx: AuthContext, now: datetime):
             lead.c.starts_at,
             lead.c.occurrence_count,
             co_hosted.label("co_host"),
+            invited_person.label("invited"),
         )
         # Outer join is defensive only: creation requires an occurrence and
         # the last one is undeletable, so a NULL next_occurrence should not
@@ -1068,9 +1381,19 @@ def _list_statement(ctx: AuthContext, now: datetime):
     # the same one statement; a standalone gathering reads NULL for all.
     return (
         _home_joins(statement)
-        .where(or_(kept_by_caller, invited_person, hosted, co_hosted))
+        .where(or_(invited_person, hosted, co_hosted, shared_with))
         .order_by(Gathering.created_at.desc(), Gathering.id)
     )
+
+
+def _view_from_facts(gathering: Gathering, ctx: AuthContext, *, co_host: bool, invited: bool) -> str:
+    """`caller_view` from the facts the list's one statement fetched (CK-77):
+    `full` for the invited tier — the host (the row's column), a co-host or
+    an invitee (the two EXISTS columns) — else `memory`, because the WHERE
+    admitted the row and the only other way in is a `shared_with` row."""
+    if is_host(gathering, ctx) or co_host or invited:
+        return VIEW_FULL
+    return VIEW_MEMORY
 
 
 def _list_items(rows, ctx: AuthContext) -> list[dict]:
@@ -1086,6 +1409,7 @@ def _list_items(rows, ctx: AuthContext) -> list[dict]:
             starts_at,
             occurrence_count,
             _role_from_facts(gathering, ctx, co_host=co_host),
+            _view_from_facts(gathering, ctx, co_host=co_host, invited=invited),
         )
         for (
             gathering,
@@ -1097,6 +1421,7 @@ def _list_items(rows, ctx: AuthContext) -> list[dict]:
             starts_at,
             occurrence_count,
             co_host,
+            invited,
         ) in rows
     ]
 
@@ -1106,16 +1431,19 @@ async def list_gatherings(
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """The gatherings the caller KEEPS, holds an accepted INVITATION to
-    (CK-25 — without the invited half an invitee could reach a gathering only
-    through the emailed link, forever), HOSTS or CO-HOSTS (CK-76 — the read
-    audience; the host term closes the CK-68 gap, which a group gathering's
-    creator fell through), newest first — each with an occurrence summary
+    """The gatherings the caller holds an accepted INVITATION to (CK-25 —
+    without the invited half an invitee could reach a gathering only through
+    the emailed link, forever), HOSTS or CO-HOSTS (CK-76 — the host term
+    closes the CK-68 gap, which a group gathering's creator fell through),
+    or is SHARED WITH (CK-77 — the memory tier, `caller_view` `memory` with
+    the summary null), newest first — each with an occurrence summary
     (CK-20): `next_occurrence` is the earliest occurrence at or after now,
     or, when every date has passed, the latest past one (the
     next-or-most-recent rule — a display decision that lives HERE so the list
     view needs no per-gathering detail fetch), plus `occurrence_count`; and
-    since CK-76 `group`, the home group's id and name or null.
+    since CK-76 `group`, the home group's id and name or null. NOT what the
+    caller merely KEEPS (CK-77 — keeping lets no one in; from CK-49b to
+    CK-77 it was): a keeper who is none of the four finds nothing here.
 
     ONE query, deliberately: the lead occurrence and the count come from a
     DISTINCT ON subquery with a window count, joined to the caller's
@@ -1137,13 +1465,13 @@ async def list_group_gatherings(
     group's read audience, `_group_for_read` (a member or the admin);
     everyone else draws the group's 404 byte-identical to a missing group.
     The gatherings that BELONG TO the group (`owning_group_id`) that the
-    caller can read — the list's own criterion, kept OR invited OR host OR
-    co-host, ANDed with the group — in the list's item shape, ordered as
-    the list is, in ONE statement: `_list_statement` with one more WHERE
-    term. In this phase every member is invited to every one of the
-    group's gatherings, so a member reads them all; CK-77's shared-with and
-    left-out places will narrow what this returns, through the same
-    criterion. A gathering the group was merely INVITED to (a group-targeted
+    caller can read — the list's own criterion, invited OR host OR co-host
+    OR shared with, ANDed with the group — in the list's item shape, ordered
+    as the list is, in ONE statement: `_list_statement` with one more WHERE
+    term. A member SHARED WITH a gathering finds it here in the memory view;
+    a member LEFT OUT of one does not find it here at all (CK-77 — no trace,
+    the group's own list included), and nor does the group's keeper by
+    keeping. A gathering the group was merely INVITED to (a group-targeted
     invitation row) is not the group's and is not here."""
     group = await _group_for_read(db, ctx, group_id)
     statement = _list_statement(ctx, datetime.now(timezone.utc)).where(
@@ -1159,19 +1487,36 @@ async def get_gathering(
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    gathering = await _gathering_for_read(db, ctx, gathering_id)
-    occurrences = (
-        await db.scalars(
-            select(Occurrence)
-            .where(Occurrence.gathering_id == gathering.id)
-            .order_by(Occurrence.starts_at, Occurrence.id)
+    """The detail — THE MEMORY TIER (CK-77): the host, a co-host and an
+    invitee read the full body; a member only shared with reads the memory
+    view — `caller_view` `memory`, `occurrences` and `rsvp_list_visibility`
+    null (the dates and the RSVP setting are logistics; withheld is not
+    empty), everything else as the full body. A left-out member, a keeper by
+    keeping and a stranger each draw the 404 byte-identical to a missing
+    id."""
+    gathering, view = await _gathering_for_memory(db, ctx, gathering_id)
+    if view == VIEW_FULL:
+        occurrences = list(
+            (
+                await db.scalars(
+                    select(Occurrence)
+                    .where(Occurrence.gathering_id == gathering.id)
+                    .order_by(Occurrence.starts_at, Occurrence.id)
+                )
+            ).all()
         )
-    ).all()
+        caller_role = await _role_of(db, gathering, ctx)
+    else:
+        # Not read at all in the memory view — the body carries the key as
+        # null — and a member only shared with is neither host nor co-host.
+        occurrences = []
+        caller_role = None
     return _gathering_body(
         gathering,
-        list(occurrences),
+        occurrences,
         facts=await _home_facts(db, gathering),
-        caller_role=await _role_of(db, gathering, ctx),
+        caller_role=caller_role,
+        caller_view=view,
     )
 
 
@@ -1235,8 +1580,9 @@ async def patch_gathering(
         gathering,
         facts=await _home_facts(db, gathering),
         # The organiser loader admitted the caller: the host, or else a
-        # co-host — no second lookup.
+        # co-host — no second lookup, and the full view by construction.
         caller_role=ROLE_HOST if is_host(gathering, ctx) else ROLE_CO_HOST,
+        caller_view=VIEW_FULL,
     )
 
 
@@ -1353,3 +1699,257 @@ async def delete_occurrence(
         )
     await db.delete(occurrence)
     await db.commit()
+
+
+# --- the places: who is invited, shared with, left out (CK-77) --------------------
+#
+# The host's choice, after create, as a surface — DELEGABLE (the host or a
+# co-host, `may_administer`; the 2026-10-04 record §4: "delegable like every
+# invitation act"). Two routes on a GROUP gathering: the member list with
+# each member's place, and one PUT per member. A standalone gathering has no
+# members to place and answers 409 `not_in_a_group`; everyone who is not an
+# organiser draws the gathering's 404 byte-identical to a missing id — the
+# posture of every organiser route. Display names and the membership handle
+# only (CK-75's member list rule): never an email, a person id or an account
+# id. Nothing here logs.
+
+
+class PlaceIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    place: PlaceChoice
+
+
+def _require_group(gathering: Gathering) -> None:
+    if gathering.owning_group_id is None:
+        raise HTTPException(
+            409,
+            detail={
+                "code": NOT_IN_A_GROUP,
+                "message": "this gathering doesn't belong to a group, so it has no members to place",
+            },
+        )
+
+
+def _place_refusal(code: str, message: str) -> HTTPException:
+    """A 409 with a stable code (the CK-34 confirm shape): the move is
+    refused and nothing is written."""
+    return HTTPException(409, detail={"code": code, "message": message})
+
+
+def _places_statement(gathering: Gathering):
+    """ONE statement over the group's live members — each with their place
+    on this gathering and whether they co-host it — excluding the host's own
+    membership (the host has no place; a hostless gathering excludes
+    nobody). The invitation row and the place row are each an outer
+    correlated read; a co-host is an EXISTS on the account spine."""
+    invited = exists(
+        select(GatheringInvitation.id).where(
+            GatheringInvitation.gathering_id == gathering.id,
+            GatheringInvitation.person_id == Membership.person_id,
+        )
+    ).label("invited")
+    place = (
+        select(GatheringMemberPlace.place)
+        .where(
+            GatheringMemberPlace.gathering_id == gathering.id,
+            GatheringMemberPlace.person_id == Membership.person_id,
+        )
+        .scalar_subquery()
+        .label("place")
+    )
+    co_host = exists(
+        select(GatheringCoHost.gathering_id).where(
+            GatheringCoHost.gathering_id == gathering.id,
+            GatheringCoHost.account_id == Person.account_id,
+        )
+    ).label("co_host")
+    statement = (
+        select(Membership.id, Person.display_name, invited, place, co_host)
+        .join(Person, Person.id == Membership.person_id)
+        .where(Membership.group_id == gathering.owning_group_id, Person.anonymized_at.is_(None))
+        .order_by(Membership.created_at, Membership.id)
+    )
+    if gathering.host_account_id is not None:
+        statement = statement.where(Person.account_id != gathering.host_account_id)
+    return statement
+
+
+def _place_entry(membership_id: UUID, display_name: Optional[str], invited: bool, place, co_host: bool) -> dict:
+    """One member's entry: the handle, the name, the place — `invited` |
+    `shared_with` | `left_out` | null (a live member with no row of either
+    kind, who sees nothing) — and the co-host flag, which says why a move
+    away from invited would be refused."""
+    if invited:
+        resolved: Optional[str] = PLACE_INVITED
+    elif place is not None:
+        resolved = place.value if isinstance(place, MemberPlace) else str(place)
+    else:
+        resolved = None
+    return {
+        "membership_id": str(membership_id),
+        "display_name": display_name,
+        "place": resolved,
+        "co_host": bool(co_host),
+    }
+
+
+@router.get("/gatherings/{gathering_id}/places")
+async def list_places(
+    gathering_id: UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """WHO STANDS WHERE on a group gathering — the organisers' list (the host
+    or a co-host; everyone else the gathering 404). **200**
+    `{"invitees_chosen", "members": [{"membership_id", "display_name",
+    "place", "co_host"}, …]}`: one entry per live member of the gathering's
+    group except the host, in joining order — the handle every member
+    already reads (CK-75), a display name, the place (`invited` |
+    `shared_with` | `left_out` | null — no row of either kind), and whether
+    they co-host; never an email, a person id or an account id. ONE
+    statement. A standalone gathering is 409 `not_in_a_group`."""
+    gathering = await _gathering_for_organiser(db, ctx, gathering_id)
+    _require_group(gathering)
+    rows = (await db.execute(_places_statement(gathering))).all()
+    return {
+        "invitees_chosen": gathering.invitees_chosen,
+        "members": [_place_entry(*row) for row in rows],
+    }
+
+
+@router.put("/gatherings/{gathering_id}/places/{membership_id}")
+async def put_place(
+    gathering_id: UUID,
+    membership_id: UUID,
+    body: PlaceIn,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """CHANGE ONE MEMBER'S PLACE — delegable (the host or a co-host). The
+    member is named by their MEMBERSHIP id in this gathering's group; an id
+    that is not a live membership of that group draws CK-75's member 404
+    (one body for "no such member" and "a member of some other group").
+
+    TO INVITED: the invitation row is written (`invited_by_person_id` the
+    caller) if the member holds none, and any place row is deleted —
+    `invitees_chosen` does not move (once chosen, chosen). TO SHARED WITH or
+    LEFT OUT: the place row is written or changed (`set_by_person_id` the
+    caller; `updated_at` stamped when the place CHANGES), the invitation
+    row is deleted, and `invitees_chosen` is set true. Idempotent: asking
+    for the place a member already holds writes nothing and answers 200.
+
+    REFUSED, each with a stable code and nothing written: 409 `is_co_host`
+    — a co-host stays invited (CK-68's handle is their invitation row;
+    remove them as a co-host first); 409 `has_answered` — a member who has
+    answered any of the gathering's dates stays invited (their answer can't
+    be deleted, CK-27, and a roster showing an answer from someone who can
+    no longer see the gathering is worse than the refusal); 422 `is_host`
+    on the path's `membership_id` — the host's own membership has no place;
+    409 `not_in_a_group` — a standalone gathering. **200** with the
+    member's entry, the list's item shape."""
+    gathering = await _gathering_for_organiser(db, ctx, gathering_id)
+    _require_group(gathering)
+    found = (
+        await db.execute(
+            select(Membership, Person)
+            .join(Person, Person.id == Membership.person_id)
+            .where(
+                Membership.id == membership_id,
+                Membership.group_id == gathering.owning_group_id,
+                Person.anonymized_at.is_(None),
+            )
+        )
+    ).first()
+    if found is None:
+        raise _no_such_member()
+    membership, person = found
+    if gathering.host_account_id is not None and person.account_id == gathering.host_account_id:
+        raise HTTPException(
+            422,
+            detail=[
+                {
+                    "loc": ["path", "membership_id"],
+                    "msg": "the host runs this gathering and has no place on it",
+                    "type": "value_error",
+                    "code": IS_HOST,
+                }
+            ],
+        )
+    now = datetime.now(timezone.utc)
+    if body.place == PLACE_INVITED:
+        if not await _holds_invitation(db, person.id, gathering.id):
+            db.add(
+                GatheringInvitation(
+                    gathering_id=gathering.id,
+                    person_id=person.id,
+                    # Provenance: who invited them — the organiser who moved
+                    # them, exactly as the create path writes the creator.
+                    invited_by_person_id=ctx.person.id,
+                )
+            )
+        await db.execute(
+            delete(GatheringMemberPlace).where(
+                GatheringMemberPlace.gathering_id == gathering.id,
+                GatheringMemberPlace.person_id == person.id,
+            )
+        )
+    else:
+        # A co-host cannot be moved away from invited: the relation's handle
+        # is their invitation row (CK-68), and an organiser who cannot read
+        # the gathering is a contradiction. Remove them as a co-host first.
+        if await is_co_host(db, gathering.id, person.account_id):
+            raise _place_refusal(
+                IS_CO_HOST,
+                "a co-host stays invited — remove them as a co-host first",
+            )
+        # A member who has answered any of this gathering's dates stays
+        # invited: no answer can be deleted (CK-27, deliberately), and a
+        # roster carrying an answer from someone who can no longer see the
+        # gathering would be worse than this refusal.
+        answered = await db.scalar(
+            select(RSVP.id)
+            .join(Occurrence, Occurrence.id == RSVP.occurrence_id)
+            .where(Occurrence.gathering_id == gathering.id, RSVP.person_id == person.id)
+            .limit(1)
+        )
+        if answered is not None:
+            raise _place_refusal(
+                HAS_ANSWERED,
+                "they've answered for one of this gathering's dates, so they stay invited",
+            )
+        place = MemberPlace(body.place)
+        row = await db.get(GatheringMemberPlace, (gathering.id, person.id))
+        if row is None:
+            db.add(
+                GatheringMemberPlace(
+                    gathering_id=gathering.id,
+                    person_id=person.id,
+                    place=place,
+                    set_by_person_id=ctx.person.id,
+                )
+            )
+        elif row.place != place:
+            row.place = place
+            row.set_by_person_id = ctx.person.id
+            row.updated_at = now
+        await db.execute(
+            delete(GatheringInvitation).where(
+                GatheringInvitation.gathering_id == gathering.id,
+                GatheringInvitation.person_id == person.id,
+            )
+        )
+        # Once chosen, chosen: any move away from invited says the host
+        # chose, and nothing sets it back.
+        gathering.invitees_chosen = True
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Two organisers moving the same member at once: the primary key or
+        # the partial unique held for the other, so the state asked for is
+        # the state that holds — answered below as it stands.
+        await db.rollback()
+    entry = (
+        await db.execute(_places_statement(gathering).where(Membership.id == membership.id))
+    ).one()
+    return _place_entry(*entry)

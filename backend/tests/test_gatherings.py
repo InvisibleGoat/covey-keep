@@ -20,6 +20,7 @@ from app.models import (
     Account,
     AccountKind,
     Gathering,
+    GatheringInvitation,
     GatheringType,
     Occurrence,
     Person,
@@ -183,8 +184,14 @@ async def test_an_org_hosted_gathering_reads_gated_by_the_backstop(
         db.add(gathering)
         await db.flush()
         db.add(Occurrence(gathering_id=gathering.id, starts_at=datetime(2026, 9, 1, 18, tzinfo=timezone.utc)))
-        # The caller keeps it, so they are in the read audience.
+        # The caller keeps it — which since CK-77 admits NOBODY (keeping lets
+        # no one in; until CK-77 the kept row alone put them in the read
+        # audience) — so they are INVITED too: the person-targeted
+        # invitation row is what admits them to the detail and the list,
+        # the keeper column only to the quota. Both planted on purpose.
         await keep(db, await _account_for(db, address), gathering)
+        person_id = (await db.execute(select(Person.id).where(Person.email == address))).scalar_one()
+        db.add(GatheringInvitation(gathering_id=gathering.id, person_id=person_id))
         await db.commit()
         gathering_id = str(gathering.id)
         assert gathering.requires_approval is None  # nobody decided
@@ -1158,8 +1165,10 @@ async def test_the_switch_is_the_hosts_alone_and_the_refusal_is_the_gathering_40
     """The switch is host-only like the rest of the PATCH surface: a keeper
     who is not the host, and a stranger, each draw the gathering 404
     byte-identical to a missing id (never a 403 — that the gate exists is
-    not information the audience gets), and the column does not move. The
-    keeper can still READ the gathering: the refusal is about the act."""
+    not information the audience gets), and the column does not move. Since
+    CK-77 the keeper cannot READ the gathering either — keeping lets no one
+    in (until then this test ended with their 200: the refusal was about
+    the act alone)."""
     host_headers = await _signed_in_headers(client, capsys, "host@example.com")
     keeper_address = "keeper@example.com"
     keeper_headers = await _signed_in_headers(client, capsys, keeper_address)
@@ -1190,7 +1199,7 @@ async def test_the_switch_is_the_hosts_alone_and_the_refusal_is_the_gathering_40
         assert refused.content == missing.content
     assert (
         await client.get(f"/gatherings/{gathering_id}", headers=keeper_headers)
-    ).status_code == 200
+    ).status_code == 404
     async with db_session_factory() as db:
         gathering = (await db.execute(select(Gathering))).scalars().one()
         assert gathering.requires_approval is None  # still nobody's decision

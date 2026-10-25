@@ -55,8 +55,10 @@ class RSVPListVisibility(str, Enum):
     """Who may read an occurrence's RSVP list (CK-27) — the host's first real
     per-gathering option, a value on the gathering in requires_approval's
     shape (never a capability-profile lookup at read time). HOST_ONLY: the
-    admin alone. INVITEES: the CK-25 read audience (keeper, admin, or accepted
-    invitee). ATTENDEES: those whose own response is yes. Two rules hold in
+    admin alone. INVITEES: the invited tier (the host, a co-host, or an
+    accepted invitee — never the keeper by keeping since CK-77, and never a
+    member only shared with the gathering, who cannot reach the RSVP routes
+    at all). ATTENDEES: those whose own response is yes. Two rules hold in
     every mode: the admin always sees the full list (a narrower setting must
     never show the host less than HOST_ONLY does), and the caller always sees
     their own RSVP (no one is locked out of their own answer)."""
@@ -206,6 +208,38 @@ class BillingPlan(str, Enum):
     PHOTOS_300K = "photos_300k"
 
 
+class MemberPlace(str, Enum):
+    """A group member's PLACE on one of the group's gatherings when it is
+    NOT "invited" (CK-77, migration 0034; decisions/2026-10-04-a-groups-
+    gathering-stays-in-the-group.md §4). Invited is not a value here on
+    purpose: an invited member holds a person-targeted `gathering_invitations`
+    row, exactly what the product has always understood, and this enum
+    discriminates the SIBLING relation `gathering_member_places` — the two
+    other places — so that no existing check that admits an invitee has to
+    learn a new filter, and a place row grants nothing until a read path
+    opts in to it (it fails closed).
+
+    shared_with   MEMORY ONLY (the participation record §4): the photographs
+                  — and later the posts written for everyone — never the time,
+                  the place, the RSVP, the invitation list, a calendar entry
+                  or an upload. Opted into by exactly two read paths:
+                  api/gatherings.py::_gathering_for_memory and
+                  api/media.py::_visible_media's `live` branch.
+    left_out      NO TRACE (the surprise party): absent from every list,
+                  count and group listing until the host changes their place.
+                  Opted into by NOTHING — the value exists so the host's
+                  choice is a row and never a lookup, and so a newcomer's
+                  default (shared with) can be told from the host's refusal.
+
+    Design-fixed, so a native enum (database-schema decision 2): a third
+    place is a decision record, never a value that grows as data. Made by
+    CREATE TYPE at 0034, so its labels are usable at once (the CK-71 rule).
+    """
+
+    SHARED_WITH = "shared_with"
+    LEFT_OUT = "left_out"
+
+
 class JoinRequestOutcome(str, Enum):
     """How an open request to join a group through its link was decided
     (CK-75, migration 0032; joining-a-group record §2). Set together with
@@ -238,3 +272,4 @@ PUBLICATION_STATE = db_enum(PublicationState, "publication_state")
 BILLING_PROVIDER = db_enum(BillingProvider, "billing_provider")
 BILLING_PLAN = db_enum(BillingPlan, "billing_plan")
 JOIN_REQUEST_OUTCOME = db_enum(JoinRequestOutcome, "join_request_outcome")
+MEMBER_PLACE = db_enum(MemberPlace, "member_place")

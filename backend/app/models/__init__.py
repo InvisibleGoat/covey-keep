@@ -24,6 +24,7 @@ from app.models.enums import (
     InvitationChannel,
     JoinRequestOutcome,
     MediaFailureReason,
+    MemberPlace,
     MediaLayer,
     MediaStatus,
     PublicationState,
@@ -35,6 +36,7 @@ from app.models.gathering import (
     GatheringCoHost,
     GatheringInvitation,
     GatheringInvitationPending,
+    GatheringMemberPlace,
     Occurrence,
 )
 from app.models.group import (
@@ -69,6 +71,7 @@ __all__ = [
     "GatheringCoHost",
     "GatheringInvitation",
     "GatheringInvitationPending",
+    "GatheringMemberPlace",
     "GatheringType",
     "Group",
     "GroupCoAdmin",
@@ -88,6 +91,7 @@ __all__ = [
     "MediaLayer",
     "MediaStatus",
     "MediaTag",
+    "MemberPlace",
     "Membership",
     "NextStepAcceptance",
     "NextStepDismissal",

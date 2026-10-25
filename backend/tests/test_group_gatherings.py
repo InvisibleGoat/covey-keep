@@ -42,7 +42,7 @@ The load-bearing pins:
   through the real worker) and at restore (a non-host's restore lands
   `live`, and `pending` once the host's own setting gates); a groupless
   gathering is exactly today's (JOIN_SHAPE);
-- THE BACKUP COLUMN is unmapped and still present;
+- THE BACKUP COLUMN is unmapped (CK-76) and GONE since 0034 (CK-77);
 - THE 0033 ROUND TRIP, under the round-trip rider;
 - the verifier's three new lines, fired by a plant each and by nothing
   else; nothing logged that these routes did not log before.
@@ -111,8 +111,11 @@ from tests.test_worker import (
 GROUP_NAME = "Finch family"
 INDEX = "ix_gatherings_owning_group_id"
 # The verifier's total, pinned as a number (the CK-57 convention): 339 since
-# CK-76's three lines on top of CK-75's 336.
-VERIFIER_TOTAL = 339
+# CK-76's three lines on top of CK-75's 336; 361 since CK-77's twenty-three
+# (the places table's shape, the type's labels, invitees_chosen and its CHECK,
+# three data lines) less the one retired (CK-75's backup-NULL line, replaced
+# by the 0009 block's is-gone line).
+VERIFIER_TOTAL = 361
 
 
 def _now() -> datetime:
@@ -692,7 +695,10 @@ async def test_the_list_shows_what_the_caller_hosts_or_co_hosts_with_group_on_ev
     assert member_items[standalone["id"]]["group"] is None
 
     admin_items = {g["id"]: g for g in await _list(client, cast.admin)}
-    assert set(admin_items) == {in_group["id"], standalone["id"]}  # invited to one, keeps the other
+    # Invited to the group gathering; KEEPS the standalone one — which since
+    # CK-77 lists nothing (keeping lets no one in; until CK-77 both were
+    # here). The pin moved with its reason.
+    assert set(admin_items) == {in_group["id"]}
     assert admin_items[in_group["id"]]["caller_role"] is None
     co_admin_items = {g["id"]: g for g in await _list(client, cast.co_admin)}
     assert set(co_admin_items) == {in_group["id"]}
@@ -876,12 +882,13 @@ async def test_a_group_gathering_resolves_open_through_the_template_rung_in_the_
 # --- the backup column, unmapped and present --------------------------------------
 
 
-async def test_the_backup_admin_column_is_unmapped_and_still_in_the_database(db_session_factory):
-    """CK-76 unmaps `groups.backup_admin_person_id` — the model has no such
+async def test_the_backup_admin_column_is_unmapped_and_gone(db_session_factory):
+    """CK-76 unmapped `groups.backup_admin_person_id` — the model has no such
     attribute and the table object no such column, so no SELECT the ORM
-    builds names it (the instance serving during CK-77's pre-deploy window
-    reads it nowhere) — and the column itself is still in the database,
-    nullable, with its FK, for CK-77 to drop."""
+    builds names it — and CK-77's 0034 DROPPED it with its FK (the contract
+    step; until CK-77 this test asserted the column still present, nullable,
+    with its FK, waiting for the drop). tests/test_member_places.py pins the
+    hook's deletion and `alembic check` clean."""
     assert not hasattr(Group, "backup_admin_person_id")
     assert "backup_admin_person_id" not in Group.__table__.columns
     async with db_session_factory() as db:
@@ -893,12 +900,12 @@ async def test_the_backup_admin_column_is_unmapped_and_still_in_the_database(db_
                 )
             )
         ).first()
-        assert shape is not None and shape[0] == "YES"
+        assert shape is None
         assert (
             await db.scalar(
                 text("SELECT count(*) FROM pg_constraint WHERE conname = 'fk_groups_backup_admin_person_id'")
             )
-        ) == 1
+        ) == 0
 
 
 # --- the 0033 round trip ---------------------------------------------------------------

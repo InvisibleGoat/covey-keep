@@ -322,13 +322,13 @@ async def test_deletion_relinquishes_group_admin_and_retains_memberships(
     lives is still open — CK-76 wrote the first gathering that resolves
     through a group and decided nothing about the stamp); a group someone
     else keeps is untouched. THE RETIRED `backup_admin_person_id` (moved at
-    CK-76, with its reason): until CK-76 this test planted the deleted
-    person as the other group's backup admin and asserted the leg NULLed
-    it; the column is UNMAPPED since CK-76 (nothing writes it, the leg no
-    longer touches it, CK-77 drops it), so the plant is gone — nothing has
-    ever written that column in production — and the column is read by raw
-    SQL as NULL on both groups before and after, the state the verifier
-    asserts on every deployed row."""
+    CK-76, and again at CK-77, each with its reason): until CK-76 this test
+    planted the deleted person as the other group's backup admin and
+    asserted the leg NULLed it; CK-76 unmapped the column (the plant went —
+    nothing has ever written that column in production) and read it NULL
+    by raw SQL before and after; 0034 (CK-77) DROPPED it, so the column is
+    asserted absent from the catalog once and the leg is shown to need
+    nothing of it."""
     address = "groupadmin@example.com"
     other_address = "othermember@example.com"
     headers = await _signed_in_headers(client, capsys, address)
@@ -382,20 +382,19 @@ async def test_deletion_relinquishes_group_admin_and_retains_memberships(
         await db.commit()
         backed_id = backed.id
 
-    async def backup_columns() -> list:
-        # The unmapped column, by raw SQL: NULL on both groups, before and
-        # after — nothing writes it, and the leg no longer touches it.
-        async with db_session_factory() as db:
-            return (
-                await db.scalars(
-                    text("SELECT backup_admin_person_id FROM groups WHERE id IN (:a, :b)"),
-                    {"a": own_group_id, "b": backed_id},
+    async with db_session_factory() as db:
+        # The retired column is gone (0034, CK-77): nothing for the leg to
+        # touch, and nothing to read — until CK-77 this read it NULL on
+        # both groups before and after.
+        assert (
+            await db.scalar(
+                text(
+                    "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' "
+                    "AND table_name = 'groups' AND column_name = 'backup_admin_person_id'"
                 )
-            ).all()
-
-    assert await backup_columns() == [None, None]
+            )
+        ) == 0
     assert (await client.post("/me/delete", json=DELETE_BODY, headers=headers)).status_code == 204
-    assert await backup_columns() == [None, None]
 
     async with db_session_factory() as db:
         own = (await db.execute(select(Group).where(Group.id == own_group_id))).scalars().one()

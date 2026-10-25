@@ -41,10 +41,9 @@ seeded role ladder (`memberships.role_id` stays unread — one of its rungs is
 permission matrix. Every co-admin is a member, and leaving or removal
 deletes the co-admin row with the membership; an admin is never also a
 co-admin (the add refuses the admin; a hand-over deletes the new admin's
-row). The retired `backup_admin_person_id` left every body at CK-75 and is
-written by nothing; UNMAPPED at CK-76 (models/group.py — the model no
-longer carries it), the column itself dropped by CK-77's migration, the
-contract step after the release that stops reading it.
+row). The retired `backup_admin_person_id` left every body at CK-75, was
+written by nothing, UNMAPPED at CK-76 (models/group.py), and DROPPED at
+0034 (CK-77) — the contract step after the release that stopped reading it.
 
 HOUSEHOLD ONLY, AND THAT IS BINDING, NOT A SIMPLIFICATION. `group_type` is
 schema-valid for four values and the create endpoint accepts one: TEAM,
@@ -510,8 +509,8 @@ async def create_group(
         # The creator is the first keeper (record §8) — an ACCOUNT fact on a
         # row whose other facts are people, and it authorizes nothing here.
         keeper_account_id=ctx.person.account_id,
-        # backup_admin_person_id stays NULL in the database: retired,
-        # written by nothing, and UNMAPPED since CK-76 (models/group.py).
+        # No backup admin: the column was retired at CK-75, unmapped at
+        # CK-76 and dropped at 0034 (CK-77) — co-admins are the relation.
         # organization_id stays NULL: a household has no organization.
     )
     db.add(group)

@@ -12,10 +12,13 @@ refcount and CK-20 for occurrence text). Since CK-29 the update path stamps
 rsvps.updated_at (a mutable row with only a created_at can be read but not
 accounted for — the gap that cost CK-28 a verification).
 
-Authorization is CK-25's read audience, inherited exactly: keeper OR host OR
-accepted invitee of the parent gathering may RSVP and may read; anyone else
-gets the uniform 404 — a signed-in stranger must not learn an occurrence
-exists by RSVPing to it.
+Authorization is THE INVITED TIER (api/gatherings.py::_gathering_for_invited
+— CK-77; CK-25's audience until then): the host, a co-host, or an accepted
+invitee of the parent gathering may RSVP and may read; anyone else gets the
+uniform 404 — a signed-in stranger must not learn an occurrence exists by
+RSVPing to it. RSVP is LOGISTICS (the participation record §4), so a member
+only SHARED WITH the gathering is outside it, and so is the keeper by
+keeping (keeping lets no one in — keeping-explained §5.11).
 
 stay_included — "I can't make it, but keep me included" (the 2026-09-02
 participation-terminology record §3) — is INTEREST, never permission. It
@@ -94,7 +97,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, get_auth_context, get_db
-from app.api.gatherings import _gathering_for_read, _not_found, may_administer
+from app.api.gatherings import _gathering_for_invited, _not_found, may_administer
 from app.models import (
     Gathering,
     Occurrence,
@@ -237,13 +240,15 @@ def _list_row(
 async def _occurrence_for_read(
     db: AsyncSession, ctx: AuthContext, occurrence_id: UUID
 ) -> tuple[Occurrence, Gathering]:
-    """The CK-25 audience, applied through the occurrence: a missing id and a
-    parent gathering the caller may not read raise the same 404 with the same
-    body — byte-identical, the gatherings posture."""
+    """The INVITED tier, applied through the occurrence (CK-77; CK-25's
+    audience until then — the keeper term gone with it): a missing id and a
+    parent gathering the caller may not RSVP to raise the same 404 with the
+    same body — byte-identical, the gatherings posture. A member only shared
+    with the gathering draws it too: RSVP is logistics."""
     occurrence = await db.get(Occurrence, occurrence_id)
     if occurrence is None:
         raise _not_found()
-    gathering = await _gathering_for_read(db, ctx, occurrence.gathering_id)
+    gathering = await _gathering_for_invited(db, ctx, occurrence.gathering_id)
     return occurrence, gathering
 
 

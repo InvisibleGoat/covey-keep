@@ -393,18 +393,20 @@ async def test_a_failed_row_is_visible_to_its_uploader_alone(client, capsys, db_
         assert refused.status_code == 404, (act.__name__, refused.text)
         assert refused.json() == missing.json(), act.__name__
 
-    # A keeper and a second accepted invitee: the gathering is theirs to
-    # read, the failed row is not — before CK-71 and after.
-    for headers in (cast.keeper, cast.bystander):
-        assert failed not in _ids(await _list(client, headers, cast.gathering_id))
-        for act in ACTS:
-            refused = await act(client, headers, failed)
-            assert refused.status_code == 404, act.__name__
-            assert refused.json() == missing.json(), act.__name__
-    # A stranger: the gathering 404 on the list, the media 404 on every act.
-    assert (await _list(client, cast.stranger, cast.gathering_id)).status_code == 404
+    # A second accepted invitee: the gathering is theirs to read, the failed
+    # row is not — before CK-71 and after.
+    assert failed not in _ids(await _list(client, cast.bystander, cast.gathering_id))
     for act in ACTS:
-        assert (await act(client, cast.stranger, failed)).json() == missing.json(), act.__name__
+        refused = await act(client, cast.bystander, failed)
+        assert refused.status_code == 404, act.__name__
+        assert refused.json() == missing.json(), act.__name__
+    # A stranger — and the keeper, outside the audience since CK-77 (keeping
+    # lets no one in; until then the keeper read the list beside the
+    # invitee): the gathering 404 on the list, the media 404 on every act.
+    for headers in (cast.stranger, cast.keeper):
+        assert (await _list(client, headers, cast.gathering_id)).status_code == 404
+        for act in ACTS:
+            assert (await act(client, headers, failed)).json() == missing.json(), act.__name__
 
     # The queue: never a failed row — the host's own included.
     queue = await client.get(
@@ -471,12 +473,20 @@ async def test_a_guest_uploads_failed_row_is_visible_to_nobody(client, capsys, d
         await db.commit()
         guest = str(row.id)
     missing = await _url(client, cast.host, MISSING_ID)
-    for headers in (cast.host, cast.uploader, cast.keeper, cast.bystander):
+    for headers in (cast.host, cast.uploader, cast.bystander):
         assert guest not in _ids(await _list(client, headers, cast.gathering_id))
         for act in (_url, _dismiss):
             refused = await act(client, headers, guest)
             assert refused.status_code == 404
             assert refused.json() == missing.json()
+    # The keeper by keeping is outside the gathering altogether since CK-77
+    # (keeping lets no one in): the list is the gathering 404, each act the
+    # media 404 — so the guest row is in their view least of all.
+    assert (await _list(client, cast.keeper, cast.gathering_id)).status_code == 404
+    for act in (_url, _dismiss):
+        refused = await act(client, cast.keeper, guest)
+        assert refused.status_code == 404
+        assert refused.json() == missing.json()
     assert await _reason_and_rung(db_session_factory, guest) == (
         MediaStatus.FAILED, MediaFailureReason.UPLOAD_INCOMPLETE,
     )
@@ -760,7 +770,7 @@ async def test_the_verifier_asserts_a_reason_iff_failed(client, capsys, db_sessi
         assert [m.value for m in MediaFailureReason] == list(REASONS)
 
     passed, failed_count, code, out = _verifier()
-    assert (passed, failed_count, code) == (339, 0, 0), out
+    assert (passed, failed_count, code) == (361, 0, 0), out
     for line in (
         "media.failure_reason is nullable",
         "media.failure_reason is of type media_failure_reason",
@@ -783,14 +793,14 @@ async def test_the_verifier_asserts_a_reason_iff_failed(client, capsys, db_sessi
         "SELECT count(*) FROM media WHERE id = :id AND status = 'failed' AND failure_reason IS NULL",
     )
     passed, failed_count, code, out = _verifier()
-    assert (passed, failed_count, code) == (338, 1, 1), out
+    assert (passed, failed_count, code) == (360, 1, 1), out
     assert f"FAIL  {label}" in out and "1 media row(s) whose failure_reason disagrees with status" in out
     await plant(
         failed,
         "UPDATE media SET failure_reason = 'upload_incomplete' WHERE id = :id",
         "SELECT count(*) FROM media WHERE id = :id AND failure_reason = 'upload_incomplete'",
     )
-    assert _verifier()[:3] == (339, 0, 0)
+    assert _verifier()[:3] == (361, 0, 0)
 
     # (2) A ready row with a reason: the same line, and only it.
     await plant(
@@ -799,11 +809,11 @@ async def test_the_verifier_asserts_a_reason_iff_failed(client, capsys, db_sessi
         "SELECT count(*) FROM media WHERE id = :id AND status = 'ready' AND failure_reason IS NOT NULL",
     )
     passed, failed_count, code, out = _verifier()
-    assert (passed, failed_count, code) == (338, 1, 1), out
+    assert (passed, failed_count, code) == (360, 1, 1), out
     assert f"FAIL  {label}" in out
     await plant(
         ready,
         "UPDATE media SET failure_reason = NULL WHERE id = :id",
         "SELECT count(*) FROM media WHERE id = :id AND failure_reason IS NULL",
     )
-    assert _verifier()[:3] == (339, 0, 0)
+    assert _verifier()[:3] == (361, 0, 0)

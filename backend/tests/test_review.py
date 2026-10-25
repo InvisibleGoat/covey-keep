@@ -212,8 +212,10 @@ async def test_the_host_publishes_and_the_row_goes_live_with_both_stamps(
         await db.commit()
     before = await _bytes(db_session_factory, cast)
     # Before: the read audience cannot see it (the rule this phase acts
-    # inside), and the body carries no stamp.
-    assert _ids(await _list(client, cast.keeper, cast.gathering_id)) == []
+    # inside), and the body carries no stamp. (The bystander — an invitee;
+    # until CK-77 the keeper stood here, and since CK-77 the keeper is
+    # outside the audience altogether: keeping lets no one in.)
+    assert _ids(await _list(client, cast.bystander, cast.gathering_id)) == []
     assert (await _list(client, cast.host, cast.gathering_id)).json()["media"][0]["published_at"] is None
 
     response = await _publish(client, cast.host, media_id)
@@ -231,11 +233,14 @@ async def test_the_host_publishes_and_the_row_goes_live_with_both_stamps(
     assert publisher == await _host_person_id(db_session_factory)
     assert datetime.fromisoformat(body["published_at"]) == published_at
 
-    # The whole read audience sees it now — the CK-37 `live` branch, unchanged.
-    for headers in (cast.uploader, cast.host, cast.keeper, cast.bystander):
+    # The whole read audience sees it now — the CK-37 `live` branch. (The
+    # keeper left that audience at CK-77 — keeping lets no one in — and
+    # draws the gathering 404 beside the stranger.)
+    for headers in (cast.uploader, cast.host, cast.bystander):
         assert _ids(await _list(client, headers, cast.gathering_id)) == [media_id]
         assert (await _url(client, headers, media_id)).status_code == 200
-    assert (await _list(client, cast.stranger, cast.gathering_id)).status_code == 404
+    for headers in (cast.stranger, cast.keeper):
+        assert (await _list(client, headers, cast.gathering_id)).status_code == 404
 
     # Publication is not a byte.
     assert await _bytes(db_session_factory, cast) == before
@@ -468,8 +473,11 @@ async def test_the_batch_refuses_whole_and_leaves_nothing_changed(client, capsys
     stamps = {(await _state(db_session_factory, m))[2:4] for m in good}
     assert len(stamps) == 1 and next(iter(stamps))[1] == host_person
     assert (await _state(db_session_factory, elsewhere))[1] == PublicationState.PENDING
-    # The keeper sees exactly the published three.
-    assert set(_ids(await _list(client, cast.keeper, cast.gathering_id))) == set(good)
+    # An invitee who uploaded nothing sees exactly the published three.
+    # (The keeper stood here until CK-77; since then keeping lets no one
+    # in, and the keeper's list is the gathering 404.)
+    assert set(_ids(await _list(client, cast.bystander, cast.gathering_id))) == set(good)
+    assert (await _list(client, cast.keeper, cast.gathering_id)).status_code == 404
     # And a second batch of the same ids refuses whole: already live.
     item(await _batch(client, cast.host, cast.gathering_id, good), 0, ALREADY_LIVE)
 
@@ -521,10 +529,15 @@ async def test_the_queue_is_the_hosts_alone_and_runs_inside_the_audience_rule(
     ))) == 4
 
     missing = await client.get(f"/media/{MISSING_ID}/url", params={"layer": "web"}, headers=cast.host)
-    for headers in (cast.uploader, cast.keeper, cast.bystander):
+    for headers in (cast.uploader, cast.bystander):
         refused = await _queue(client, headers, cast.gathering_id)
         assert refused.status_code == 404
         assert refused.json() == missing.json()  # the media 404, not the gathering's
+    # The keeper (outside the audience since CK-77 — keeping lets no one
+    # in) draws the GATHERING's 404 one door earlier, like a stranger.
+    refused = await _queue(client, cast.keeper, cast.gathering_id)
+    assert refused.status_code == 404
+    assert refused.json() == (await client.get(f"/gatherings/{MISSING_ID}", headers=cast.keeper)).json()
     # The uploader's own pending rows are in THEIR list — the queue is
     # not new visibility, it is the host's visibility given an action.
     assert set(_ids(await _list(client, cast.uploader, cast.gathering_id))) >= set(waiting)
@@ -597,10 +610,15 @@ async def test_a_decline_lands_removed_in_the_gatherings_bin_and_the_uploader_do
     # from their list, the media 404 byte-identical to a missing id on the
     # URL — and neither do a keeper or a second invitee.
     missing = await _url(client, cast.uploader, MISSING_ID)
-    for headers in (cast.uploader, cast.keeper, cast.bystander):
+    for headers in (cast.uploader, cast.bystander):
         assert _ids(await _list(client, headers, cast.gathering_id)) == []
         refused = await _url(client, headers, media_id)
         assert (refused.status_code, refused.json()) == (404, missing.json())
+    # The keeper (outside the audience since CK-77): the gathering 404 on
+    # the list, the same media 404 on the URL.
+    assert (await _list(client, cast.keeper, cast.gathering_id)).status_code == 404
+    refused = await _url(client, cast.keeper, media_id)
+    assert (refused.status_code, refused.json()) == (404, missing.json())
     # The HOST reads that bin since CK-66: the default list stays clean
     # (the bin is a view — test_gathering_bin.py) and the row opens for
     # them (CHANGED: until CK-66 the host drew the 404 too).

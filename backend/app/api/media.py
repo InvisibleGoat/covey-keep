@@ -21,12 +21,21 @@ Everything here is part of the accept/refuse decision:
   capability (participation-terminology record §5 — deliberately not a
   keeper one: "keeping is where the perks live, never the entry fee"), and
   attendance has no surface (attendance_records is unwritten). So the rule
-  cannot be implemented yet, and this router takes _gathering_for_read's
-  audience — host OR keeper OR accepted invitee — as the stand-in. It is
-  NOT gated on keeping, in either direction (an invitee with no kept row
-  may upload; pinned by test). REPLACED BY the phase that gives attendance
-  a surface; an interim not written down as interim becomes the rule by
-  default, which is why this paragraph and the api-reference both say it.
+  cannot be implemented yet, and this router takes THE INVITED TIER —
+  api/gatherings.py::_gathering_for_invited: the host, a co-host, or an
+  accepted invitee — as the stand-in (the participation record §5 at 1.2.0,
+  Steven 2026-10-24: "until attendance has a surface, the uploaders are the
+  host, the co-hosts and the invited"). OUTSIDE IT, each drawing the
+  gathering's 404: a member only SHARED WITH the gathering (memory only —
+  they see the photographs and add none; a host who wants theirs changes
+  their place to invited), a member LEFT OUT, and THE KEEPER BY KEEPING
+  (CK-77 — keeping lets no one in; from CK-49b to CK-77 the resolved keeper
+  was in this audience, through `_gathering_for_read`'s keeper term). It is
+  NOT gated on keeping in the other direction either (an invitee who keeps
+  nothing may upload; pinned by test). REPLACED BY the phase that gives
+  attendance a surface; an interim not written down as interim becomes the
+  rule by default, which is why this paragraph and the api-reference both
+  say it.
 - THE DECLARED CONTENT TYPE — advisory here, enforced later. A `.mov`
   renamed `.jpg` passes any intent-time allowlist; the worker verifies the
   real type from the bytes (CK-36 — processing.DECODABLE_FORMATS is this
@@ -72,7 +81,8 @@ Everything here is part of the accept/refuse decision:
   cannot both pass against the same headroom. WHO IS ASKING decides how
   much a refusal says (CK-51b.1; narrowed on both sides at CK-65 —
   keeping-explained §5.2, §5.5) — the caller's account against the
-  resolved keeper's, the comparison _gathering_for_read already makes.
+  resolved keeper's, the one comparison against a keeper column any
+  router makes since CK-77 (the quota's; no audience makes one).
   Since CK-74 the keeper's form alone carries the type `keeper_space_full`
   (KEEPER_SPACE_FULL) on its 422 entry — the one refusal that may point at
   more space, because it is the keeper's space; the wording is unchanged.
@@ -144,11 +154,17 @@ photograph (`GET /media/{id}/url?layer=`). Both apply ONE rule — in SQL,
 `_visible_media`, never in the response layer — and it has three cases, of
 which only one is the gathering's ordinary read audience:
 
-  live     the read audience (_gathering_for_read: host OR keeper OR
-           accepted invitee). Since CK-41 the state of every photograph in
-           a gathering that resolves open through the publication ladder
-           (every gathering today); since CK-43 also what the host's
-           publish writes where a gathering resolves gated.
+  live     THE MEMORY TIER'S audience (CK-77): the host, an accepted
+           invitee, or a member SHARED WITH the gathering (a `shared_with`
+           place row — the one place in this module that opts into the
+           place table; the participation record §4: photographs are
+           memory, and memory reaches the shared-with). NEVER THE KEEPER
+           by keeping (CK-77 — keeping lets no one in; from CK-37 to CK-77
+           the resolved keeper was a term here), never a left-out member.
+           Since CK-41 the state of every photograph in a gathering that
+           resolves open through the publication ladder (every gathering
+           today); since CK-43 also what the host's publish writes where a
+           gathering resolves gated.
   pending  THE UPLOADER AND THE HOST, AND NOBODY ELSE — a co-host is
            nobody here (CK-68: reserved, co-hosts §4). A row not yet
            `ready`, or a `ready` one in a gathering that resolves gated
@@ -476,7 +492,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import AuthContext, get_auth_context, get_db
 from app.api.gatherings import (
     _field_422,
-    _gathering_for_read,
+    _gathering_for_invited,
+    _gathering_for_memory,
     _home_facts,
     administers_gathering,
     is_host,
@@ -486,12 +503,14 @@ from app.models import (
     Account,
     Gathering,
     GatheringInvitation,
+    GatheringMemberPlace,
     GatheringType,
     Media,
     MediaDerivative,
     MediaLayer,
     MediaStatus,
     MediaTag,
+    MemberPlace,
     Occurrence,
     Person,
     PublicationState,
@@ -863,8 +882,10 @@ async def _enforce_limits(
     WHO IS ASKING decides how much the refusal says (CK-51b.1; narrowed on
     both sides at CK-65 — keeping-explained §5.2, §5.5).
     `caller_account_id` — the id, not the context, so the function stays
-    DB-shaped — is compared against the resolved keeper's, the comparison
-    _gathering_for_read already makes; no second resolution. THE KEEPER,
+    DB-shaped — is compared against the resolved keeper's; one resolution,
+    the quota's own (since CK-77 no loader resolves the keeper — keeping
+    lets no one in, and the keeper may be outside the gathering's audience
+    altogether while still paying for it). THE KEEPER,
     asking about their own space, reads the allowance, the room left and
     what is being added — their own numbers, and the ones they can act on.
     EVERYONE ELSE reads that the space is full and how many photos they
@@ -975,8 +996,16 @@ async def create_intents(
     """Decide whether these uploads may be accepted and, if so, issue one
     presigned PUT per item. All or nothing: the rows are created and
     presigned inside one transaction, and any refusal — a foreign date, the
-    quota, the ceiling — leaves no row behind."""
-    gathering = await _gathering_for_read(db, ctx, gathering_id)
+    quota, the ceiling — leaves no row behind.
+
+    THE AUDIENCE IS THE INVITED TIER (`_gathering_for_invited`): the host,
+    a co-host, or an accepted invitee — the attendee capability's INTERIM
+    answer until attendance has a surface (the participation record §5,
+    1.2.0; the module docstring). A member only shared with the gathering
+    and a keeper by keeping are OUTSIDE it (CK-77) and draw the gathering's
+    404 — the shared-with see the photographs and add none, and the keeper
+    is charged for what others add, through `_enforce_limits` below."""
+    gathering = await _gathering_for_invited(db, ctx, gathering_id)
     now = datetime.now(timezone.utc)
 
     # Reap abandoned intents (CK-24's mechanism, fifth customer — see the
@@ -1188,10 +1217,13 @@ def _visible_media(ctx: AuthContext, now: datetime):
     the caller may not see is never even fetched.
 
     Three cases, and only `live` is the gathering's read audience:
-      - `live`    → host, keeper, or accepted invitee (the CK-25 audience,
-                    as EXISTS subqueries — list_gatherings' shape; the
-                    keeper RESOLVED through `keeping.keeps_gathering`, the
-                    ladder as SQL — since CK-49b, never a kept row).
+      - `live`    → host, accepted invitee, or SHARED WITH (CK-77: a
+                    `shared_with` row in `gathering_member_places` — the
+                    memory tier, the participation record §4; as EXISTS
+                    subqueries, list_gatherings' shape). NEVER THE KEEPER
+                    (CK-77 — keeping lets no one in; from CK-49b to CK-77
+                    `keeping.keeps_gathering` stood here) and never a
+                    `left_out` row, which no read path opts into.
       - `pending` → the UPLOADER or the HOST, and nobody else. A keeper is
                     not an approver; an invitation is visibility of the
                     gathering, not of unreviewed media. A `failed` row is
@@ -1267,15 +1299,24 @@ def _visible_media(ctx: AuthContext, now: datetime):
     account_id = ctx.person.account_id
     person_id = ctx.person.id
     # The host column alone — NOT `_moderates`: `live` admits the read
-    # audience (a co-host is in it by construction, as an accepted invitee
-    # or a keeper), and `pending` is RESERVED (below).
+    # audience (a co-host is in it by construction, as an accepted
+    # invitee), and `pending` is RESERVED (below).
     hosts = Gathering.host_account_id == account_id
     is_uploader = Media.uploader_person_id == person_id
-    keeps = keeping.keeps_gathering(account_id, Media.gathering_id)
     invited = exists(
         select(GatheringInvitation.id).where(
             GatheringInvitation.person_id == person_id,
             GatheringInvitation.gathering_id == Media.gathering_id,
+        )
+    )
+    # The memory tier's own term (CK-77): a `shared_with` place row — the
+    # photographs reach the shared-with, nothing else does. `left_out` is
+    # deliberately not a term anywhere.
+    shared_with = exists(
+        select(GatheringMemberPlace.gathering_id).where(
+            GatheringMemberPlace.person_id == person_id,
+            GatheringMemberPlace.gathering_id == Media.gathering_id,
+            GatheringMemberPlace.place == MemberPlace.SHARED_WITH,
         )
     )
     return and_(
@@ -1285,7 +1326,10 @@ def _visible_media(ctx: AuthContext, now: datetime):
         # person), so such a failed row is visible to nobody.
         or_(Media.status != MediaStatus.FAILED, is_uploader),
         or_(
-            and_(Media.publication_state == PublicationState.LIVE, or_(hosts, keeps, invited)),
+            and_(
+                Media.publication_state == PublicationState.LIVE,
+                or_(hosts, invited, shared_with),
+            ),
             # RESERVED (CK-68; co-hosts §4; who-may-see §2): the uploader
             # and THE HOST. Never `_moderates` here — a co-host is not an
             # approver, and seeing what the host has not decided on is the
@@ -1383,11 +1427,14 @@ async def list_media(
 ) -> dict:
     """The photographs of this gathering THE CALLER MAY SEE — filtered by
     `_visible_media` in the query, newest first. The gathering itself must
-    be readable (a stranger draws the gathering 404); within it, a caller
-    who is neither the host nor an uploader sees exactly the `live` rows,
-    which today is none. Every rung appears (`pending_upload` through
-    `failed`) with its state; no URL is in this body — one is minted per
-    object, per layer, on request.
+    be readable in THE MEMORY TIER (`_gathering_for_memory`, CK-77: the
+    host, a co-host, an invitee, or a member shared with it — a stranger, a
+    left-out member and a keeper by keeping draw the gathering 404); within
+    it, a caller who is neither the host nor an uploader sees exactly the
+    `live` rows — a member only shared with sees those and nothing else,
+    which is the memory view's whole content. Every rung appears
+    (`pending_upload` through `failed`) with its state; no URL is in this
+    body — one is minted per object, per layer, on request.
 
     `q` (CK-39) narrows that set — and only narrows it: the search
     criterion is ANDed with the audience rule in the same WHERE, so a term
@@ -1418,7 +1465,7 @@ async def list_media(
     two flags together are a 422: a photograph cannot be awaiting review
     and in the bin at once, and a combined view would have to invent
     which criterion wins."""
-    gathering = await _gathering_for_read(db, ctx, gathering_id)
+    gathering, _view = await _gathering_for_memory(db, ctx, gathering_id)
     if removed and awaiting_review:
         raise _field_422(
             "removed",
@@ -1873,11 +1920,13 @@ async def publish_media_batch(
     the code the single act would have drawn; a missing id, another
     gathering's id, and an id the caller may not act on all read "no such
     photograph" — byte-identical, so the batch confirms nothing. The
-    gathering must be the caller's to host (404 otherwise); the rows are
+    gathering must be the caller's to host (404 otherwise — the invited
+    tier's loader first, then `is_host`; a member only shared with is
+    outside both); the rows are
     locked for the check-and-update, so two sessions racing one queue
     cannot both stamp a row, and every row in a batch carries the same
     `published_at`."""
-    gathering = await _gathering_for_read(db, ctx, gathering_id)
+    gathering = await _gathering_for_invited(db, ctx, gathering_id)
     if not is_host(gathering, ctx):
         raise _media_not_found()
     now = datetime.now(timezone.utc)

@@ -19,10 +19,12 @@ from app.models.base import Base, created_at_col, uuid_pk
 from app.models.enums import (
     GATHERING_TYPE,
     INVITATION_CHANNEL,
+    MEMBER_PLACE,
     PUBLICATION_STATE,
     RSVP_LIST_VISIBILITY,
     GatheringType,
     InvitationChannel,
+    MemberPlace,
     PublicationState,
     RSVPListVisibility,
 )
@@ -77,6 +79,15 @@ class Gathering(Base):
             "owning_group_id IS NULL OR keeper_account_id IS NULL",
             name="group_gathering_has_no_keeper",
         ),
+        # Whether the host chose who is invited is a fact about a GROUP
+        # gathering only (0034, CK-77): a standalone gathering has no group
+        # to choose from, so `invitees_chosen` is false wherever
+        # `owning_group_id` is NULL. The CHECK makes the create path's rule
+        # structural rather than remembered.
+        CheckConstraint(
+            "owning_group_id IS NOT NULL OR NOT invitees_chosen",
+            name="invitees_chosen_needs_group",
+        ),
     )
 
     id: Mapped[UUID] = uuid_pk()
@@ -104,7 +115,8 @@ class Gathering(Base):
     # Arrived at 0022 (CK-49a) as a COLUMN WITH NO WRITER, so the CHECK in
     # __table_args__ was honest and the keeper resolver's group rung real;
     # since CK-49b the resolver READS it (services/keeping.py —
-    # resolved_keeper_of, keeps_gathering) to find the group whose keeper
+    # resolved_keeper_of; `keeps_gathering` too, which no audience criterion
+    # names since CK-77) to find the group whose keeper
     # answers; WRITTEN SINCE CK-76 by `POST /gatherings` with a `group_id`
     # (api/gatherings.py — the caller a member of a HOUSEHOLD group; the
     # gathering's own keeper column NULL, the CHECK insisting; one
@@ -129,9 +141,14 @@ class Gathering(Base):
     # (a stamped gathering is Unkept on purpose and got no keeper back)
     # before that relation was dropped; since CK-49b written by keep() at
     # creation, NULLed by unkeep() and the deletion lapse, and read by every
-    # consumer THROUGH THE RESOLVER (resolved_keeper_of for a loaded row,
-    # keeps_gathering's SQL form in the audience criteria) — never directly.
-    # THE ONLY REPRESENTATION since 0023: no relation, no boolean, no count.
+    # consumer THROUGH THE RESOLVER (resolved_keeper_of for a loaded row;
+    # keeps_gathering's SQL form sat in the audience criteria from CK-49b to
+    # CK-77) — never directly. SINCE CK-77 THE KEEPER IS NOT AN AUDIENCE:
+    # keeping lets no one in (keeping-explained §5.11) — the quota path
+    # (api/media.py::_enforce_limits, services/keeping.py::account_usage)
+    # and the deletion lapse read this column through the resolver, and no
+    # read path does. THE ONLY REPRESENTATION since 0023: no relation, no
+    # boolean, no count.
     # Indexed since 0024 (CK-51a; `ix_gatherings_keeper_account_id`) -
     # owed since 0023 and re-homed twice; the reader is account_usage's
     # WHERE over every gathering, not the audience criteria (those look
@@ -162,6 +179,24 @@ class Gathering(Base):
     # could backfill pre-existing rows, and is never relied on.
     rsvp_list_visibility: Mapped[RSVPListVisibility] = mapped_column(
         RSVP_LIST_VISIBILITY, nullable=False, server_default=text("'INVITEES'")
+    )
+    # DID THE HOST CHOOSE WHO IS INVITED? (0034, CK-77; the 2026-10-04 record
+    # §4, §9.) False: the whole group is invited — every live member holds a
+    # `gathering_invitations` row (CK-76), and a newcomer to the group is
+    # given one for this gathering while it is upcoming. True: the host (or a
+    # co-host) chose — some members hold a `gathering_member_places` row
+    # instead — and a newcomer is given a `shared_with` place row, exactly
+    # the place every other uninvited member has. ONCE CHOSEN, CHOSEN: any
+    # change that puts a member somewhere other than invited sets this true
+    # (at create, or `PUT /gatherings/{id}/places/{membership_id}`), and
+    # nothing sets it back. The server default is RIGHT here, unlike
+    # `requires_approval`'s (decision 33): every writer that does not know
+    # about choosing — the instance serving during 0034's pre-deploy window
+    # included — means "the whole group", which is what false says; the
+    # create path sets it explicitly anyway (the CK-16 discipline). Always
+    # false on a standalone gathering (the CHECK above).
+    invitees_chosen: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
     )
     # Grace is ONE timestamp: stamped when the keeper leaves (under one
     # keeper, CK-49b, the same event the relation called "the last keeper
@@ -428,3 +463,62 @@ class GatheringCoHost(Base):
         ForeignKey("accounts.id"), nullable=False
     )
     created_at: Mapped[datetime] = created_at_col()
+
+
+class GatheringMemberPlace(Base):
+    """A group member's place on one of the group's gatherings when that
+    place is NOT invited — `shared_with` or `left_out` (CK-77, migration
+    0034; decisions/2026-10-04-a-groups-gathering-stays-in-the-group.md §4,
+    §9, §10; the participation record §4). ONE ROW PER (gathering, person),
+    A SIBLING RELATION BESIDE `gathering_invitations` AND NEVER A KIND ON
+    IT: an invited member keeps holding exactly the person-targeted
+    invitation row the product has always understood, so every check that
+    admits an invitee — the read audience, RSVP, uploads, the co-host
+    handle, the invitation roster — stays correct by construction, and a
+    row here GRANTS NOTHING until a read path opts in to it. Two do, for
+    `shared_with` alone: api/gatherings.py::_gathering_for_memory (the
+    detail and the media list, in the MEMORY view — no dates, no RSVP
+    setting) and api/media.py::_visible_media's `live` branch (the
+    photographs). `left_out` is opted into by nothing: no trace, anywhere.
+
+    ONE PLACE PER PERSON PER GATHERING, ACROSS THE TWO TABLES: a person
+    never holds both an invitation row and a place row for one gathering
+    (verifier-asserted; the places route deletes one as it writes the
+    other), and a place row exists only on a gathering that belongs to a
+    group (verifier-asserted). A live member with NO row of either kind has
+    no place — they see nothing — which is what a member who joined after
+    the gathering's dates passed holds (the newcomer rule writes nothing
+    for the past), and the host may give them one.
+
+    WRITTEN by the host's or a co-host's choice (`set_by_person_id` the
+    chooser) at create and through the places route, and by the group's
+    rule for a newcomer to a chosen gathering (`set_by_person_id` NULL — the
+    CK-43 publisher shape); `updated_at` stamped when the place CHANGES
+    (shared with → left out or back), never on the first write. Rows, never
+    a lookup: leaving or removal from the group changes no row (the archive
+    record §6.1). Three FKs with no delete rule — nothing cascades from a
+    person or a gathering; a person who deleted their account keeps their
+    row, which admits nobody (an anonymized person cannot sign in). Keyed on
+    the PERSON, as the invitation row is: a place is a relationship with the
+    people, and keeping (an account fact) never enters into it — keeping
+    lets no one in (keeping-explained §5.11)."""
+
+    __tablename__ = "gathering_member_places"
+
+    gathering_id: Mapped[UUID] = mapped_column(
+        ForeignKey("gatherings.id"), primary_key=True
+    )
+    person_id: Mapped[UUID] = mapped_column(
+        ForeignKey("people.id"), primary_key=True, index=True
+    )
+    place: Mapped[MemberPlace] = mapped_column(MEMBER_PLACE, nullable=False)
+    # Provenance, never a subject: who chose this place — the host or a
+    # co-host — or NULL when the group's rule placed a newcomer.
+    set_by_person_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("people.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = created_at_col()
+    # Stamped when the place changes, the 0004/0010 shape: NULL until then.
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

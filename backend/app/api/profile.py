@@ -390,8 +390,8 @@ async def delete_account(
     # the admin, or `admin_person_id` goes NULL where there is none; the
     # person's co-admin rows and OPEN join requests are deleted; memberships
     # RETAINED, attributed to the anonymized row like every contribution
-    # (the retired `backup_admin_person_id` is unmapped since CK-76 and no
-    # longer written here — nothing ever set it). A PERSON fact, beside
+    # (the retired `backup_admin_person_id` was dropped at 0034, CK-77 —
+    # nothing ever set it). A PERSON fact, beside
     # the account-spine lapse above — the two are keyed on different ids
     # on purpose.
     await lapse_group_roles(db, person.id)

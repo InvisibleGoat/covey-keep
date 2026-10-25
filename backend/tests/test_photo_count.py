@@ -157,8 +157,11 @@ BOTH_INDEXES = {"ix_gatherings_keeper_account_id", "ix_groups_keeper_account_id"
 # and touches neither; 0032, CK-75, creates the four group tables and the
 # `join_request_outcome` type and backfills `groups.keeper_account_id`, and
 # touches neither; 0033, CK-76, adds the index on
-# `gatherings.owning_group_id` and touches neither.)
-HEAD = "0033"
+# `gatherings.owning_group_id` and touches neither; 0034, CK-77, creates
+# `gathering_member_places` and the `member_place` type, adds
+# `gatherings.invitees_chosen` with its CHECK, drops
+# `groups.backup_admin_person_id`, and touches neither.)
+HEAD = "0034"
 
 
 async def test_0024_round_trip_backfills_the_count_and_the_downgrade_is_genuine(

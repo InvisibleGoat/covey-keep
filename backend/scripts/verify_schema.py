@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0033"
+EXPECTED_REVISION = "0034"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -697,13 +697,18 @@ async def verify(conn, ck: Checks) -> None:
         f"delete rule is {rsvp_fk[1]!r}" if rsvp_fk else "FK missing",
     )
 
-    print("\n-- groups steward -> admin rename (0009) --")
+    print("\n-- groups steward -> admin rename (0009); the backup slot dropped (0034) --")
+    # `backup_admin_person_id` was 0009's rename of 0001's backup steward,
+    # RETIRED at CK-75 (the co-admin relation replaced it; this script
+    # asserted it NULL on every row from CK-75 to CK-76), UNMAPPED at CK-76,
+    # and DROPPED at 0034 (CK-77) — the contract step. The absence line here
+    # REPLACES the NULL line that stood in the membership-integrity block.
     assert_columns(
         ck,
         columns,
         "groups",
-        present=("admin_person_id", "backup_admin_person_id"),
-        absent=("steward_person_id", "backup_steward_person_id"),
+        present=("admin_person_id",),
+        absent=("steward_person_id", "backup_steward_person_id", "backup_admin_person_id"),
     )
 
     print("\n-- groups: the first surface (0021, CK-45) --")
@@ -969,18 +974,10 @@ async def verify(conn, ck: Checks) -> None:
             "no open join request names an anonymized person",
             f"{anonymized_request} open request(s) from a deleted account",
         )
-        # (4) THE RETIRED BACKUP SLOT IS NULL ON EVERY ROW (record §6): the
-        # co-admin relation replaced it, nothing ever wrote it, it left
-        # every body at CK-75, and the column itself is dropped by a later
-        # contract step — until then this line is what says it is dead.
-        backup_set = await scalar(
-            conn, "SELECT count(*) FROM groups WHERE backup_admin_person_id IS NOT NULL"
-        )
-        ck.check(
-            backup_set == 0,
-            "groups.backup_admin_person_id is NULL on every row (retired at CK-75; dropped later)",
-            f"{backup_set} group(s) with a backup admin set",
-        )
+        # (4) THE RETIRED BACKUP SLOT — asserted NULL on every row from CK-75
+        # to CK-76 (the co-admin relation replaced it; nothing ever wrote
+        # it) and DROPPED at 0034 (CK-77): the "is gone" line in the 0009
+        # block above replaced the NULL line that stood here.
         # DELIBERATELY NOT ASSERTED: "every group's keeper is its admin's
         # account." True of every group created through the API until the
         # first hand-over, and false the moment one happens — the keeper
@@ -1161,13 +1158,16 @@ async def verify(conn, ck: Checks) -> None:
             f"{non_household_group_gathering} group gathering(s) under a non-HOUSEHOLD group",
         )
         # DELIBERATELY NOT ASSERTED: "every member of a group holds an
-        # invitation to each of its upcoming gatherings." True in this phase
-        # — every member's place is INVITED, written at create and at join
-        # — and broken ON PURPOSE by CK-77's shared-with and left-out places
-        # (the 2026-10-04 record §4), which are rows of another kind, or no
-        # row at all; a line here would fail correctly the day they ship.
-        # The CK-41 (dy) / CK-45 run-once precedent: a check for the deploy,
-        # never a script that will fail correctly later.
+        # invitation to each of its upcoming gatherings." True from CK-76 to
+        # CK-77 — every member's place was INVITED — and broken ON PURPOSE
+        # since CK-77's shared-with and left-out places (the 2026-10-04
+        # record §4), which are rows of another kind, or no row at all. Nor
+        # its successor, "every live member holds a place of SOME kind on
+        # each upcoming gathering": membership moves and rows never do, by
+        # design (the archive record §6.1 — a member who joined after the
+        # dates passed holds none, and the host may give them one), so a
+        # line here would fail correctly on an ordinary database. The CK-41
+        # (dy) / CK-45 run-once precedent.
     else:
         ck.check(
             False,
@@ -1830,6 +1830,158 @@ async def verify(conn, ck: Checks) -> None:
             "gathering_co_hosts or gatherings table missing",
         )
 
+    print("\n-- the host's choice: member places, and invitees_chosen (0034, CK-77) --")
+    # THE TWO PLACES THAT ARE NOT "INVITED" AS A SIBLING RELATION (the
+    # 2026-10-04 record §4, §9, §10; the participation record §4): one row
+    # per (gathering, person) — shared with, or left out — beside the
+    # person-targeted `gathering_invitations` row that IS "invited", so no
+    # check that admits an invitee learned a filter and a place row grants
+    # nothing until a read path opts in. Keyed on the PERSON as the
+    # invitation row is; the composite PK is the uniqueness on this table
+    # (the cross-table half is the data line below); the index on person_id
+    # answers "where does this person stand" (the list statement's and the
+    # media audience's reader); three FKs with NO delete rule — nothing
+    # cascades from a person or a gathering (decision 15), and a deleted
+    # account's row stays and admits nobody. `set_by_person_id` nullable:
+    # NULL when the group's rule placed a newcomer (the CK-43 publisher
+    # shape). `updated_at` nullable: stamped when the place changes. Every
+    # line is the 0034 shape read back from the catalog — the 0022 idiom.
+    ck.check(
+        "gathering_member_places" in tables, "table gathering_member_places exists", "table missing"
+    )
+    assert_columns(
+        ck,
+        columns,
+        "gathering_member_places",
+        not_null=("gathering_id", "person_id", "place", "created_at"),
+        nullable=("set_by_person_id", "updated_at"),
+    )
+    place_pk = await pk_columns(conn, "pk_gathering_member_places")
+    ck.check(
+        place_pk == ["gathering_id", "person_id"],
+        "gathering_member_places primary key is (gathering_id, person_id) — one place per person per gathering",
+        f"found {place_pk!r}",
+    )
+    for column, target, conname in (
+        ("gathering_id", "gatherings", "fk_gathering_member_places_gathering_id"),
+        ("person_id", "people", "fk_gathering_member_places_person_id"),
+        ("set_by_person_id", "people", "fk_gathering_member_places_set_by_person_id"),
+    ):
+        fk = await fk_rule(conn, conname)
+        ck.check(
+            fk is not None and fk[0] == target,
+            f"gathering_member_places.{column} references {target}",
+            f"found {fk!r}",
+        )
+        ck.check(
+            fk is not None and fk[1] == "a",
+            f"gathering_member_places.{column} has no delete rule (nothing cascades from a person or a gathering)",
+            f"delete rule is {fk[1] if fk else None!r}",
+        )
+    place_index = await index_shape(conn, "ix_gathering_member_places_person_id")
+    ck.check(
+        place_index is not None
+        and place_index[0] == "gathering_member_places"
+        and "(person_id)" in place_index[1],
+        "index ix_gathering_member_places_person_id exists on gathering_member_places.person_id",
+        "index missing" if place_index is None else f"found on {place_index[0]!r}: {place_index[1]}",
+    )
+    # The type's labels, read from pg_enum (autogenerate never diffs them):
+    # exactly the two places that are not "invited" — invited is the
+    # invitation row, and a label for it here would be the second
+    # representation the sibling-relation shape exists to prevent.
+    place_labels = await enum_labels(conn, "member_place")
+    ck.check(
+        place_labels == ["shared_with", "left_out"],
+        "member_place carries exactly 'shared_with', 'left_out' (invited is the invitation row, never a label)",
+        f"found {place_labels!r}",
+    )
+    # `invitees_chosen`: did the host choose? NOT NULL, boolean, DEFAULT
+    # false — the server default is RIGHT here (every writer that does not
+    # know about choosing means "the whole group"; the pre-deploy window's
+    # instance included), unlike `requires_approval`'s (decision 33). Read
+    # with .first() so a missing column FAILs rather than passing vacuously.
+    assert_columns(ck, columns, "gatherings", not_null=("invitees_chosen",))
+    chosen_shape = await column_type_and_default(conn, "gatherings", "invitees_chosen")
+    ck.check(
+        chosen_shape is not None and chosen_shape[0] == "boolean",
+        "gatherings.invitees_chosen is boolean",
+        "column missing" if chosen_shape is None else f"type is {chosen_shape[0]!r}",
+    )
+    ck.check(
+        chosen_shape is not None and chosen_shape[1] == "false",
+        "gatherings.invitees_chosen defaults to false (the whole group invited, until the host chooses)",
+        "column missing" if chosen_shape is None else f"default is {chosen_shape[1]!r}",
+    )
+    # THE CHECK — a standalone gathering has no group to choose from.
+    ck.check(
+        "ck_gatherings_invitees_chosen_needs_group" in check_constraints,
+        "CHECK ck_gatherings_invitees_chosen_needs_group exists",
+        "constraint missing",
+    )
+
+    print("\n-- member place integrity (CK-77) --")
+    # Guarded on the tables and the column (the CK-43 lesson): below 0034 a
+    # query over the relation is a crash, not a FAIL.
+    if {"gathering_member_places", "gathering_invitations", "gatherings"} <= tables and (
+        "invitees_chosen" in set(columns["gatherings"])
+    ):
+        # (1) ONE PLACE PER PERSON PER GATHERING, ACROSS THE TWO TABLES: a
+        # person never holds both an invitation row and a place row for one
+        # gathering. The places route deletes one as it writes the other,
+        # and the create path writes each member into exactly one; the
+        # failing state is a row written around them — or a reader that
+        # would have to invent which place wins.
+        both_rows = await scalar(
+            conn,
+            "SELECT count(*) FROM gathering_member_places p "
+            "JOIN gathering_invitations i "
+            "  ON i.gathering_id = p.gathering_id AND i.person_id = p.person_id",
+        )
+        ck.check(
+            both_rows == 0,
+            "no person holds both an invitation row and a place row for one gathering (one place each)",
+            f"{both_rows} person(s) with a row of each kind on one gathering",
+        )
+        # (2) A PLACE ROW ONLY ON A GATHERING THAT BELONGS TO A GROUP: the
+        # places exist to choose among a group's members, and a standalone
+        # gathering has none. The create path and the places route both
+        # refuse the standalone case before writing.
+        placeless_group = await scalar(
+            conn,
+            "SELECT count(*) FROM gathering_member_places p "
+            "JOIN gatherings g ON g.id = p.gathering_id WHERE g.owning_group_id IS NULL",
+        )
+        ck.check(
+            placeless_group == 0,
+            "every member place row sits on a gathering that belongs to a group",
+            f"{placeless_group} place row(s) on a standalone gathering",
+        )
+        # (3) The CHECK above, re-asserted as DATA (the 0031 pattern): no
+        # standalone gathering says its host chose. If the constraint were
+        # ever dropped the shape line fails and so does this one.
+        chosen_without_group = await scalar(
+            conn,
+            "SELECT count(*) FROM gatherings WHERE invitees_chosen AND owning_group_id IS NULL",
+        )
+        ck.check(
+            chosen_without_group == 0,
+            "no standalone gathering carries invitees_chosen",
+            f"{chosen_without_group} standalone gathering(s) marked chosen",
+        )
+        # DELIBERATELY NOT ASSERTED: "every live member of a group holds a
+        # place on each of its upcoming gatherings." Membership moves and
+        # rows never do, by design (the archive record §6.1): a member who
+        # joined after a gathering's dates passed holds no row, and the host
+        # may give them one. The CK-76 block above says the same of the
+        # invitation-only form.
+    else:
+        ck.check(
+            False,
+            "member place integrity",
+            "gathering_member_places / gathering_invitations / gatherings.invitees_chosen missing",
+        )
+
     print("\n-- media upload integrity (CK-34) --")
     if "media" in tables:
         # Properties of whatever rows exist — never a count (pending rows
@@ -2478,6 +2630,9 @@ async def verify(conn, ck: Checks) -> None:
         # The three reaped group tables deliberately do NOT join: a count of
         # an ephemeral table flaps on an idle database (the CK-24 rule).
         "group_co_admins",
+        # `gathering_member_places` joins at CK-77 (0034): zero on the deploy
+        # until (kb) makes the first choice.
+        "gathering_member_places",
         "billing_customers",
         "subscriptions",
     ):
