@@ -449,19 +449,27 @@ async def accept_invitation(
     if status != "valid" or row is None:
         return {"status": status, "gathering_id": None}
 
+    # Plain values, captured BEFORE the write (CK-77.1): a rollback expires
+    # every object this session holds — `row` and `ctx.person` included,
+    # `expire_on_commit=False` notwithstanding — and reading an expired
+    # object on an async session raises MissingGreenlet, its id included.
+    # The backstop below reads these and nothing loaded.
+    pending_id, gathering_id, person_id = row.id, row.gathering_id, ctx.person.id
+    invited_by_person_id = row.invited_by_person_id
+
     row.consumed_at = now
     existing = await db.scalar(
         select(GatheringInvitation.id).where(
-            GatheringInvitation.gathering_id == row.gathering_id,
-            GatheringInvitation.person_id == ctx.person.id,
+            GatheringInvitation.gathering_id == gathering_id,
+            GatheringInvitation.person_id == person_id,
         )
     )
     if existing is None:
         db.add(
             GatheringInvitation(
-                gathering_id=row.gathering_id,
-                person_id=ctx.person.id,
-                invited_by_person_id=row.invited_by_person_id,
+                gathering_id=gathering_id,
+                person_id=person_id,
+                invited_by_person_id=invited_by_person_id,
             )
         )
     try:
@@ -469,14 +477,16 @@ async def accept_invitation(
     except IntegrityError:
         # Two accepts for the same (gathering, person) racing: the partial
         # unique index held, so the invitation row exists — consume the token
-        # in a fresh transaction and report the idempotent outcome.
+        # in a fresh transaction and report the idempotent outcome. The
+        # pending row is reloaded by its captured id (`db.get` issues its own
+        # SELECT); nothing loaded before the rollback is read.
         await db.rollback()
-        fresh = await db.get(GatheringInvitationPending, row.id)
+        fresh = await db.get(GatheringInvitationPending, pending_id)
         if fresh is not None and fresh.consumed_at is None and fresh.revoked_at is None:
             fresh.consumed_at = datetime.now(timezone.utc)
             await db.commit()
-        return {"status": "already_accepted", "gathering_id": str(row.gathering_id)}
+        return {"status": "already_accepted", "gathering_id": str(gathering_id)}
     return {
         "status": "already_accepted" if existing is not None else "accepted",
-        "gathering_id": str(row.gathering_id),
+        "gathering_id": str(gathering_id),
     }

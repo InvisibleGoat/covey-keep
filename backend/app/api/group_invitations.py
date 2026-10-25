@@ -359,40 +359,51 @@ async def accept_group_invitation(
         return {"status": "used", "group_id": None}
     if status != "valid" or row is None:
         return {"status": status, "group_id": None}
-    group_id = row.group_id
+    # Plain values, captured BEFORE the write (CK-77.1): a rollback expires
+    # every object this session holds — `row` and `ctx.person` included —
+    # and reading an expired object on an async session raises
+    # MissingGreenlet, its id included. The backstop reads these alone.
+    pending_id, group_id, person_id = row.id, row.group_id, ctx.person.id
 
     row.consumed_at = now
-    member = await _is_member(db, group_id, ctx.person.id)
-    if not member:
-        db.add(Membership(group_id=group_id, person_id=ctx.person.id))
-        # THE NEWCOMER'S PLACES (CK-76; the 2026-10-04 record §9): a row on
-        # each of the group's UPCOMING gatherings they hold none for,
-        # `invited_by_person_id` NULL — the group's rule invited them — in
-        # the transaction that writes the membership. Past gatherings are
-        # never written. The one helper both admission paths call
-        # (api/group_links.py's approve is the other).
-        await invite_newcomer_to_upcoming_gatherings(
-            db, group_id=group_id, person_id=ctx.person.id, now=now
-        )
-    # The acceptance decides any open request of theirs: approved, by nobody.
-    await db.execute(
-        update(GroupJoinRequest)
-        .where(
-            GroupJoinRequest.group_id == group_id,
-            GroupJoinRequest.person_id == ctx.person.id,
-            GroupJoinRequest.decided_at.is_(None),
-        )
-        .values(decided_at=now, outcome=JoinRequestOutcome.APPROVED, decided_by_person_id=None)
-    )
+    member = await _is_member(db, group_id, person_id)
     try:
+        # THE TRY ENCLOSES EVERYTHING FROM THE FIRST CONFLICTING WRITE TO THE
+        # COMMIT (CK-77.1): the membership add is flushed by the newcomer
+        # helper's first statement — autoflush — so a racing acceptance's
+        # UNIQUE violation surfaces THERE, not at the commit; a `try` around
+        # the commit alone let it escape as a 500.
+        if not member:
+            db.add(Membership(group_id=group_id, person_id=person_id))
+            # THE NEWCOMER'S PLACES (CK-76; the 2026-10-04 record §9): a row
+            # on each of the group's UPCOMING gatherings they hold none for,
+            # `invited_by_person_id` NULL — the group's rule invited them —
+            # in the transaction that writes the membership. Past gatherings
+            # are never written. The one helper both admission paths call
+            # (api/group_links.py's approve is the other).
+            await invite_newcomer_to_upcoming_gatherings(
+                db, group_id=group_id, person_id=person_id, now=now
+            )
+        # The acceptance decides any open request of theirs: approved, by nobody.
+        await db.execute(
+            update(GroupJoinRequest)
+            .where(
+                GroupJoinRequest.group_id == group_id,
+                GroupJoinRequest.person_id == person_id,
+                GroupJoinRequest.decided_at.is_(None),
+            )
+            .values(decided_at=now, outcome=JoinRequestOutcome.APPROVED, decided_by_person_id=None)
+        )
         await db.commit()
     except IntegrityError:
         # Two accepts for the same (group, person) racing — or an approval
         # landing meanwhile: the membership exists (and whichever path
-        # wrote it wrote the newcomer's places), so consume the token in a
-        # fresh transaction and report the idempotent outcome.
+        # wrote it wrote the newcomer's places and decided any open
+        # request), so consume the token in a fresh transaction and report
+        # the idempotent outcome — by the captured id, reading nothing
+        # loaded before the rollback.
         await db.rollback()
-        fresh = await db.get(GroupInvitationPending, row.id)
+        fresh = await db.get(GroupInvitationPending, pending_id)
         if fresh is not None and fresh.consumed_at is None and fresh.revoked_at is None:
             fresh.consumed_at = datetime.now(timezone.utc)
             await db.commit()

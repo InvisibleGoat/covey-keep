@@ -357,44 +357,56 @@ async def _decide(
     if request.decided_at is not None:
         raise _already_decided(request.outcome)
     person_id, created_at = request.person_id, request.created_at
+    # Plain values, captured BEFORE any write (CK-77.1): `decide()` runs
+    # again after a rollback, when `ctx.person` and `group` are expired —
+    # and reading an expired object on an async session raises
+    # MissingGreenlet, its id included.
+    decider_id, group_pk = ctx.person.id, group.id
     now = datetime.now(timezone.utc)
 
     async def decide() -> int:
         result = await db.execute(
             update(GroupJoinRequest)
             .where(GroupJoinRequest.id == request_id, GroupJoinRequest.decided_at.is_(None))
-            .values(decided_at=now, outcome=outcome, decided_by_person_id=ctx.person.id)
+            .values(decided_at=now, outcome=outcome, decided_by_person_id=decider_id)
         )
         return result.rowcount
 
     if await decide() != 1:
-        # Lost to a racing decision: nothing of ours is written.
+        # Lost to a racing decision: nothing of ours is written. The
+        # request is reloaded by the path's id — its own SELECT.
         await db.rollback()
         fresh = await db.get(GroupJoinRequest, request_id)
         raise _already_decided(fresh.outcome if fresh is not None else None)
-    if outcome is JoinRequestOutcome.APPROVED:
-        member = await db.scalar(
-            select(Membership.id).where(
-                Membership.group_id == group.id, Membership.person_id == person_id
-            )
-        )
-        if member is None:
-            db.add(Membership(group_id=group.id, person_id=person_id))
-            # THE NEWCOMER'S PLACES (CK-76; the 2026-10-04 record §9): a row
-            # on each of the group's UPCOMING gatherings they hold none for,
-            # `invited_by_person_id` NULL — the group's rule invited them —
-            # in the transaction that writes the membership, so the two
-            # land together or not at all. Past gatherings are never
-            # written. The one helper both admission paths call.
-            await invite_newcomer_to_upcoming_gatherings(
-                db, group_id=group.id, person_id=person_id, now=now
-            )
     try:
+        # THE TRY ENCLOSES THE MEMBERSHIP ADD AND THE HELPER (CK-77.1): the
+        # add is flushed by the helper's first statement — autoflush — so a
+        # racing acceptance's UNIQUE violation surfaces THERE, not at the
+        # commit; a `try` around the commit alone let it escape as a 500.
+        if outcome is JoinRequestOutcome.APPROVED:
+            member = await db.scalar(
+                select(Membership.id).where(
+                    Membership.group_id == group_pk, Membership.person_id == person_id
+                )
+            )
+            if member is None:
+                db.add(Membership(group_id=group_pk, person_id=person_id))
+                # THE NEWCOMER'S PLACES (CK-76; the 2026-10-04 record §9): a
+                # row on each of the group's UPCOMING gatherings they hold
+                # none for, `invited_by_person_id` NULL — the group's rule
+                # invited them — in the transaction that writes the
+                # membership, so the two land together or not at all. Past
+                # gatherings are never written. The one helper both
+                # admission paths call.
+                await invite_newcomer_to_upcoming_gatherings(
+                    db, group_id=group_pk, person_id=person_id, now=now
+                )
         await db.commit()
     except IntegrityError:
         # The membership landed by another path between our check and our
         # commit (an acceptance, which wrote the newcomer's places itself):
-        # the decision stands on its own.
+        # the decision stands on its own, re-applied from the captured
+        # values — nothing loaded before the rollback is read.
         await db.rollback()
         if await decide() != 1:
             await db.rollback()

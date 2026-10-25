@@ -282,18 +282,24 @@ async def put_rsvp(
     row (the partial unique index is the backstop, never the error path) and
     stamps updated_at; the first leaves it NULL, so the stamp means "changed
     since first answered" and never merely mirrors created_at."""
-    occurrence, _ = await _occurrence_for_read(db, ctx, occurrence_id)
+    await _occurrence_for_read(db, ctx, occurrence_id)
+    # Plain values for the backstop (CK-77.1): the path's own occurrence id
+    # (the loader above looked the row up by it) and the caller's person
+    # id, copied before the write — after a rollback the loaded occurrence
+    # and `ctx.person` are expired, and reading either on an async session
+    # raises MissingGreenlet, so the re-read below uses these alone.
+    person_id = ctx.person.id
     row = (
         await db.execute(
             select(RSVP).where(
-                RSVP.occurrence_id == occurrence.id,
-                RSVP.person_id == ctx.person.id,
+                RSVP.occurrence_id == occurrence_id,
+                RSVP.person_id == person_id,
             )
         )
     ).scalar_one_or_none()
     try:
         if row is None:
-            row = RSVP(occurrence_id=occurrence.id, person_id=ctx.person.id)
+            row = RSVP(occurrence_id=occurrence_id, person_id=person_id)
             _apply(row, body)
             db.add(row)
             # Flush so the server-generated id exists for the companion rows
@@ -308,13 +314,14 @@ async def put_rsvp(
     except IntegrityError:
         # Two first-time submissions racing: the partial unique index held, so
         # the row exists now — apply this request as the update it would have
-        # been a moment later.
+        # been a moment later, re-read by the two captured ids (the rule
+        # above: nothing loaded before the rollback is read).
         await db.rollback()
         row = (
             await db.execute(
                 select(RSVP).where(
-                    RSVP.occurrence_id == occurrence.id,
-                    RSVP.person_id == ctx.person.id,
+                    RSVP.occurrence_id == occurrence_id,
+                    RSVP.person_id == person_id,
                 )
             )
         ).scalar_one()

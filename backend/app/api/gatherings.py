@@ -151,7 +151,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import case, delete, exists, func, or_, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, get_auth_context, get_db
@@ -1838,6 +1838,9 @@ async def put_place(
     caller; `updated_at` stamped when the place CHANGES), the invitation
     row is deleted, and `invitees_chosen` is set true. Idempotent: asking
     for the place a member already holds writes nothing and answers 200.
+    Two organisers moving the same member at once both read the place
+    that holds: each row is written as an INSERT … ON CONFLICT (CK-77.1),
+    so the writes cannot conflict and nothing here is caught.
 
     REFUSED, each with a stable code and nothing written: 409 `is_co_host`
     — a co-host stays invited (CK-68's handle is their invitation row;
@@ -1877,15 +1880,31 @@ async def put_place(
             ],
         )
     now = datetime.now(timezone.utc)
+    # THE WRITES CANNOT CONFLICT, SO NOTHING HERE IS CAUGHT (CK-77.1). Two
+    # organisers moving the same member at once used to meet the primary key
+    # or the partial unique at the DELETE below — autoflush carries a
+    # pending add into the next statement, so the conflict surfaced THERE,
+    # outside a `try` that wrapped only the commit — and the second answered
+    # 500 (reproduced on the deploy, 2026-10-25). Each row is now written as
+    # an INSERT … ON CONFLICT: the state asked for is the state that holds,
+    # whoever wrote it first, and no backstop is needed. Nothing is read
+    # after a rollback, because nothing rolls back.
     if body.place == PLACE_INVITED:
         if not await _holds_invitation(db, person.id, gathering.id):
-            db.add(
-                GatheringInvitation(
+            await db.execute(
+                pg_insert(GatheringInvitation)
+                .values(
                     gathering_id=gathering.id,
                     person_id=person.id,
                     # Provenance: who invited them — the organiser who moved
                     # them, exactly as the create path writes the creator.
                     invited_by_person_id=ctx.person.id,
+                )
+                # The person-target partial unique: a concurrent move to
+                # invited wrote the row first, and that row stands.
+                .on_conflict_do_nothing(
+                    index_elements=["gathering_id", "person_id"],
+                    index_where=GatheringInvitation.person_id.is_not(None),
                 )
             )
         await db.execute(
@@ -1919,20 +1938,24 @@ async def put_place(
                 "they've answered for one of this gathering's dates, so they stay invited",
             )
         place = MemberPlace(body.place)
-        row = await db.get(GatheringMemberPlace, (gathering.id, person.id))
-        if row is None:
-            db.add(
-                GatheringMemberPlace(
-                    gathering_id=gathering.id,
-                    person_id=person.id,
-                    place=place,
-                    set_by_person_id=ctx.person.id,
-                )
+        await db.execute(
+            pg_insert(GatheringMemberPlace)
+            .values(
+                gathering_id=gathering.id,
+                person_id=person.id,
+                place=place,
+                set_by_person_id=ctx.person.id,
             )
-        elif row.place != place:
-            row.place = place
-            row.set_by_person_id = ctx.person.id
-            row.updated_at = now
+            # A row already there — this organiser's earlier move, or a
+            # concurrent one — changes only when the PLACE changes: the
+            # chooser and the stamp move with it (`updated_at` means "the
+            # place changed"), and an identical place writes nothing.
+            .on_conflict_do_update(
+                index_elements=["gathering_id", "person_id"],
+                set_={"place": place, "set_by_person_id": ctx.person.id, "updated_at": now},
+                where=GatheringMemberPlace.place != place,
+            )
+        )
         await db.execute(
             delete(GatheringInvitation).where(
                 GatheringInvitation.gathering_id == gathering.id,
@@ -1942,13 +1965,7 @@ async def put_place(
         # Once chosen, chosen: any move away from invited says the host
         # chose, and nothing sets it back.
         gathering.invitees_chosen = True
-    try:
-        await db.commit()
-    except IntegrityError:
-        # Two organisers moving the same member at once: the primary key or
-        # the partial unique held for the other, so the state asked for is
-        # the state that holds — answered below as it stands.
-        await db.rollback()
+    await db.commit()
     entry = (
         await db.execute(_places_statement(gathering).where(Membership.id == membership.id))
     ).one()

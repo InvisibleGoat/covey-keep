@@ -647,6 +647,11 @@ async def sync_subscription(
             subscription_id,
         )
         return None
+    # The account id as a plain value (CK-77.1): the flush below can roll
+    # back, a rollback expires every object this session holds — `customer`
+    # included — and reading an expired object on an async session raises
+    # MissingGreenlet; the backstop's re-read uses this and nothing loaded.
+    account_id = customer.account_id
 
     item = _first_item(sub)
     plan = _plan_for_lookup_key(getattr(getattr(item, "price", None), "lookup_key", None))
@@ -694,7 +699,7 @@ async def sync_subscription(
     scheduled_plan, scheduled_plan_at = _scheduled_change(sub, plan, period_end_raw, event_id=event_id)
 
     if status in PAID_STATUSES:
-        other = await _other_paid_subscription(db, customer.account_id, subscription_id)
+        other = await _other_paid_subscription(db, account_id, subscription_id)
         if other is not None:
             log.error(
                 "billing: event %s: subscription %s would be a second paid subscription for the "
@@ -713,7 +718,7 @@ async def sync_subscription(
     )
     if row is None:
         row = Subscription(
-            account_id=customer.account_id,
+            account_id=account_id,
             provider=PROVIDER,
             provider_subscription_id=subscription_id,
             plan=plan,
@@ -739,9 +744,11 @@ async def sync_subscription(
     except IntegrityError:
         # The race the pre-check cannot see: two events for two paid
         # subscriptions on one account, flushed at once. The partial unique
-        # is the backstop; this one is dropped and logged like the other.
+        # is the backstop; this one is dropped and logged like the other —
+        # from the account id captured above, because `customer` is expired
+        # once the session has rolled back (CK-77.1).
         await db.rollback()
-        other = await _other_paid_subscription(db, customer.account_id, subscription_id)
+        other = await _other_paid_subscription(db, account_id, subscription_id)
         log.error(
             "billing: event %s: subscription %s would be a second paid subscription for the "
             "account that already holds %s; nothing written — cancel the duplicate by hand",
