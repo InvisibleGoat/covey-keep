@@ -9,6 +9,9 @@ import { EmailChangeResult } from './routes/EmailChangeResult'
 import { GatheringDetail } from './routes/GatheringDetail'
 import { GatheringNew } from './routes/GatheringNew'
 import { Gatherings } from './routes/Gatherings'
+import { GroupDetail } from './routes/GroupDetail'
+import { GroupNew } from './routes/GroupNew'
+import { Groups } from './routes/Groups'
 import { Home } from './routes/Home'
 import { InvitationAccept } from './routes/InvitationAccept'
 import { PageNotAvailable } from './routes/PageNotAvailable'
@@ -53,6 +56,40 @@ function App() {
           element={
             <RequireAuth>
               <GatheringDetail />
+            </RequireAuth>
+          }
+        />
+        {/* Your groups (CK-78, Groups 3a). `/groups/new` sits before
+            `/groups/:id` so it reads as the static route it is. */}
+        <Route
+          path="/groups"
+          element={
+            <RequireAuth>
+              <Groups />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/groups/new"
+          element={
+            <RequireAuth>
+              <GroupNew />
+            </RequireAuth>
+          }
+        />
+        {/* The join link CK-75 mints (`/groups/join#token=…`) has no screen
+            until Groups 3b, and it must keep reaching the catch-all's screen
+            (CK-75.1): `/groups/:id` below would otherwise capture it — behind
+            RequireAuth, which sends a signed-out holder to `/` and drops the
+            fragment, the token with it (CK-75's finding 1 again). A static
+            segment outranks a dynamic one, so this row wins. Groups 3b
+            replaces it with the landing screen. */}
+        <Route path="/groups/join" element={<PageNotAvailable />} />
+        <Route
+          path="/groups/:id"
+          element={
+            <RequireAuth>
+              <GroupDetail />
             </RequireAuth>
           }
         />

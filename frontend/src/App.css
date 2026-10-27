@@ -519,3 +519,40 @@
 .plan-wait p {
   margin: 0.5rem 0;
 }
+
+/* Groups (CK-78): the member list. The initials sit beside a name, never
+   instead of it (aria-hidden); still the app's current styles — the
+   design session's lifted cards and teal are the theming phase's. */
+.member-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.member-row p {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.member-initials {
+  display: inline-block;
+  min-width: 2rem;
+  padding: 0.25rem 0;
+  border-radius: 1rem;
+  background: #e5e5e5;
+  color: #333;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.member-role {
+  color: #333;
+  font-weight: 600;
+}
+
+.member-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
