@@ -10,6 +10,8 @@ import { GatheringDetail } from './routes/GatheringDetail'
 import { GatheringNew } from './routes/GatheringNew'
 import { Gatherings } from './routes/Gatherings'
 import { GroupDetail } from './routes/GroupDetail'
+import { GroupInvitationAccept } from './routes/GroupInvitationAccept'
+import { GroupJoin } from './routes/GroupJoin'
 import { GroupNew } from './routes/GroupNew'
 import { Groups } from './routes/Groups'
 import { Home } from './routes/Home'
@@ -77,14 +79,17 @@ function App() {
             </RequireAuth>
           }
         />
-        {/* The join link CK-75 mints (`/groups/join#token=…`) has no screen
-            until Groups 3b, and it must keep reaching the catch-all's screen
-            (CK-75.1): `/groups/:id` below would otherwise capture it — behind
-            RequireAuth, which sends a signed-out holder to `/` and drops the
-            fragment, the token with it (CK-75's finding 1 again). A static
-            segment outranks a dynamic one, so this row wins. Groups 3b
-            replaces it with the landing screen. */}
-        <Route path="/groups/join" element={<PageNotAvailable />} />
+        {/* The two landings the backend's URLs point at (CK-79, Groups 3b):
+            the group's link (`/groups/join#token=…`) and the emailed group
+            invitation (`/groups/invitations/accept#token=…`). Deliberately
+            NOT behind RequireAuth — a signed-out holder must see what the
+            link is for and how to sign in, and RequireAuth would send them to
+            `/` without the fragment, the token with it (CK-75's finding 1).
+            Both sit before `/groups/:id`; the static `/groups/join` segment
+            outranks the dynamic one, which until CK-79 a static row
+            rendering the catch-all held for it. */}
+        <Route path="/groups/join" element={<GroupJoin />} />
+        <Route path="/groups/invitations/accept" element={<GroupInvitationAccept />} />
         <Route
           path="/groups/:id"
           element={

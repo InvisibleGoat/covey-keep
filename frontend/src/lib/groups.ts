@@ -304,8 +304,9 @@ export function groupRefusalMessage(code: string, name: string, act?: GroupAct):
 
 // What the admin hands a co-admin, above the member list — the delegable
 // set in plain words, each clause a power the server grants a co-admin
-// today (inviting and approving get their screens in Groups 3b), and the
-// reserved set as what stays with "you" (the admin is the reader).
+// today (inviting and approving have their screens since Groups 3b,
+// CK-79), and the reserved set as what stays with "you" (the admin is the
+// reader).
 export const CO_ADMIN_HINT =
   'A co-admin can rename the group, invite people, approve requests to join, and remove members. Only you choose co-admins, remove them, and make someone else the admin.'
 

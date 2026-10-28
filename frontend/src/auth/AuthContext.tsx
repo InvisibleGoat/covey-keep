@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { authFetch } from '../lib/api'
+import { clearReturnPath } from '../lib/returnPath'
 import { clearToken, getToken, setToken, subscribe } from '../lib/session'
 import { detectTimeZone } from '../lib/timezone'
 import { AuthContext, type AuthStatus, type Person } from './context'
@@ -12,6 +13,17 @@ let timezoneCaptureInFlight = false
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>(() => (getToken() ? 'loading' : 'signedOut'))
   const [person, setPerson] = useState<Person | null>(null)
+  // The sign-in return (CK-79): null until the auth state first settles,
+  // then true if it settled signed out, and false — for the rest of the page
+  // load — the moment it is ever signed in. Derived during render (React's
+  // "information from previous renders" pattern), so the guard reads the
+  // fact in the same render that turns a visitor away. A sign-out or a 401
+  // after a signed-in state leaves it false: nothing parks.
+  const [signedOutSinceLoad, setSignedOutSinceLoad] = useState<boolean | null>(() =>
+    getToken() ? null : true,
+  )
+  if (status === 'signedIn' && signedOutSinceLoad !== false) setSignedOutSinceLoad(false)
+  else if (status === 'signedOut' && signedOutSinceLoad === null) setSignedOutSinceLoad(true)
 
   const captureTimeZone = useCallback(async (loaded: Person) => {
     // Silent first-sign-in capture (CK-7). Browsers know the person's own
@@ -88,6 +100,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // Best effort — the local session ends regardless.
     }
+    // A sign-out hands nothing on (CK-79): whatever was parked for a sign-in
+    // return goes with the session, so the next person to sign in on this
+    // device lands on Home, never on a page the last one meant to open.
+    clearReturnPath()
     clearToken()
     setPerson(null)
     setStatus('signedOut')
@@ -96,7 +112,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const updatePerson = useCallback((next: Person) => setPerson(next), [])
 
   return (
-    <AuthContext.Provider value={{ status, person, signIn, signOut, updatePerson }}>
+    <AuthContext.Provider
+      value={{
+        status,
+        person,
+        signedOutSinceLoad: signedOutSinceLoad === true,
+        signIn,
+        signOut,
+        updatePerson,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   )

@@ -126,10 +126,19 @@ function expectNoHomeOrSignIn() {
 // The fix: the address survives, and the screen renders — signed in or out.
 // ---------------------------------------------------------------------------
 
+// MOVED AT CK-79, with its reason: until CK-79 the first two were the URLs
+// CK-75's backend mints into routes no bundle had yet —
+// `/groups/invitations/accept#token=abc` and `/groups/join#token=abc` — and
+// CK-79 gives both their screens (pinned below and in
+// routes/group-join.test.tsx and routes/group-invitation-accept.test.tsx).
+// The rule this catch-all exists for — an address this bundle has no route
+// for keeps its path AND its fragment — stays pinned on addresses no route
+// matches, carrying a token-shaped fragment as the two did. (Not
+// `/gatherings/<anything>` or `/groups/<one segment>`: the detail routes
+// capture those.)
 const UNKNOWN_ADDRESSES = [
-  // The two URLs CK-75's backend mints into routes Groups 3 builds.
-  '/groups/invitations/accept#token=abc',
-  '/groups/join#token=abc',
+  '/zz-ck79-unbuilt/invitations/accept#token=abc',
+  '/zz-ck79-unbuilt/join#token=abc',
   // A mistyped address, with nothing in the fragment.
   '/zz-ck751-nowhere',
 ]
@@ -152,7 +161,9 @@ for (const address of UNKNOWN_ADDRESSES) {
 }
 
 test('the screen is wired to the one service-worker owner: a newer worker taking control switches the copy in, the address still kept', () => {
-  renderAppAt('/groups/invitations/accept#token=abc', signedIn)
+  // Re-pointed at CK-79 from `/groups/invitations/accept#token=abc`, which
+  // has its own screen now: the same shape, at an address no route matches.
+  renderAppAt('/zz-ck79-unbuilt/invitations/accept#token=abc', signedIn)
   expect(screen.queryByText(NEWER_VERSION)).toBeNull()
   expect(sw.options?.onNeedReload).toBeTypeOf('function')
   // What the register helper does when the new worker has activated and
@@ -160,7 +171,7 @@ test('the screen is wired to the one service-worker owner: a newer worker taking
   act(() => sw.options?.onNeedReload?.())
   expect(screen.getByText(NEWER_VERSION)).toBeTruthy()
   expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(HEADING)
-  expect(locationText()).toBe('/groups/invitations/accept#token=abc')
+  expect(locationText()).toBe('/zz-ck79-unbuilt/invitations/accept#token=abc')
 })
 
 // ---------------------------------------------------------------------------
@@ -288,6 +299,31 @@ test('/invitations/accept still renders the acceptance screen at /invitations/ac
   )
   expect(screen.queryByText(HEADING)).toBeNull()
 })
+
+// CK-79: the two URLs CK-75's backend mints now reach their screens — the
+// catch-all no longer renders at either, and each keeps its address. With
+// no token in the window's fragment and none parked, each says its link
+// didn't work, and sends nothing.
+for (const [seat, auth] of [
+  ['signed out', signedOut],
+  ['signed in', signedIn],
+] as const) {
+  test(`${seat}, /groups/join renders the join landing at /groups/join, not the catch-all`, async () => {
+    const { fetchStub } = renderAppAt('/groups/join', auth)
+    expect(locationText()).toBe('/groups/join')
+    await screen.findByRole('heading', { level: 1, name: "That link didn't work" })
+    expect(screen.queryByText(HEADING)).toBeNull()
+    expect(fetchStub).not.toHaveBeenCalled()
+  })
+
+  test(`${seat}, /groups/invitations/accept renders the invitation landing at its path, not the catch-all`, async () => {
+    const { fetchStub } = renderAppAt('/groups/invitations/accept', auth)
+    expect(locationText()).toBe('/groups/invitations/accept')
+    await screen.findByRole('heading', { level: 1, name: "That invitation link didn't work" })
+    expect(screen.queryByText(HEADING)).toBeNull()
+    expect(fetchStub).not.toHaveBeenCalled()
+  })
+}
 
 test('/plan still renders the plan screen at /plan', async () => {
   const billing = {

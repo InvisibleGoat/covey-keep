@@ -9,6 +9,7 @@ import {
   type AcceptResult,
   type InvitationPreview,
 } from '../lib/invitations'
+import { parkReturnPath } from '../lib/returnPath'
 
 // The acceptance landing screen (CK-25). The emailed invitation link ends
 // here with the token in the URL FRAGMENT (never the query string — it must
@@ -113,6 +114,11 @@ export function InvitationAccept() {
           }
           const preview = (await response.json()) as InvitationPreview
           if (preview.status === 'valid') {
+            // The sign-in return (CK-79): this screen's own address, so the
+            // callback brings the invitee back here. The callback's
+            // invitation-token branch, which did this alone before CK-79,
+            // stays as its fallback.
+            parkReturnPath('/invitations/accept')
             setScreen({ status: 'signInNeeded', title: preview.gathering_title })
           } else {
             clearInvitationToken()

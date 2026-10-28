@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { readInvitationToken } from '../lib/invitations'
+import { takeReturnPath } from '../lib/returnPath'
 
 export function AuthCallback() {
   const { signIn } = useAuth()
@@ -21,9 +22,15 @@ export function AuthCallback() {
     history.replaceState(null, '', window.location.pathname)
     if (token) {
       signIn(token)
-      // An invitation parked before sign-in resumes now that a session
-      // exists: the acceptance screen picks the stored token back up (CK-25).
-      navigate(readInvitationToken() ? '/invitations/accept' : '/home', { replace: true })
+      // Where the person was going, in this order (CK-79):
+      //   1. the sign-in return — a page `RequireAuth` turned them away from,
+      //      or a landing screen that sent them to sign in — when one is
+      //      parked, valid and fresh (lib/returnPath.ts; taking it clears it);
+      //   2. else the CK-25 acceptance screen when an invitation token is
+      //      parked — the branch from before CK-79, kept as the fallback;
+      //   3. else Home.
+      const back = takeReturnPath()
+      navigate(back ?? (readInvitationToken() ? '/invitations/accept' : '/home'), { replace: true })
     } else {
       setFailed(true)
     }

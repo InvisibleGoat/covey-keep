@@ -144,10 +144,19 @@ for (const [seat, auth] of [
   ['signed out', signedOut],
   ['signed in', signedIn],
 ] as const) {
-  test(`${seat}, /groups/join#token=abc still reaches the catch-all — the group routes do not swallow the join link`, () => {
+  // MOVED AT CK-79, with its reason: until CK-79 `/groups/join` was a static
+  // row rendering the catch-all, so the join URL reached "This page isn't
+  // available". CK-79 replaces that row with the link's landing. What this
+  // pin always held still holds — `/groups/:id` does not swallow the join
+  // link, and RequireAuth does not send it to `/` — and the screen it
+  // reaches is now the landing's. (The landing reads the WINDOW's fragment;
+  // this router's address carries one and the window's holds none, so the
+  // landing has no token, says so, and sends nothing.)
+  test(`${seat}, /groups/join#token=abc reaches the join landing — the group routes do not swallow the join link`, async () => {
     const fetchStub = renderAppAt('/groups/join#token=abc', auth, () => json(200, {}))
     expect(screen.getByTestId('location').textContent).toBe('/groups/join#token=abc')
-    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe("This page isn't available")
+    await screen.findByRole('heading', { level: 1, name: "That link didn't work" })
+    expect(screen.queryByText("This page isn't available")).toBeNull()
     expect(screen.queryByText('Nothing here')).toBeNull()
     expect(fetchStub).not.toHaveBeenCalled()
   })
