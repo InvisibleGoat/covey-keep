@@ -39,8 +39,10 @@
 // refused with a STABLE CODE the copy switches on (binRefusalMessage); the
 // bin's line says what the bin IS from the person's side — theirs alone,
 // and open to put back for the rest of the window (binDaysLeft) — and never
-// what happens at the window's end, because the automatic clear ships
-// switched off and until it is on nothing clears a bin; and the permanent
+// what happens at the window's end. That rule was written while the
+// automatic clear (CK-59's sweep) shipped switched off and nothing cleared a
+// bin; the sweep has been on since check (gt), 2026-10-19, and whether the
+// line should now say so is a copy decision not yet made. And the permanent
 // delete's confirmation is the bin record §7.1's sentence, verbatim, with
 // "from <the product>" kept because a photograph already in a printed book
 // is out of reach (DELETE_PERMANENTLY_CONFIRMATION).
@@ -254,10 +256,10 @@ const DAY_MS = 24 * 60 * 60 * 1000
 //
 // What the number is NOT: a countdown to deletion. At the window's close
 // the person stops seeing the photograph and can no longer put it back —
-// that is what the server's audience rule enforces today, and all of it.
-// The automatic clear (CK-59's sweep) ships switched off, and until it is
-// on nothing clears a bin; copy built on this number may claim only what
-// is enforced.
+// the server's audience rule. Since check (gt), 2026-10-19, the sweep
+// (CK-59) then destroys it on a later pass, run only while the worker is
+// idle, so the close is not the instant of destruction; copy built on
+// this number may claim only the window.
 export function binDaysLeft(removedAt: string, now: Date): number | null {
   const closes = Date.parse(removedAt) + REMOVED_BIN_DAYS * DAY_MS
   if (Number.isNaN(closes)) return null

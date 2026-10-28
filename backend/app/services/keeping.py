@@ -73,8 +73,8 @@ What is DERIVED, and never stored, is unchanged in its rule:
 - Grace state is derived from ONE timestamp (`last_keeper_left_at`) plus the
   policy constants below — never persisted. Under one keeper "the last
   keeper left" and "the keeper left" are the same event, so the stamp's
-  meaning did not move. The 30/90 thresholds are v2 §5's ladder in design
-  and inert in code — see the note on `grace_state`.
+  meaning did not move. The 30/90 thresholds are RETIRED in design and
+  inert in code — see the note on `ARCHIVE_AFTER`.
 - A memorial is exempt by TYPE (keeper record §9.4): quota-free and never in
   grace, keyed on `gathering_type == MEMORIAL`, never a flag. Exempt from
   the ACCOUNT quota is not unbounded: a memorial carries its own ceiling
@@ -134,14 +134,16 @@ from app.models import (
 # archived-but-recoverable, deletable at 90. Constants in code, thresholds
 # derived — never stored per-gathering.
 #
-# DELIBERATELY UNTOUCHED AT CK-49b. Keeper record v2 §5 replaces these two
-# rungs with five — Kept → Dunning → Unkept → Frozen → Deleted, 360 days on
-# paid — and that is new BEHAVIOUR, not a representation swap: it arrives
-# with the surfaces that give it entrances and exits (the in-app alert, the
-# claim button, the storage screen), and nothing past Frozen ships until
-# export exists (§9). These constants and grace_state are INERT either way:
-# nothing outside tests/test_keeping.py calls grace_state (verified
-# 2026-09-18). Do not "fix" the numbers here ahead of the ladder.
+# RETIRED IN DESIGN, AND INERT IN CODE. These two rungs were to be replaced
+# by keeper record v2 §5's five (Kept → Dunning → Unkept → Frozen → Deleted),
+# and that ladder was itself RETIRED on 2026-09-27
+# (decisions/2026-09-27-keeping-explained.md): a failed card or a downgrade
+# drops the keeper to the free tier, new photos stop only if what they keep
+# no longer fits, nothing is frozen or deleted, and deletion is reached only
+# by the inactivity closure. Nothing outside tests/test_keeping.py calls
+# grace_state (verified again 2026-10-28), so these constants decide
+# nothing; they stay until a phase removes them with their tests. Do not
+# wire them up.
 ARCHIVE_AFTER = timedelta(days=30)
 DELETE_AFTER = timedelta(days=90)
 
@@ -274,11 +276,10 @@ def grace_state(gathering: Gathering, now: datetime) -> GraceState:
     """Derived, never persisted. A kept gathering (stamp NULL) is live; a
     memorial is live regardless — it never enters grace.
 
-    UNTOUCHED AT CK-49b, and inert: no consumer calls this (only its own
-    tests do). Keeper record v2 §5's five-rung ladder replaces the two
-    thresholds it derives, and the ladder arrives with its surfaces — the
-    note on ARCHIVE_AFTER / DELETE_AFTER above. The stamp it reads kept its
-    meaning through the cutover: under one keeper, "the last keeper left"
+    Inert: no consumer calls this (only its own tests do), and the grace
+    it derives is RETIRED in design, as is the v2 §5 ladder that was to
+    replace it — the note on ARCHIVE_AFTER / DELETE_AFTER above. The stamp
+    it reads kept its meaning through the cutover: under one keeper, "the last keeper left"
     and "the keeper left" are one event."""
     if gathering.gathering_type == GatheringType.MEMORIAL:
         return GraceState.LIVE
@@ -507,8 +508,8 @@ async def unkeep(
     meaning is exactly what it was. A memorial never gets the stamp: it
     never enters grace. An account that is not the gathering's own keeper
     is refused loudly — including the keeper of a group the gathering
-    belongs to, who releases the GROUP (Arc B's surface), never one
-    gathering out of it."""
+    belongs to, who releases the GROUP (the keeping flows' surface,
+    unbuilt), never one gathering out of it."""
     now = now or datetime.now(timezone.utc)
     if gathering.keeper_account_id != account.id:
         raise LookupError("account does not keep this gathering")
@@ -714,9 +715,9 @@ async def lapse_kept_statuses(
     """An anonymized person's keeping lapses (keeper record §8): the keeper
     column goes NULL wherever the deleted account held it, and every
     gathering that just lost its keeper is stamped exactly as unkeep would
-    stamp it — a deleted account must not silently hold a gathering alive
-    forever. Called from the account deletion transaction (profile.py); the
-    caller commits.
+    stamp it — an anonymized account cannot answer for a gathering's
+    photographs. Called from the account deletion transaction
+    (profile.py); the caller commits.
 
     Four writes, each guarded on the column — or, for the fourth, on the
     co-host relation's own key — and never on a keeper relation:
@@ -728,10 +729,12 @@ async def lapse_kept_statuses(
     `groups.keeper_account_id` NULLed wherever this account held it, the
     CK-45 admin relinquishment's reasoning applied to the keeper column: an
     anonymized account cannot answer for a home's bytes. NO stamp is
-    written on a group — where a group's lapse stamp lives is v2 §12 item
-    9's group half, handed to Arc B, because no gathering resolves through
-    a group until Arc B writes `owning_group_id`, so nothing can lose a
-    keeper by this write today and there is no row to reason about; (4)
+    written, on the group or on its gatherings: since CK-76 a gathering in
+    a group resolves through the group's keeper, so this write leaves
+    every one of them Unkept (the resolver's third rung) and unstamped.
+    Where a group's lapse stamp would live is v2 §12 item 9's group half,
+    still open, and no stamp has a reader while the lapse ladder is
+    retired; (4)
     every `gathering_co_hosts` row this account holds is DELETED (CK-68;
     co-hosts §8's DATA-HANDLING: an anonymized account's co-hosting ends
     with its deletion) — deleted, not relinquished, because a row here IS

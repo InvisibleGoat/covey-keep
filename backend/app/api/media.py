@@ -1749,7 +1749,7 @@ def _review_refusal(row: Media, *, publish: bool) -> Optional[dict]:
             "status": row.status.value,
             "message": "this photo is already published"
             if publish
-            else "this photo is already published — taking a published photo down isn't supported yet",
+            else "this photo is already published — to take it down, remove it",
         }
     if state == PublicationState.REMOVED:
         # A takedown is never undone by a queue action — the worker's rule
@@ -2438,11 +2438,12 @@ async def restore_media(
     §2).
 
     THE UPLOADER'S RESTORE: WHERE IT GOES, THE GATE DECIDES — THE
-    RESTORER DOES NOT, and no parameter may. The gathering's own setting
-    and the host account's kind are read exactly as the worker's publish
-    step reads them (services/ingest.py step 4; `_host_kind` is the
-    gatherings router's reader of the same fact) and
-    `publication.resolve_gathering` answers. GATED → `pending`: the
+    RESTORER DOES NOT, and no parameter may. The gathering's own setting,
+    the host account's kind and — since CK-76 — the home group's template
+    are read exactly as the worker's publish step reads them
+    (services/ingest.py step 4), through `_gate_destination` and the
+    gatherings router's `_home_facts` (named `_host_kind` until CK-76),
+    and `publication.resolve_gathering` answers. GATED → `pending`: the
     photograph waits for the host again, in the queue, and BOTH
     publication stamps are cleared — "no pending row carries a
     published_at" is a verifier invariant, and the host's publish stamps

@@ -57,8 +57,9 @@ class Group(Base):
     # table, and it authorizes nothing about membership. NULL is the unkept
     # state (§5). Backfilled once at 0022 from the admin person's account —
     # the creator is still the first keeper; since CK-49b read by the
-    # resolver's first rung (services/keeping.py — unreachable until Arc B
-    # writes gatherings.owning_group_id) and NULLed by the deletion lapse
+    # resolver's first rung (services/keeping.py — reachable since CK-76,
+    # when POST /gatherings began writing gatherings.owning_group_id) and
+    # NULLed by the deletion lapse
     # where the anonymized account held it. WRITTEN AT CREATION SINCE CK-75
     # (migration 0032 backfilled the groups created between 0022 and then):
     # POST /groups had never written it, so every group created since 0022

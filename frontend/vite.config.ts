@@ -28,7 +28,8 @@ export default defineConfig({
       // Replace the app shell on deploy — the default strategy kept serving a
       // stale bundle across deploys (bit during CK-4 verification).
       registerType: 'autoUpdate',
-      // Registration is owned by src/components/PwaUpdatePrompt.tsx (CK-8.1);
+      // Registration is owned by src/components/AppUpdateProvider.tsx (since
+      // CK-75.1; src/components/PwaUpdatePrompt.tsx owned it from CK-8.1);
       // letting the plugin also inject its register script would register the
       // worker twice. This must be `null`, NOT the `false` the type docs call
       // equivalent: the plugin decides whether to bake skipWaiting/clientsClaim

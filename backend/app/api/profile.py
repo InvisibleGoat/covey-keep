@@ -377,12 +377,15 @@ async def delete_account(
     await db.execute(
         delete(WebauthnChallenge).where(WebauthnChallenge.person_id == person.id)
     )
-    # Kept statuses lapse (CK-13, keeper model §8): the person's kept rows are
-    # hard-deleted, admin is relinquished, and any gathering that just lost
-    # its last keeper enters grace exactly as an unkeep would put it there —
-    # a deleted account must not silently hold a gathering alive forever.
-    # (The accounts row itself is retained: it carries no PII, and the
-    # person's gatherings and contributions still reference it.)
+    # Keeping, hosting and co-hosting lapse (services/keeping.py::
+    # lapse_kept_statuses — CK-13, against the keeper column since CK-49b):
+    # host is relinquished everywhere; the keeper column goes NULL on every
+    # gathering and group the account kept, each non-memorial gathering
+    # stamped `last_keeper_left_at` as an unkeep stamps it; and the account's
+    # co-host rows are deleted (CK-68). An anonymized account keeps, hosts
+    # and co-hosts nothing. (The accounts row itself is retained: it carries
+    # no PII, and the person's gatherings and contributions still reference
+    # it.)
     await lapse_kept_statuses(db, person.account_id, now=now)
     # The person's group roles lapse (CK-45, succession since CK-75;
     # services/groups.py): a former member administers nothing — on each

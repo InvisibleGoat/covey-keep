@@ -228,8 +228,10 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
   return (
     <main className="auth-screen">
       <h1>Your plan</h1>
-      {/* ADJUSTED from the prototype's "groups and gatherings": no group can
-          be kept until Arc B writes owning_group_id (keeping-explained §3). */}
+      {/* ADJUSTED from the prototype's "groups and gatherings" while no group
+          could be kept (keeping-explained §3). Since CK-76 a gathering in a
+          group is charged to the group's keeper; whether this line should
+          name groups again is a copy decision not yet made. */}
       <p>Space for the photos in the gatherings you keep.</p>
 
       <section className="auth-card plan-card plan-current" aria-labelledby="plan-current-tag">

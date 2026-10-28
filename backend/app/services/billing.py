@@ -396,8 +396,8 @@ async def checkout_url(customer_id: str, price_id: str, account_id: UUID) -> str
     and buy-now-pay-later add ways for a payment to fail without adding
     buyers. On the deploy the filter removed Cash App Pay, Klarna and
     Amazon Pay (check `(jh)`, 2026-10-22; a *Bank* option remained beside
-    *Card*, probably Link's own bank payment — `(jk)` notes whether it is
-    still offered once Link is hidden).
+    *Card*, probably Link's own bank payment, and `(jk)` found it gone
+    once Link was hidden, the same day).
 
     `wallet_options: {"link": {"display": "never"}}` is what hides Link.
     CK-74.1 sent the filter alone to turn Link off, and `(jh)` showed the
@@ -429,7 +429,8 @@ async def checkout_url(customer_id: str, price_id: str, account_id: UUID) -> str
     A parameter's documentation says what a session ACCEPTS, not what
     Checkout SHOWS: the filter's docstring was quoted at CK-74.1 and Link
     stayed. Only a look at the sandbox's Checkout page proves a change
-    here, which is why `(jk)` exists."""
+    here. `(jk)` was that look for these two parameters, and it passed
+    on 2026-10-22: Link gone from Checkout, and *Bank* with it."""
     params = {
         "mode": "subscription",
         "customer": customer_id,

@@ -1,7 +1,8 @@
 // Browser session storage. localStorage is deliberate: the session must
-// survive a browser restart (the 30-day trusted-device promise), and an
-// httpOnly cookie is not viable while the frontend (*.netlify.app) and API
-// (*.onrender.com) are cross-site — revisit at the prod cutover phase
+// survive a browser restart (the trusted-device promise — 90 days, sliding,
+// capped at a year since CK-9), and an httpOnly cookie is not viable while
+// the frontend (*.netlify.app) and API (*.onrender.com) are cross-site —
+// revisit at the prod cutover phase
 // (decisions/2026-08-20-browser-session-storage.md in the docs root).
 
 const STORAGE_KEY = 'covey-keep:session-token'

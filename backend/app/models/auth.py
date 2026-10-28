@@ -54,7 +54,9 @@ class EmailChangeRequest(Base):
 
 
 class Session(Base):
-    """A trusted-device session (~30 days). The JWT carries this row's id as
+    """A trusted-device session: 90 days, sliding — pushed forward on use, at
+    most daily — and never past 365 days from `issued_at` (api/deps.py,
+    CK-9). The JWT carries this row's id as
     `sid`; the row is what makes the JWT revocable — a valid signature alone is
     never sufficient."""
 

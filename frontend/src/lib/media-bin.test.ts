@@ -7,8 +7,9 @@
 // not; the days-left count rounded UP to whole days, "less than a day" in
 // the last one, never negative, and never a countdown to deletion; the bin's
 // line built from it and saying nothing about what happens at the window's
-// end (the automatic clear ships switched off, so nothing is enforced
-// there); and the permanent delete's confirmation, the bin record §7.1's
+// end (written while the automatic clear shipped switched off; it has
+// been on since check (gt), 2026-10-19, and the copy still claims only
+// the window); and the permanent delete's confirmation, the bin record §7.1's
 // sentence character for character, with "from CoveyKeep" kept because a
 // printed book is out of reach. Since CK-67 the gathering-bin helpers are
 // pinned here too: the host's line for a row someone else uploaded, and
@@ -207,8 +208,9 @@ test("the bin's line: whose it is, and how long the way back stays open — and 
     'Removed.',
   )
   // Nothing promises deletion on a date, an emptying, or a safety: the
-  // automatic clear ships switched off, and until it is on nothing clears a
-  // bin — the copy may claim only that the way back closes.
+  // copy may claim only that the way back closes. (Written while the
+  // automatic clear shipped switched off; it has been on since check (gt),
+  // 2026-10-19, and saying more is a copy decision not yet made.)
   for (const days of [0, 2, 29, 29.5, 31]) {
     for (const isHost of [true, false]) {
       const line = mediaStateMessage({ ...own, removed_at: stamp }, { isHost, now: at(days) })
@@ -297,7 +299,8 @@ test("the host's line for a gathering-bin row: whose sight it left, how long the
   // A non-organiser is never shown such a row; the branch stays defensive.
   expect(mediaStateMessage({ ...theirs, removed_at: stamp }, { isHost: false, now: at(0) })).toBe('Removed.')
   // The ban list holds on every form: nothing promises deletion on a date,
-  // an emptying, or a safety — the sweep still ships switched off.
+  // an emptying, or a safety (the sweep has been on since check (gt),
+  // 2026-10-19; the copy still claims only the window).
   for (const days of [0, 2, 29, 29.5, 31]) {
     const line = host(at(days))
     expect(line).not.toMatch(BIN_BAN)

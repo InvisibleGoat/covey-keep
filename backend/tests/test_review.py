@@ -636,12 +636,15 @@ async def test_a_decline_lands_removed_in_the_gatherings_bin_and_the_uploader_do
         assert detail["code"] == NOT_PENDING
         assert detail["publication_state"] == "removed"
 
-    # A `live` photograph is not declined: the takedown is unbuilt.
+    # A `live` photograph is not declined: taking it down is `remove`
+    # (CK-54), and the refusal's message says so (until 2026-10-28 it said
+    # the takedown "isn't supported yet").
     live = await _photograph(db_session_factory, cast, publication_state=PublicationState.LIVE)
     refused = await _decline(client, cast.host, live)
     assert refused.status_code == 409
     assert refused.json()["detail"]["code"] == NOT_PENDING
     assert refused.json()["detail"]["publication_state"] == "live"
+    assert refused.json()["detail"]["message"] == "this photo is already published — to take it down, remove it"
     assert (await _state(db_session_factory, live))[1] == PublicationState.LIVE
 
 

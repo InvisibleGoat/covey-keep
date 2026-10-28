@@ -7,8 +7,9 @@ export interface Person {
   // IANA zone name (e.g. America/Chicago); null until captured on first
   // sign-in or set in /settings. Every gathering time renders through this.
   timezone: string | null
-  // The caller's own account id (CK-20). Keeping and hosting are account facts
-  // (gatherings.host_account_id), so this is what the edit gates compare.
+  // The caller's own account id, from /auth/me (CK-20). No gate reads it
+  // since CK-69: a role comes from the body's `caller_role` (roleFlags,
+  // groupRoleFlags), and no surface compares account ids.
   account_id: string
 }
 
