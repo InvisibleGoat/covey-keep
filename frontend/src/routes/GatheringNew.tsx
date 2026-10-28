@@ -1,3 +1,16 @@
+// The gathering form (CK-17) — one form, two doors (CK-80):
+// - `/gatherings/new` renders it with no group: a standalone gathering, and
+//   no group choice anywhere (Steven, 2026-10-27).
+// - `/groups/:id/gatherings/new` renders it through GroupGatheringNew, which
+//   reads the group and its members and passes them as `inGroup`: the body
+//   carries `group_id`, and WHO IT'S FOR lists every member but the caller
+//   (`is_self` — the creator becomes the host and has no place), each with
+//   one of three choices, everyone starting Invited. The two lists in the
+//   body come from lib/places.ts::placesBody and nowhere else — every member
+//   Invited sends NEITHER list, the whole-group create, so a member who
+//   joins later is invited too.
+// The type, the title, the decedent name and the dates are the same fields
+// either way, mapped through the one 422 mapper.
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
@@ -12,6 +25,25 @@ import {
   type FormErrors,
 } from '../lib/formErrors'
 import { GATHERING_TYPES, type Gathering } from '../lib/gatherings'
+import { initials, type Group, type GroupMember } from '../lib/groups'
+import {
+  createRefusalMessage,
+  listRefusals,
+  newcomerLine,
+  noOtherMembersLine,
+  PLACE_LABELS,
+  PLACES,
+  PLACES_HEADING,
+  PLACES_HINT,
+  placesBody,
+  type Place,
+} from '../lib/places'
+
+// The group a gathering is being made in, as GroupGatheringNew read it.
+export interface InGroup {
+  group: Group
+  members: GroupMember[]
+}
 
 interface OccurrenceDraft {
   key: number
@@ -27,7 +59,7 @@ function emptyOccurrence(): OccurrenceDraft {
   return { key: nextKey, startsAt: '', endsAt: '', location: '', mapUrl: '' }
 }
 
-export function GatheringNew() {
+export function GatheringNew({ inGroup }: { inGroup?: InGroup } = {}) {
   const { person } = useAuth()
   const navigate = useNavigate()
   const zone = effectiveZone(person?.timezone)
@@ -41,6 +73,29 @@ export function GatheringNew() {
   const [occurrences, setOccurrences] = useState<OccurrenceDraft[]>([emptyOccurrence()])
   const [submitting, setSubmitting] = useState(false)
   const [errors, setErrors] = useState<FormErrors>(noErrors())
+
+  // Who it's for (CK-80): every member but the caller, in joining order,
+  // each starting Invited. The choices are keyed by membership id — the
+  // handle the body carries, and nothing that is ever rendered.
+  const others = inGroup ? inGroup.members.filter((member) => !member.is_self) : []
+  const [choices, setChoices] = useState<Record<string, Place>>(() =>
+    Object.fromEntries(others.map((member) => [member.membership_id, 'invited' as Place])),
+  )
+  // A list refusal, landed on the member's row it names (membership id →
+  // the line from its code).
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
+  const choiceMap = new Map<string, Place>(
+    others.map((member) => [member.membership_id, choices[member.membership_id] ?? 'invited']),
+  )
+  const everyoneInvited = [...choiceMap.values()].every((place) => place === 'invited')
+
+  function choose(membershipId: string, place: Place) {
+    setChoices((current) => ({ ...current, [membershipId]: place }))
+  }
+
+  function chooseEveryone(place: Place) {
+    setChoices(Object.fromEntries(others.map((member) => [member.membership_id, place])))
+  }
 
   const isMemorial = gatheringType === 'memorial'
   // "Can plausibly succeed" (the Settings idiom): presence only. The decedent
@@ -58,7 +113,12 @@ export function GatheringNew() {
     event.preventDefault()
     setSubmitting(true)
     setErrors(noErrors())
+    setRowErrors({})
 
+    // The two lists, from placesBody alone: every member Invited sends
+    // neither (the whole-group create); otherwise `invited` and, when anyone
+    // is kept a surprise, `left_out` — the server shares it with the rest.
+    const lists = inGroup ? placesBody(choiceMap) : {}
     const body = {
       gathering_type: gatheringType,
       title,
@@ -73,6 +133,7 @@ export function GatheringNew() {
         ...(o.location.trim() ? { location: o.location.trim() } : {}),
         ...(o.mapUrl.trim() ? { map_url: o.mapUrl.trim() } : {}),
       })),
+      ...(inGroup ? { group_id: inGroup.group.id, ...lists } : {}),
     }
 
     // Every key this form renders an inline error against; anything the
@@ -100,7 +161,28 @@ export function GatheringNew() {
         navigate(`/gatherings/${created.id}`)
         return
       }
-      setErrors(await errorsFromResponse(response, visibleFields))
+      // An item-level 422 on a list names an entry by its index in the list
+      // AS SENT; map it back to the member and say why from its code.
+      const refusals =
+        inGroup && response.status === 422
+          ? listRefusals(await response.clone().json().catch(() => null))
+          : []
+      const onRows: Record<string, string> = {}
+      // The entries that landed on a row are visible to the mapper too, so
+      // it never repeats them form-level; one that names no row on screen
+      // stays form-level — never swallowed.
+      const landed: string[] = []
+      for (const refusal of refusals) {
+        const membershipId = lists[refusal.list]?.[refusal.index]
+        const member = others.find((candidate) => candidate.membership_id === membershipId)
+        if (!member) continue
+        landed.push(`${refusal.list}.${refusal.index}`)
+        if (!(member.membership_id in onRows)) {
+          onRows[member.membership_id] = createRefusalMessage(refusal.code, member.display_name)
+        }
+      }
+      setRowErrors(onRows)
+      setErrors(await errorsFromResponse(response, [...visibleFields, ...landed]))
     } catch {
       setErrors(networkErrors())
     }
@@ -109,7 +191,7 @@ export function GatheringNew() {
 
   return (
     <main className="auth-screen">
-      <h1>New gathering</h1>
+      <h1>{inGroup ? `New gathering in ${inGroup.group.name}` : 'New gathering'}</h1>
 
       <form className="auth-card gathering-form" onSubmit={(event) => void handleSubmit(event)}>
         <label htmlFor="gathering-type">Type of gathering</label>
@@ -237,13 +319,86 @@ export function GatheringNew() {
           Add another date
         </button>
 
+        {inGroup && (
+          // WHO IT'S FOR (CK-80; record §4): one choice of three per member,
+          // a radio group whose legend is the member's name, everyone
+          // starting Invited; the two bulk buttons cover the common cases —
+          // the record's "invite only these; share with everyone else" is
+          // Let everyone see the photos, then the few marked Invited. A
+          // radio group's name is its row's index, never a membership id.
+          <section aria-labelledby="places-heading">
+            <h2 id="places-heading">{PLACES_HEADING}</h2>
+            {others.length === 0 ? (
+              <p className="field-hint">{noOtherMembersLine(inGroup.group.name)}</p>
+            ) : (
+              <>
+                <p className="field-hint">{PLACES_HINT}</p>
+                <div className="member-actions">
+                  <button type="button" className="link-button" onClick={() => chooseEveryone('invited')}>
+                    Invite everyone
+                  </button>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => chooseEveryone('shared_with')}
+                  >
+                    Let everyone see the photos
+                  </button>
+                </div>
+                {others.map((member, index) => {
+                  const chosen = choices[member.membership_id] ?? 'invited'
+                  return (
+                    <fieldset key={member.membership_id} className="occurrence-fields">
+                      <legend>
+                        <span className="member-initials" aria-hidden="true">
+                          {initials(member.display_name)}
+                        </span>{' '}
+                        {member.display_name}
+                      </legend>
+                      {PLACES.map((place) => (
+                        <label key={place}>
+                          <input
+                            type="radio"
+                            name={`place-${index}`}
+                            value={place}
+                            checked={chosen === place}
+                            onChange={() => choose(member.membership_id, place)}
+                          />{' '}
+                          {PLACE_LABELS[place]}
+                        </label>
+                      ))}
+                      {rowErrors[member.membership_id] && (
+                        <FormLevelErrors
+                          errors={{ fields: {}, form: [rowErrors[member.membership_id]] }}
+                        />
+                      )}
+                    </fieldset>
+                  )
+                })}
+              </>
+            )}
+            {/* What happens to someone who joins the group while this is
+                still ahead — read from the current choice: everyone Invited
+                sends neither list, and the gathering stays the whole
+                group's (record §9). */}
+            <p className="field-hint">{newcomerLine(!everyoneInvited, inGroup.group.name)}</p>
+          </section>
+        )}
+
         <button type="submit" disabled={!plausible || submitting}>
           {submitting ? 'Creating…' : 'Create gathering'}
         </button>
+        {Object.keys(rowErrors).length > 0 && (
+          <p className="field-hint">Nothing was created.</p>
+        )}
         <FormLevelErrors errors={errors} />
       </form>
 
-      <Link to="/gatherings">Back to your gatherings</Link>
+      {inGroup ? (
+        <Link to={`/groups/${inGroup.group.id}`}>Back to {inGroup.group.name}</Link>
+      ) : (
+        <Link to="/gatherings">Back to your gatherings</Link>
+      )}
     </main>
   )
 }

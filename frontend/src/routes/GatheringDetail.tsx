@@ -31,10 +31,31 @@ import {
 } from '../lib/formErrors'
 import {
   gatheringTypeLabel,
+  PHOTOS_ONLY_LINE,
   roleFlags,
+  viewOf,
   type GatheringWithOccurrences,
   type Occurrence,
 } from '../lib/gatherings'
+import { initials } from '../lib/groups'
+import {
+  CO_HOST_ALWAYS_INVITED,
+  newcomerLine,
+  noOtherMembersLine,
+  noPlaceLine,
+  PLACE_LABELS,
+  PLACES,
+  PLACES_HEADING,
+  PLACES_HINT,
+  placeRefusalMessage,
+  promptAction,
+  promptLine,
+  readPlaces,
+  setPlace,
+  type Place,
+  type PlaceEntry,
+  type PlaceList,
+} from '../lib/places'
 import {
   RSVP_LIST_VISIBILITIES,
   RSVP_RESPONSES,
@@ -123,7 +144,10 @@ function gatheringPatch(
       patch.memorial_decedent_name = name
     }
   }
-  if (form.rsvpListVisibility !== gathering.rsvp_list_visibility) {
+  // The edit form exists in the full view only, where the server always
+  // sends the setting; the fallback (the create default) only satisfies the
+  // type — a withheld value is never read (CK-80).
+  if (form.rsvpListVisibility !== (gathering.rsvp_list_visibility ?? 'INVITEES')) {
     patch.rsvp_list_visibility = form.rsvpListVisibility
   }
   if (viewer.isHost && form.reviewPhotos !== reviewIsOn(gathering)) {
@@ -592,6 +616,19 @@ function OccurrenceRsvp({
 // CK-69 (`host_account_id === person.account_id`), and a co-host was shown
 // an invitee's page while the server would let them do most of what the
 // host does. Anything but the two known roles gates closed.
+//
+// WHAT THE CALLER GETS COMES FROM THE BODY TOO (CK-80): `caller_view`, read
+// through lib/gatherings.ts::viewOf and nowhere by hand. Anything but `full`
+// is THE PHOTOS-ONLY VIEW — the header, one line, and the Photos section
+// with no upload and no date label — and the page then reads neither
+// `occurrences` nor `rsvp_list_visibility` (NULL: withheld, not empty) and
+// asks for nothing the view withholds. On a GROUP's gathering (CK-80, Groups
+// 3c) everyone who can read it gets the group line; the organisers get Who
+// it's for (each member's place, one tap each, `organises` — delegable),
+// the prompt to share once a date has started, and an Invitations section
+// that is co-host management alone — no email form and no Waiting on,
+// because every emailed invitation to a group's gathering is the 409
+// `members_only`. Nobody is told their place.
 export function GatheringDetail() {
   const { id } = useParams()
   const { person } = useAuth()
@@ -667,6 +704,22 @@ export function GatheringDetail() {
   const [coHostActing, setCoHostActing] = useState<string | null>(null)
   const [confirmUnmake, setConfirmUnmake] = useState<string | null>(null)
 
+  // Who it's for and the prompt to share (CK-80), for the organisers of a
+  // group's gathering in the full view: one read of the places on mount, in
+  // its own card; a change is one PUT, its row re-rendered from the
+  // server's entry; one change at a time; a refusal lands on the row — or
+  // the prompt line — that drew it, nothing re-read.
+  const [placesLoad, setPlacesLoad] = useState<
+    { status: 'loading' } | { status: 'loaded'; value: PlaceList } | { status: 'failed' }
+  >({ status: 'loading' })
+  const [placesKey, setPlacesKey] = useState(0)
+  const [placeActing, setPlaceActing] = useState<string | null>(null)
+  const [placeRefusal, setPlaceRefusal] = useState<{
+    membershipId: string
+    where: 'row' | 'prompt'
+    message: string
+  } | null>(null)
+
   // Cancel-on-unmount for mutation handlers (the CK-19 convention covers
   // every in-flight request, not just the load effect below).
   const alive = useRef(true)
@@ -730,6 +783,32 @@ export function GatheringDetail() {
     }
   }, [id, invitationsOpen, coHostsReloadKey])
 
+  // The places (CK-80) are read only where the server would answer them: an
+  // organiser of a group's gathering, in the full view. For anyone else the
+  // route is the gathering's 404 — and in the photos-only view the page asks
+  // for nothing the view withholds — so it is never asked.
+  const loadedGathering = state.status === 'loaded' ? state.gathering : null
+  const wantsPlaces =
+    loadedGathering !== null &&
+    loadedGathering.group !== null &&
+    viewOf(loadedGathering.caller_view).full &&
+    roleFlags(loadedGathering.caller_role).organises
+  useEffect(() => {
+    const gatheringId = id
+    if (!wantsPlaces || gatheringId === undefined) return
+    let cancelled = false
+    async function load(target: string) {
+      const outcome = await readPlaces(target)
+      if (!cancelled) {
+        setPlacesLoad(outcome.ok ? { status: 'loaded', value: outcome.value } : { status: 'failed' })
+      }
+    }
+    void load(gatheringId)
+    return () => {
+      cancelled = true
+    }
+  }, [id, wantsPlaces, placesKey])
+
   useEffect(() => {
     let cancelled = false
     async function load() {
@@ -778,10 +857,23 @@ export function GatheringDetail() {
   }
 
   if (state.status === 'failed') {
+    // A retry is a control, never a sentence with nothing to press (CK-80;
+    // CK-74.1's idiom): Try again re-reads through the loading state.
     return (
       <main className="auth-screen">
         <h1>Something went wrong</h1>
-        <p className="form-error">This gathering couldn't be loaded just now. Try again.</p>
+        <p className="form-error" role="alert">
+          This gathering couldn't be loaded just now.
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            setState({ status: 'loading' })
+            setReloadKey((key) => key + 1)
+          }}
+        >
+          Try again
+        </button>
         <Link to="/gatherings">Back to your gatherings</Link>
       </main>
     )
@@ -789,6 +881,62 @@ export function GatheringDetail() {
 
   const { gathering } = state
   const isMemorial = gathering.gathering_type === 'memorial'
+
+  // The header every view shares: the title, the type, the decedent line,
+  // and on a group's gathering the group line (CK-80) — a link to the
+  // group's page, for everyone who can read the gathering.
+  const header = (
+    <>
+      <h1>{gathering.title}</h1>
+      <p>{gatheringTypeLabel(gathering.gathering_type)}</p>
+      {gathering.memorial_decedent_name && (
+        <p>In memory of {gathering.memorial_decedent_name}</p>
+      )}
+      {gathering.group && (
+        <p>
+          In <Link to={`/groups/${gathering.group.id}`}>{gathering.group.name}</Link>
+        </p>
+      )}
+    </>
+  )
+
+  // THE PHOTOS-ONLY VIEW (CK-80; CK-77's memory view), wherever `viewOf`
+  // does not say `full` — a member only shared with a group's gathering, or
+  // a body this build does not understand (an unknown view shows less). The
+  // header, one line saying what this is, and the Photos section with no
+  // upload and no date label: no When, no RSVP, no Edit gathering, no
+  // Invitations, no places. This branch NEVER reads `occurrences` or
+  // `rsvp_list_visibility` — the server sends them NULL, and withheld is
+  // not empty (the CK-30 precedent) — and asks for nothing the view
+  // withholds. The memory view carries no role (`caller_role` null), and
+  // the photos-only view gives none whatever arrives.
+  if (viewOf(gathering.caller_view).photosOnly) {
+    return (
+      <main className="auth-screen">
+        {header}
+        <p>{PHOTOS_ONLY_LINE}</p>
+        <section className="auth-card" aria-labelledby="photos-heading">
+          <h2 id="photos-heading">Photos</h2>
+          <GatheringMedia
+            gatheringId={gathering.id}
+            isHost={false}
+            organises={false}
+            requiresApproval={gathering.requires_approval}
+            occurrences={null}
+            canUpload={false}
+            zone={zone}
+          />
+        </section>
+        <Link to="/gatherings">Back to your gatherings</Link>
+      </main>
+    )
+  }
+
+  // The full view from here: the server always sends the dates in it (a
+  // null would be an invariant breach, rendered as no dates rather than as
+  // a crash).
+  const occurrences: Occurrence[] = gathering.occurrences ?? []
+  const group = gathering.group
 
   // The two role flags (CK-69), from the body's `caller_role` and nothing
   // else. Edit affordances render only for an organiser — anyone else sees
@@ -811,7 +959,7 @@ export function GatheringDetail() {
   const editedOccurrence =
     editingOccurrenceId === null
       ? null
-      : gathering.occurrences.find((o) => o.id === editingOccurrenceId) ?? null
+      : occurrences.find((o) => o.id === editingOccurrenceId) ?? null
   const occurrenceDirty =
     editedOccurrence !== null &&
     Object.keys(occurrencePatch(occurrenceForm, occurrenceToForm(editedOccurrence, zone), zone))
@@ -821,7 +969,7 @@ export function GatheringDetail() {
     setGatheringForm({
       title: gathering.title,
       decedentName: gathering.memorial_decedent_name ?? '',
-      rsvpListVisibility: gathering.rsvp_list_visibility,
+      rsvpListVisibility: gathering.rsvp_list_visibility ?? 'INVITEES',
       reviewPhotos: reviewIsOn(gathering),
     })
     setGatheringErrors(noErrors())
@@ -983,6 +1131,9 @@ export function GatheringDetail() {
     setCoHostActing(null)
     if (outcome.ok) {
       setCoHostsReloadKey((key) => key + 1)
+      // Who it's for carries each member's `co_host` (CK-80): a co-host's
+      // row offers Invited alone, so the places are re-read with the list.
+      if (wantsPlaces) setPlacesKey((key) => key + 1)
       return
     }
     setCoHostError({
@@ -1006,7 +1157,11 @@ export function GatheringDetail() {
     setConfirmUnmake(null)
     if (outcome.ok) {
       if (steppingDown) setReloadKey((key) => key + 1)
-      else setCoHostsReloadKey((key) => key + 1)
+      else {
+        setCoHostsReloadKey((key) => key + 1)
+        // A removed co-host's row in Who it's for offers all three again.
+        if (wantsPlaces) setPlacesKey((key) => key + 1)
+      }
       return
     }
     setCoHostError({
@@ -1014,6 +1169,63 @@ export function GatheringDetail() {
       errors: { fields: {}, form: [coHostRefusalMessage(outcome.code, coHostName(row.display_name))] },
     })
   }
+
+  // Change one member's place (CK-80) — Who it's for's one tap, and the
+  // prompt's. One PUT; the row re-renders from the server's entry, and
+  // `invitees_chosen` follows the API's documented rule (any move away from
+  // invited sets it, and nothing sets it back — once chosen, chosen). It is
+  // reversible, and nobody is told. A refusal lands where it was drawn,
+  // from its code, with nothing re-read.
+  async function changePlace(entry: PlaceEntry, place: Place, where: 'row' | 'prompt') {
+    if (placeActing !== null || group === null) return
+    setPlaceActing(entry.membership_id)
+    setPlaceRefusal(null)
+    const outcome = await setPlace(gathering.id, entry.membership_id, place)
+    if (!alive.current) return
+    setPlaceActing(null)
+    if (outcome.ok) {
+      const updated = outcome.entry
+      setPlacesLoad((current) =>
+        current.status !== 'loaded'
+          ? current
+          : {
+              status: 'loaded',
+              value: {
+                inviteesChosen:
+                  current.value.inviteesChosen ||
+                  (updated.place !== null && updated.place !== 'invited'),
+                members: current.value.members.map((member) =>
+                  member.membership_id === updated.membership_id ? updated : member,
+                ),
+              },
+            },
+      )
+      return
+    }
+    setPlaceRefusal({
+      membershipId: entry.membership_id,
+      where,
+      message: placeRefusalMessage(outcome.code, entry.display_name, group.name),
+    })
+  }
+
+  function refreshPlaces() {
+    setPlaceRefusal(null)
+    setPlacesKey((key) => key + 1)
+  }
+
+  const places = placesLoad.status === 'loaded' ? placesLoad.value : null
+  // THE PROMPT TO SHARE (Steven, 2026-10-27; record §4): for an organiser of
+  // a group's gathering, once any of its dates has started, one line per
+  // member still kept a surprise — so a surprise is never left hidden by
+  // forgetting. No dialog, no notification.
+  const anyDateStarted = occurrences.some(
+    (occurrence) => new Date(occurrence.starts_at).getTime() <= Date.now(),
+  )
+  const stillASurprise =
+    organises && group !== null && anyDateStarted && places !== null
+      ? places.members.filter((member) => member.place === 'left_out')
+      : []
 
   // Deliberately not disabled when one date remains: the server owns the
   // last-occurrence rule, refuses with a 422, and its reason renders beside
@@ -1059,10 +1271,32 @@ export function GatheringDetail() {
 
   return (
     <main className="auth-screen">
-      <h1>{gathering.title}</h1>
-      <p>{gatheringTypeLabel(gathering.gathering_type)}</p>
-      {gathering.memorial_decedent_name && (
-        <p>In memory of {gathering.memorial_decedent_name}</p>
+      {header}
+
+      {stillASurprise.length > 0 && group !== null && (
+        // The prompt (CK-80): one line per member still kept a surprise once
+        // a date has started, the one tap beside it — PUT shared_with, and
+        // the line goes. Nothing is sent to the member.
+        <section className="auth-card" aria-label={PLACE_LABELS.left_out}>
+          <ul className="occurrence-list">
+            {stillASurprise.map((member) => (
+              <li key={member.membership_id}>
+                <p>{promptLine(member.display_name)}</p>
+                <button
+                  type="button"
+                  disabled={placeActing !== null}
+                  onClick={() => void changePlace(member, 'shared_with', 'prompt')}
+                >
+                  {promptAction(member.display_name)}
+                </button>
+                {placeRefusal?.where === 'prompt' &&
+                  placeRefusal.membershipId === member.membership_id && (
+                    <FormLevelErrors errors={{ fields: {}, form: [placeRefusal.message] }} />
+                  )}
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {organises && !editingGathering && (
@@ -1191,7 +1425,7 @@ export function GatheringDetail() {
         <h2 id="occurrences-heading">When</h2>
         <p className="field-hint">Times in {zone}.</p>
         <ul className="occurrence-list">
-          {gathering.occurrences.map((occurrence) => (
+          {occurrences.map((occurrence) => (
             <li key={occurrence.id} className="occurrence-item">
               {organises && editingOccurrenceId === occurrence.id ? (
                 <form onSubmit={(event) => void saveOccurrence(event, occurrence)}>
@@ -1463,87 +1697,186 @@ export function GatheringDetail() {
           isHost={isHost}
           organises={organises}
           requiresApproval={gathering.requires_approval}
-          occurrences={gathering.occurrences}
+          occurrences={occurrences}
           zone={zone}
         />
       </section>
 
+      {organises && group !== null && (
+        // WHO IT'S FOR (CK-80; record §4), the organisers' on a group's
+        // gathering: each member's place, changed with one tap — reversible,
+        // and nobody is told. A co-host's row offers Invited alone (the
+        // server refuses the other two, `is_co_host`); a member with no
+        // place shows none checked until one is chosen. The names are what
+        // every member reads on the group page; the places are the
+        // organisers' alone. A radio group's name is its row's index, never
+        // a membership id.
+        <section className="auth-card" aria-labelledby="places-heading">
+          <h2 id="places-heading">{PLACES_HEADING}</h2>
+          {placesLoad.status === 'loading' && <p>Loading…</p>}
+          {placesLoad.status === 'failed' && (
+            <>
+              <p className="form-error" role="alert">
+                <span aria-hidden="true">⚠ </span>
+                Who it's for couldn't be loaded just now.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setPlacesLoad({ status: 'loading' })
+                  setPlacesKey((key) => key + 1)
+                }}
+              >
+                Try again
+              </button>
+            </>
+          )}
+          {places !== null && (
+            <>
+              <p className="field-hint">{PLACES_HINT}</p>
+              <p className="field-hint">{newcomerLine(places.inviteesChosen, group.name)}</p>
+              {places.members.length === 0 && (
+                <p className="field-hint">{noOtherMembersLine(group.name)}</p>
+              )}
+              {places.members.map((member, index) => (
+                <fieldset key={member.membership_id} className="occurrence-fields">
+                  <legend>
+                    <span className="member-initials" aria-hidden="true">
+                      {initials(member.display_name)}
+                    </span>{' '}
+                    {member.display_name}
+                    {member.co_host && (
+                      <>
+                        {' · '}
+                        <span className="member-role">Co-host</span>
+                      </>
+                    )}
+                  </legend>
+                  {PLACES.map((place) => (
+                    <label key={place}>
+                      <input
+                        type="radio"
+                        name={`gathering-place-${index}`}
+                        value={place}
+                        checked={member.place === place}
+                        disabled={placeActing !== null || (member.co_host && place !== 'invited')}
+                        onChange={() => void changePlace(member, place, 'row')}
+                      />{' '}
+                      {PLACE_LABELS[place]}
+                    </label>
+                  ))}
+                  {member.co_host && <p className="field-hint">{CO_HOST_ALWAYS_INVITED}</p>}
+                  {member.place === null && (
+                    <p className="field-hint">{noPlaceLine(member.display_name)}</p>
+                  )}
+                  {placeRefusal?.where === 'row' &&
+                    placeRefusal.membershipId === member.membership_id && (
+                      <>
+                        <FormLevelErrors errors={{ fields: {}, form: [placeRefusal.message] }} />
+                        <button type="button" className="link-button" onClick={refreshPlaces}>
+                          Refresh the list
+                        </button>
+                      </>
+                    )}
+                </fieldset>
+              ))}
+            </>
+          )}
+        </section>
+      )}
+
       {organises && (
+        // The Invitations section (CK-25). On a GROUP's gathering it is the
+        // co-host section alone (CK-80): every emailed invitation to a
+        // group's gathering is the 409 `members_only` (CK-76) — its members
+        // get their place on Who it's for — so no email form and no
+        // *Waiting on* is offered (the CK-18 lesson). What stays is CK-69's
+        // co-host management: the co-host list, and the invited members —
+        // the materialized invitation rows — with Make co-host.
         <section className="auth-card" aria-labelledby="invitations-heading">
-          <h2 id="invitations-heading">Invitations</h2>
+          <h2 id="invitations-heading">{group !== null ? 'Co-hosts' : 'Invitations'}</h2>
           {!invitationsOpen ? (
             <button
               type="button"
               className="link-button"
               onClick={() => setInvitationsOpen(true)}
             >
-              Invite people
+              {group !== null ? 'Show co-hosts' : 'Invite people'}
             </button>
           ) : (
             <>
-              <form onSubmit={(event) => void sendInvitation(event)}>
-                <label htmlFor="invite-destination">Email address</label>
-                <input
-                  id="invite-destination"
-                  type="email"
-                  required
-                  value={inviteDestination}
-                  aria-describedby={describedBy(inviteErrors, 'destination')}
-                  onChange={(event) => setInviteDestination(event.target.value)}
-                />
-                <FieldError errors={inviteErrors} field="destination" />
-                <FieldError errors={inviteErrors} field="channel" />
-                <p className="field-hint">
-                  They'll get an email with a link to this gathering. Invitations expire
-                  after 7 days.
-                </p>
-                <button
-                  type="submit"
-                  disabled={inviteDestination.trim() === '' || inviteSubmitting}
-                >
-                  {inviteSubmitting ? 'Sending…' : 'Send invitation'}
-                </button>
-                <FormLevelErrors errors={inviteErrors} />
-              </form>
+              {group === null && (
+                <form onSubmit={(event) => void sendInvitation(event)}>
+                  <label htmlFor="invite-destination">Email address</label>
+                  <input
+                    id="invite-destination"
+                    type="email"
+                    required
+                    value={inviteDestination}
+                    aria-describedby={describedBy(inviteErrors, 'destination')}
+                    onChange={(event) => setInviteDestination(event.target.value)}
+                  />
+                  <FieldError errors={inviteErrors} field="destination" />
+                  <FieldError errors={inviteErrors} field="channel" />
+                  <p className="field-hint">
+                    They'll get an email with a link to this gathering. Invitations expire
+                    after 7 days.
+                  </p>
+                  <button
+                    type="submit"
+                    disabled={inviteDestination.trim() === '' || inviteSubmitting}
+                  >
+                    {inviteSubmitting ? 'Sending…' : 'Send invitation'}
+                  </button>
+                  <FormLevelErrors errors={inviteErrors} />
+                </form>
+              )}
 
               {invitationsFailed && (
                 <p className="form-error" role="alert">
                   <span aria-hidden="true">⚠ </span>
-                  The invitation list couldn't be loaded just now.
+                  {group !== null
+                    ? "The list of who's invited couldn't be loaded just now."
+                    : "The invitation list couldn't be loaded just now."}
                 </p>
               )}
               {invitations && (
                 <>
-                  <h3>Waiting on</h3>
-                  {invitations.pending.length === 0 ? (
-                    <p className="field-hint">No pending invitations.</p>
-                  ) : (
-                    <ul className="occurrence-list">
-                      {invitations.pending.map((pending) => (
-                        <li key={pending.id}>
-                          {pending.destination}
-                          {' — '}
-                          {new Date(pending.expires_at).getTime() <= Date.now()
-                            ? 'expired'
-                            : `expires ${formatInstant(pending.expires_at, zone)}`}{' '}
-                          <button
-                            type="button"
-                            className="link-button"
-                            onClick={() => void revokeInvitation(pending.id)}
-                          >
-                            Revoke
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
+                  {group === null && (
+                    <>
+                      <h3>Waiting on</h3>
+                      {invitations.pending.length === 0 ? (
+                        <p className="field-hint">No pending invitations.</p>
+                      ) : (
+                        <ul className="occurrence-list">
+                          {invitations.pending.map((pending) => (
+                            <li key={pending.id}>
+                              {pending.destination}
+                              {' — '}
+                              {new Date(pending.expires_at).getTime() <= Date.now()
+                                ? 'expired'
+                                : `expires ${formatInstant(pending.expires_at, zone)}`}{' '}
+                              <button
+                                type="button"
+                                className="link-button"
+                                onClick={() => void revokeInvitation(pending.id)}
+                              >
+                                Revoke
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </>
                   )}
                   {/* Co-hosts (CK-69; co-hosts §4): the list for every
                       organiser; the host alone makes and removes one, and
                       reads the hint that says what they are handing over;
                       a co-host reads the list and steps down from their
                       own row — nobody else's — and nowhere else on the
-                      page is the list shown. */}
-                  <h3>Co-hosts</h3>
+                      page is the list shown. On a group's gathering the
+                      section's own heading says Co-hosts (CK-80). */}
+                  {group === null && <h3>Co-hosts</h3>}
                   {isHost && <p className="field-hint">{CO_HOST_HINT}</p>}
                   {coHostsFailed && (
                     <p className="form-error" role="alert">
@@ -1626,11 +1959,19 @@ export function GatheringDetail() {
                         })}
                       </ul>
                     ))}
-                  <h3>Accepted</h3>
+                  {/* On a group's gathering the accepted rows are the
+                      invited members' materialized invitations (CK-76), so
+                      the list says Invited (CK-80). */}
+                  <h3>{group !== null ? 'Invited' : 'Accepted'}</h3>
                   {invitations.accepted.length === 0 ? (
-                    <p className="field-hint">No one has accepted yet.</p>
+                    <p className="field-hint">
+                      {group !== null ? 'No one else is invited yet.' : 'No one has accepted yet.'}
+                    </p>
                   ) : (
-                    <ul className="occurrence-list" aria-label="Accepted">
+                    <ul
+                      className="occurrence-list"
+                      aria-label={group !== null ? 'Invited' : 'Accepted'}
+                    >
                       {invitations.accepted.map((accepted) => {
                         // An Accepted row that is a co-host says so instead
                         // of offering the act again; the act waits for the

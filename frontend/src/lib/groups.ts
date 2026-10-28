@@ -29,6 +29,7 @@
 // role: no notification exists (record §12).
 import { authFetch } from './api'
 import { errorsFromResponse, networkErrors, type FormErrors } from './formErrors'
+import type { GatheringListItem } from './gatherings'
 
 export type GroupRole = 'admin' | 'co_admin' | 'member'
 
@@ -147,6 +148,25 @@ export function readMembers(groupId: string): Promise<GroupRead<GroupMember[]>> 
     `/groups/${groupId}/members`,
     (body) => (body as { members?: GroupMember[] }).members ?? [],
   )
+}
+
+// The group's gatherings (CK-80; `GET /groups/{id}/gatherings`, CK-76): the
+// ones that belong to the group that the caller can read, in the list's
+// item shape — a gathering they are only shared with in the photos-only
+// view, and one they are kept a surprise from not here at all. A section's
+// own read: any refusal is its failure, never the page's not-found screen
+// (the group itself was already read).
+export async function readGroupGatherings(
+  groupId: string,
+): Promise<{ ok: true; gatherings: GatheringListItem[] } | { ok: false }> {
+  try {
+    const response = await authFetch(`/groups/${groupId}/gatherings`)
+    if (!response.ok) return { ok: false }
+    const body = (await response.json()) as { gatherings?: GatheringListItem[] }
+    return { ok: true, gatherings: body.gatherings ?? [] }
+  } catch {
+    return { ok: false }
+  }
 }
 
 // --- create and rename: through the one mapper -------------------------------

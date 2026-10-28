@@ -10,6 +10,7 @@ import { GatheringDetail } from './routes/GatheringDetail'
 import { GatheringNew } from './routes/GatheringNew'
 import { Gatherings } from './routes/Gatherings'
 import { GroupDetail } from './routes/GroupDetail'
+import { GroupGatheringNew } from './routes/GroupGatheringNew'
 import { GroupInvitationAccept } from './routes/GroupInvitationAccept'
 import { GroupJoin } from './routes/GroupJoin'
 import { GroupNew } from './routes/GroupNew'
@@ -95,6 +96,16 @@ function App() {
           element={
             <RequireAuth>
               <GroupDetail />
+            </RequireAuth>
+          }
+        />
+        {/* A gathering in the group (CK-80): the group page's New gathering
+            opens the form with the group's member list. */}
+        <Route
+          path="/groups/:id/gatherings/new"
+          element={
+            <RequireAuth>
+              <GroupGatheringNew />
             </RequireAuth>
           }
         />

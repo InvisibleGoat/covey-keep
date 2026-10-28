@@ -18,6 +18,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AuthContext, type AuthState, type Person } from '../auth/context'
+import { formatInstant } from '../lib/datetime'
 import { networkErrors } from '../lib/formErrors'
 import type { ShareDevice } from '../lib/groupJoining'
 import {
@@ -153,6 +154,10 @@ interface Overrides {
   getInvitations?: Responder
   invite?: Responder
   revokeInvitation?: Responder
+  // CK-80's route: the page reads the group's gatherings for every member,
+  // so the fake answers it — by default with none, which renders the
+  // Gatherings section's empty state and nothing else of 3c.
+  getGatherings?: Responder
 }
 
 const NO_LINK = { url: null, expires_at: null }
@@ -236,6 +241,9 @@ function stubServer(server: ReturnType<typeof makeServer>, over: Overrides = {})
     }
     if (method === 'DELETE' && /^\/groups\/g-1\/invitations\/[^/]+$/.test(path)) {
       return respond(over.revokeInvitation, () => new Response(null, { status: 204 }))
+    }
+    if (method === 'GET' && path === '/groups/g-1/gatherings') {
+      return respond(over.getGatherings, () => json(200, { gatherings: [] }))
     }
     throw new Error(`no stub for ${method} ${path}`)
   })
@@ -431,10 +439,17 @@ test('a group with no admin: nobody’s row says Admin and the reserved acts ren
 // offered nothing of 3b OR 3c — no button that invites, shares, copies or
 // handles a request. CK-79 IS 3b: Make a link, Share the link, Send
 // invitation and the request queue's acts are now the page's on purpose
-// (their own pins are below). What stays pinned is 3c's absence: no
-// gathering, no places, no "shared with" or "left out" anywhere on the page,
-// in a button or in its text, and still one link — back to the list.
-test('the page offers nothing of 3c: its one link is back to the list, and nothing names a gathering or a place', async () => {
+// (their own pins are below). What stayed pinned was 3c's absence.
+//
+// MOVED AGAIN AT CK-80, with its reason: CK-80 IS 3c. The Gatherings section
+// and its New gathering link are the page's on purpose (their own pins are
+// in the CK-80 block below), so the links are New gathering and the way
+// back, and one heading names the group's gatherings. What stays pinned is
+// that the GROUP page never shows anyone's place on a gathering — places are
+// the gathering's organisers' alone, on the gathering's own page — so no
+// place word, no "shared with" and no "left out" anywhere here, in a button,
+// a heading or the text.
+test('the page offers 3c’s Gatherings section and nothing else of it: its links are New gathering and the way back, and nothing names anyone’s place', async () => {
   stubServer(makeServer('ada'), {
     getLink: () => json(200, { url: LINK_URL, expires_at: LINK_EXPIRES }),
     getRequests: () => json(200, { join_requests: [REQUEST_ZOE] }),
@@ -443,18 +458,22 @@ test('the page offers nothing of 3c: its one link is back to the list, and nothi
   await loaded()
   await screen.findByRole('button', { name: 'Share the link' })
   await screen.findByRole('list', { name: 'Requests to join' })
-  expect(screen.getAllByRole('link').map((link) => link.textContent)).toEqual(['Back to your groups'])
+  await screen.findByText('No gatherings in this group yet.')
+  expect(screen.getAllByRole('link').map((link) => link.textContent)).toEqual([
+    'New gathering',
+    'Back to your groups',
+  ])
+  expect(screen.getByRole('link', { name: 'New gathering' }).getAttribute('href')).toBe(
+    '/groups/g-1/gatherings/new',
+  )
   expect(screen.getByRole('link', { name: 'Back to your groups' }).getAttribute('href')).toBe('/groups')
   for (const name of screen.getAllByRole('button').map((b) => b.textContent ?? '')) {
-    expect(name).not.toMatch(/gathering|place|shared with|left out/i)
+    expect(name).not.toMatch(/place|shared with|left out|surprise|sees the photos/i)
   }
-  // No section of 3c's: no heading names a gathering or a place. (The leave
-  // card's CK-78 sentence — gatherings you're already part of don't change —
-  // is about leaving, not a list of them.)
-  for (const heading of screen.getAllByRole('heading').map((h) => h.textContent ?? '')) {
-    expect(heading).not.toMatch(/gathering|place/i)
-  }
-  expect(document.body.textContent).not.toMatch(/shared with|left out/i)
+  const headings = screen.getAllByRole('heading').map((h) => h.textContent ?? '')
+  expect(headings).toContain('Gatherings')
+  for (const heading of headings) expect(heading).not.toMatch(/place|who it's for/i)
+  expect(document.body.textContent).not.toMatch(/shared with|left out|kept a surprise|sees the photos/i)
 })
 
 // ---------------------------------------------------------------------------
@@ -965,6 +984,20 @@ test('a failed read says so and can be retried: Try again re-reads both once per
 // and in the CK-79 tests). Every id rule is unchanged, the request and
 // invitation ids added to it, and every step is still opened in turn —
 // CK-79's three among them.
+// MOVED AT CK-80, with its reason: the group's own id now appears in the
+// markup exactly once — the New gathering link's href,
+// `/groups/<id>/gatherings/new`, the route the kickoff fixes for making a
+// gathering in the group (the page's own address carries the same id). It is
+// a navigation target, never text on the screen. This helper asserts that one
+// href is there exactly once and hands back the markup without it, so every
+// id — the group's included — is still pinned absent from everything else.
+const NEW_GATHERING_HREF = 'href="/groups/g-1/gatherings/new"'
+function markupBesidesNewGathering(container: HTMLElement): string {
+  const markup = container.innerHTML
+  expect(markup.split(NEW_GATHERING_HREF)).toHaveLength(2)
+  return markup.replace(NEW_GATHERING_HREF, '')
+}
+
 test('nothing identifying on screen: no address outside an organiser’s pending list, and no membership, person, group, request or invitation id anywhere in the markup — every step open in turn', async () => {
   stubServer(makeServer('ada'), {
     getLink: () => json(200, { url: LINK_URL, expires_at: LINK_EXPIRES }),
@@ -981,8 +1014,9 @@ test('nothing identifying on screen: no address outside an organiser’s pending
     expect(pendingList.textContent).toContain(PENDING_DORA.destination)
     const outside = (document.body.textContent ?? '').replace(pendingList.textContent ?? '', '')
     expect(outside).not.toContain('@')
+    const markup = markupBesidesNewGathering(view.container)
     for (const id of [...ALL_IDS, REQUEST_ZOE.id, PENDING_DORA.id]) {
-      expect(view.container.innerHTML).not.toContain(id)
+      expect(markup).not.toContain(id)
     }
     expectNoLinkOrToken(view.container)
     expect(document.body.textContent).not.toMatch(FORBIDDEN)
@@ -1014,7 +1048,8 @@ test('nothing identifying on screen: no address outside an organiser’s pending
   await loaded()
   fireEvent.click(within(rowOf('Bea')).getByRole('button', { name: 'Step down' }))
   expect(document.body.textContent).not.toContain('@')
-  for (const id of ALL_IDS) expect(coAdminView.container.innerHTML).not.toContain(id)
+  const coAdminMarkup = markupBesidesNewGathering(coAdminView.container)
+  for (const id of ALL_IDS) expect(coAdminMarkup).not.toContain(id)
 })
 
 // ===========================================================================
@@ -1623,4 +1658,147 @@ test('the new copy names nothing it should not: no ban word, no promise of a not
   expect(text).not.toMatch(FORBIDDEN)
   expect(text).not.toMatch(/notif|we'll let you know|you'll hear|you will be told/i)
   expect(text).not.toMatch(/CoveyKeep/)
+})
+
+// ===========================================================================
+// CK-80 — gatherings in a group: the group's gatherings on its page
+// (decisions/2026-10-04-a-groups-gathering-stays-in-the-group.md §4; Steven's
+// answers of 2026-10-27 — making a gathering in a group starts from the
+// group's page).
+// ===========================================================================
+
+const GET_GATHERINGS = (mock: ReturnType<typeof vi.fn>) =>
+  calls(mock, 'GET', '/groups/g-1/gatherings').length
+
+// The list item shape `GET /groups/{id}/gatherings` sends (the list's own).
+function gatheringItem(over: Record<string, unknown> = {}) {
+  return {
+    id: 'gath-whole-1111',
+    gathering_type: 'potluck',
+    title: 'Sunday Dinner',
+    memorial_decedent_name: null,
+    requires_approval: false,
+    requires_approval_override: null,
+    rsvp_list_visibility: 'INVITEES',
+    publication_state: 'live',
+    created_by_account_id: 'acct-a',
+    host_account_id: 'acct-a',
+    group: { id: 'g-1', name: 'The Lees' },
+    caller_role: null,
+    caller_view: 'full',
+    created_at: '2026-10-27T12:00:00+00:00',
+    updated_at: null,
+    next_occurrence: { id: 'occ-1', starts_at: '2035-01-01T18:00:00+00:00' },
+    occurrence_count: 1,
+    ...over,
+  }
+}
+
+// The photos-only item: the summary withheld — null, never 0 or a date.
+const MEMORY_ITEM = gatheringItem({
+  id: 'gath-party-2222',
+  title: 'The Party',
+  rsvp_list_visibility: null,
+  caller_view: 'memory',
+  next_occurrence: null,
+  occurrence_count: null,
+})
+
+function gatheringsRegion(): HTMLElement {
+  return screen.getByRole('region', { name: 'Gatherings' })
+}
+
+test('the Gatherings section, by view: a full item with its type and date, a photos-only item with "You can see its photos" and no date — each a link to the gathering', async () => {
+  const mock = stubServer(makeServer('cal'), {
+    getGatherings: () => json(200, { gatherings: [gatheringItem(), MEMORY_ITEM] }),
+  })
+  renderPage()
+  await loaded()
+  const list = await screen.findByRole('list', { name: "The group's gatherings" })
+  const items = within(list).getAllByRole('link')
+  expect(items.map((link) => link.getAttribute('href'))).toEqual([
+    '/gatherings/gath-whole-1111',
+    '/gatherings/gath-party-2222',
+  ])
+  // The date in the viewer's profile zone (America/Chicago), as the list renders it.
+  const date = formatInstant('2035-01-01T18:00:00+00:00', 'America/Chicago')
+  expect(items[0].textContent).toBe(`Sunday DinnerPotluck · ${date}`)
+  expect(items[1].textContent).toBe('The PartyPotluck · You can see its photos')
+  expect(items[1].textContent).not.toMatch(/\d{4}|AM|PM/)
+  // The group's own name rides no item here — it is this group's page.
+  expect(list.textContent).not.toContain('The Lees')
+  expect(within(gatheringsRegion()).getByText('Times in America/Chicago.')).toBeTruthy()
+  expect(GET_GATHERINGS(mock)).toBe(1)
+})
+
+test('a group whose gatherings are all photos-only shows no times hint — no date is on screen', async () => {
+  stubServer(makeServer('cal'), { getGatherings: () => json(200, { gatherings: [MEMORY_ITEM] }) })
+  renderPage()
+  await loaded()
+  await screen.findByRole('list', { name: "The group's gatherings" })
+  expect(within(gatheringsRegion()).queryByText(/Times in/)).toBeNull()
+})
+
+for (const [seat, label] of [
+  ['ada', 'the admin'],
+  ['bea', 'a co-admin'],
+  ['cal', 'a member'],
+] as const) {
+  test(`with none: "No gatherings in this group yet." and New gathering — for ${label} too`, async () => {
+    stubServer(makeServer(seat))
+    renderPage()
+    await loaded()
+    const region = gatheringsRegion()
+    expect(await within(region).findByText('No gatherings in this group yet.')).toBeTruthy()
+    const link = within(region).getByRole('link', { name: 'New gathering' })
+    expect(link.getAttribute('href')).toBe('/groups/g-1/gatherings/new')
+    expect(within(region).queryByRole('list')).toBeNull()
+  })
+}
+
+test('the section sits after the header and before Members', async () => {
+  stubServer(makeServer('ada'))
+  renderPage()
+  await loaded()
+  const headings = screen.getAllByRole('heading').map((h) => h.textContent)
+  expect(headings.indexOf('Gatherings')).toBeGreaterThan(headings.indexOf('Rename the group'))
+  expect(headings.indexOf('Gatherings')).toBeLessThan(headings.indexOf('Members'))
+})
+
+test('a failed read fails in its own card: the line and Try again, which re-reads once per press, and a read that succeeds renders the list — the rest of the page untouched', async () => {
+  let fail = true
+  const mock = stubServer(makeServer('cal'), {
+    getGatherings: () => (fail ? json(500, {}) : json(200, { gatherings: [gatheringItem()] })),
+  })
+  renderPage()
+  await loaded()
+  const region = gatheringsRegion()
+  expect(await within(region).findByText("The group's gatherings couldn't be loaded just now.")).toBeTruthy()
+  // The members are on screen whatever this section's read did.
+  expect(screen.getByRole('list', { name: 'Members' })).toBeTruthy()
+  expect(GET_GATHERINGS(mock)).toBe(1)
+  fireEvent.click(within(region).getByRole('button', { name: 'Try again' }))
+  await waitFor(() => expect(GET_GATHERINGS(mock)).toBe(2))
+  expect(await within(region).findByText("The group's gatherings couldn't be loaded just now.")).toBeTruthy()
+  fail = false
+  fireEvent.click(within(region).getByRole('button', { name: 'Try again' }))
+  await within(region).findByRole('list', { name: "The group's gatherings" })
+  expect(GET_GATHERINGS(mock)).toBe(3)
+  expect(within(region).queryByRole('button', { name: 'Try again' })).toBeNull()
+  expect(GET_GROUP(mock)).toBe(1)
+  expect(GET_MEMBERS(mock)).toBe(1)
+})
+
+test('nothing identifying in the Gatherings section: no membership, person or account id, and the group id only in New gathering’s href', async () => {
+  const view = (() => {
+    stubServer(makeServer('cal'), {
+      getGatherings: () => json(200, { gatherings: [gatheringItem(), MEMORY_ITEM] }),
+    })
+    return renderPage()
+  })()
+  await loaded()
+  await screen.findByRole('list', { name: "The group's gatherings" })
+  const markup = markupBesidesNewGathering(view.container)
+  for (const id of [...ALL_IDS, 'acct-a']) expect(markup).not.toContain(id)
+  expect(document.body.textContent).not.toMatch(FORBIDDEN)
 })

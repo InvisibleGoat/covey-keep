@@ -60,12 +60,23 @@
 //   invite by email — CK-25's form on the group — and read *Waiting on*.
 //   `device` is a prop for tests only (the CK-74 `follow` idiom); the app
 //   passes nothing and gets the browser's own.
+//
+// GATHERINGS IN THE GROUP (CK-80, Groups 3c; the 2026-10-04 record §4), after
+// the header and rename, before Members: `GET /groups/{id}/gatherings` on its
+// own key, failing in its own card. Each item a link to the gathering — the
+// title, then the type and the next date, or in the photos-only view "You can
+// see its photos" and no date (none was sent). A gathering the caller is kept
+// a surprise from is not in the answer at all, so it is not here. New
+// gathering, for every member (any member of a household group may start
+// one, CK-76), opens `/groups/<id>/gatherings/new` with the group's member
+// list.
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { FieldError, FormLevelErrors } from '../components/FieldError'
 import { effectiveZone, formatDay } from '../lib/datetime'
 import { describedBy, noErrors, type FormErrors } from '../lib/formErrors'
+import { listItemLine, viewOf, type GatheringListItem } from '../lib/gatherings'
 import {
   approveRequest,
   approveSentence,
@@ -112,6 +123,7 @@ import {
   makeAdminSentence,
   memberCountLabel,
   readGroup,
+  readGroupGatherings,
   readMembers,
   removeCoAdmin,
   removeCoAdminSentence,
@@ -259,6 +271,12 @@ export function GroupDetail({ device }: { device?: ShareDevice } = {}) {
   const [inviteErrors, setInviteErrors] = useState<FormErrors>(noErrors())
   const [inviteSubmitting, setInviteSubmitting] = useState(false)
 
+  // The group's gatherings (CK-80): its own read, its own key, its own card.
+  const [gatheringsLoad, setGatheringsLoad] = useState<SectionLoad<GatheringListItem[]>>({
+    status: 'loading',
+  })
+  const [gatheringsKey, setGatheringsKey] = useState(0)
+
   // Cancel-on-unmount for the mutation handlers (the CK-18 convention).
   const alive = useRef(true)
   useEffect(() => {
@@ -291,6 +309,22 @@ export function GroupDetail({ device }: { device?: ShareDevice } = {}) {
       cancelled = true
     }
   }, [groupId, membersKey])
+
+  // The group's gatherings: any member may read them, so they are read on
+  // mount (CK-80).
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      const outcome = await readGroupGatherings(groupId)
+      if (!cancelled) {
+        setGatheringsLoad(outcome.ok ? { status: 'loaded', value: outcome.gatherings } : { status: 'failed' })
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [groupId, gatheringsKey])
 
   // The two organiser reads wait for the group body to say the caller
   // organises: for anyone else they are the group's 404, and never asked.
@@ -590,6 +624,7 @@ export function GroupDetail({ device }: { device?: ShareDevice } = {}) {
   const requests = requestsLoad.status === 'loaded' ? requestsLoad.value : null
   const link = linkLoad.status === 'loaded' ? linkLoad.value : null
   const pending = invitationsLoad.status === 'loaded' ? invitationsLoad.value : null
+  const groupGatherings = gatheringsLoad.status === 'loaded' ? gatheringsLoad.value : null
   const shareLine = shareOutcomeLine(shareOutcome)
 
   return (
@@ -621,6 +656,49 @@ export function GroupDetail({ device }: { device?: ShareDevice } = {}) {
           <FormLevelErrors errors={renameErrors} />
         </form>
       )}
+
+      <section className="auth-card" aria-labelledby="group-gatherings-heading">
+        <h2 id="group-gatherings-heading">Gatherings</h2>
+        {gatheringsLoad.status === 'loading' && <p>Loading…</p>}
+        {gatheringsLoad.status === 'failed' && (
+          <>
+            <p className="form-error" role="alert">
+              <span aria-hidden="true">⚠ </span>
+              The group's gatherings couldn't be loaded just now.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setGatheringsLoad({ status: 'loading' })
+                setGatheringsKey((key) => key + 1)
+              }}
+            >
+              Try again
+            </button>
+          </>
+        )}
+        {groupGatherings !== null && groupGatherings.length === 0 && (
+          <p>No gatherings in this group yet.</p>
+        )}
+        {groupGatherings !== null && groupGatherings.length > 0 && (
+          <>
+            {groupGatherings.some(
+              (gathering) => viewOf(gathering.caller_view).full && gathering.next_occurrence !== null,
+            ) && <p className="field-hint">Times in {zone}.</p>}
+            <ul className="gathering-list" aria-label="The group's gatherings">
+              {groupGatherings.map((gathering) => (
+                <li key={gathering.id}>
+                  <Link className="gathering-item" to={`/gatherings/${gathering.id}`}>
+                    <strong>{gathering.title}</strong>
+                    <p>{listItemLine(gathering, zone, false)}</p>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        <Link to={`/groups/${group.id}/gatherings/new`}>New gathering</Link>
+      </section>
 
       <section className="auth-card" aria-labelledby="members-heading">
         <h2 id="members-heading">Members</h2>

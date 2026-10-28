@@ -262,7 +262,19 @@ interface Props {
   // one of the two things that render the review: this, or anything
   // waiting in the list (the strand rule, point 6 above).
   requiresApproval: boolean
-  occurrences: Occurrence[]
+  // The gathering's dates, for the label on a photograph — or NULL when the
+  // dates are WITHHELD (the photos-only view, CK-80): then no photograph
+  // carries a date label, and no row shows the moment it was added either
+  // (that moment says when the event was, which the view withholds).
+  // Withheld is not empty: null never reads as a gathering with no dates.
+  occurrences: Occurrence[] | null
+  // Whether the caller may add photographs (CK-80): false in the
+  // photos-only view, where the server refuses an upload intent (a member
+  // only shared with sees the photos and adds none — record §11 item 4).
+  // Then no upload form renders, the toggle reads "Show photos", and no
+  // row offers a retry that would open the picker. Default true: every
+  // pre-CK-80 site means exactly what it meant.
+  canUpload?: boolean
   zone: string
   // Overridable for tests only; the product uses the one constant each.
   pollIntervalMs?: number
@@ -510,6 +522,7 @@ export function GatheringMedia({
   organises: organisesProp,
   requiresApproval,
   occurrences,
+  canUpload = true,
   zone,
   pollIntervalMs = POLL_INTERVAL_MS,
   searchDebounceMs = SEARCH_DEBOUNCE_MS,
@@ -943,11 +956,14 @@ export function GatheringMedia({
     fileInput.current?.click()
   }
 
+  // The date a photograph is labelled with — never where the dates are
+  // withheld (`occurrences` null, the photos-only view, CK-80).
   function labelFor(item: MediaItem): string | null {
-    if (item.occurrence_id === null) return null
+    if (occurrences === null || item.occurrence_id === null) return null
     const occurrence = occurrences.find((candidate) => candidate.id === item.occurrence_id)
     return occurrence ? formatInstant(occurrence.starts_at, zone) : null
   }
+  const datesWithheld = occurrences === null
 
   function whoFor(item: MediaItem): string {
     if (item.is_own) return 'You'
@@ -957,7 +973,7 @@ export function GatheringMedia({
   if (!open) {
     return (
       <button type="button" className="link-button" onClick={() => setOpen(true)}>
-        Show photos and add yours
+        {canUpload ? 'Show photos and add yours' : 'Show photos'}
       </button>
     )
   }
@@ -1008,73 +1024,77 @@ export function GatheringMedia({
 
   return (
     <div className="media-block">
-      <form onSubmit={(event) => void upload(event)}>
-        <label htmlFor="media-files">Add photos</label>
-        <input
-          id="media-files"
-          ref={fileInput}
-          type="file"
-          multiple
-          accept={PICKER_ACCEPT}
-          aria-describedby={describedBy(errors, 'items')}
-          onChange={(event) => {
-            setFiles(Array.from(event.target.files ?? []))
-            setErrors(noErrors())
-          }}
-        />
-        {/* The product's first promise about a photograph, in the real
-            order (pipeline record §3): uploaded, then prepared, and the
-            location data removed as part of preparing it. Nothing here
-            says anyone reviews it, screens it, or that the gathering can
-            see it. */}
-        <p className="field-hint">
-          Once uploaded, each photo is prepared for viewing; any location data saved
-          inside the photo is removed as part of that. JPEG, PNG, WebP or HEIC, up to
-          25 MB each. Videos can't be added.
-        </p>
-        {files.length > 0 && (
-          <ul className="media-chosen" aria-label="Chosen files">
-            {files.map((file, index) => (
-              <li key={index}>
-                {file.name}
-                {/* The server's 422 lands on the file it names — batch
-                    refused whole, in its own words. */}
-                <FieldError errors={errors} field={`items.${index}.content_type`} />
-                <FieldError errors={errors} field={`items.${index}.size_bytes`} />
-                <FieldError errors={errors} field={`items.${index}.occurrence_id`} />
-                <FieldError errors={errors} field={`items.${index}.filename`} />
-              </li>
-            ))}
-          </ul>
-        )}
-        <FieldError errors={errors} field="items" />
-        {/* The keeper's own "no room" refusal — and ONLY that one, by its
-            stable code and never its wording — offers the way to more
-            space beneath the server's message: it is their space (CK-74;
-            paid-tiers record §12). The non-keeper form, the ceiling and
-            every other refusal render exactly as before, with no link
-            (CK-50's rule; keeping-explained moment 6 binds the rest). */}
-        {errorType(errors, 'items') === KEEPER_SPACE_FULL && (
+      {/* The upload form is the invited tier's (CK-80): none in the
+          photos-only view, where the server refuses an intent. */}
+      {canUpload && (
+        <form onSubmit={(event) => void upload(event)}>
+          <label htmlFor="media-files">Add photos</label>
+          <input
+            id="media-files"
+            ref={fileInput}
+            type="file"
+            multiple
+            accept={PICKER_ACCEPT}
+            aria-describedby={describedBy(errors, 'items')}
+            onChange={(event) => {
+              setFiles(Array.from(event.target.files ?? []))
+              setErrors(noErrors())
+            }}
+          />
+          {/* The product's first promise about a photograph, in the real
+              order (pipeline record §3): uploaded, then prepared, and the
+              location data removed as part of preparing it. Nothing here
+              says anyone reviews it, screens it, or that the gathering can
+              see it. */}
           <p className="field-hint">
-            <Link to="/plan">Get more space</Link>
+            Once uploaded, each photo is prepared for viewing; any location data saved
+            inside the photo is removed as part of that. JPEG, PNG, WebP or HEIC, up to
+            25 MB each. Videos can't be added.
           </p>
-        )}
-        <button type="submit" disabled={files.length === 0 || progress !== null}>
-          {progress !== null
-            ? `Uploading ${Math.min(progress.done + 1, progress.total)} of ${progress.total}…`
-            : files.length > 1
-              ? `Upload ${files.length} photos`
-              : 'Upload'}
-        </button>
-        {Object.keys(errors.fields).length > 0 && (
-          <p className="field-hint">
-            {refusalNamesAFile
-              ? 'Nothing was uploaded — fix the photo named above and try again.'
-              : 'Nothing was uploaded.'}
-          </p>
-        )}
-        <FormLevelErrors errors={errors} />
-      </form>
+          {files.length > 0 && (
+            <ul className="media-chosen" aria-label="Chosen files">
+              {files.map((file, index) => (
+                <li key={index}>
+                  {file.name}
+                  {/* The server's 422 lands on the file it names — batch
+                      refused whole, in its own words. */}
+                  <FieldError errors={errors} field={`items.${index}.content_type`} />
+                  <FieldError errors={errors} field={`items.${index}.size_bytes`} />
+                  <FieldError errors={errors} field={`items.${index}.occurrence_id`} />
+                  <FieldError errors={errors} field={`items.${index}.filename`} />
+                </li>
+              ))}
+            </ul>
+          )}
+          <FieldError errors={errors} field="items" />
+          {/* The keeper's own "no room" refusal — and ONLY that one, by its
+              stable code and never its wording — offers the way to more
+              space beneath the server's message: it is their space (CK-74;
+              paid-tiers record §12). The non-keeper form, the ceiling and
+              every other refusal render exactly as before, with no link
+              (CK-50's rule; keeping-explained moment 6 binds the rest). */}
+          {errorType(errors, 'items') === KEEPER_SPACE_FULL && (
+            <p className="field-hint">
+              <Link to="/plan">Get more space</Link>
+            </p>
+          )}
+          <button type="submit" disabled={files.length === 0 || progress !== null}>
+            {progress !== null
+              ? `Uploading ${Math.min(progress.done + 1, progress.total)} of ${progress.total}…`
+              : files.length > 1
+                ? `Upload ${files.length} photos`
+                : 'Upload'}
+          </button>
+          {Object.keys(errors.fields).length > 0 && (
+            <p className="field-hint">
+              {refusalNamesAFile
+                ? 'Nothing was uploaded — fix the photo named above and try again.'
+                : 'Nothing was uploaded.'}
+            </p>
+          )}
+          <FormLevelErrors errors={errors} />
+        </form>
+      )}
 
       {/* Search (CK-40): per gathering, by caption, tag or file name; the
           term goes as `q` after the debounce and the server narrows the
@@ -1279,7 +1299,10 @@ export function GatheringMedia({
             // does not lean on that: a non-own failed row — should one ever
             // arrive — gets the line and nothing to press.
             const failedRow = item.status === 'failed' && !deviceProblem
-            const failedRetry = failedRow && item.is_own ? failureRetry(item.failure_reason) : null
+            // A retry opens the picker, so it is offered only where an upload
+            // can succeed (CK-80: never in the photos-only view).
+            const failedRetry =
+              failedRow && item.is_own && canUpload ? failureRetry(item.failure_reason) : null
             const dismissable = failedRow && item.is_own
             // The editor: the caller's own rows only (the server reserves
             // the edit to the uploader — no affordance that cannot succeed),
@@ -1368,7 +1391,8 @@ export function GatheringMedia({
                 )}
                 <p>
                   <strong>{name}</strong> — added by {who}
-                  {label ? ` for ${label}` : ''}, {formatInstant(item.created_at, zone)}
+                  {label ? ` for ${label}` : ''}
+                  {datesWithheld ? '' : `, ${formatInstant(item.created_at, zone)}`}
                 </p>
                 <TagList tags={item.tags} label={`Tags on ${name}`} />
                 <p className={item.status === 'failed' || problem ? 'form-error' : 'field-hint'}>

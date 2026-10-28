@@ -160,6 +160,12 @@ const detailBody = {
   // The caller's role (CK-68's body field; read by the page since CK-69 —
   // a shape change): the signed-in person is the host here.
   caller_role: 'host',
+  // What the caller gets and the group (CK-77/CK-76's body fields; read by
+  // the page since CK-80 — a shape change): the full view of a standalone
+  // gathering. Without `caller_view` the page shows the photos-only view,
+  // which is CK-80's gate-closed rule for a body it does not understand.
+  caller_view: 'full',
+  group: null,
   created_at: '2026-08-25T12:00:00+00:00',
   updated_at: null,
   occurrences: [

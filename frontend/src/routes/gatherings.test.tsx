@@ -183,6 +183,12 @@ test('the list renders each date from the list response alone — one request, n
               host_account_id: 'acct-1',
               // The caller's role (CK-68's body field; a shape change).
               caller_role: 'host',
+              // What the caller gets and the group (CK-77/CK-76's body fields; read by
+              // the page since CK-80 — a shape change): the full view of a standalone
+              // gathering. Without `caller_view` the page shows the photos-only view,
+              // which is CK-80's gate-closed rule for a body it does not understand.
+              caller_view: 'full',
+              group: null,
               created_at: '2026-08-25T12:00:00+00:00',
               updated_at: null,
               next_occurrence: { id: 'occ-1', starts_at: startsAt },
@@ -201,6 +207,106 @@ test('the list renders each date from the list response alone — one request, n
   const expectedDate = formatInstant(startsAt, profileZone)
   expect(screen.getByText((content) => content.includes(expectedDate))).toBeTruthy()
   expect(fetchMock).toHaveBeenCalledTimes(1)
+})
+
+// ---- CK-80: the list knows groups and the photos-only view ----
+
+function listItem(over: Record<string, unknown> = {}) {
+  return {
+    id: 'g-1',
+    gathering_type: 'potluck',
+    title: 'Test Potluck',
+    memorial_decedent_name: null,
+    requires_approval: false,
+    requires_approval_override: null,
+    rsvp_list_visibility: 'INVITEES',
+    publication_state: 'live',
+    created_by_account_id: 'acct-1',
+    host_account_id: 'acct-1',
+    caller_role: 'host',
+    caller_view: 'full',
+    group: null,
+    created_at: '2026-08-25T12:00:00+00:00',
+    updated_at: null,
+    next_occurrence: { id: 'occ-1', starts_at: wallClockToInstant('2035-01-01T18:00', profileZone) },
+    occurrence_count: 1,
+    ...over,
+  }
+}
+
+test('a group’s gathering carries its group’s name, and a photos-only item reads "You can see its photos" in place of the date', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            gatherings: [
+              listItem({ id: 'g-1', title: 'Sunday Dinner', group: { id: 'grp-1', name: 'The Lees' } }),
+              listItem({
+                id: 'g-2',
+                title: 'The Party',
+                group: { id: 'grp-1', name: 'The Lees' },
+                caller_role: null,
+                caller_view: 'memory',
+                rsvp_list_visibility: null,
+                next_occurrence: null,
+                occurrence_count: null,
+              }),
+              listItem({ id: 'g-3', title: 'Book Club' }),
+            ],
+          }),
+          { status: 200 },
+        ),
+      ),
+    ),
+  )
+  renderWithAuth(<Gatherings />)
+  await screen.findByText('Sunday Dinner')
+  const date = formatInstant(wallClockToInstant('2035-01-01T18:00', profileZone), profileZone)
+  const lineOf = (title: string) =>
+    screen.getByText(title).closest('a')?.querySelector('p')?.textContent
+  expect(lineOf('Sunday Dinner')).toBe(`Potluck · ${date} · The Lees`)
+  expect(lineOf('The Party')).toBe('Potluck · You can see its photos · The Lees')
+  expect(lineOf('Book Club')).toBe(`Potluck · ${date}`)
+})
+
+test('the empty state says what the list holds — gatherings you start or are invited to — and never "keep"', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() => Promise.resolve(new Response(JSON.stringify({ gatherings: [] }), { status: 200 }))),
+  )
+  renderWithAuth(<Gatherings />)
+  expect(await screen.findByText('Gatherings you start or are invited to will be listed here.')).toBeTruthy()
+  // MOVED AT CK-80, with its reason: the CK-17 sentence "The gatherings you
+  // keep will live here — every one you create or choose to hold on to." was
+  // false from CK-77 — keeping lets no one in — and is pinned ABSENT now.
+  expect(document.body.textContent).not.toMatch(/keep|hold on to/i)
+})
+
+test('a failed read says so and Try again re-reads once per press, through the loading state, until the list renders', async () => {
+  let fail = true
+  const fetchMock = vi.fn(() =>
+    Promise.resolve(
+      fail
+        ? new Response('{}', { status: 500 })
+        : new Response(JSON.stringify({ gatherings: [listItem()] }), { status: 200 }),
+    ),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  renderWithAuth(<Gatherings />)
+  const line = await screen.findByText('Something went wrong loading your gatherings.')
+  expect(line.getAttribute('role')).toBe('alert')
+  // MOVED AT CK-80, with its reason: the sentence lost its "Try again." —
+  // there was nothing to press — and the button carries it (CK-74.1's idiom).
+  expect(document.body.textContent).not.toContain('Try again.')
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+  await screen.findByText('Something went wrong loading your gatherings.')
+  fail = false
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  await screen.findByText('Test Potluck')
+  expect(fetchMock).toHaveBeenCalledTimes(3)
 })
 
 // ---- CK-18: the editing surface on /gatherings/:id ----
@@ -231,6 +337,12 @@ function detailBody(over: Record<string, unknown> = {}) {
     created_by_account_id: 'acct-1',
     host_account_id: 'acct-1',
     caller_role: hostAccountId === 'acct-1' ? 'host' : null,
+    // What the caller gets and the group (CK-77/CK-76's body fields; read by
+    // the page since CK-80 — a shape change): the full view of a standalone
+    // gathering. Without `caller_view` the page shows the photos-only view,
+    // which is CK-80's gate-closed rule for a body it does not understand.
+    caller_view: 'full',
+    group: null,
     created_at: '2026-08-25T12:00:00+00:00',
     updated_at: null,
     occurrences: [
