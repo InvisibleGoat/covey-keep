@@ -1,17 +1,20 @@
 # CoveyKeep — Repo Operational Guide: history (moved from `CLAUDE.md`)
 
-**Version:** 1.1.0
-**Last Updated:** 2026-10-28
+**Version:** 1.2.0
+**Last Updated:** 2026-10-29
 **Source:** Moved from the code-root `CLAUDE.md` v1.87.0 (`23bc47d`) at its 1.88.0 (2026-10-28) — the sixth doc audit's condensing proposal (Hub `covey-keep/audits/2026-10-28-doc-audit.md` 1.2.0 §19), applied at Steven's go. The `**Source:**` line and 87 changelog entries — versions 1.84.0 down to 1.0.0 (2026-10-25 back to 2026-08-17) — moved here byte for byte and in their original order.
 **Audience:** Any session that needs why the code-root `CLAUDE.md` changed, and when. Not auto-loaded: Claude Code loads `CLAUDE.md` alone.
 
 **Changelog:**
+- **1.2.0** (2026-10-29): One section appended at the code-root `CLAUDE.md` 1.91.0, the sixth doc audit's last open item: the three Deploys bullets — the publication gate (CK-41), Groups (CK-45) and the sweep (CK-59) — as they stood in v1.90.0, before each was rewritten to its current state. They carried no amendment mark, so 1.89.0's rewrite had not reached them. Verbatim and in their original order; above them only this entry, the version and date lines and the paragraph saying what 1.2.0 added are new.
 - **1.1.0** (2026-10-28): Two sections appended at the code-root `CLAUDE.md` 1.89.0, the last piece of the sixth doc audit's condensing proposal (§19): the directory map as it stood in v1.88.0 (177 lines, 178,813 bytes), replaced there by one line per tracked file, and the nine Deploys bullets that carried a restatement or another inline amendment (23,880 bytes), as they stood before each was rewritten to its current state. Both verbatim and in their original order; above them only this entry, the version line and the paragraph saying what 1.1.0 added are new. 453,572 → 658,270 bytes.
 - **1.0.0** (2026-10-28): Initial creation. The live file keeps its newest entries and a one-line pointer to this file.
 
 **Why this file exists, and what it is not.** `CLAUDE.md` is loaded into every Claude Code session in the code root, and these 87 entries were 53.9% of it. **This is not a summary.** Every entry below is the text that stood in `CLAUDE.md`, unaltered and in its original order, newest first. The move was proved before it was made: the live file with its two pointers swapped back for this text equals `CLAUDE.md` at `23bc47d` byte for byte, and every line here appears once here and nowhere in the live file.
 
 **What 1.1.0 added.** Two sections at the end, moved from `CLAUDE.md` at its 1.89.0 (2026-10-28), the last step of the same proposal: the directory map as it stood in v1.88.0, one entry per folder carrying its files' descriptions with their history phase by phase, which `CLAUDE.md` replaced with one line per tracked file saying what the file is now; and the nine Deploys bullets that carried a *Restated at CK-NN* chain or another inline amendment, as they stood before `CLAUDE.md` rewrote each to its current state. They are verbatim too: every line of the old map and of the nine bullets is in those sections once, in its original order, and nowhere in the live file except the map's two fence lines, proved against `CLAUDE.md` at `4056268`.
+
+**What 1.2.0 added.** One section at the end, moved from `CLAUDE.md` at its 1.91.0 (2026-10-29): the three Deploys bullets that carried no amendment mark and still described their phase's moment, as they stood before `CLAUDE.md` rewrote each to its current state. Verbatim too, proved against `CLAUDE.md` at `ef8eee3`.
 
 ---
 ## The `**Source:**` line, as it stood in `CLAUDE.md` v1.87.0
@@ -591,3 +594,107 @@ The nine Deploys bullets that carried a *Restated at CK-NN* chain or another inl
   row is replaced by the link's landing, and joining is built — the bullet
   below. Restated at CK-80: 3c is built too — a group's gatherings, the
   places, the photos-only view — the bullet after it.)*
+
+---
+## Deploys bullets restated at 1.91.0, as they stood in `CLAUDE.md` v1.90.0
+
+The three Deploys bullets that carried no amendment mark, so the 1.89.0 rewrite did not reach them, verbatim and in their original order, as they stood before `CLAUDE.md` 1.91.0 (2026-10-29) rewrote each to say the current state; the other bullets stayed where they were.
+
+- The publication gate (CK-41; migration 0019): **whether a photograph
+  waits for the host is a default the product sets and the host owns,
+  resolved through a ladder at publish time and never frozen at create**
+  (`app/services/publication.py`; `decisions/2026-09-09-consent-gate-defaults.md`
+  2.0.0 §1): the gathering's own setting (`gatherings.requires_approval` —
+  the host's choice, written since CK-44 through `PATCH /gatherings/{id}`'s
+  `requires_approval_override`), else the home group's default
+  (empty today), else the type's template (`capability_profiles.requires_approval`,
+  reachable only through a home group; empty today), else the join shape
+  (privately joined does not wait; a link anyone can use does — the share
+  link will be its producer), with an ORGANIZATION host gated as a
+  backstop beneath the two rungs a person sets. **Every gathering today
+  resolves open**, so the worker moves `pending → live` in the same
+  guarded statement that moves `status` to `ready`; a gathering that
+  resolves open is **unreviewed**, and no copy may call it safe, screened,
+  reviewed or consent-verified. **`requires_approval` is nullable with no
+  server default — NULL means inherit — and creation writes nothing to
+  it** (the deliberate inversion of database-schema decision 22; do not
+  "fix" the create path back). Every gathering body carries
+  `requires_approval` as the EFFECTIVE value beside
+  `requires_approval_override`, the host's own — **readable and not
+  writable until CK-44, which ships after CK-43's review surface — built;
+  writable since CK-44** (`true` / `false` / an explicit `null` = inherit;
+  the effective value still refused — the switch bullet below). The
+  resolver's `source` is not exposed — CK-44 did not need it (what the
+  accuracy statement needs is the inherited answer, and today every
+  gathering the switch can render on inherits open; the trigger is the
+  share link or rung 2). `_visible_media` is untouched.
+  No `groups` column, no belongs-to link, no share link, no profile rows.
+- Groups (CK-45; migration 0021): **the first surface on a table that has
+  existed since 0001 with no writer** — `app/api/groups.py`, the ninth
+  router (`decisions/2026-09-14-groups-get-a-surface.md`). `POST /groups`
+  creates a **HOUSEHOLD** group — and only that: `TEAM`, `CONGREGATION`
+  and `CLUB` are schema-valid and endpoint-refused (a field-level 422
+  naming rung 2 of the publication ladder — the CK-25 `SMS` shape, binding
+  until the home group's default exists; `capability_profiles` keeps its
+  one seeded row and the router seeds nothing). **The creator is admin
+  and first member in one transaction** — a group never exists with zero
+  members, even transiently (verifier-asserted on every deployed row) —
+  with the membership's `household_id`, `sub_group_id` and `role_id` left
+  NULL: no reader consumes them, and one of the seeded rungs is
+  `observer`, the retired word. `GET /groups` (member-or-admin, one
+  statement), `GET /groups/{id}`, `PATCH /groups/{id}` (rename, admin only;
+  `name` never clearable; `updated_at` stamped by patches alone).
+  **Both authorization checks live on the PERSON spine** —
+  `groups.admin_person_id`, `memberships.person_id` — and the gatherings
+  rule (an account fact plus a person fact) does not transfer; do not reach
+  for `account_id` here. 404-not-403 byte-identical to a missing id;
+  `member_count` computed at read time; **no body carries a roster**, an
+  email, or a person id beyond the two admin columns; `name` is never
+  logged. **No delete, no leave**: `gathering_invitations.group_id`
+  carries no delete rule, so a group delete would 500 exactly as
+  `delete_occurrence` did before 0015 — the rule is the delete phase's.
+  **`POST /me/delete` relinquishes group admin** (both columns NULL
+  wherever the person held them, the backup never promoted) **and keeps
+  the membership** — `services/groups.py`, beside the kept-status lapse.
+  Not built: membership of anyone else, invitations, sub-groups, the
+  belongs-to link and the group default (the next phase), the thread.
+- The sweep (CK-59; no migration): **Phase B — the bin's automatic half,
+  shipped DARK.** `services/destruction.py::sweep_expired_bin` finds the
+  `ready` + `removed` rows whose `removed_at` is at or past
+  `now − REMOVED_BIN` — the same constant `_visible_media` reads, so the
+  two clocks the bin record §6.1 names meet at one instant: nothing is
+  swept while someone could still see it, and nothing sits
+  invisible-and-still-charged past the window — and calls
+  `mark_for_destruction` on each **row by row, never a bulk UPDATE**,
+  committing per row: the statement's own `ready` guard is the
+  concurrency safety (two workers cannot double-decrement) and it only
+  works per row. **It marks; the CK-54 worker step destroys** — no
+  second routine, no second decrement, no `delete_published_object` call
+  here. **No memorial branch, no type branch, no account branch, and NO
+  FIXTURE EXEMPTION** — no id allowlist, no date floor (bin record §7.4,
+  §8; each decided). **The worker runs it only when `SWEEP_ENABLED` is
+  on** — `WorkerSettings.sweep_enabled: bool = False`, the seventh
+  worker variable, `"false"` in `render.yaml` until CK-73.2 and `"true"`
+  since — ON on the deploy since `(gt)`, 2026-10-19 — turned on by hand in the
+  worker's dashboard with no deploy — and only from an idle poll (the
+  queue drains first, always), once per `SWEEP_INTERVAL` (15 min; the
+  first pass at the first idle poll after boot), at most `SWEEP_BATCH`
+  (20) rows a pass, because every mark is a destroy job claimed AHEAD of
+  any fresh upload (`claim_next` orders by `created_at` across both
+  ladders) and twenty bounds that at ≈11 s; a pass that marked anything
+  is drained before the loop sleeps, so `--once` with the switch on is
+  the operator's sweep from a shell. One INFO line per pass that marked
+  anything — the count, nothing else; silence otherwise. **The module
+  boundary is the caller set**: `destruction.py` holds what the API and
+  the worker both call and never imports `ingest`, `processing`,
+  `storage` or botocore (the Gotcha below); `handle_destroying` stays in
+  `ingest.py`. **The two decline rows** (`ck43-eg-decline.png`,
+  `ck44-em-decline.png`, `removed_at` 2026-09-14, the project's only
+  decline evidence) are captured in CK-59's report as far as this
+  machine could reach them; the psql row state is Steven's BEFORE the
+  switch, and they go on the first pass at or after **2026-10-14** with
+  it on. Not built: Phase C (the bin surface, empty-the-bin, every
+  user-facing quota surface), restore-from-bin, a per-account bin
+  ceiling; CK-57 (what a `destroying` row's `last_error` means) should
+  follow, because the sweep makes a stuck destruction likely rather than
+  theoretical once it is on.
