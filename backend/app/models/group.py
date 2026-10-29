@@ -76,10 +76,9 @@ class Group(Base):
     # the upload gate charges this account for a group gathering's
     # photographs (CK-50's resolver, its first real subject at CK-76); an
     # ARCHIVED group still keeps its gatherings, and the resolver never
-    # reads the archive state (§3.1). No lapse stamp lives here yet: where
-    # a group's stamp lives is v2 §12 item 9's group half, still open —
-    # CK-76 writes the first gathering that resolves through a group and
-    # decides nothing about the stamp.
+    # reads the archive state (§3.1). No lapse stamp lives here, and none
+    # will: v2 §12 item 9's group half was RETIRED on 2026-10-29, because
+    # nothing reads a lapse stamp while the lapse ladder is retired.
     # Indexed since 0024 (CK-51a; `ix_groups_keeper_account_id`), with the
     # gatherings one: account_usage's WHERE names both.
     keeper_account_id: Mapped[Optional[UUID]] = mapped_column(

@@ -732,9 +732,9 @@ async def lapse_kept_statuses(
     written, on the group or on its gatherings: since CK-76 a gathering in
     a group resolves through the group's keeper, so this write leaves
     every one of them Unkept (the resolver's third rung) and unstamped.
-    Where a group's lapse stamp would live is v2 §12 item 9's group half,
-    still open, and no stamp has a reader while the lapse ladder is
-    retired; (4)
+    v2 §12 item 9's group half, where a group's lapse stamp would live,
+    was RETIRED on 2026-10-29: no stamp lives on a group, because no
+    stamp has a reader while the lapse ladder is retired; (4)
     every `gathering_co_hosts` row this account holds is DELETED (CK-68;
     co-hosts §8's DATA-HANDLING: an anonymized account's co-hosting ends
     with its deletion) — deleted, not relinquished, because a row here IS

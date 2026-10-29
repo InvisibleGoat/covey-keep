@@ -209,9 +209,9 @@ class Gathering(Base):
     # inert). A gathering with a keeper always has NULL here, and a memorial
     # has NULL regardless (it never enters grace). Stays on the GATHERING
     # under v2 (record §12 item 9's gathering half, decided at CK-49b);
-    # where a GROUP's stamp would live is the item's group half, still open
-    # — since CK-76 a gathering resolves through its group, and none is
-    # stamped when the group loses its keeper.
+    # and no stamp lives on a GROUP: the item's group half was RETIRED on
+    # 2026-10-29 — since CK-76 a gathering resolves through its group, and
+    # none is stamped when the group loses its keeper.
     last_keeper_left_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
