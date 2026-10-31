@@ -1,0 +1,120 @@
+/* The page: the display face, the body, the paper grain and the ground
+   glow, focus, the type, and motion (CK-81). Each recipe is the mockup's
+   (app-template.html lines 71–658) — the grain and the glow verbatim —
+   with every colour read from tokens.css. */
+
+/* Source Serif 4, self-hosted from the app's own origin: a variable font
+   covering 400–600, SIL OFL 1.1, its licence beside it in public/fonts/. */
+@font-face {
+  font-family: "Source Serif 4";
+  src: url("/fonts/sourceserif.woff2") format("woff2");
+  font-weight: 400 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* A layout rule must never un-hide an element. */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--pg-bg);
+  color: var(--pg-text);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The paper grain — the recipe verbatim; its opacity is .09 in light and
+   0 in dark ("paper by day, clean by night"). */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='p'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0' intercept='1'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23p)'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+  background-repeat: repeat;
+  mix-blend-mode: multiply;
+  opacity: var(--pg-grain-opacity);
+}
+
+/* The ground glow — the recipe verbatim, from 768px. */
+@media (min-width: 768px) {
+  body {
+    background-image: radial-gradient(1200px 640px at 50% -12%, var(--pg-ground-glow), var(--pg-ground-glow-0) 60%),
+      radial-gradient(1500px 1100px at 50% 32%, var(--pg-ground-glow), var(--pg-ground-glow-0) 72%);
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+  }
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* Focus: a 3px solid accent outline, offset 2px, wherever focus is shown. */
+:focus-visible {
+  outline: 3px solid var(--pg-events-accent);
+  outline-offset: 2px;
+}
+
+/* The type: headings in Source Serif 600; the body is the system stack. */
+h1,
+h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+
+h1 {
+  font-size: clamp(1.875rem, 1.5rem + 1.6vw, 2.5rem);
+  line-height: 1.08;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+
+h2 {
+  font-size: 1.375rem;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+a {
+  color: var(--ck-active-ink);
+  text-underline-offset: 3px;
+}
+
+/* The waiting quail breathes (the mockup's 1.6s). */
+@keyframes breathe {
+  50% {
+    transform: scale(0.92);
+    opacity: 0.7;
+  }
+}
+
+/* Reduced motion turns every transition and animation off. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}

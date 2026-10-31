@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { PRODUCT_NAME, TAGLINE } from '../brand'
+import { Quail, SignInPrints } from '../components/AuthArt'
 import { apiFetch, TOS_VERSION } from '../lib/api'
 import {
   browserSupportsWebAuthn,
@@ -74,72 +75,87 @@ export function SignIn() {
     setPasskeyState('idle')
   }
 
+  // The mockup's sign-in (CK-81; screens 17 and 18): the three prints, then
+  // the lockup — the quail in front of the name on one line, the tagline
+  // beneath (Steven, 2026-10-14) — and the card; two columns from 900px.
+  // Every word is the screen's own, and the heading is still the product
+  // name alone: the quail is decorative.
   return (
-    <main className="auth-screen">
-      <h1>{PRODUCT_NAME}</h1>
-      <p className="tagline">{TAGLINE}</p>
+    <main className="auth-screen auth-split">
+      <SignInPrints />
+      <div className="auth-side">
+        <div className="auth-brand">
+          <h1 className="lockup">
+            <Quail />
+            {PRODUCT_NAME}
+          </h1>
+          <p className="tagline">{TAGLINE}</p>
+        </div>
 
-      {submitState === 'sent' ? (
-        <section className="auth-card">
-          <h2>Check your email</h2>
-          {/* Mirrors the API's non-enumerating wording — never reveal whether
-              the address was known. */}
-          <p>If that address can receive email, a sign-in link is on its way.</p>
-          <p>The link works once and expires in 15 minutes.</p>
-          <button type="button" className="link-button" onClick={() => setSubmitState('idle')}>
-            Use a different address
-          </button>
-        </section>
-      ) : (
-        <form className="auth-card" onSubmit={(event) => void handleSubmit(event)}>
-          <label htmlFor="email">Email address</label>
-          <input
-            id="email"
-            type="email"
-            required
-            autoComplete="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-          />
-          <label className="tos-row">
-            <input
-              type="checkbox"
-              checked={tosAccepted}
-              onChange={(event) => setTosAccepted(event.target.checked)}
-            />
-            <span>
-              I've read the <Link to="/tos">private test notice</Link> and agree to take part
-            </span>
-          </label>
-          <button type="submit" disabled={!tosAccepted || submitState === 'submitting'}>
-            {submitState === 'submitting' ? 'Sending…' : 'Email me a sign-in link'}
-          </button>
-          {submitState === 'rateLimited' && (
-            <p className="form-error">Too many link requests just now — wait a few minutes and try again.</p>
-          )}
-          {submitState === 'failed' && (
-            <p className="form-error">Something went wrong sending the link. Try again.</p>
-          )}
-          {/* Secondary, never primary or default (sign-in-ergonomics §4):
-              passkeys are the security path for people who already know what
-              they are — the emailed link stays the way in. Hidden entirely
-              where WebAuthn is unavailable. No address is collected on this
-              path, in any form. */}
-          {passkeySupported && (
-            <button
-              type="button"
-              className="link-button"
-              disabled={passkeyState === 'working'}
-              onClick={() => void handlePasskey()}
-            >
-              {passkeyState === 'working' ? 'Waiting for your passkey…' : 'Use a passkey'}
+        {submitState === 'sent' ? (
+          <section className="auth-card">
+            <h2>Check your email</h2>
+            {/* Mirrors the API's non-enumerating wording — never reveal whether
+                the address was known. */}
+            <p>If that address can receive email, a sign-in link is on its way.</p>
+            <p>The link works once and expires in 15 minutes.</p>
+            <button type="button" className="link-button" onClick={() => setSubmitState('idle')}>
+              Use a different address
             </button>
-          )}
-          {passkeyError && <p className="form-error">{passkeyError}</p>}
-        </form>
-      )}
+          </section>
+        ) : (
+          <form className="auth-card" onSubmit={(event) => void handleSubmit(event)}>
+            <div className="field">
+              <label htmlFor="email">Email address</label>
+              <input
+                id="email"
+                type="email"
+                required
+                autoComplete="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+              />
+            </div>
+            <label className="tos-row">
+              <input
+                type="checkbox"
+                checked={tosAccepted}
+                onChange={(event) => setTosAccepted(event.target.checked)}
+              />
+              <span>
+                I've read the <Link to="/tos">private test notice</Link> and agree to take part
+              </span>
+            </label>
+            <button type="submit" disabled={!tosAccepted || submitState === 'submitting'}>
+              {submitState === 'submitting' ? 'Sending…' : 'Email me a sign-in link'}
+            </button>
+            {submitState === 'rateLimited' && (
+              <p className="form-error">Too many link requests just now — wait a few minutes and try again.</p>
+            )}
+            {submitState === 'failed' && (
+              <p className="form-error">Something went wrong sending the link. Try again.</p>
+            )}
+            {/* Secondary, never primary or default (sign-in-ergonomics §4):
+                passkeys are the security path for people who already know what
+                they are — the emailed link stays the way in. Hidden entirely
+                where WebAuthn is unavailable. No address is collected on this
+                path, in any form. */}
+            {passkeySupported && (
+              <button
+                type="button"
+                className="link-button"
+                disabled={passkeyState === 'working'}
+                onClick={() => void handlePasskey()}
+              >
+                {passkeyState === 'working' ? 'Waiting for your passkey…' : 'Use a passkey'}
+              </button>
+            )}
+            {passkeyError && <p className="form-error">{passkeyError}</p>}
+          </form>
+        )}
 
-      <p className="api-status">API: {apiStatus}</p>
+        <p className="api-status">API: {apiStatus}</p>
+      </div>
     </main>
   )
 }

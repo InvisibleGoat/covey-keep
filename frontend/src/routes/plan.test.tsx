@@ -189,8 +189,12 @@ test('the free tier: the current card, More space with both paid plans, Recommen
   stubRoutes([{ method: 'GET', match: endsWith('/billing'), response: () => json(200, body()) }])
   renderPlan()
   await openScreen()
-  // ADJUSTED from the prototype: "gatherings", because no group can be kept yet.
-  expect(screen.getByText('Space for the photos in the gatherings you keep.')).toBeTruthy()
+  // MOVED at CK-81: the mockup's lede (decisions/2026-10-31-the-design-and-how-it-is-merged.md
+  // §1.4), true since CK-76 charged a group's gatherings to its keeper. From CK-74 to
+  // CK-81 it read "in the gatherings you keep", adjusted while no group could be kept;
+  // that line is pinned absent.
+  expect(screen.getByText('Space for the photos in the groups and gatherings you keep.')).toBeTruthy()
+  expect(screen.queryByText('Space for the photos in the gatherings you keep.')).toBeNull()
 
   const current = currentCard()
   expect(within(current).getByText('Current plan')).toBeTruthy()
@@ -690,9 +694,11 @@ test('the source: the product is named from brand.ts, the honey colour is unused
   // The brand rule (CK-14): no spelling of the product name in the source.
   for (const source of [planSource, billingSource]) {
     expect(source).not.toMatch(/covey ?keep/i)
-    // No code may use honey — its values or its tokens — until paper-goose
-    // registers it (the honey record §3); the word may appear in a comment
-    // saying exactly that.
+    // Honey is reached only through its tokens, in CSS, on the recommended
+    // card (CK-81; the honey record as amended 2026-10-31 — no registration
+    // waits on it now): never its values or its tokens in this source. The
+    // card carries one class, and App.css alone gives it honey
+    // (styles/look.test.ts pins that rule).
     expect(source).not.toMatch(/#F2BE4E|#E8B64A|--pg-events-honey|honey-ink|honey-tint/i)
   }
   // A Checkout or portal URL never enters state: the component holds no

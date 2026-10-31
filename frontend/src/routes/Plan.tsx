@@ -19,9 +19,11 @@
 // cancelled Checkout is the ordinary screen with nothing changed and
 // nothing said.
 //
-// Built in the app's current styles: the prototype's look belongs to the
-// theming phase, and the honey colour is not registered yet, so nothing
-// here may use it.
+// The look is the mockup's (CK-81; screen 14): the current plan on the
+// hero gradient, tagged Current plan, its meter and its button in the
+// on-hero tokens; the recommended plan badged and bordered in honey through
+// one class on its card (`plan-card-recommended`) — honey lives in App.css
+// alone, reached only through its tokens, and never in this file.
 //
 // CK-74.1 — the screen says only what is true. On a plan that is ending
 // the Free card carries no "To go back to free, cancel in Manage your
@@ -36,6 +38,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { Quail } from '../components/AuthArt'
 import {
   BACK_TO_FREE_LINE,
   type Billing,
@@ -187,6 +190,7 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
       <main className="auth-screen">
         <h1>Your plan</h1>
         <section className="plan-wait" role="status">
+          <Quail />
           <p>{WAITING_LINE}</p>
           {slow && <p className="field-hint">{SLOW_LINE}</p>}
         </section>
@@ -226,13 +230,13 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
   const percent = usagePercent(billing.used, billing.allowance)
 
   return (
-    <main className="auth-screen">
+    <main className="auth-screen plan-screen">
       <h1>Your plan</h1>
-      {/* ADJUSTED from the prototype's "groups and gatherings" while no group
-          could be kept (keeping-explained §3). Since CK-76 a gathering in a
-          group is charged to the group's keeper; whether this line should
-          name groups again is a copy decision not yet made. */}
-      <p>Space for the photos in the gatherings you keep.</p>
+      {/* The mockup's lede (decisions/2026-10-31-the-design-and-how-it-is-merged.md
+          §1.4): true since CK-76 charged a group's gatherings to its keeper.
+          From CK-74 to CK-81 it read "in the gatherings you keep", adjusted
+          while no group could be kept (keeping-explained §3). */}
+      <p className="lede">Space for the photos in the groups and gatherings you keep.</p>
 
       <section className="auth-card plan-card plan-current" aria-labelledby="plan-current-tag">
         <p className="plan-tag" id="plan-current-tag">
@@ -258,6 +262,7 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
         {paid && (
           <button
             type="button"
+            className="btn-onhero"
             onClick={() => void manage('manage')}
             disabled={acting !== null}
           >
@@ -279,13 +284,17 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
           const recommended = !paid && offer.plan === RECOMMENDED_PLAN
           return (
             <li key={key}>
-              <section className="auth-card plan-card" aria-labelledby={headingId}>
+              <section
+                className={recommended ? 'auth-card plan-card plan-card-recommended' : 'auth-card plan-card'}
+                aria-labelledby={headingId}
+              >
                 {recommended && <p className="plan-recommended">{RECOMMENDED_LABEL}</p>}
                 <h3 id={headingId}>{formatPhotos(offer.allowance)}</h3>
                 <p>{priceLabel(offer.monthly_price_cents)}</p>
                 {offer.plan !== null && offer.monthly_price_cents !== null && !paid && (
                   <button
                     type="button"
+                    className={recommended ? 'btn-primary' : undefined}
                     onClick={() => void upgrade(offer.plan as BillingPlanId)}
                     disabled={acting !== null}
                   >
@@ -318,7 +327,15 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
         })}
       </ul>
 
-      <p>{NO_DATA_LINE}</p>
+      <p className="plan-noads">
+        {/* The mockup's check-in-circle, hand-drawn on a 24-unit grid in
+            currentColor — no icon set. Decorative: the line says it. */}
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="8.5" />
+          <path d="M8.4 12.3l2.4 2.4 4.9-5.1" />
+        </svg>
+        {NO_DATA_LINE}
+      </p>
       <p className="field-hint">{RENEWAL_LINE}</p>
       <Link to="/settings">Back to settings</Link>
     </main>

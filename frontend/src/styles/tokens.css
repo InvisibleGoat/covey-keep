@@ -1,0 +1,160 @@
+/* CoveyKeep's tokens — THE ONLY PLACE A COLOUR IS NAMED (CK-81).
+
+   The values are the design chat's mockup, exactly as the snapshot spells
+   them (D:\projects\temp\design\mockup-2026-10-30\source\app-template.html,
+   lines 8–69; decisions/2026-10-31-the-design-and-how-it-is-merged.md).
+   CoveyKeep owns every token. The names stay the mockup's — `--pg-*`,
+   `--pg-events-*`, `--ck-*` — so the mockup and the code read one to one;
+   a name is a label here, not membership of a family.
+
+   THE THEME IS THE ATTRIBUTE. `index.html` carries `data-theme="light"`
+   statically, so the page paints light before any script runs; dark is
+   `data-theme="dark"` on <html>, set by hand until CK-82 builds the switch.
+   No stylesheet asks the device which scheme it prefers, on purpose: the
+   app never follows the device's setting, and stores no theme.
+
+   Every stylesheet but this one names colours ONLY through these tokens —
+   no hex, rgb(), rgba() or hsl() — and so does every .ts and .tsx (pinned
+   by styles/look.test.ts). A new colour is a new token here, in BOTH theme
+   blocks: the two blocks always carry the same names (pinned). Not here:
+   `--ck-bezel` (the prototype's phone frame) and the landing page's
+   `--ck-pledge-*` set, neither of which the app draws. */
+
+/* What does not change with the theme: the type, the radii, the mat, and
+   the lifted card's two shadows, composed from the per-theme layers below
+   (resolved on <html>, where the theme attribute sits). No colour here. */
+:root {
+  --font-display: "Source Serif 4", "Iowan Old Style", Georgia, serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --r-card: 18px;
+  --r-photo: 12px;
+  --mat: 7px;
+  /* the lifted card: always on, for every card (the record §2) */
+  --ck-lift: inset 0 1px 0 var(--ck-lift-hi), 0 1px 2px var(--ck-lift-near), 0 12px 28px -14px var(--ck-lift-mid), 0 34px 70px -34px var(--ck-lift-far);
+  --ck-lift-hover: inset 0 1px 0 var(--ck-lift-hi), 0 2px 5px var(--ck-lift-near), 0 20px 38px -16px var(--ck-lift-mid), 0 48px 90px -36px var(--ck-lift-far);
+}
+
+/* Light — the default, and the only theme a person sees until CK-82. */
+:root,
+:root[data-theme="light"] {
+  /* the neutrals */
+  --pg-bg: #FEFEFC;
+  --pg-surface: #FFFFFF;
+  --pg-surface-edge: #ECE9E1;
+  --pg-hairline: #E4E1D8;
+  --pg-text: #363636;
+  --pg-mark: #464644;
+  --pg-grain-opacity: .09;
+  --pg-ground-glow: rgba(74,70,60,.06);
+  --pg-ground-glow-0: rgba(74,70,60,0);
+  /* the accent trio */
+  --pg-events-accent: #217A79;
+  --pg-events-accent-2: #1B4A52;
+  --pg-events-accent-ink: #FFFFFF;
+  /* the hero trio: the teal pair as a deep gradient, no new hue — light
+     aliases the accent pair, dark carries literals so the far end never
+     goes pale */
+  --pg-events-hero-from: var(--pg-events-accent);
+  --pg-events-hero-to: var(--pg-events-accent-2);
+  --pg-events-hero-ink: #FFFFFF;
+  /* honey: ONE meaning, something CoveyKeep recommends or celebrates
+     (decisions/2026-10-14-honey-a-second-colour-with-one-meaning.md). A
+     fill carrying its own ink, never text on paper, never a state or an
+     action. Referenced by the recommended plan card's rules and nothing
+     else (pinned). */
+  --pg-events-honey: #F2BE4E;
+  --pg-events-honey-ink: #3A2900;
+  --pg-events-honey-tint: rgba(242,190,78,.2);
+  /* CoveyKeep's semantic layer */
+  --ck-muted: #66655F;
+  --ck-tint: rgba(33,122,121,.09);
+  --ck-active-ink: #1B4A52;
+  --ck-empty: #EDF4F3;
+  --ck-on-photo: #FFFFFF;
+  --ck-on-photo-ink: #363636;
+  --ck-scrim: rgba(14,16,18,.80);
+  --ck-scrim-mid: rgba(14,16,18,.38);
+  --ck-scrim-0: rgba(14,16,18,0);
+  --ck-frost: rgba(255,255,255,.88);
+  --ck-frost-ink: #363636;
+  --ck-overlay: rgba(20,22,25,.42);
+  --ck-stage: #0B0C0E;
+  --ck-error: #B3261E;
+  --ck-lift-hi: rgba(255,255,255,.85);
+  --ck-lift-near: rgba(54,54,54,.07);
+  --ck-lift-mid: rgba(54,54,54,.22);
+  --ck-lift-far: rgba(54,54,54,.26);
+  /* the mockup's literals outside its tokens, made tokens where the app
+     uses them (CK-81): the hero card's sheen, rule, meter, tag and button,
+     and the recommended badge's shadow — the same in both themes */
+  --ck-hero-sheen: rgba(255,255,255,.16);
+  --ck-hero-sheen-0: rgba(255,255,255,0);
+  --ck-hero-rule: rgba(255,255,255,.28);
+  --ck-hero-track: rgba(255,255,255,.24);
+  --ck-hero-tag-edge: rgba(255,255,255,.4);
+  --ck-hero-tag-fill: rgba(255,255,255,.16);
+  --ck-on-hero-meter: #FFFFFF;
+  --ck-on-hero-button: #FFFFFF;
+  --ck-on-hero-button-hover: #F1F6F6;
+  --ck-badge-shadow: 0 4px 12px -6px rgba(0,0,0,.35);
+  color-scheme: light;
+}
+
+/* Dark — reached by setting data-theme="dark" on <html>. Every name the
+   light block carries, and no other: a value the mockup keeps the same in
+   both themes is restated here as it is above. */
+:root[data-theme="dark"] {
+  /* the neutrals */
+  --pg-bg: #141619;
+  --pg-surface: #1f2329;
+  --pg-surface-edge: #2e333b;
+  --pg-hairline: #262a31;
+  --pg-text: #E8E8E4;
+  --pg-mark: #FFFFFF;
+  --pg-grain-opacity: 0;
+  --pg-ground-glow: rgba(125,140,160,.1);
+  --pg-ground-glow-0: rgba(125,140,160,0);
+  /* the accent trio */
+  --pg-events-accent: #3DA8A5;
+  --pg-events-accent-2: #6FC9C5;
+  --pg-events-accent-ink: #06231F;
+  /* the hero trio */
+  --pg-events-hero-from: #1F6F6D;
+  --pg-events-hero-to: #163E46;
+  --pg-events-hero-ink: #FFFFFF;
+  /* honey */
+  --pg-events-honey: #E8B64A;
+  --pg-events-honey-ink: #2A1D00;
+  --pg-events-honey-tint: rgba(232,182,74,.16);
+  /* CoveyKeep's semantic layer */
+  --ck-muted: #A2A6AD;
+  --ck-tint: rgba(61,168,165,.15);
+  --ck-active-ink: #6FC9C5;
+  --ck-empty: #1B2A2C;
+  --ck-on-photo: #FFFFFF;
+  --ck-on-photo-ink: #363636;
+  --ck-scrim: rgba(14,16,18,.80);
+  --ck-scrim-mid: rgba(14,16,18,.38);
+  --ck-scrim-0: rgba(14,16,18,0);
+  --ck-frost: rgba(31,35,41,.86);
+  --ck-frost-ink: #E8E8E4;
+  --ck-overlay: rgba(0,0,0,.55);
+  --ck-stage: #0B0C0E;
+  --ck-error: #F2B8B5;
+  --ck-lift-hi: rgba(255,255,255,.05);
+  --ck-lift-near: rgba(0,0,0,.35);
+  --ck-lift-mid: rgba(0,0,0,.55);
+  --ck-lift-far: rgba(0,0,0,.72);
+  /* the literals made tokens, unchanged in dark */
+  --ck-hero-sheen: rgba(255,255,255,.16);
+  --ck-hero-sheen-0: rgba(255,255,255,0);
+  --ck-hero-rule: rgba(255,255,255,.28);
+  --ck-hero-track: rgba(255,255,255,.24);
+  --ck-hero-tag-edge: rgba(255,255,255,.4);
+  --ck-hero-tag-fill: rgba(255,255,255,.16);
+  --ck-on-hero-meter: #FFFFFF;
+  --ck-on-hero-button: #FFFFFF;
+  --ck-on-hero-button-hover: #F1F6F6;
+  --ck-badge-shadow: 0 4px 12px -6px rgba(0,0,0,.35);
+  color-scheme: dark;
+}

@@ -1,7 +1,8 @@
 // /groups — your groups (CK-78, Groups 3a). ONE request (`GET /groups`),
 // cancelled on unmount; each group links to its page with the member count
 // and, for the caller alone, their role in it. In the server's order —
-// newest first; pinning and last-active ordering are the theming phase's.
+// newest first; pinning and last-active ordering are later phases of their
+// own (decisions/2026-10-31-the-design-and-how-it-is-merged.md §4).
 // The empty state is a real screen that promises nothing without a screen
 // yet (no invitation, gathering or photo); a failed read can be retried,
 // never "Try again." with nothing to press.

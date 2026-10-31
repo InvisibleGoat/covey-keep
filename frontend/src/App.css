@@ -1,36 +1,60 @@
-/* Deliberately plain — Paper Goose tokens and the --pg-events-* teal accent
-   arrive in the theming phase, not here. */
+/* The class vocabulary every screen reuses, in CoveyKeep's look (CK-81).
+
+   Colours come from styles/tokens.css and nowhere else: this file names
+   none (pinned). Every class from before CK-81 is kept — renamed and
+   removed, none — and a new screen reuses these before inventing its own
+   (reference/frontend/components.md, Styling). Each screen is still one
+   centred column of cards; the mockup's wide layouts come with their
+   screens' phases. The recipes are the mockup's
+   (app-template.html lines 71–658). */
+
+/* ---------- the screen: one centred column ---------- */
 
 .auth-screen {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.75rem;
-  padding: 1.5rem;
+  gap: 0.875rem;
+  padding: 1.25rem 16px 2.5rem;
   text-align: center;
 }
 
-.auth-screen h1 {
-  margin: 0;
-  font-size: 2.5rem;
+@media (min-width: 900px) {
+  .auth-screen {
+    padding: 2.25rem clamp(24px, 4vw, 48px) 3.5rem;
+  }
 }
 
-.auth-screen h2 {
-  margin: 0;
-  font-size: 1.5rem;
-}
-
+.auth-screen h1,
+.auth-screen h2,
 .auth-screen p {
   margin: 0;
-  font-size: 1.125rem;
-  color: #555;
 }
 
-.auth-screen .tagline {
-  margin-bottom: 1rem;
+/* A section's sub-heading inside a card: the body face, bold. */
+.auth-screen h3 {
+  margin: 0.25rem 0 0;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.3;
 }
+
+/* A line on the screen itself, outside any card: secondary, kept to a
+   reading measure. */
+.auth-screen > p {
+  max-width: 40rem;
+  font-size: 1.0625rem;
+  color: var(--ck-muted);
+}
+
+:where(.auth-screen) a {
+  font-weight: 600;
+}
+
+/* ---------- cards: the lift, always on ---------- */
 
 .auth-card {
   display: flex;
@@ -38,150 +62,278 @@
   gap: 0.75rem;
   width: 100%;
   max-width: 22rem;
-  padding: 1.5rem;
-  border: 1px solid #ddd;
-  border-radius: 0.5rem;
+  padding: 20px;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: var(--r-card);
+  background: var(--pg-surface);
+  box-shadow: var(--ck-lift);
   text-align: left;
+}
+
+.auth-card h2 {
+  text-align: left;
+}
+
+.auth-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
 }
 
 .auth-card label {
   font-size: 0.9375rem;
+  font-weight: 600;
 }
 
-.auth-card h2 {
-  font-size: 1.125rem;
-  text-align: left;
-}
-
-.auth-card input[type='email'],
-.auth-card input[type='text'],
-.auth-card input[type='datetime-local'],
-.auth-card select {
-  padding: 0.5rem 0.625rem;
-  font-size: 1rem;
-  border: 1px solid #bbb;
-  border-radius: 0.25rem;
-  background: #fff;
-}
-
-.tos-row {
+/* A label that holds its own checkbox or radio sits beside it. */
+.auth-card :where(label:has(> input[type='checkbox'], > input[type='radio'])) {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   gap: 0.5rem;
 }
 
-.auth-card button[type='submit'],
-.auth-screen button:not(.link-button) {
-  padding: 0.5rem 1rem;
-  font-size: 1rem;
-  border: 1px solid #888;
-  border-radius: 0.25rem;
-  background: #f5f5f5;
+/* ---------- fields ---------- */
+
+.field {
+  display: grid;
+  gap: 0.25rem;
+}
+
+:where(.auth-screen) :where(
+    input:not([type]),
+    input[type='email'],
+    input[type='text'],
+    input[type='search'],
+    input[type='url'],
+    input[type='tel'],
+    input[type='number'],
+    input[type='date'],
+    input[type='time'],
+    input[type='datetime-local'],
+    select,
+    textarea
+  ) {
+  min-height: 44px;
+  padding: 0 0.75rem;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 10px;
+  background: var(--pg-surface);
+  color: var(--pg-text);
+  font: inherit;
+}
+
+:where(.auth-screen) textarea {
+  padding: 0.625rem 0.75rem;
+  line-height: 1.4;
+}
+
+:where(.auth-screen) :where(input[type='checkbox'], input[type='radio']) {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0.125rem 0 0;
+  accent-color: var(--pg-events-accent);
+}
+
+:where(.auth-screen) input[type='file'] {
+  max-width: 100%;
+  font: inherit;
+  font-size: 0.9375rem;
+}
+
+.tos-row,
+.auth-card .tos-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  font-size: 0.9375rem;
+  font-weight: 400;
+  line-height: 1.45;
   cursor: pointer;
 }
 
-.auth-card button[type='submit']:disabled {
-  color: #999;
+.tos-row input {
+  margin-top: 1px;
+}
+
+/* ---------- buttons: pills, at least 48px tall (small ones 40px) ---------- */
+
+/* Every button on a screen is the quiet pill unless it says otherwise. */
+:where(.auth-screen, .update-notice) button:where(:not(.link-button)),
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 48px;
+  padding: 0 1.125rem;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 999px;
+  background: var(--pg-surface);
+  color: var(--pg-text);
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+/* The primary: the teal pill with its ink — a form's submit, and anything
+   marked btn-primary. */
+:where(.auth-screen) button[type='submit']:where(:not(.link-button)),
+:where(.update-notice) button:first-of-type,
+.newer-version button,
+.btn-primary {
+  border-color: transparent;
+  background: var(--pg-events-accent);
+  color: var(--pg-events-accent-ink);
+}
+
+:where(.auth-screen) button[type='submit']:where(:not(.link-button)):hover:not(:disabled),
+:where(.update-notice) button:first-of-type:hover,
+.newer-version button:hover,
+.btn-primary:hover:not(:disabled) {
+  background: var(--pg-events-accent-2);
+}
+
+:where(.auth-screen, .update-notice) button:disabled {
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
-.link-button {
-  border: none;
-  background: none;
-  padding: 0;
+/* Small: a control inside a row of controls. */
+.btn-small,
+:where(.update-notice, .newer-version, .member-actions, .media-review, .media-batch, .passkey-row, .companion-row)
+  button:where(:not(.link-button)) {
+  min-height: 40px;
+  padding: 0 0.875rem;
   font-size: 0.9375rem;
-  color: #1a5dbb;
+}
+
+.link-button {
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ck-active-ink);
+  text-align: left;
   text-decoration: underline;
+  text-underline-offset: 3px;
   cursor: pointer;
   align-self: flex-start;
 }
 
-/* Error affordance (CK-18, closing a CK-17 finding): the second selector
-   out-ranks `.auth-screen p`, which was silently winning on colour and size —
-   the message rendered as body text and did not look like an error. */
+/* A link-button standing on the screen itself keeps to the column. */
+.auth-screen > .link-button {
+  align-self: center;
+}
+
+/* ---------- words: errors, success, hints ---------- */
+
+/* A status colour is always paired with words: the line says what
+   happened, the colour only marks it. */
 .form-error,
 .auth-screen .form-error {
   font-size: 0.9375rem;
   font-weight: 600;
-  color: #b3261e;
+  color: var(--ck-error);
 }
 
-.form-success {
+.form-success,
+.auth-screen .form-success {
   font-size: 0.9375rem;
-  color: #1a7f37;
+  font-weight: 600;
+  color: var(--pg-text);
 }
 
-.auth-card .field-hint {
-  font-size: 0.8125rem;
-  color: #888;
+.field-hint,
+.auth-screen .field-hint {
+  font-size: 0.875rem;
+  color: var(--ck-muted);
 }
 
 .auth-screen .api-status {
-  margin-top: 1.5rem;
-  font-size: 0.875rem;
-  color: #999;
+  font-size: 0.8125rem;
+  color: var(--ck-muted);
 }
 
-/* Destructive section (CK-8): visually separated from routine settings —
-   the red border is the "this card is different" signal, not decoration. */
+/* ---------- destructive sections (CK-8): red, with words ---------- */
+
 .danger-zone {
   margin-top: 1.5rem;
-  border-color: #b3261e;
+  border-color: var(--ck-error);
 }
 
 .danger-zone h2 {
-  font-size: 1.125rem;
-  color: #b3261e;
-  text-align: left;
+  color: var(--ck-error);
 }
 
 .auth-card .danger-explainer {
   font-size: 0.9375rem;
-  text-align: left;
 }
 
-.auth-screen .danger-button {
-  border-color: #b3261e;
-  color: #b3261e;
-  background: #fff;
+.auth-screen .danger-button,
+.auth-screen .danger-button:hover:not(:disabled) {
+  border-color: var(--ck-error);
+  background: var(--pg-surface);
+  color: var(--ck-error);
 }
 
 .auth-screen .danger-button:disabled {
-  border-color: #bbb;
-  color: #999;
-  cursor: not-allowed;
+  border-color: var(--pg-surface-edge);
+  color: var(--ck-muted);
 }
 
-/* Gatherings (CK-17): list entries, detail occurrences, the creation form's
-   per-date fieldsets. Still deliberately plain — theming is its own phase. */
+/* ---------- lists: gatherings, groups, dates, members ---------- */
+
 .gathering-list {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.875rem;
   width: 100%;
   max-width: 24rem;
 }
 
+/* A clickable card: lifted, and lifted further under the pointer. */
 .gathering-item {
   display: block;
-  padding: 0.75rem 1rem;
-  border: 1px solid #ddd;
-  border-radius: 0.5rem;
+  padding: 14px 16px;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: var(--r-card);
+  background: var(--pg-surface);
+  box-shadow: var(--ck-lift);
+  color: inherit;
   text-align: left;
   text-decoration: none;
-  color: inherit;
+  transition:
+    box-shadow 0.22s ease,
+    transform 0.22s ease;
+}
+
+.gathering-item:hover {
+  box-shadow: var(--ck-lift-hover);
+  transform: translateY(-2px);
 }
 
 .gathering-item strong {
+  font-family: var(--font-display);
   font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .gathering-item p {
   margin: 0.25rem 0 0;
-  font-size: 0.9375rem;
+  font-size: 0.875rem;
+  color: var(--ck-muted);
 }
 
 .occurrence-list {
@@ -193,36 +345,130 @@
   gap: 0.75rem;
 }
 
+.occurrence-item + .occurrence-item,
+.member-list > li + li {
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--pg-hairline);
+}
+
 .occurrence-item p {
   margin: 0;
   font-size: 0.9375rem;
 }
 
-/* Unscoped from .gathering-form at CK-18: the detail page's inline date
-   editors reuse the same fieldset vocabulary outside a .gathering-form. */
+/* A date's own controls stand inline, so they need their own space. */
+.occurrence-item > button + button {
+  margin-left: 0.75rem;
+}
+
+/* A set of fields in its own quiet box, its legend inside it. */
 .occurrence-fields {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.625rem;
+  min-width: 0;
   margin: 0;
-  padding: 0.75rem;
-  border: 1px solid #ddd;
-  border-radius: 0.5rem;
+  padding: 14px;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 14px;
+  background: var(--pg-bg);
 }
 
 .occurrence-fields legend {
+  float: left;
+  width: 100%;
+  margin: 0;
+  padding: 0;
   font-size: 0.9375rem;
-  padding: 0 0.25rem;
+  font-weight: 700;
 }
 
-/* Photos (CK-38): the upload form, the chosen-files list, the state list,
-   and the opened web layer. Thumbnails are ≤400px WebP over blob: URLs;
-   the web layer ≤2560px, constrained to the card. Still plain — theming is
-   its own phase. */
-.media-block {
+.rsvp-block {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.companion-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.5rem;
+}
+
+.companion-row label {
+  width: 100%;
+}
+
+.companion-row input {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+.companion-list {
+  margin: 0.25rem 0 0 1rem;
+  padding: 0;
+  font-size: 0.875rem;
+  color: var(--ck-muted);
+}
+
+.member-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.member-row p {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+/* The initials sit beside a name, never instead of it (aria-hidden). */
+.member-initials {
+  display: inline-block;
+  min-width: 2rem;
+  margin-right: 0.25rem;
+  padding: 0.25rem 0.375rem;
+  border-radius: 999px;
+  background: var(--ck-tint);
+  color: var(--ck-active-ink);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
+.member-role {
+  color: var(--pg-text);
+  font-weight: 600;
+}
+
+.member-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.passkey-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.passkey-row p {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+/* ---------- photos (CK-38 onward): today's rows, each in its own box ---------- */
+
+.media-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
 }
 
 .media-block form {
@@ -238,19 +484,23 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.625rem;
 }
 
 .media-chosen li {
   font-size: 0.9375rem;
+  overflow-wrap: anywhere;
 }
 
 .media-item {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid #eee;
+  gap: 0.375rem;
+  padding: 10px 12px;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 14px;
+  background: var(--pg-bg);
+  overflow-wrap: anywhere;
 }
 
 .media-item p {
@@ -259,32 +509,40 @@
 }
 
 .auth-screen .media-thumb-button {
+  display: block;
+  min-height: 0;
   padding: 0;
-  border: none;
+  border: 0;
+  border-radius: var(--r-photo);
   background: none;
+  line-height: 0;
   cursor: pointer;
   align-self: flex-start;
-  line-height: 0;
 }
 
+/* A thumbnail carries the small mat as a ring. */
 .media-thumb {
   display: block;
   width: 8rem;
   height: 8rem;
   object-fit: cover;
-  border-radius: 0.25rem;
+  border-radius: var(--r-photo);
+  background: var(--ck-empty);
+  box-shadow:
+    0 0 0 2px var(--pg-surface),
+    0 0 0 3px var(--pg-surface-edge);
 }
 
 .media-placeholder {
   display: flex;
   align-items: center;
   justify-content: center;
-  text-align: center;
   padding: 0.5rem;
+  background: var(--ck-empty);
+  color: var(--ck-muted);
   font-size: 0.8125rem;
   line-height: 1.3;
-  color: #888;
-  background: #f5f5f5;
+  text-align: center;
 }
 
 .media-viewer {
@@ -294,90 +552,24 @@
   align-items: flex-start;
 }
 
+/* The opened photo sits in the 7px mat, its corners at the photo radius. */
 .media-web {
   display: block;
-  max-width: 100%;
+  max-width: calc(100% - 2 * (var(--mat) + 1px));
   height: auto;
-  border-radius: 0.25rem;
+  margin: calc(var(--mat) + 1px);
+  border-radius: var(--r-photo);
+  box-shadow:
+    0 0 0 var(--mat) var(--pg-surface),
+    0 0 0 calc(var(--mat) + 1px) var(--pg-surface-edge);
 }
 
 .media-web.media-placeholder {
-  width: 100%;
+  width: calc(100% - 2 * (var(--mat) + 1px));
   min-height: 6rem;
 }
 
-/* Passkey list rows (CK-10). */
-.passkey-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.passkey-row p {
-  margin: 0;
-  font-size: 0.9375rem;
-}
-
-/* PWA update notice (CK-8.1): fixed and non-blocking — bottom corner so it
-   never covers a screen's primary actions, persistent until acted on. */
-.update-notice {
-  position: fixed;
-  right: 1rem;
-  bottom: 1rem;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  max-width: calc(100vw - 2rem);
-  padding: 0.75rem 1rem;
-  border: 1px solid #888;
-  border-radius: 0.5rem;
-  background: #fff;
-  box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
-}
-
-.update-notice p {
-  margin: 0;
-  font-size: 0.9375rem;
-}
-
-.update-notice button {
-  padding: 0.375rem 0.75rem;
-  font-size: 0.9375rem;
-  border: 1px solid #888;
-  border-radius: 0.25rem;
-  background: #f5f5f5;
-  cursor: pointer;
-}
-
-/* The catch-all's newer-version line (CK-75.1): the update notice's idiom,
-   but static and inline above the heading — the screen it sits on has no
-   primary action for a fixed corner to stay clear of. */
-.newer-version {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  border: 1px solid #888;
-  border-radius: 0.5rem;
-  background: #fff;
-}
-
-.newer-version p {
-  margin: 0;
-  font-size: 0.9375rem;
-}
-
-.auth-screen .newer-version button {
-  padding: 0.375rem 0.75rem;
-  font-size: 0.9375rem;
-}
-
-/* The words on a photograph (CK-40): tags as text chips, the per-row editor,
-   and the search box. A chip is text — never a link. */
+/* Tags are chips of text — never links. */
 .media-tags {
   list-style: none;
   margin: 0;
@@ -391,20 +583,16 @@
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  padding: 0.125rem 0.5rem;
+  padding: 0.125rem 0.6rem;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 999px;
+  background: var(--pg-surface);
   font-size: 0.8125rem;
-  border: 1px solid #ccc;
-  border-radius: 1rem;
-  background: #f5f5f5;
 }
 
-.media-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid #ddd;
-  border-radius: 0.25rem;
+.media-tags .link-button {
+  min-height: 0;
+  font-size: 0.8125rem;
 }
 
 .media-search {
@@ -413,20 +601,37 @@
   gap: 0.25rem;
 }
 
-/* The host's review (CK-43.1): the all-or-queue switch, the per-row acts
-   and the decline's second click, the batch form, and the row checkbox.
-   None of it renders unless the gathering resolves gated and the caller is
-   the host. */
+.media-search label {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+/* The view switch: one pill group, the current view filled. */
 .media-view {
   display: flex;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: 2px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 24px;
+  background: var(--pg-surface);
+  box-shadow: var(--ck-lift);
+}
+
+.media-view .link-button {
+  min-height: 40px;
+  padding: 0 0.875rem;
+  border-radius: 999px;
+  color: var(--ck-muted);
+  text-decoration: none;
+  align-self: auto;
 }
 
 .media-view .link-button[aria-pressed='true'] {
-  font-weight: 600;
-  color: inherit;
-  text-decoration: none;
+  background: var(--pg-events-accent);
+  color: var(--pg-events-accent-ink);
   cursor: default;
 }
 
@@ -434,20 +639,28 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem 0.875rem;
 }
 
 .media-review p {
   margin: 0;
 }
 
-.media-decline {
+/* A second step, and the caption-and-tags editor: a quiet box on the row. */
+.media-decline,
+.media-editor {
+  display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.375rem;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid #ddd;
-  border-radius: 0.25rem;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 12px;
+  background: var(--pg-surface);
+}
+
+.media-editor {
+  align-items: stretch;
 }
 
 .media-block .media-batch {
@@ -461,98 +674,506 @@
   align-self: flex-start;
   width: 1.125rem;
   height: 1.125rem;
+  accent-color: var(--pg-events-accent);
 }
 
-/* Your plan (CK-74): the app's current styles, deliberately — the prototype's
-   hero, badge and lifted cards belong to the theming phase, and the honey
-   colour is not registered yet, so nothing here may use it. */
-.plan-card h3 {
+/* ---------- the update notice and the newer-version line: cards ---------- */
+
+.update-notice {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  max-width: calc(100vw - 32px);
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: var(--r-card);
+  background: var(--pg-surface);
+  color: var(--pg-text);
+  box-shadow: var(--ck-lift);
+}
+
+.update-notice p {
   margin: 0;
-  font-size: 1.125rem;
+  font-size: 0.9375rem;
+}
+
+.newer-version {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: var(--r-card);
+  background: var(--pg-surface);
+  box-shadow: var(--ck-lift);
+}
+
+.newer-version p {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+/* ---------- the screens before the app (the mockup's 17–21) ---------- */
+
+/* Sign-in, and the landings beside it: the prints, then the side; two
+   columns from 900px. */
+.auth-split {
+  gap: 1.25rem;
+  padding: 2rem 16px 2.5rem;
+}
+
+.auth-side {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  width: 100%;
+  max-width: 420px;
+}
+
+.auth-side .auth-card {
+  max-width: none;
+  gap: 0.875rem;
+}
+
+.auth-side .auth-card h2 {
+  font-size: 1.5rem;
+}
+
+.auth-side .auth-card button:not(.link-button),
+.auth-side > .btn {
+  width: 100%;
+}
+
+.auth-side .auth-card .link-button {
+  align-self: center;
+}
+
+.auth-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+  text-align: center;
+}
+
+/* The lockup: the quail in front of the name, on one line. */
+.lockup {
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+  font-size: clamp(2.25rem, 1.9rem + 1.4vw, 3rem);
+}
+
+.lockup img {
+  flex: none;
+  width: auto;
+  height: 1.7em;
+  margin: -0.25em -0.05em -0.2em -0.2em;
+  object-fit: contain;
+}
+
+.auth-screen .tagline {
+  margin: 0.125rem 0 0;
+  font-family: var(--font-display);
+  font-size: 1.1875rem;
+  color: var(--ck-muted);
+}
+
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.brand-mark img {
+  width: 40px;
+  height: 40px;
+}
+
+.auth-head {
+  display: grid;
+  gap: 0.5rem;
+  text-align: center;
+}
+
+.auth-head h1 {
+  font-size: clamp(1.75rem, 1.5rem + 1.2vw, 2.25rem);
+}
+
+.auth-head p {
+  color: var(--pg-text);
+}
+
+/* Three matted prints, as if laid on a table. */
+.auth-art {
+  position: relative;
+  width: 100%;
+  max-width: 340px;
+  height: 150px;
+}
+
+.print {
+  position: absolute;
+  margin: 0;
+  padding: 6px;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 6px;
+  background: var(--pg-surface);
+  box-shadow: var(--ck-lift);
+}
+
+.print img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 3px;
+}
+
+.print.p1 {
+  top: 16%;
+  left: 3%;
+  width: 42%;
+  height: 76%;
+  transform: rotate(-7deg);
+}
+
+.print.p2 {
+  top: 2%;
+  left: 27%;
+  z-index: 2;
+  width: 46%;
+  height: 86%;
+  transform: rotate(2deg);
+}
+
+.print.p3 {
+  top: 20%;
+  right: 3%;
+  width: 40%;
+  height: 74%;
+  transform: rotate(8deg);
+}
+
+@media (min-width: 900px) {
+  .auth-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 420px;
+    align-items: center;
+    justify-items: stretch;
+    gap: clamp(40px, 6vw, 96px);
+    padding: 3rem clamp(40px, 6vw, 96px);
+  }
+
+  .auth-split .auth-art {
+    justify-self: center;
+    max-width: 620px;
+    height: min(460px, 58dvh);
+  }
+
+  .auth-split .print {
+    padding: 10px;
+    border-radius: 8px;
+  }
+
+  .auth-split .auth-brand {
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .auth-split .auth-head {
+    text-align: left;
+  }
+}
+
+/* A waiting screen: the quail breathes above the line. */
+.auth-wait {
+  display: grid;
+  justify-items: center;
+  gap: 0.75rem;
+  color: var(--ck-muted);
+  font-size: 1.0625rem;
+}
+
+.auth-wait img,
+.plan-wait img {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+/* The private test notice: the text on one card, at reading width. */
+.notice-screen {
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 2rem 16px 2.5rem;
   text-align: left;
 }
 
-.auth-screen .plan-tag,
-.auth-screen .plan-recommended {
-  font-size: 0.8125rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #666;
+@media (min-width: 900px) {
+  .notice-screen {
+    padding: 3rem 24px;
+  }
 }
 
-.auth-screen .plan-usage {
-  font-size: 1rem;
-  color: #333;
+.notice-page {
+  display: grid;
+  gap: 1rem;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.notice-page > a {
+  justify-self: start;
+}
+
+.notice-card {
+  max-width: none;
+  gap: 1rem;
+  padding: 22px 24px;
+}
+
+.notice-card p {
+  font-size: 1.0625rem;
+  line-height: 1.6;
+}
+
+/* ---------- Your plan (CK-74; the mockup's screen 14) ---------- */
+
+.plan-screen {
+  display: grid;
+  grid-template-columns: minmax(0, 720px);
+  justify-content: center;
+  align-content: start;
+  text-align: left;
+}
+
+.plan-screen > a {
+  justify-self: start;
+}
+
+.plan-screen > p {
+  max-width: none;
+}
+
+.plan-screen > .lede {
+  max-width: 56ch;
+  margin-top: -0.5rem;
+  font-size: 0.9375rem;
+}
+
+.plan-screen > h2 {
+  margin-top: 1.25rem;
+}
+
+.plan-screen > .field-hint {
+  max-width: 62ch;
+}
+
+.plan-card {
+  position: relative;
+}
+
+.plan-card h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.15;
+  text-align: left;
+}
+
+.plan-tag,
+.plan-recommended {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* The current plan on the hero: the teal pair as a deep gradient. */
+.plan-current {
+  max-width: none;
+  gap: 0.5rem;
+  padding: 20px 22px;
+  border: 0;
+  background:
+    radial-gradient(120% 140% at 100% 0%, var(--ck-hero-sheen), var(--ck-hero-sheen-0) 55%),
+    linear-gradient(135deg, var(--pg-events-hero-from), var(--pg-events-hero-to));
+  color: var(--pg-events-hero-ink);
+}
+
+.plan-current h2 {
+  font-size: clamp(2rem, 1.6rem + 1.8vw, 2.75rem);
+  line-height: 1.05;
+  color: inherit;
+}
+
+.plan-current .plan-tag {
+  align-self: flex-start;
+  padding: 0.2rem 0.7rem;
+  border: 1px solid var(--ck-hero-tag-edge);
+  border-radius: 999px;
+  background: var(--ck-hero-tag-fill);
+}
+
+.plan-current .plan-usage {
+  margin-top: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--ck-hero-rule);
+}
+
+.plan-current .form-error {
+  color: inherit;
+}
+
+.plan-current :focus-visible {
+  outline-color: var(--pg-events-hero-ink);
 }
 
 /* The bar carries no text (aria-hidden) and never draws past full. */
 .plan-meter {
-  height: 0.5rem;
-  border-radius: 0.25rem;
-  background: #e5e5e5;
+  height: 10px;
   overflow: hidden;
+  border-radius: 999px;
+  background: var(--ck-empty);
 }
 
 .plan-meter span {
   display: block;
   height: 100%;
-  background: #555;
+  border-radius: inherit;
+  background: var(--pg-events-accent);
+}
+
+.plan-current .plan-meter {
+  background: var(--ck-hero-track);
+}
+
+.plan-current .plan-meter span {
+  background: var(--ck-on-hero-meter);
+}
+
+.btn-onhero {
+  align-self: flex-start;
+  margin-top: 0.375rem;
+  border-color: transparent;
+  background: var(--ck-on-hero-button);
+  color: var(--pg-events-hero-to);
+}
+
+.btn-onhero:hover:not(:disabled) {
+  background: var(--ck-on-hero-button-hover);
 }
 
 .plan-list {
   list-style: none;
   margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.75rem;
-  width: 100%;
+  padding: 12px 0 0;
+  display: grid;
+  gap: 22px 14px;
+}
+
+@media (min-width: 640px) {
+  .plan-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .plan-list li {
   display: flex;
-  justify-content: center;
+}
+
+.plan-list .plan-card {
+  max-width: none;
+  height: 100%;
+  gap: 0.25rem;
+  padding: 18px;
+}
+
+.plan-list .plan-card h3 + p {
+  margin-bottom: 0.875rem;
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+
+.plan-list .plan-card > button,
+.plan-list .plan-card > .field-hint {
+  margin-top: auto;
+}
+
+.plan-list .plan-card > button {
   width: 100%;
 }
 
-.plan-wait p {
-  margin: 0.5rem 0;
+/* Honey: the recommended plan's badge, border and halo, and nowhere else
+   in the app (decisions/2026-10-14-honey-a-second-colour-with-one-meaning.md).
+   A fill carrying its own ink; the badge's word carries the meaning. */
+.plan-card-recommended {
+  border: 2px solid var(--pg-events-honey);
+  box-shadow:
+    0 0 0 4px var(--pg-events-honey-tint),
+    var(--ck-lift);
 }
 
-/* Groups (CK-78): the member list. The initials sit beside a name, never
-   instead of it (aria-hidden); still the app's current styles — the
-   design session's lifted cards and teal are the theming phase's. */
-.member-row {
+.plan-card-recommended .plan-recommended {
+  position: absolute;
+  top: -13px;
+  left: 16px;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  background: var(--pg-events-honey);
+  color: var(--pg-events-honey-ink);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  box-shadow: var(--ck-badge-shadow);
+}
+
+.plan-card-recommended h3 {
+  padding-top: 0.25rem;
+}
+
+.auth-screen .plan-noads {
   display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-}
-
-.member-row p {
-  margin: 0;
-  font-size: 0.9375rem;
-}
-
-.member-initials {
-  display: inline-block;
-  min-width: 2rem;
-  padding: 0.25rem 0;
-  border-radius: 1rem;
-  background: #e5e5e5;
-  color: #333;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  text-align: center;
-}
-
-.member-role {
-  color: #333;
+  align-items: center;
+  gap: 0.625rem;
+  margin-top: 0.875rem;
+  padding: 0.875rem 1rem;
+  border-radius: 14px;
+  background: var(--ck-tint);
+  color: var(--pg-text);
+  font-size: 1rem;
   font-weight: 600;
 }
 
-.member-actions {
-  display: flex;
-  flex-wrap: wrap;
+.plan-noads svg {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: var(--ck-active-ink);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.plan-wait {
+  display: grid;
+  justify-items: center;
   gap: 0.75rem;
+  padding: 1.5rem 0;
+  color: var(--ck-muted);
+  font-size: 1.0625rem;
 }

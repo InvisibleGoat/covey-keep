@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { BrandMark, Quail, SignInPrints } from '../components/AuthArt'
 import { apiFetch, authFetch } from '../lib/api'
 import {
   clearInvitationToken,
@@ -132,21 +133,36 @@ export function InvitationAccept() {
     void act(token)
   }, [fragmentConsumed, token, authStatus, navigate])
 
+  // The two states the mockup draws (CK-81; screens 20 and 21): the waiting
+  // quail while the invitation is checked, and the signed-out landing beside
+  // the prints, with the small mark and the screen's own words. The dead
+  // tokens' screens below keep their markup and take the look.
   if (screen.status === 'working') {
     return (
       <main className="auth-screen">
-        <p>Checking your invitation…</p>
+        <div className="auth-wait">
+          <Quail />
+          <p>Checking your invitation…</p>
+        </div>
       </main>
     )
   }
 
   if (screen.status === 'signInNeeded') {
     return (
-      <main className="auth-screen">
-        <h1>You're invited</h1>
-        {screen.title !== null && <p>You've been invited to "{screen.title}".</p>}
-        <p>Sign in (or create your account) to accept — you'll come right back here.</p>
-        <Link to="/">Sign in to accept</Link>
+      <main className="auth-screen auth-split">
+        <SignInPrints />
+        <div className="auth-side">
+          <BrandMark />
+          <div className="auth-head">
+            <h1>You're invited</h1>
+            {screen.title !== null && <p>You've been invited to "{screen.title}".</p>}
+            <p>Sign in (or create your account) to accept — you'll come right back here.</p>
+          </div>
+          <Link to="/" className="btn btn-primary">
+            Sign in to accept
+          </Link>
+        </div>
       </main>
     )
   }

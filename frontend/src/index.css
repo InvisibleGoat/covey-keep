@@ -1,12 +1,5 @@
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  color: #1a1a1a;
-  background-color: #fff;
-}
+/* The stylesheet entry (main.tsx imports it before App.css): the tokens
+   first — the only place a colour is named — then the page beneath every
+   screen. App.css styles the class vocabulary on top (CK-81). */
+@import './styles/tokens.css';
+@import './styles/base.css';

@@ -20,5 +20,10 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    // Vitest blanks every CSS import unless told otherwise — a `?raw` read
+    // included, which made a stylesheet pin read an empty string and pass.
+    // The raw reads alone get the file's text (styles/look.test.tsx, CK-81);
+    // a stylesheet a component imports stays blank, as it always has.
+    css: { include: [/\.css\?raw$/] },
   },
 })

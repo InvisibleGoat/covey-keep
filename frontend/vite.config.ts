@@ -36,6 +36,13 @@ export default defineConfig({
       // into the worker via `injectRegister == null`, so `false` silently
       // builds a prompt-shaped worker that waits forever under autoUpdate.
       injectRegister: null,
+      // The precache: workbox-build's default pattern, which setting this
+      // replaces, kept whole, plus the self-hosted font and the sign-in
+      // screen's images (CK-81), so the look works offline like the rest of
+      // the app shell.
+      workbox: {
+        globPatterns: ['**/*.{js,wasm,css,html}', '**/*.{woff2,webp}'],
+      },
       manifest: {
         name: PRODUCT_NAME,
         short_name: PRODUCT_NAME,

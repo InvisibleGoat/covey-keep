@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { BrandMark, Quail, SignInPrints } from '../components/AuthArt'
 import { readInvitationToken } from '../lib/invitations'
 import { takeReturnPath } from '../lib/returnPath'
 
@@ -36,19 +37,34 @@ export function AuthCallback() {
     }
   }, [signIn, navigate])
 
+  // The mockup's waiting style (CK-81): the quail breathing above the line
+  // (stilled under reduced motion), and the failure in its expired-link
+  // design — the prints, the small mark, the screen's own words, and the
+  // way back as the primary button.
   if (!failed) {
     return (
       <main className="auth-screen">
-        <p>Signing you in…</p>
+        <div className="auth-wait">
+          <Quail />
+          <p>Signing you in…</p>
+        </div>
       </main>
     )
   }
 
   return (
-    <main className="auth-screen">
-      <h1>That link didn't work</h1>
-      <p>Sign-in links work once and expire after 15 minutes. This one has expired or was already used.</p>
-      <Link to="/">Request a new sign-in link</Link>
+    <main className="auth-screen auth-split">
+      <SignInPrints />
+      <div className="auth-side">
+        <BrandMark />
+        <div className="auth-head">
+          <h1>That link didn't work</h1>
+          <p>Sign-in links work once and expire after 15 minutes. This one has expired or was already used.</p>
+        </div>
+        <Link to="/" className="btn btn-primary">
+          Request a new sign-in link
+        </Link>
+      </div>
     </main>
   )
 }
