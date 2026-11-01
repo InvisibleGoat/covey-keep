@@ -1147,25 +1147,28 @@ async def test_the_verifier_asserts_a_destroying_row_that_spent_an_attempt_and_i
     # a HOUSEHOLD group), so 339; CK-77 added twenty-three (the places
     # table's shape, the member_place labels, invitees_chosen and its CHECK,
     # three data lines) and retired one (CK-75's backup-NULL line, replaced
-    # by the 0009 block's is-gone line), so 361.
+    # by the 0009 block's is-gone line), so 361; CK-83a added twenty-four
+    # (the six cover columns' shapes on gatherings and groups — their
+    # nullability, FKs and delete rules, cover_set_at's type, the CHECKs
+    # and the partial indexes — and four data lines), so 385.
     await plant(1, False, None)
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (360, 1, 1), out
+    assert (passed, failed, code) == (384, 1, 1), out
     assert f"FAIL  {label}" in out and "1 destroying media row(s)" in out
 
     # Passes with the reason present — what the release now writes.
     await plant(1, False, ingest.ERROR_CREDENTIAL_REJECTED)
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (361, 0, 0), out
+    assert (passed, failed, code) == (385, 0, 0), out
     assert f"PASS  {label}" in out
 
     # Must NOT fire on a fresh mark (attempts 0, no reason: nothing is
     # wrong with it) ...
     await plant(0, False, None)
-    assert _verifier()[:3] == (361, 0, 0)
+    assert _verifier()[:3] == (385, 0, 0)
     # ... nor on a held row: the claim writes no reason, the outcome will.
     await plant(1, True, None)
-    assert _verifier()[:3] == (361, 0, 0)
+    assert _verifier()[:3] == (385, 0, 0)
 
 
 async def test_a_stalled_destruction_is_reclaimed_and_the_abandoned_attempt_counted(

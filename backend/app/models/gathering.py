@@ -88,6 +88,23 @@ class Gathering(Base):
             "owning_group_id IS NOT NULL OR NOT invitees_chosen",
             name="invitees_chosen_needs_group",
         ),
+        # A COVER IS ONE FACT IN THREE COLUMNS (0035, CK-83a): the photograph,
+        # when it was set and who set it — all set or all NULL. The set path
+        # writes the three together, and the clearing statement and the
+        # organisers' DELETE clear them together (api/covers.py,
+        # services/covers.py).
+        CheckConstraint(
+            "num_nonnulls(cover_media_id, cover_set_at, cover_set_by_person_id) IN (0, 3)",
+            name="cover_all_or_none",
+        ),
+        # The clearing statement's reader (services/covers.py — `WHERE
+        # cover_media_id = :media_id` in every removal and destruction).
+        # Partial: nearly every row has no cover, and nothing asks for NULL.
+        Index(
+            "ix_gatherings_cover_media_id",
+            "cover_media_id",
+            postgresql_where=text("cover_media_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = uuid_pk()
@@ -261,6 +278,33 @@ class Gathering(Base):
     )
     removed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # THE COVER (0035, CK-83a; decisions/2026-10-31-the-design-and-how-it-
+    # is-merged.md §1.3): a POINTER to one of this gathering's own published
+    # photographs, set by an organiser — the host or a co-host — through
+    # api/covers.py ("Use as cover"), and CLEARED by the transaction that
+    # stops the photograph being published (services/covers.py — removal and
+    # destruction, the 30-day sweep included). Never resolved through the
+    # photograph's state at read time: a pointer filtered by liveness would
+    # be a second representation of "is this the cover", and a restore would
+    # bring it back. All three set or all NULL (the CHECK above); NULL is
+    # "no cover yet", and the empty cover shows. The FK to `media` closes a
+    # cycle (media -> gatherings), so it is `use_alter`; no delete rule —
+    # the house habit, and nothing deletes a `ready` photograph's row.
+    cover_media_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("media.id", use_alter=True), nullable=True
+    )
+    # When the cover was set — its VERSION: setting the same photograph again
+    # writes nothing, so a client's cached image stays valid. Not
+    # `updated_at`, which a cover change never stamps (it stays PATCH's).
+    cover_set_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # WHO set it — provenance, the `published_by_person_id` shape, and in no
+    # body. A deleted account keeps its anonymized person row, so this stays
+    # a pointer to a former member.
+    cover_set_by_person_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("people.id"), nullable=True
     )
     # 0010 (CK-16) — stamped on every successful PATCH, the people.updated_at
     # precedent: the column arrives with the phase that makes the row mutable.

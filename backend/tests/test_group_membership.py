@@ -76,7 +76,10 @@ ENTRY_KEYS = {"membership_id", "display_name", "role", "is_self"}
 # the index on gatherings.owning_group_id, no pending invitation on a
 # gathering that belongs to a group, every group gathering under a
 # HOUSEHOLD group.
-VERIFIER_TOTAL = 361  # 339 at CK-76; CK-77's twenty-three lines less the backup-NULL line it replaced
+# 339 at CK-76; 361 since CK-77's twenty-three lines less the backup-NULL
+# line it replaced; 385 since CK-83a's twenty-four (the cover columns'
+# shapes on gatherings and groups, and four data lines).
+VERIFIER_TOTAL = 385
 
 
 def _now() -> datetime:

@@ -18,6 +18,20 @@ from app.models.enums import (
 
 class Group(Base):
     __tablename__ = "groups"
+    __table_args__ = (
+        # A COVER IS ONE FACT IN THREE COLUMNS (0035, CK-83a) — the gatherings
+        # table's CHECK, on a group: all set or all NULL.
+        CheckConstraint(
+            "num_nonnulls(cover_media_id, cover_set_at, cover_set_by_person_id) IN (0, 3)",
+            name="cover_all_or_none",
+        ),
+        # The clearing statement's reader (services/covers.py). Partial.
+        Index(
+            "ix_groups_cover_media_id",
+            "cover_media_id",
+            postgresql_where=text("cover_media_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[UUID] = uuid_pk()
     organization_id: Mapped[Optional[UUID]] = mapped_column(
@@ -83,6 +97,28 @@ class Group(Base):
     # gatherings one: account_usage's WHERE names both.
     keeper_account_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("accounts.id"), nullable=True, index=True
+    )
+    # THE COVER (0035, CK-83a; decisions/2026-10-31-the-design-and-how-it-
+    # is-merged.md §1.3): a POINTER to a published photograph from one of
+    # this group's own gatherings, set by an organiser — the admin or a
+    # co-admin — through api/covers.py, and CLEARED by the transaction that
+    # stops the photograph being published (services/covers.py). Seen by
+    # EVERY member, including one who cannot see the gathering it came from
+    # — the organiser's judgement — and served through the cover URL alone,
+    # so no group body ever names the photograph (api/groups.py). All three
+    # set or all NULL (the CHECK above). The FK to `media` closes a cycle
+    # (media -> gatherings -> groups), so it is `use_alter`; no delete rule.
+    cover_media_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("media.id", use_alter=True), nullable=True
+    )
+    # The cover's version — setting the same photograph again writes nothing.
+    # Never `updated_at`, which stays the rename's.
+    cover_set_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Who set it — provenance, in no body.
+    cover_set_by_person_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("people.id"), nullable=True
     )
     # Stamped on every successful rename (PATCH /groups/{id}) and by nothing
     # else — the 0004/0010/0014 shape, added WITH the mutability (CK-45,

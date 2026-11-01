@@ -518,7 +518,7 @@ from app.models import (
 # The module, not its names: the limits are read at call time, so a test
 # can narrow FREE_TIER_PHOTOGRAPHS / MEMORIAL_CEILING_PHOTOGRAPHS on
 # keeping itself.
-from app.services import destruction, keeping, publication
+from app.services import covers, destruction, keeping, publication
 from app.services.retention import REMOVED_BIN, purge_stale
 from app.services.storage import (
     ServeClient,
@@ -645,6 +645,12 @@ DESTRUCTION_STATUSES = (MediaStatus.DESTROYING, MediaStatus.DESTROYED)
 # export, neither of which exists. Never a default; never widened to make a
 # gallery "sharper".
 SERVABLE_LAYERS = frozenset({MediaLayer.WEB, MediaLayer.THUMBNAIL})
+# The refusal for any other layer — one string, read by `read_url` and by
+# api/covers.py's two cover URL routes (CK-83a), so the wording cannot drift.
+ARCHIVAL_NOT_SERVED = (
+    "only the web and thumbnail layers can be viewed — the archival layer "
+    "is the print master and isn't served"
+)
 
 # Words on a photograph (CK-39). The caps are bounds for a column, never
 # arithmetic anything depends on: a file name at the conventional
@@ -1526,12 +1532,7 @@ async def read_url(
     if row is None:
         raise _media_not_found()
     if layer not in SERVABLE_LAYERS:
-        raise _field_422(
-            "layer",
-            "only the web and thumbnail layers can be viewed — the archival layer "
-            "is the print master and isn't served",
-            where="query",
-        )
+        raise _field_422("layer", ARCHIVAL_NOT_SERVED, where="query")
     if row.status != MediaStatus.READY:
         raise HTTPException(
             409,
@@ -2205,7 +2206,12 @@ async def remove_media(
     The host, a co-host, or the uploader for their own (`_may_send_to_bin`);
     everyone else draws the media 404 — a co-host on a `pending` row too,
     which they cannot see (reserved). 409 `not_ready` for a row with
-    nothing stored, `already_removed` for one already binned."""
+    nothing stored, `already_removed` for one already binned.
+
+    AND ANY COVER IT IS GOES (CK-83a): a gathering's or a group's cover
+    that is this photograph is cleared in the same transaction
+    (services/covers.py::clear_covers_of) — a photograph taken back must
+    not live on as a cover, and a restore does not bring the cover back."""
     now = datetime.now(timezone.utc)
     row = await _removable_row(db, ctx, media_id, now, may=_may_send_to_bin(ctx))
     refusal = _removal_refusal(row, destroy=False)
@@ -2231,6 +2237,16 @@ async def remove_media(
     if result.rowcount != 1:
         await db.rollback()
         raise HTTPException(409, detail=_CHANGED_WHILE_DECIDING)
+    # A COVER NEVER OUTLIVES ITS PHOTOGRAPH'S PUBLICATION (CK-83a; the merge
+    # record §1.3): in this transaction, after the state change and only
+    # because it took, every gathering or group whose cover this photograph
+    # is goes back to no cover — cleared, never filtered at read time, so a
+    # later restore does not bring it back. The row lock `_removable_row`
+    # took is what makes it whole: a set of this photograph as a cover takes
+    # the same row `FOR SHARE` first (api/covers.py), so it either committed
+    # before this removal began — and this statement clears it — or it waits
+    # and then reads the photograph removed.
+    await covers.clear_covers_of(db, row.id)
     await db.commit()
     await db.refresh(row)
     return _media_body(row)
@@ -2281,7 +2297,8 @@ async def destroy_media(
     co-host may bin and restore, never empty or delete permanently);
     everyone else draws the media 404, a co-host on a gathering-bin row
     they can read included. 409 `not_ready` for a row with nothing
-    stored."""
+    stored. Any cover the photograph is clears with the mark (CK-83a —
+    inside `mark_for_destruction`, so the sweep clears through it too)."""
     now = datetime.now(timezone.utc)
     row = await _removable_row(db, ctx, media_id, now, may=_may_destroy(ctx))
     refusal = _removal_refusal(row, destroy=True)

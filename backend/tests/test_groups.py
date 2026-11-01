@@ -37,6 +37,10 @@ BODY_KEYS = {
     # `caller_role` joined (`admin` | `co_admin` | `member`).
     "member_count",
     "caller_role",
+    # CK-83a: `cover` joined — `{"source": "photo", "set_at"}` or null,
+    # and never the photograph's id (a group's cover may come from a
+    # gathering the reader is not in). The pin moved with this reason.
+    "cover",
     "created_at",
     "updated_at",
 }

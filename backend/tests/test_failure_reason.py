@@ -746,7 +746,9 @@ async def test_the_verifier_asserts_a_reason_iff_failed(client, capsys, db_sessi
     line and five membership invariants, with CK-45's
     at-least-one-membership line replaced; and 339 since CK-76's three — the index on
     `gatherings.owning_group_id`, no pending invitation on a group gathering,
-    every group gathering under a HOUSEHOLD group).
+    every group gathering under a HOUSEHOLD group; and 361 since CK-77's
+    twenty-three less the backup-NULL line it retired; and 385 since
+    CK-83a's twenty-four — the six cover columns' shapes on gatherings and groups — nullability, the two FKs each with no delete rule, cover_set_at's type, the CHECKs and the partial indexes — and four data lines).
     A PLANT IS NOT EVIDENCE UNTIL
     SOMETHING INDEPENDENT OF THE ASSERTION CONFIRMS THE ROW EXISTS (CK-56's
     lesson), so each is counted by its own SELECT before the verifier reads
@@ -770,7 +772,7 @@ async def test_the_verifier_asserts_a_reason_iff_failed(client, capsys, db_sessi
         assert [m.value for m in MediaFailureReason] == list(REASONS)
 
     passed, failed_count, code, out = _verifier()
-    assert (passed, failed_count, code) == (361, 0, 0), out
+    assert (passed, failed_count, code) == (385, 0, 0), out
     for line in (
         "media.failure_reason is nullable",
         "media.failure_reason is of type media_failure_reason",
@@ -793,14 +795,14 @@ async def test_the_verifier_asserts_a_reason_iff_failed(client, capsys, db_sessi
         "SELECT count(*) FROM media WHERE id = :id AND status = 'failed' AND failure_reason IS NULL",
     )
     passed, failed_count, code, out = _verifier()
-    assert (passed, failed_count, code) == (360, 1, 1), out
+    assert (passed, failed_count, code) == (384, 1, 1), out
     assert f"FAIL  {label}" in out and "1 media row(s) whose failure_reason disagrees with status" in out
     await plant(
         failed,
         "UPDATE media SET failure_reason = 'upload_incomplete' WHERE id = :id",
         "SELECT count(*) FROM media WHERE id = :id AND failure_reason = 'upload_incomplete'",
     )
-    assert _verifier()[:3] == (361, 0, 0)
+    assert _verifier()[:3] == (385, 0, 0)
 
     # (2) A ready row with a reason: the same line, and only it.
     await plant(
@@ -809,11 +811,11 @@ async def test_the_verifier_asserts_a_reason_iff_failed(client, capsys, db_sessi
         "SELECT count(*) FROM media WHERE id = :id AND status = 'ready' AND failure_reason IS NOT NULL",
     )
     passed, failed_count, code, out = _verifier()
-    assert (passed, failed_count, code) == (360, 1, 1), out
+    assert (passed, failed_count, code) == (384, 1, 1), out
     assert f"FAIL  {label}" in out
     await plant(
         ready,
         "UPDATE media SET failure_reason = NULL WHERE id = :id",
         "SELECT count(*) FROM media WHERE id = :id AND failure_reason IS NULL",
     )
-    assert _verifier()[:3] == (361, 0, 0)
+    assert _verifier()[:3] == (385, 0, 0)

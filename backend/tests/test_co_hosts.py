@@ -963,7 +963,9 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
     line and five membership invariants, with CK-45's
     at-least-one-membership line replaced; and 339 since CK-76's three — the index on
     `gatherings.owning_group_id`, no pending invitation on a group gathering,
-    every group gathering under a HOUSEHOLD group).
+    every group gathering under a HOUSEHOLD group; and 361 since CK-77's
+    twenty-three less the backup-NULL line it retired; and 385 since
+    CK-83a's twenty-four — the six cover columns' shapes on gatherings and groups — nullability, the two FKs each with no delete rule, cover_set_at's type, the CHECKs and the partial indexes — and four data lines).
     A PLANT IS NOT
     EVIDENCE UNTIL SOMETHING
     INDEPENDENT OF THE ASSERTION CONFIRMS THE ROW EXISTS (CK-56's lesson)."""
@@ -973,7 +975,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
         host_account = (await _account_for(db, HOST)).id
 
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (361, 0, 0), out
+    assert (passed, failed, code) == (385, 0, 0), out
     for line in (
         "table gathering_co_hosts exists",
         "gathering_co_hosts primary key is (gathering_id, account_id)",
@@ -1001,7 +1003,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
         )
         assert planted == 1, "the plant did not land"
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (360, 1, 1), out
+    assert (passed, failed, code) == (384, 1, 1), out
     assert f"FAIL  {exclusive}" in out and "1 co-host row(s) naming the gathering's host" in out
 
     async with db_session_factory() as db:
@@ -1010,7 +1012,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
             {"g": UUID(cast.gathering_id), "a": host_account},
         )
         await db.commit()
-    assert _verifier()[:3] == (361, 0, 0)
+    assert _verifier()[:3] == (385, 0, 0)
 
 
 async def test_co_host_management_logs_nothing_at_debug(client, capsys, db_session_factory, caplog):

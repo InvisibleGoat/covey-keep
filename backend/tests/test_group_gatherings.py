@@ -114,8 +114,10 @@ INDEX = "ix_gatherings_owning_group_id"
 # CK-76's three lines on top of CK-75's 336; 361 since CK-77's twenty-three
 # (the places table's shape, the type's labels, invitees_chosen and its CHECK,
 # three data lines) less the one retired (CK-75's backup-NULL line, replaced
-# by the 0009 block's is-gone line).
-VERIFIER_TOTAL = 361
+# by the 0009 block's is-gone line); 385 since CK-83a's twenty-four (the six
+# cover columns' shapes on gatherings and groups, their FKs, CHECKs and
+# partial indexes, and four data lines).
+VERIFIER_TOTAL = 385
 
 
 def _now() -> datetime:

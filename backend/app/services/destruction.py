@@ -20,7 +20,9 @@ rather than chosen.
 
 This module needs the models and sqlalchemy and nothing else — every one
 of them something `api/media.py` already imports — so the web service's
-import graph is what it was before CK-58. NOTHING HERE MAY IMPORT
+import graph is what it was before CK-58. (Since CK-83a it also calls
+`services/covers.py`, which holds itself to the same boundary: the models
+and sqlalchemy alone.) NOTHING HERE MAY IMPORT
 `ingest`, `processing`, `storage` or botocore: the moment it does, the
 coupling is back, one import away and invisible until someone measures.
 `ingest.py` imports THIS module (the ladder reads whole from the module
@@ -58,6 +60,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Gathering, Media, MediaDerivative, MediaStatus, PublicationState
+from app.services.covers import clear_covers_of
 from app.services.retention import REMOVED_BIN
 
 
@@ -74,12 +77,17 @@ async def mark_for_destruction(db: AsyncSession, row: Media) -> bool:
     uncounted, False when it was not `ready` at that instant — and then
     NOTHING was written.
 
-    Two statements, in this order, and the second only if the first took:
+    Three steps, in this order, and the second and third only if the first
+    took:
 
       1. The guarded mark — `UPDATE media … WHERE id = :id AND status =
          'ready'` — to `destroying`, with the four job columns RESET.
       2. The one `UPDATE gatherings` that drops `photo_count` and
          `total_bytes` together.
+      3. Since CK-83a, `services/covers.py::clear_covers_of` — every
+         gathering's or group's cover that is this photograph goes back
+         to no cover (a photograph that stops being published never lives
+         on as a cover).
 
     THE `status = 'ready'` GUARD IS THIS FUNCTION'S, NOT THE CALLER'S.
     The endpoint's `_removal_refusal` also tests the rung — for the 409
@@ -141,6 +149,13 @@ async def mark_for_destruction(db: AsyncSession, row: Media) -> bool:
         )
         .execution_options(synchronize_session=False)
     )
+    # THE COVER GOES WITH IT (CK-83a; the merge record §1.3): a photograph
+    # that stops being published clears every cover it is, in the
+    # transaction that stopped it — here, after the mark took, so both
+    # callers (the destroy endpoint and the sweep) clear through this one
+    # copy. The photograph's row was locked by the mark before the subject
+    # is touched: the order the set path takes (api/covers.py).
+    await clear_covers_of(db, row.id)
     return True
 
 

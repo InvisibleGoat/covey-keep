@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0034"
+EXPECTED_REVISION = "0035"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -1980,6 +1980,117 @@ async def verify(conn, ck: Checks) -> None:
             False,
             "member place integrity",
             "gathering_member_places / gathering_invitations / gatherings.invitees_chosen missing",
+        )
+
+    print("\n-- covers from photographs (0035, CK-83a) --")
+    # A COVER IS A POINTER ON ITS SUBJECT, CLEARED — NEVER RESOLVED THROUGH
+    # LIVENESS (the merge record §1.3): on each of `gatherings` and `groups`,
+    # the photograph (`cover_media_id`, FK -> media), the cover's version
+    # (`cover_set_at`) and who set it (`cover_set_by_person_id`, FK ->
+    # people — provenance, in no body), all nullable, both FKs with NO
+    # delete rule (the house habit), the three all set or all NULL (the
+    # CHECK), and a PARTIAL index on the pointer for the clearing statement
+    # (services/covers.py — `WHERE cover_media_id = :media_id` in every
+    # removal and destruction). Every line is the 0035 shape read back from
+    # the catalog — the 0022 idiom.
+    for subject in ("gatherings", "groups"):
+        assert_columns(
+            ck,
+            columns,
+            subject,
+            nullable=("cover_media_id", "cover_set_at", "cover_set_by_person_id"),
+        )
+        for column, target in (("cover_media_id", "media"), ("cover_set_by_person_id", "people")):
+            fk = await fk_rule(conn, f"fk_{subject}_{column}")
+            ck.check(
+                fk is not None and fk[0] == target,
+                f"{subject}.{column} references {target}",
+                f"found {fk!r}",
+            )
+            ck.check(
+                fk is not None and fk[1] == "a",
+                f"{subject}.{column} has no delete rule",
+                f"delete rule is {fk[1] if fk else None!r}",
+            )
+        set_at_shape = await column_type_and_default(conn, subject, "cover_set_at")
+        ck.check(
+            set_at_shape is not None and set_at_shape[0] == "timestamp with time zone",
+            f"{subject}.cover_set_at is timestamptz",
+            "column missing" if set_at_shape is None else f"type is {set_at_shape[0]!r}",
+        )
+        ck.check(
+            f"ck_{subject}_cover_all_or_none" in check_constraints,
+            f"CHECK ck_{subject}_cover_all_or_none exists (the three cover columns all set or all NULL)",
+            "constraint missing",
+        )
+        cover_index = await index_shape(conn, f"ix_{subject}_cover_media_id")
+        ck.check(
+            cover_index is not None
+            and cover_index[0] == subject
+            and "(cover_media_id)" in cover_index[1]
+            and "WHERE (cover_media_id IS NOT NULL)" in cover_index[1],
+            f"partial index ix_{subject}_cover_media_id exists on {subject}.cover_media_id "
+            "WHERE cover_media_id IS NOT NULL",
+            "index missing" if cover_index is None else f"found on {cover_index[0]!r}: {cover_index[1]}",
+        )
+
+    print("\n-- cover integrity (CK-83a) --")
+    # Guarded on the columns (the CK-43 lesson): below 0035 a query over a
+    # cover column is a crash, not a FAIL.
+    cover_columns = {"cover_media_id", "cover_set_at", "cover_set_by_person_id"}
+    if {"gatherings", "groups", "media"} <= tables and all(
+        cover_columns <= set(columns.get(subject, {})) for subject in ("gatherings", "groups")
+    ):
+        # (1) EVERY GATHERING'S COVER IS ONE OF ITS OWN PUBLISHED PHOTOGRAPHS:
+        # `ready` and `live`, and in that gathering. The set path refuses
+        # anything else (`not_in_gathering`, `not_published`), and removal
+        # and destruction clear the pointer in the transaction that stops
+        # the photograph being published — so a cover on a removed, pending,
+        # destroyed or foreign photograph is a writer that went around both,
+        # and the URL route refuses to serve it.
+        bad_gathering_covers = await scalar(
+            conn,
+            "SELECT count(*) FROM gatherings g JOIN media m ON m.id = g.cover_media_id "
+            "WHERE m.status <> 'ready' OR m.publication_state <> 'live' OR m.gathering_id <> g.id",
+        )
+        ck.check(
+            bad_gathering_covers == 0,
+            "every gathering's cover is a ready, published photograph of that gathering",
+            f"{bad_gathering_covers} gathering(s) whose cover is not",
+        )
+        # (2) EVERY GROUP'S COVER IS A PUBLISHED PHOTOGRAPH FROM ONE OF THE
+        # GROUP'S OWN GATHERINGS (`owning_group_id`) — the record §2's
+        # 2026-10-13 row as amended by §1.3. The same two writers keep it.
+        bad_group_covers = await scalar(
+            conn,
+            "SELECT count(*) FROM groups gr JOIN media m ON m.id = gr.cover_media_id "
+            "JOIN gatherings g ON g.id = m.gathering_id "
+            "WHERE m.status <> 'ready' OR m.publication_state <> 'live' "
+            "OR g.owning_group_id IS DISTINCT FROM gr.id",
+        )
+        ck.check(
+            bad_group_covers == 0,
+            "every group's cover is a ready, published photograph from one of that group's gatherings",
+            f"{bad_group_covers} group(s) whose cover is not",
+        )
+        # (3) The CHECKs above, re-asserted as DATA (the 0031 pattern): if a
+        # constraint were ever dropped its shape line fails and so does this.
+        for subject in ("gatherings", "groups"):
+            half_covers = await scalar(
+                conn,
+                f"SELECT count(*) FROM {subject} "
+                "WHERE num_nonnulls(cover_media_id, cover_set_at, cover_set_by_person_id) NOT IN (0, 3)",
+            )
+            ck.check(
+                half_covers == 0,
+                f"no {subject} row carries part of a cover (all three columns or none)",
+                f"{half_covers} {subject} row(s) with part of a cover",
+            )
+    else:
+        ck.check(
+            False,
+            "cover integrity",
+            "gatherings / groups cover columns or media missing",
         )
 
     print("\n-- media upload integrity (CK-34) --")

@@ -29,7 +29,10 @@ moves between groups and never gains a group after creation (the archive
 record §9; `GatheringPatch` forbids the field). It is MEMBERS ONLY until
 sharing outside the group ships: api/invitations.py refuses an emailed
 invitation to it with a 409 `members_only`. Every gathering body carries
-`group` — `{"id", "name"}` or null.
+`group` — `{"id", "name"}` or null — and, since CK-83a, `cover` —
+`{"source": "photo", "media_id", "set_at"}` or null, the memory view
+included (set and cleared by api/covers.py; cleared too when the photograph
+stops being published).
 
 THE HOST'S CHOICE — THREE PLACES (CK-77, Groups 2b; the 2026-10-04 record
 §4, §9, §10; the participation record §4). Each member of the group holds
@@ -604,6 +607,26 @@ def _group_ref(group_id: Optional[UUID], name: Optional[str]) -> Optional[dict]:
     return {"id": str(group_id), "name": name} if group_id is not None else None
 
 
+def _cover_body(gathering: Gathering) -> Optional[dict]:
+    """`cover` on every gathering body (CK-83a): `{"source": "photo",
+    "media_id", "set_at"}`, or null until an organiser sets one (the empty
+    cover is the surface's to draw). From the row the route already holds —
+    never a query of its own, so the list stays one statement. NAMING THE
+    PHOTOGRAPH IS SAFE HERE, unlike on a group body: it is one of this
+    gathering's own published photographs (the set path's rule; cleared the
+    moment it stops being published), and everyone who can read the
+    gathering — the memory tier — is in the audience its `live` branch
+    admits. `set_at` is the cover's version. Who set it rides no body. Also
+    api/covers.py's answer to a set."""
+    if gathering.cover_media_id is None:
+        return None
+    return {
+        "source": "photo",
+        "media_id": str(gathering.cover_media_id),
+        "set_at": gathering.cover_set_at.isoformat(),
+    }
+
+
 def _home_joins(statement):
     """The outer joins every body's facts ride — to `accounts` for the
     host's kind (CK-41), to `groups` for the home group and to
@@ -693,6 +716,9 @@ def _gathering_body(
         # patch alike. The id and the name are what every member already
         # reads on the group; nothing else about the group rides here.
         "group": facts.group,
+        # The cover (CK-83a) — not logistics, so the memory view carries it
+        # too: a member who sees the photographs sees the cover.
+        "cover": _cover_body(gathering),
         # What the caller IS to this gathering (CK-68): `host`, `co_host`,
         # or null — a fact about the caller, decided by `is_host` and the
         # co-host row, never re-derived by a consumer from the ids above

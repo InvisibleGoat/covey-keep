@@ -112,8 +112,10 @@ BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # rules, the index — the type's labels, invitees_chosen's three shape lines,
 # its CHECK, and three data lines) and retires one: CK-75's "backup column
 # NULL on every row" line is REPLACED by the 0009 block's "is gone" line
-# (one present line out, one absent line in), so 339 + 23 − 1 = 361.
-VERIFIER_TOTAL = 361
+# (one present line out, one absent line in), so 339 + 23 − 1 = 361; and
+# CK-83a adds twenty-four (the six cover columns' shapes on gatherings and
+# groups, their FKs, CHECKs and partial indexes, and four data lines), so 385.
+VERIFIER_TOTAL = 385
 
 LOGISTICS_FIELDS = ("occurrences", "rsvp_list_visibility")
 SUMMARY_FIELDS = ("next_occurrence", "occurrence_count")

@@ -89,7 +89,10 @@ account id in any body; the member list carries display names and the
 membership id (the one handle — a row the caller already reads) beside a
 role and `is_self`. `name` is user-supplied text naming a family and is
 never logged — this module has no logger (pinned with the root logger at
-DEBUG).
+DEBUG). Since CK-83a every body carries `cover` — `{"source": "photo",
+"set_at"}` or null — which NEVER names the photograph: a group's cover is
+seen by every member, and it may come from a gathering the reader is not
+in (api/covers.py sets it and serves it).
 
 Patch semantics (CK-22): JSON Merge Patch, presence read from
 `model_fields_set`. `name` is NOT NULL and therefore not clearable — an
@@ -374,10 +377,26 @@ async def _group_for_admin(db: AsyncSession, ctx: AuthContext, group_id: UUID) -
 # --- bodies ---------------------------------------------------------------------------
 
 
+def _cover_body(group: Group) -> Optional[dict]:
+    """`cover` on every group body (CK-83a): `{"source": "photo", "set_at"}`,
+    or null until an organiser sets one. IT NEVER NAMES THE PHOTOGRAPH: a
+    group's cover is seen by every member, and it may come from a gathering
+    the reader is not in — the photograph's id would hand them a handle to
+    something `_visible_media` does not show them. The image is reached
+    through `GET /groups/{id}/cover/url` alone, which answers with no id
+    either. `set_at` is the cover's version; who set it rides no body. From
+    the row the route already holds — no query of its own. Also
+    api/covers.py's answer to a set."""
+    if group.cover_media_id is None:
+        return None
+    return {"source": "photo", "set_at": group.cover_set_at.isoformat()}
+
+
 def _group_body(group: Group, member_count: int, caller_role: str) -> dict:
     # The admin column is the group's own fact; `caller_role` the one
     # caller-relative one. No retired backup column (CK-75), no roster,
-    # no email, no account id.
+    # no email, no account id — and, since CK-83a, a cover that never names
+    # its photograph.
     return {
         "id": str(group.id),
         "name": group.name,
@@ -385,6 +404,7 @@ def _group_body(group: Group, member_count: int, caller_role: str) -> dict:
         "admin_person_id": str(group.admin_person_id) if group.admin_person_id else None,
         "member_count": member_count,
         "caller_role": caller_role,
+        "cover": _cover_body(group),
         "created_at": group.created_at.isoformat(),
         "updated_at": group.updated_at.isoformat() if group.updated_at else None,
     }
