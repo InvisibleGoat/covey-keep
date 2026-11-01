@@ -31,7 +31,12 @@ test('the key, the TTL and the bound: covey-keep:return-path, 30 minutes, 2,000 
 test('valid paths are kept, with their query', () => {
   for (const path of [
     '/',
+    // Kept at CK-82, with its reason: Home is retired, but /home is still a
+    // gated route — it forwards to /groups inside the signed-in layout — so a
+    // signed-out visit to an old bookmark parks it like any gated page, and
+    // the return lands there and forwards. You is new at CK-82.
     '/home',
+    '/you',
     '/groups/g-1',
     '/groups/g-1?x=1',
     '/plan?checkout=complete',

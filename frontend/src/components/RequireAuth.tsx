@@ -6,7 +6,8 @@ import { parkReturnPath } from '../lib/returnPath'
 // The route guard. A signed-out visitor is sent to the sign-in screen at `/`
 // — that redirect is unchanged since CK-6 — and, since CK-79, the page they
 // were turned away from is PARKED first (lib/returnPath.ts), so the sign-in
-// round trip brings them back to it instead of to Home.
+// round trip brings them back to it instead of to Groups (Home until
+// CK-82, which retired it).
 //
 // It parks only when this page load has been signed out since its auth
 // state first settled (`signedOutSinceLoad`): a visitor with no session, or

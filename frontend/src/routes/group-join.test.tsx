@@ -230,7 +230,12 @@ test('Ask to join → requested: one join request with the token, Your request i
   expect((await screen.findByRole('heading', { level: 1 })).textContent).toBe('Your request is in')
   expect(screen.getByText(REQUEST_IN_LINE)).toBeTruthy()
   expect(screen.getByRole('link', { name: 'Your groups' }).getAttribute('href')).toBe('/groups')
-  expect(screen.getByRole('link', { name: 'Back home' }).getAttribute('href')).toBe('/home')
+  // MOVED AT CK-82, with its reason: Home is retired, and this screen's
+  // Back home link went with it — Your groups, already beside it, is the
+  // way on (the kickoff's *the link points to /groups with the label Your
+  // groups*; a second link to the same place would say nothing new).
+  expect(screen.queryByRole('link', { name: 'Back home' })).toBeNull()
+  expect(screen.getAllByRole('link')).toHaveLength(1)
   expect(pathsOf(mock)).toEqual(['/group-links/preview', '/group-links/join'])
   expect(bodyOf(mock, 1)).toEqual({ token: 'tok-abc' })
   expect(readGroupLinkToken()).toBeNull()
@@ -291,12 +296,16 @@ test('Ask to join → a network failure: the app’s line, the button live again
   expect(readGroupLinkToken()).toBe('tok-abc')
 })
 
-test('Not now: no request, the token cleared, and Home', async () => {
+// MOVED AT CK-82, with its reason: Not now went Home until Home was retired;
+// it goes to Your groups, where sign-in lands now.
+test('Not now: no request, the token cleared, and Your groups', async () => {
   const mock = stubServer({})
   window.location.hash = '#token=tok-abc'
   renderJoin(signedIn)
   fireEvent.click(await screen.findByRole('button', { name: 'Not now' }))
-  expect(await screen.findByText('home-stub')).toBeTruthy()
+  expect(await screen.findByText('your-groups-stub')).toBeTruthy()
+  expect(screen.getByTestId('location').textContent).toBe('/groups')
+  expect(screen.queryByText('home-stub')).toBeNull()
   expect(readGroupLinkToken()).toBeNull()
   expect(pathsOf(mock)).toEqual(['/group-links/preview'])
 })

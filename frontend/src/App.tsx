@@ -1,6 +1,7 @@
-import { Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes } from 'react-router-dom'
 import './App.css'
 import { AppUpdateProvider } from './components/AppUpdateProvider'
+import { Frame } from './components/Frame'
 import { PwaUpdatePrompt } from './components/PwaUpdatePrompt'
 import { RequireAuth } from './components/RequireAuth'
 import { AccountDeleted } from './routes/AccountDeleted'
@@ -15,13 +16,13 @@ import { GroupInvitationAccept } from './routes/GroupInvitationAccept'
 import { GroupJoin } from './routes/GroupJoin'
 import { GroupNew } from './routes/GroupNew'
 import { Groups } from './routes/Groups'
-import { Home } from './routes/Home'
 import { InvitationAccept } from './routes/InvitationAccept'
 import { PageNotAvailable } from './routes/PageNotAvailable'
 import { Plan } from './routes/Plan'
 import { Settings } from './routes/Settings'
 import { SignIn } from './routes/SignIn'
 import { Tos } from './routes/Tos'
+import { You } from './routes/You'
 
 function App() {
   return (
@@ -30,103 +31,53 @@ function App() {
       <Routes>
         <Route path="/" element={<SignIn />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
+        {/* Every signed-in page, under ONE layout route (CK-82): RequireAuth
+            around the frame — the menu, the top and bottom bars — which
+            renders the page through its <Outlet />. RequireAuth's behaviour
+            is unchanged: a signed-out visit to any of these parks its
+            `pathname + search` and goes to `/` (the sign-in return). Each
+            page keeps its own <main>. */}
         <Route
-          path="/home"
           element={
             <RequireAuth>
-              <Home />
+              <Frame />
             </RequireAuth>
           }
-        />
-        <Route
-          path="/gatherings"
-          element={
-            <RequireAuth>
-              <Gatherings />
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/gatherings/new"
-          element={
-            <RequireAuth>
-              <GatheringNew />
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/gatherings/:id"
-          element={
-            <RequireAuth>
-              <GatheringDetail />
-            </RequireAuth>
-          }
-        />
-        {/* Your groups (CK-78, Groups 3a). `/groups/new` sits before
-            `/groups/:id` so it reads as the static route it is. */}
-        <Route
-          path="/groups"
-          element={
-            <RequireAuth>
-              <Groups />
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/groups/new"
-          element={
-            <RequireAuth>
-              <GroupNew />
-            </RequireAuth>
-          }
-        />
+        >
+          {/* Home is retired (CK-82; the merge record §1.4): sign-in lands
+              on Groups, and an old link or bookmark to /home forwards there.
+              Inside the layout, so a signed-out visit parks /home as any
+              gated page does. */}
+          <Route path="/home" element={<Navigate to="/groups" replace />} />
+          <Route path="/gatherings" element={<Gatherings />} />
+          <Route path="/gatherings/new" element={<GatheringNew />} />
+          <Route path="/gatherings/:id" element={<GatheringDetail />} />
+          {/* Your groups (CK-78, Groups 3a). */}
+          <Route path="/groups" element={<Groups />} />
+          <Route path="/groups/new" element={<GroupNew />} />
+          <Route path="/groups/:id" element={<GroupDetail />} />
+          {/* A gathering in the group (CK-80): the group page's New gathering
+              opens the form with the group's member list. */}
+          <Route path="/groups/:id/gatherings/new" element={<GroupGatheringNew />} />
+          <Route path="/settings" element={<Settings />} />
+          {/* The path is fixed by the backend's return URLs (CK-74): Checkout
+              returns to /plan?checkout=complete|cancelled, the portal to /plan. */}
+          <Route path="/plan" element={<Plan />} />
+          <Route path="/you" element={<You />} />
+        </Route>
+        {/* The routes OUTSIDE the frame stay outside: the landings are
+            reached signed out, and the mockup draws them without a frame. */}
         {/* The two landings the backend's URLs point at (CK-79, Groups 3b):
             the group's link (`/groups/join#token=…`) and the emailed group
             invitation (`/groups/invitations/accept#token=…`). Deliberately
             NOT behind RequireAuth — a signed-out holder must see what the
             link is for and how to sign in, and RequireAuth would send them to
             `/` without the fragment, the token with it (CK-75's finding 1).
-            Both sit before `/groups/:id`; the static `/groups/join` segment
-            outranks the dynamic one, which until CK-79 a static row
-            rendering the catch-all held for it. */}
+            Their static segments outrank the layout's dynamic
+            `/groups/:id`, which until CK-79 a static row rendering the
+            catch-all held for `/groups/join`. */}
         <Route path="/groups/join" element={<GroupJoin />} />
         <Route path="/groups/invitations/accept" element={<GroupInvitationAccept />} />
-        <Route
-          path="/groups/:id"
-          element={
-            <RequireAuth>
-              <GroupDetail />
-            </RequireAuth>
-          }
-        />
-        {/* A gathering in the group (CK-80): the group page's New gathering
-            opens the form with the group's member list. */}
-        <Route
-          path="/groups/:id/gatherings/new"
-          element={
-            <RequireAuth>
-              <GroupGatheringNew />
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/settings"
-          element={
-            <RequireAuth>
-              <Settings />
-            </RequireAuth>
-          }
-        />
-        {/* The path is fixed by the backend's return URLs (CK-74): Checkout
-            returns to /plan?checkout=complete|cancelled, the portal to /plan. */}
-        <Route
-          path="/plan"
-          element={
-            <RequireAuth>
-              <Plan />
-            </RequireAuth>
-          }
-        />
         {/* Deliberately NOT behind RequireAuth (CK-25): a signed-out invitee
             must see what they were invited to and where to sign in. */}
         <Route path="/invitations/accept" element={<InvitationAccept />} />

@@ -1,5 +1,6 @@
 // The sign-in return (CK-79): a signed-out visitor who opens a gated page
-// comes back to it after the magic-link round trip, instead of to Home.
+// comes back to it after the magic-link round trip, instead of to the
+// default landing — Home until CK-82, Groups since.
 // Before CK-79 `RequireAuth` answered every signed-out visit with
 // `<Navigate to="/" replace />` and nothing remembered where the person had
 // been going — a link to `/groups/<id>`, `/plan` or `/gatherings/<id>`
@@ -27,7 +28,7 @@
 // a sign-in link (which lives 15) and opening it, and short enough that a
 // path parked and abandoned never surfaces at next week's sign-in. A
 // timestamp from the future (a clock moved back) reads as stale — the safe
-// direction, which lands on Home.
+// direction, which lands on Groups (Home until CK-82).
 //
 // WHO PARKS AND WHEN is the callers' rule, not this module's: `RequireAuth`
 // parks only when the page load has been signed out since its auth state
@@ -38,7 +39,7 @@
 // parked; `AuthCallback` takes it.
 //
 // Storage unavailable (private mode) means nothing parks, and sign-in lands
-// on Home as it did before CK-79.
+// on Groups (Home until CK-82), as it did before CK-79.
 
 export const RETURN_PATH_KEY = 'covey-keep:return-path'
 
@@ -79,7 +80,7 @@ export function parkReturnPath(path: string, now: number = Date.now()): void {
   try {
     localStorage.setItem(RETURN_PATH_KEY, JSON.stringify({ path: withoutFragment, parkedAt: now }))
   } catch {
-    // Storage unavailable: nothing parks, and sign-in lands on Home.
+    // Storage unavailable: nothing parks, and sign-in lands on Groups.
   }
 }
 

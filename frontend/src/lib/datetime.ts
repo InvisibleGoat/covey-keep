@@ -124,6 +124,18 @@ export function formatDay(iso: string, zone: string): string {
   }).format(new Date(iso))
 }
 
+// The day with its weekday — "Thu, Oct 15" — for the menu's gatherings
+// coming up (CK-82), as the mockup draws them. Through the explicit zone,
+// like formatDay.
+export function formatWeekdayDay(iso: string, zone: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: zone,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date(iso))
+}
+
 // "Sep 1, 2026, 6:00 PM – 9:00 PM" when the end falls on the same day in the
 // zone; the end gets its own full date otherwise.
 export function formatInstantRange(startIso: string, endIso: string | null, zone: string): string {

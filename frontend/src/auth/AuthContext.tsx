@@ -102,7 +102,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     // A sign-out hands nothing on (CK-79): whatever was parked for a sign-in
     // return goes with the session, so the next person to sign in on this
-    // device lands on Home, never on a page the last one meant to open.
+    // device lands on Groups (Home until CK-82), never on a page the last
+    // one meant to open.
     clearReturnPath()
     clearToken()
     setPerson(null)

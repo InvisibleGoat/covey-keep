@@ -139,7 +139,7 @@ export function GroupJoin() {
 
   function notNow() {
     clearGroupLinkToken()
-    navigate('/home')
+    navigate('/groups')
   }
 
   const groupName = 'groupName' in preview ? preview.groupName : null
@@ -159,7 +159,6 @@ export function GroupJoin() {
         <h1>{shown === 'requested' ? 'Your request is in' : "You've already asked to join"}</h1>
         <p>{requestInLine(groupName)}</p>
         <Link to="/groups">Your groups</Link>
-        <Link to="/home">Back home</Link>
       </main>
     )
   }

@@ -1,29 +1,35 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { FieldError, FormLevelErrors } from '../components/FieldError'
 import { PasskeySection } from '../components/PasskeySection'
 import { ACCOUNT_DELETED_SIGNAL } from '../lib/accountDeleted'
 import { authFetch } from '../lib/api'
 import { planLine, readBilling, type Billing } from '../lib/billing'
+import { describedBy, errorsFromResponse, noErrors, type FormErrors } from '../lib/formErrors'
 import { detectTimeZone, groupedTimeZones, timeZoneLabel } from '../lib/timezone'
 import type { Person } from '../auth/context'
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'failed'
 
-interface FieldErrors {
-  display_name?: string
-  timezone?: string
-}
+// Both forms' refusals go through the one mapper (lib/formErrors.ts) and
+// render through components/FieldError.tsx — the error-<field> /
+// aria-describedby contract every form has used since CK-17. Until CK-82
+// this screen kept its own pre-CK-17 mapper, keyed on the last `loc`
+// segment and hardcoded to two fields (a standing exception in
+// components.md, recorded and not blessed). The words a person reads for
+// any refusal the server sends today are unchanged.
+const PROFILE_FIELDS = ['display_name', 'timezone']
+const EMAIL_FIELDS = ['new_email']
 
-interface ValidationDetail {
-  loc?: (string | number)[]
-  msg?: string
-}
+// Kept deliberately over the server's own message on `new_email`, which
+// reads "not an email address" (deps.py::normalize_email): this line says
+// it better.
+const NOT_AN_EMAIL = "That doesn't look like an email address."
+const SEND_FAILED = 'Something went wrong sending the link. Try again.'
 
-// "Value error, display name cannot be empty" → "Display name cannot be empty"
-function humanize(msg: string): string {
-  const stripped = msg.replace(/^Value error,\s*/, '')
-  return stripped.charAt(0).toUpperCase() + stripped.slice(1)
+function formLine(message: string): FormErrors {
+  return { ...noErrors(), form: [message] }
 }
 
 export function Settings() {
@@ -34,14 +40,16 @@ export function Settings() {
   // browser-detected one so the select opens on something sensible.
   const [timeZone, setTimeZone] = useState(person?.timezone ?? detectTimeZone() ?? '')
   const [saveState, setSaveState] = useState<SaveState>('idle')
-  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
+  const [profileErrors, setProfileErrors] = useState<FormErrors>(noErrors)
   const [newEmail, setNewEmail] = useState('')
   // The address a confirmation link is out for. Component state only: on a
   // fresh visit the section simply shows the change form again, and any new
   // request supersedes the outstanding one server-side.
   const [pendingEmail, setPendingEmail] = useState<string | null>(null)
   const [emailState, setEmailState] = useState<'idle' | 'sending' | 'cancelling'>('idle')
-  const [emailError, setEmailError] = useState<string | null>(null)
+  const [emailErrors, setEmailErrors] = useState<FormErrors>(noErrors)
+  // Cancelling an outstanding change is not a form: its one failure line.
+  const [cancelError, setCancelError] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState('')
   const [deleteState, setDeleteState] = useState<'idle' | 'deleting' | 'failed'>('idle')
   // Your plan (CK-74): the current allowance and price, read from
@@ -70,7 +78,7 @@ export function Settings() {
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
     setSaveState('saving')
-    setFieldErrors({})
+    setProfileErrors(noErrors())
     const body: Record<string, string> = { display_name: displayName }
     if (timeZone) body.timezone = timeZone
     try {
@@ -85,17 +93,9 @@ export function Settings() {
         updatePerson((await response.json()) as Person)
         setSaveState('saved')
       } else if (response.status === 422) {
-        const detail = (await response.json()).detail as ValidationDetail[] | string
-        const errors: FieldErrors = {}
-        if (Array.isArray(detail)) {
-          for (const item of detail) {
-            const field = item.loc?.at(-1)
-            if ((field === 'display_name' || field === 'timezone') && item.msg) {
-              errors[field] = humanize(item.msg)
-            }
-          }
-        }
-        setFieldErrors(errors)
+        // A field the form shows lands on it; anything else — another field,
+        // a string `detail` — lands form-level instead of vanishing.
+        setProfileErrors(await errorsFromResponse(response, PROFILE_FIELDS))
         setSaveState('idle')
       } else {
         setSaveState('failed')
@@ -107,13 +107,13 @@ export function Settings() {
 
   async function handleEmailSubmit(event: FormEvent) {
     event.preventDefault()
-    setEmailError(null)
+    setEmailErrors(noErrors())
     const target = newEmail.trim().toLowerCase()
     // A purely client-side courtesy — the person's own current address is no
     // secret to them, so this reveals nothing the server's byte-identical
-    // response is protecting.
+    // response is protecting. It is about the field, so it lands on it.
     if (person && target === person.email) {
-      setEmailError("That's already your sign-in address.")
+      setEmailErrors({ ...noErrors(), fields: { new_email: "That's already your sign-in address." } })
       return
     }
     setEmailState('sending')
@@ -129,30 +129,35 @@ export function Settings() {
         setPendingEmail(target)
         setNewEmail('')
       } else if (response.status === 429) {
-        setEmailError('Too many attempts. Wait a few minutes and try again.')
+        setEmailErrors(formLine('Too many attempts. Wait a few minutes and try again.'))
       } else if (response.status === 422) {
-        setEmailError("That doesn't look like an email address.")
+        // A refusal on `new_email` keeps this screen's own line; any other
+        // 422 — another field, a string `detail` — shows the mapper's
+        // form-level line rather than being swallowed.
+        const errors = await errorsFromResponse(response, EMAIL_FIELDS)
+        if (errors.fields.new_email) errors.fields.new_email = NOT_AN_EMAIL
+        setEmailErrors(errors)
       } else {
-        setEmailError('Something went wrong sending the link. Try again.')
+        setEmailErrors(formLine(SEND_FAILED))
       }
     } catch {
-      setEmailError('Something went wrong sending the link. Try again.')
+      setEmailErrors(formLine(SEND_FAILED))
     }
     setEmailState('idle')
   }
 
   async function handleEmailCancel() {
     setEmailState('cancelling')
-    setEmailError(null)
+    setCancelError(null)
     try {
       const response = await authFetch('/me/email-change', { method: 'DELETE' })
       if (response.status === 204) {
         setPendingEmail(null)
       } else {
-        setEmailError('Something went wrong cancelling. Try again.')
+        setCancelError('Something went wrong cancelling. Try again.')
       }
     } catch {
-      setEmailError('Something went wrong cancelling. Try again.')
+      setCancelError('Something went wrong cancelling. Try again.')
     }
     setEmailState('idle')
   }
@@ -200,18 +205,20 @@ export function Settings() {
           maxLength={120}
           autoComplete="name"
           value={displayName}
+          aria-describedby={describedBy(profileErrors, 'display_name')}
           onChange={(event) => {
             setDisplayName(event.target.value)
             edited()
           }}
         />
         <p className="field-hint">How your name appears on gatherings you join or host.</p>
-        {fieldErrors.display_name && <p className="form-error">{fieldErrors.display_name}</p>}
+        <FieldError errors={profileErrors} field="display_name" />
 
         <label htmlFor="time-zone">Time zone</label>
         <select
           id="time-zone"
           value={timeZone}
+          aria-describedby={describedBy(profileErrors, 'timezone')}
           onChange={(event) => {
             setTimeZone(event.target.value)
             edited()
@@ -229,11 +236,12 @@ export function Settings() {
           ))}
         </select>
         <p className="field-hint">Gathering times are shown to you in this time zone.</p>
-        {fieldErrors.timezone && <p className="form-error">{fieldErrors.timezone}</p>}
+        <FieldError errors={profileErrors} field="timezone" />
 
         <button type="submit" disabled={saveState === 'saving'}>
           {saveState === 'saving' ? 'Saving…' : 'Save'}
         </button>
+        <FormLevelErrors errors={profileErrors} />
         {saveState === 'saved' && <p className="form-success">Saved.</p>}
         {saveState === 'failed' && (
           <p className="form-error">Something went wrong saving your settings. Try again.</p>
@@ -270,7 +278,7 @@ export function Settings() {
           >
             {emailState === 'cancelling' ? 'Cancelling…' : 'Cancel the change'}
           </button>
-          {emailError && <p className="form-error">{emailError}</p>}
+          {cancelError && <p className="form-error">{cancelError}</p>}
         </section>
       ) : (
         <form
@@ -289,18 +297,20 @@ export function Settings() {
             required
             autoComplete="email"
             value={newEmail}
+            aria-describedby={describedBy(emailErrors, 'new_email')}
             onChange={(event) => {
               setNewEmail(event.target.value)
-              setEmailError(null)
+              setEmailErrors(noErrors())
             }}
           />
+          <FieldError errors={emailErrors} field="new_email" />
           <p className="field-hint">
             We'll send a confirmation link there — nothing changes until you open it.
           </p>
           <button type="submit" disabled={emailState === 'sending'}>
             {emailState === 'sending' ? 'Sending…' : 'Send confirmation link'}
           </button>
-          {emailError && <p className="form-error">{emailError}</p>}
+          <FormLevelErrors errors={emailErrors} />
         </form>
       )}
 
@@ -340,7 +350,7 @@ export function Settings() {
         )}
       </section>
 
-      <Link to="/home">Back to your gatherings</Link>
+      <Link to="/gatherings">Back to your gatherings</Link>
     </main>
   )
 }

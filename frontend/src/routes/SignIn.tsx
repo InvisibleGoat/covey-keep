@@ -38,7 +38,7 @@ export function SignIn() {
     }
   }, [])
 
-  if (status === 'signedIn' || status === 'loading') return <Navigate to="/home" replace />
+  if (status === 'signedIn' || status === 'loading') return <Navigate to="/groups" replace />
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
@@ -66,7 +66,7 @@ export function SignIn() {
       // that already exists, and consent was recorded when it was created.
       const token = await signInWithPasskey()
       signIn(token)
-      // status flips to 'loading' → the redirect above navigates to /home.
+      // status flips to 'loading' → the redirect above navigates to /groups.
     } catch (err) {
       if (!isCeremonyCancelled(err)) {
         setPasskeyError("Passkey sign-in didn't work. Emailing yourself a link still does.")

@@ -698,7 +698,7 @@ test('the source: the product is named from brand.ts, the honey colour is unused
     // card (CK-81; the honey record as amended 2026-10-31 — no registration
     // waits on it now): never its values or its tokens in this source. The
     // card carries one class, and App.css alone gives it honey
-    // (styles/look.test.ts pins that rule).
+    // (styles/look.test.tsx pins that rule).
     expect(source).not.toMatch(/#F2BE4E|#E8B64A|--pg-events-honey|honey-ink|honey-tint/i)
   }
   // A Checkout or portal URL never enters state: the component holds no

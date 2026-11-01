@@ -1,5 +1,6 @@
 // CK-78 pins on your groups and starting one (Groups 3a). The value under
-// test: Home links to the list above the gatherings; the list is ONE request
+// test: the way to the list comes above the gatherings (Home's links until
+// CK-82, the frame's sections since); the list is ONE request
 // and shows each group's name, its count ("1 member" for one) and the
 // caller's own role, in the server's order; the empty state is a real screen
 // that promises nothing without a screen yet; a failed read can be retried —
@@ -21,7 +22,6 @@ import groupNewSource from './GroupNew.tsx?raw'
 import { Groups } from './Groups'
 import groupsSource from './Groups.tsx?raw'
 import groupDetailSource from './GroupDetail.tsx?raw'
-import { Home } from './Home'
 
 const person: Person = {
   id: 'person-1',
@@ -90,20 +90,6 @@ function renderList() {
 // Home, and the route table.
 // ---------------------------------------------------------------------------
 
-test('Home links to Your groups, above Your gatherings', () => {
-  render(
-    <MemoryRouter>
-      <AuthContext.Provider value={signedIn}>
-        <Home />
-      </AuthContext.Provider>
-    </MemoryRouter>,
-  )
-  const groups = screen.getByRole('link', { name: 'Your groups' })
-  const gatherings = screen.getByRole('link', { name: 'Your gatherings' })
-  expect(groups.getAttribute('href')).toBe('/groups')
-  expect(groups.compareDocumentPosition(gatherings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-})
-
 function renderAppAt(address: string, auth: AuthState, respond: (url: string) => Response) {
   const fetchStub = vi.fn((url: string) => Promise.resolve(respond(String(url))))
   vi.stubGlobal('fetch', fetchStub)
@@ -117,6 +103,22 @@ function renderAppAt(address: string, auth: AuthState, respond: (url: string) =>
   )
   return fetchStub
 }
+
+// MOVED AT CK-82, with its reason: until CK-82 this pinned Home's two links,
+// Your groups above Your gatherings. Home is retired (the merge record
+// §1.4); the frame's bottom bar carries the sections, Groups first and
+// Gatherings after it — what the pin always held.
+test('the way to Your groups comes above the gatherings: the frame’s Groups tab precedes its Gatherings tab', async () => {
+  renderAppAt('/groups', signedIn, (url) =>
+    url.endsWith('/gatherings') ? json(200, { gatherings: [] }) : json(200, { groups: [group()] }),
+  )
+  await screen.findByRole('heading', { level: 1, name: 'Your groups' })
+  const bar = screen.getByRole('navigation', { name: 'Sections' })
+  const groups = within(bar).getByRole('link', { name: 'Groups' })
+  const gatherings = within(bar).getByRole('link', { name: 'Gatherings' })
+  expect(groups.getAttribute('href')).toBe('/groups')
+  expect(groups.compareDocumentPosition(gatherings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+})
 
 test('the route table reaches the list, the form and a group page, each behind sign-in', async () => {
   renderAppAt('/groups', signedIn, () => json(200, { groups: [group()] }))
@@ -191,7 +193,9 @@ test('the list: one request, each group linking to its page with its name, its c
     'Cousins12 members',
   ])
   expect(screen.getByRole('link', { name: 'Start a group' }).getAttribute('href')).toBe('/groups/new')
-  expect(screen.getByRole('link', { name: 'Back home' }).getAttribute('href')).toBe('/home')
+  // MOVED AT CK-82, with its reason: the page's Back home link is gone —
+  // Home is retired, and inside the frame the menu is the way around.
+  expect(screen.queryByRole('link', { name: 'Back home' })).toBeNull()
   expect(document.body.textContent).not.toMatch(FORBIDDEN)
 })
 
@@ -201,8 +205,11 @@ test('the empty state is a real screen, as literals, promising nothing without a
   expect(await screen.findByRole('heading', { level: 1, name: 'No groups yet' })).toBeTruthy()
   expect(screen.getByText('Groups you start or join will be listed here.')).toBeTruthy()
   expect(screen.getByRole('link', { name: 'Start a group' }).getAttribute('href')).toBe('/groups/new')
-  expect(screen.getByRole('link', { name: 'Back home' }).getAttribute('href')).toBe('/home')
-  expect(screen.getAllByRole('link')).toHaveLength(2)
+  // MOVED AT CK-82, with its reason: Back home is gone (Home is retired; the
+  // frame's menu is the way around), so Start a group is the screen's one
+  // link.
+  expect(screen.queryByRole('link', { name: 'Back home' })).toBeNull()
+  expect(screen.getAllByRole('link')).toHaveLength(1)
   const text = document.body.textContent ?? ''
   expect(text).not.toMatch(/invit|gathering|photo/i)
   expect(text).not.toMatch(FORBIDDEN)
@@ -229,7 +236,8 @@ test('a failed read says so and can be retried: Try again re-reads once per pres
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).toBe('Something went wrong loading your groups.')
   expect(screen.getByRole('heading', { level: 1, name: 'Your groups' })).toBeTruthy()
-  expect(screen.getByRole('link', { name: 'Back home' }).getAttribute('href')).toBe('/home')
+  // MOVED AT CK-82, with its reason: Back home is gone with Home.
+  expect(screen.queryByRole('link', { name: 'Back home' })).toBeNull()
   expect(mock).toHaveBeenCalledTimes(1)
 
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))

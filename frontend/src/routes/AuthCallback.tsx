@@ -29,9 +29,10 @@ export function AuthCallback() {
       //      parked, valid and fresh (lib/returnPath.ts; taking it clears it);
       //   2. else the CK-25 acceptance screen when an invitation token is
       //      parked — the branch from before CK-79, kept as the fallback;
-      //   3. else Home.
+      //   3. else Groups — Home is retired (CK-82), and sign-in lands on
+      //      Groups.
       const back = takeReturnPath()
-      navigate(back ?? (readInvitationToken() ? '/invitations/accept' : '/home'), { replace: true })
+      navigate(back ?? (readInvitationToken() ? '/invitations/accept' : '/groups'), { replace: true })
     } else {
       setFailed(true)
     }

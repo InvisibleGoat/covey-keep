@@ -6,11 +6,18 @@
 // The value under test: a signed-out visit to a gated page is turned away
 // to `/` with its path and query PARKED — never its fragment — and the
 // sign-in callback brings the person back there; with nothing parked the
-// callback lands on Home, a parked CK-25 invitation token still lands on its
-// acceptance screen, and a hostile or stale parked path lands on Home. A
-// sign-out, or a 401 that ends a session this page load held, parks
-// NOTHING — the next person to sign in on a shared device lands on Home,
-// never on the last one's page — and a sign-out clears whatever was parked.
+// callback lands on Groups (Home until CK-82 retired it), a parked CK-25
+// invitation token still lands on its acceptance screen, and a hostile or
+// stale parked path lands on Groups. A sign-out, or a 401 that ends a
+// session this page load held, parks NOTHING — the next person to sign in on
+// a shared device lands on Groups, never on the last one's page — and a
+// sign-out clears whatever was parked.
+//
+// MOVED AT CK-82, with its reason: every landing this file read as /home
+// (and Home's "Welcome, Bea" heading) reads /groups and the Groups page's
+// heading — Home is retired and sign-in lands on Groups (the merge record
+// §1.4) — and the sign-out is You's Sign out, which moved there from Home.
+// The server answers the frame's two menu reads.
 // A stored session that fails its first check is a signed-out visit.
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
@@ -72,6 +79,10 @@ function stubServer(over: Record<string, Responder> = {}) {
         return Promise.resolve(json(200, person))
       case 'POST /auth/logout':
         return Promise.resolve(new Response(null, { status: 204 }))
+      case 'GET /groups':
+        return Promise.resolve(json(200, { groups: [] }))
+      case 'GET /gatherings':
+        return Promise.resolve(json(200, { gatherings: [] }))
       case 'GET /groups/g-1':
         return Promise.resolve(json(200, group))
       case 'GET /groups/g-1/members':
@@ -169,6 +180,18 @@ test('signed out at /groups/g-1?x=1#frag: turned away to / with /groups/g-1?x=1 
   expect(window.location.hash).toBe('')
 })
 
+test('signed out at /home — Home retired at CK-82, an old bookmark: parked like any gated page, and the sign-in link lands there and forwards to /groups', async () => {
+  stubServer()
+  renderAppAt('/home')
+  await waitFor(() => expect(locationText()).toBe('/'))
+  await waitFor(() => expect(parked()?.path).toBe('/home'))
+  cleanup()
+  await openSignInLink()
+  await screen.findByRole('heading', { level: 1, name: 'No groups yet' })
+  expect(locationText()).toBe('/groups')
+  expect(parked()).toBeNull()
+})
+
 test('signed out at /plan: parked, and the sign-in link lands on /plan', async () => {
   stubServer()
   renderAppAt('/plan')
@@ -178,11 +201,11 @@ test('signed out at /plan: parked, and the sign-in link lands on /plan', async (
   await waitFor(() => expect(locationText()).toBe('/plan'))
 })
 
-test('nothing parked: the sign-in link lands on /home', async () => {
+test('nothing parked: the sign-in link lands on /groups', async () => {
   stubServer()
   await openSignInLink()
-  await screen.findByRole('heading', { level: 1, name: 'Welcome, Bea' })
-  expect(locationText()).toBe('/home')
+  await screen.findByRole('heading', { level: 1, name: 'No groups yet' })
+  expect(locationText()).toBe('/groups')
 })
 
 test('a parked CK-25 invitation token and no return path: the sign-in link still lands on /invitations/accept', async () => {
@@ -195,7 +218,7 @@ test('a parked CK-25 invitation token and no return path: the sign-in link still
   expect(readInvitationToken()).toBeNull()
 })
 
-test('a hostile or a stale parked path lands on /home, and is cleared', async () => {
+test('a hostile or a stale parked path lands on /groups, and is cleared', async () => {
   const now = Date.now()
   for (const entry of [
     { path: '//evil.example', parkedAt: now },
@@ -208,8 +231,8 @@ test('a hostile or a stale parked path lands on /home, and is cleared', async ()
     stubServer()
     localStorage.setItem(RETURN_PATH_KEY, JSON.stringify(entry))
     await openSignInLink()
-    await screen.findByRole('heading', { level: 1, name: 'Welcome, Bea' })
-    expect(locationText(), JSON.stringify(entry)).toBe('/home')
+    await screen.findByRole('heading', { level: 1, name: 'No groups yet' })
+    expect(locationText(), JSON.stringify(entry)).toBe('/groups')
     expect(parked()).toBeNull()
     cleanup()
     vi.unstubAllGlobals()
@@ -217,13 +240,13 @@ test('a hostile or a stale parked path lands on /home, and is cleared', async ()
   }
 })
 
-test('a sign-out parks nothing — and clears what was parked: Home’s Sign out lands on / with nothing parked, and the next sign-in lands on /home', async () => {
+test('a sign-out parks nothing — and clears what was parked: You’s Sign out lands on / with nothing parked, and the next sign-in lands on /groups', async () => {
   stubServer()
   setToken('session-old')
   // Something left parked earlier in the day, on this device.
   localStorage.setItem(RETURN_PATH_KEY, JSON.stringify({ path: '/plan', parkedAt: Date.now() }))
-  renderAppAt('/home')
-  await screen.findByRole('heading', { level: 1, name: 'Welcome, Bea' })
+  renderAppAt('/you')
+  await screen.findByRole('heading', { level: 1, name: 'You' })
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
   await waitFor(() => expect(locationText()).toBe('/'))
   expect(screen.getByTestId('auth-status').textContent).toBe('signedOut')
@@ -231,11 +254,11 @@ test('a sign-out parks nothing — and clears what was parked: Home’s Sign out
   cleanup()
 
   await openSignInLink('session-next')
-  await screen.findByRole('heading', { level: 1, name: 'Welcome, Bea' })
-  expect(locationText()).toBe('/home')
+  await screen.findByRole('heading', { level: 1, name: 'No groups yet' })
+  expect(locationText()).toBe('/groups')
 })
 
-test('a 401 that ends a session on a page that was signed in parks nothing: /settings, revoked mid-page, back to / with nothing parked; the next sign-in lands on /home', async () => {
+test('a 401 that ends a session on a page that was signed in parks nothing: /settings, revoked mid-page, back to / with nothing parked; the next sign-in lands on /groups', async () => {
   stubServer({ 'GET /billing': () => json(401, { detail: 'Not authenticated' }) })
   setToken('session-old')
   renderAppAt('/settings')
@@ -248,8 +271,8 @@ test('a 401 that ends a session on a page that was signed in parks nothing: /set
   cleanup()
 
   await openSignInLink('session-next')
-  await screen.findByRole('heading', { level: 1, name: 'Welcome, Bea' })
-  expect(locationText()).toBe('/home')
+  await screen.findByRole('heading', { level: 1, name: 'No groups yet' })
+  expect(locationText()).toBe('/groups')
 })
 
 test('a stored session that fails its first check is a signed-out visit: /groups/g-1 is parked, and the sign-in link returns there', async () => {

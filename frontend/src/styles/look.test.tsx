@@ -99,11 +99,33 @@ test("honey's one use: its tokens are referenced only by the recommended plan ca
   for (const [path, text] of Object.entries(sources)) expect(text, path).not.toMatch(honey)
 })
 
-test('the theme is the attribute: index.html paints light statically, and no stylesheet asks the device', () => {
+test('the theme is the attribute: index.html paints light statically, no stylesheet asks the device, and only lib/theme.ts and the one pre-paint script touch the stored choice or the attribute', () => {
   expect(indexHtml).toMatch(/<html lang="en" data-theme="light">/)
   for (const [path, text] of Object.entries(stylesheets)) expect(text, path).not.toContain('prefers-color-scheme')
-  // Nothing stores or reads a theme in this phase: the switch is CK-82's.
-  for (const [path, text] of Object.entries(sources)) expect(stripTs(text), path).not.toMatch(/data-?theme|dataset\.theme/i)
+  // MOVED AT CK-82, with its reason: until CK-82 no source stored or read a
+  // theme at all — the switch was CK-82's. Since CK-82 a person chooses
+  // Light or Dark on You, the choice is stored on the device, and it is
+  // applied before the first paint. So the pin moves from "nothing" to "one
+  // module and one script": lib/theme.ts is the only source that names the
+  // key or the attribute, and index.html's one inline script is the only
+  // other place — a second reader or writer would be a second truth about
+  // which theme a person chose.
+  const touchesTheme = /data-?theme|dataset\.theme|covey-keep:theme|THEME_KEY/i
+  const touching = Object.entries(sources)
+    .filter(([, text]) => touchesTheme.test(stripTs(text)))
+    .map(([path]) => path)
+  expect(touching).toEqual(['../lib/theme.ts'])
+  const inlineScripts = [...indexHtml.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)].filter(
+    ([, attributes]) => !/\bsrc=/.test(attributes),
+  )
+  expect(inlineScripts).toHaveLength(1)
+  expect(inlineScripts[0][2]).toMatch(touchesTheme)
+  // Nor does any stylesheet store or read one: a stylesheet only answers the
+  // attribute, through the token file's two blocks.
+  for (const [path, text] of Object.entries(stylesheets)) {
+    if (path === './tokens.css') continue
+    expect(stripCss(text), path).not.toMatch(/data-theme/)
+  }
 })
 
 test('the font: Source Serif 4 self-hosted from a file in the repo, its OFL licence beside it', () => {

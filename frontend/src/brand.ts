@@ -15,3 +15,9 @@
 export const PRODUCT_NAME = 'CoveyKeep'
 
 export const TAGLINE = 'Plan the gathering. Keep the day.'
+
+// The maker's line, at the foot of the menu and of You (CK-82; the design
+// handoff §3). It names who makes CoveyKeep, not a standard CoveyKeep
+// follows (Steven, 2026-10-31). Frontend only: no email or backend string
+// carries it.
+export const MAKER_LINE = 'a Paper Goose product'

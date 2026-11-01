@@ -47,5 +47,10 @@ test('document title comes from the brand module, never a literal', () => {
   // (the brand-title plugin in vite.config.ts) — no spelling of the name may
   // exist there for the title to drift toward.
   expect(indexHtml).toContain('<title>%PRODUCT_NAME%</title>')
-  expect(indexHtml.toLowerCase()).not.toContain('covey')
+  // MOVED AT CK-82, with its reason: the pin read `not.toContain('covey')`,
+  // and since CK-82 index.html carries the pre-paint theme script, which
+  // names the storage key `covey-keep:theme`. Its `covey-keep` is the slug —
+  // filesystem convention, never the brand (brand.ts's header) — so the pin
+  // reads the brand's own spellings, the CK-74 form, and the slug passes.
+  expect(indexHtml).not.toMatch(/covey ?keep/i)
 })

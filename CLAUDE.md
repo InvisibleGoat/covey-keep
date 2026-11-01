@@ -1,11 +1,12 @@
 # CoveyKeep — Repo Operational Guide
 
-**Version:** 1.92.0
+**Version:** 1.93.0
 **Last Updated:** 2026-10-31
 **Source:** the one-line list of every phase from CK-2 to CK-80 that stood here moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); each phase is named in its own changelog entry, here or there.
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.93.0** (2026-10-31): Phase CK-82 — **The frame: the menu, the top and bottom bars, the You screen with its theme switch, and Home retired** — the design merge's second phase (`decisions/2026-10-31-the-design-and-how-it-is-merged.md` 1.2.0 — a BUILT banner on §3's second item; `reference/frontend/theme-system.md` 2.1.0; `reference/frontend/components.md` 1.35.0 — the Frame, You and Theme storage conventions, the routing map, the inventory, both riders' exceptions removed; the design chat's snapshot at its recorded sha256 and its handoff §3; **frontend only: new `components/Frame.tsx`, `components/Menu.tsx`, `components/Icons.tsx`, `lib/frame.ts`, `lib/theme.ts` and `routes/You.tsx`, with six new test files; `App.tsx`, `App.css`, `index.html`, `brand.ts` (`MAKER_LINE`), `components/AuthArt.tsx` (`QuailHead`, `EmptyCover`), `lib/datetime.ts` (`formatWeekdayDay`), `routes/AuthCallback.tsx`, `SignIn.tsx`, `GroupJoin.tsx`, `Groups.tsx`, `Gatherings.tsx`, `Settings.tsx`, `EmailChangeResult.tsx`, `styles/tokens.css` (comments), and comments naming Home in `auth/AuthContext.tsx`, `components/RequireAuth.tsx` and `lib/returnPath.ts`; `routes/Home.tsx` removed — nothing under `backend/`, no migration, head stays 0034, the verifier at 361 unchanged, neither lock touched, `render.yaml`, `netlify.toml`, `vite.config.ts` and `frontend/.nvmrc` untouched**; **563 frontend tests, 62 new** — `components/frame.test.tsx` 13, `components/menu.test.tsx` 11, `lib/theme.test.ts` 9, `lib/frame.test.ts` 4, `routes/you.test.tsx` 11, `routes/settings-errors.test.tsx` 13, `routes/sign-in-return.test.tsx` +1 — the 501 existing green with the moved pins below; build + lint clean; sixteen mutations of the load-bearing rules each caught; two commits, one per root). **ONE LAYOUT ROUTE**: `App.tsx`'s pathless route whose element is `RequireAuth` around `Frame`, the page rendered through its `<Outlet />` and keeping its own `<main>`; under it the two gathering lists and forms, a gathering's page, the groups list and form, a group's page and its gathering form, Settings, Your plan, You and `/home`; `RequireAuth` unchanged (its loading screen stays frameless); outside it, as they were, `/`, `/auth/callback`, `/invitations/accept`, `/groups/join`, `/groups/invitations/accept`, `/tos`, `/email-change`, `/account-deleted` and the catch-all. **THE FRAME** (`components/Frame.tsx`): the breakpoint is the WINDOW's 900px, read through `matchMedia` (absent under jsdom, which reads as a phone), so the bars are absent on a wide screen rather than hidden; below it a sticky, translucent top bar (the 48px menu button, *Open menu*; the quail's head and the product name, a link to Groups) and the bottom bar `<nav aria-label="Sections">` — Groups, Gatherings and You, 58px, an icon in a pill, the current one tinted with `aria-current="page"` by `lib/frame.ts::sectionOf` (Groups for `/groups…`, Gatherings for `/gatherings…`, You for `/you`, `/settings` and `/plan`); from 900px the menu a 304px column and the frame pinned to the window (`height: 100dvh`, the page column its own scroller, reset to its top on a new page); the update notice lifted above the bottom bar by one rule (`:root:has(.tabbar) .update-notice`, 16px above it measured). **THE DRAWER**: the same element as the column, `min(90%, 384px)`, sliding in at .26s (stilled under reduced motion) over `--ck-overlay`; open, `role="dialog"`, `aria-modal`, `aria-label="Menu"`, focus moved to its first control, Tab and Shift+Tab wrapping inside it, the page column `inert` and `body.menu-open` stilling the page; Escape, the scrim and any navigation (tracked during render on `location.key`) close it and focus returns to the menu button; closed, it is `inert`, `aria-hidden` and, once its slide ends, `visibility: hidden` (so its shadow never shows at the screen's edge); crossing to a wide window closes it for good. **THE MENU** (`components/Menu.tsx`, One list, the same component in both): the brand; the three sections from `lib/frame.ts::SECTIONS`; *Your groups* — the caller's groups in the server's order, each a link with the empty cover in its small mat and `memberCountLabel`; *Gatherings coming up* — `upcomingGatherings`: the items whose view is full by `viewOf` and whose next date is at or after now, soonest first, at most five, each a link with the empty cover and its day through `formatWeekdayDay` in the profile's zone (*Thu, Oct 15*); **an empty list leaves its heading out** (the mockup draws no empty menu; no new words); a failed read of either list is one line, *Your groups and gatherings couldn't be loaded just now.*, with **Try again** re-reading both once per press; both re-read on every pathname change, every read cancelled on unmount; the footer — the initials, the name and *Signed in* (the mockup's line), a 48px link to `/settings` named *Settings*, and *a Paper Goose product*; with no profile, no name and the link still there; no chevron, pin, activity line or details panel. **THE ICONS** (`components/Icons.tsx`): the mockup's paths for groups, gatherings, you, the menu, the gear, the card (the plan), sign out and the chevron (You's link rows), 24px, `currentColor`, `aria-hidden`; no icon set. **YOU** (`routes/You.tsx`, `/you`): *You*; the initials in a tinted circle, the name, *Initials until you add a profile picture* (with no profile, Home's own line, *You're signed in, but your profile couldn't be loaded just now.*); **Display → Appearance**, two radios each named by its title and described by its line — **Light** / *Paper by day.*, **Dark** / *Easier on the eyes at night.* — the stored theme checked; the rows Settings, Your plan with `planLine` from `GET /billing` (the row alone when the read fails) and Sign out (`signOut()`, as Home's button did); *a Paper Goose product*; no Favorites, no Menu layout; today's single column. **THE THEME, STORED** (`lib/theme.ts`, the ONE module): `covey-keep:theme`, `light` or `dark`; `readTheme()` reads exactly `dark` as dark and anything else or a missing key as light, and where storage throws the theme this load is showing (light at load); `chooseTheme()` sets the attribute at once and stores it, a storage failure still applying it for this load; **`index.html`'s one inline script**, the first in `<head>` (before the stylesheet and the bundle in the build too), `try { … } catch {}`, sets `data-theme="dark"` for exactly `dark`; no `prefers-color-scheme` anywhere. **HOME RETIRED**: `routes/Home.tsx` removed; `/home` is `<Navigate to="/groups" replace />` inside the layout (a signed-out visit parks it); `AuthCallback`'s fallback and `SignIn`'s signed-in redirect are `/groups`; the *Back home* links on the groups list and the gatherings list are gone (the menu is the way around); on `GroupJoin` — outside the frame — *Not now* goes to `/groups` and its *Back home* went, *Your groups* already standing beside it; the two *Back to your gatherings* links point at `/gatherings` (the CK-19 rider). **THE RIDERS**: Settings' two forms on `lib/formErrors.ts` and `components/FieldError.tsx` — `ValidationDetail`, `FieldErrors` and the `loc` loop gone; the profile's 422 on `display_name` and `timezone` inline with `aria-describedby`, any other form-level; the email form keeps *That doesn't look like an email address.* for a 422 on `new_email` (over the server's *not an email address*, deliberately), any other 422 or a string `detail` the mapper's line, the 429, the failures and the client-side *That's already your sign-in address.* in their words (the last now on the field it is about); no words changed for any refusal the server sends today; `EmailChangeResult`'s effect cancels on unmount, one guard on `updatePerson` (a second, earlier guard was dropped because the mutation run showed it made the first untestable); the two comments naming `styles/look.test.ts` say `.tsx`. **The moved pins, each with its reason in the test**: `routes/sign-in-return.test.tsx` (every `/home` landing and Home's heading → `/groups` and the Groups page; the sign-out from You; the server answers the menu's two reads), `routes/groups.test.tsx` (Home's link → the frame's Groups tab before Gatherings; Back home asserted absent three times), `routes/group-join.test.tsx` (Back home absent, Not now → `/groups`), `routes/page-not-available.test.tsx` (Home's *Welcome* check now also no frame and no Groups page), `lib/returnPath.test.ts` (`/home` kept as a valid path with its reason — it is still a gated route that parks — and `/you` added), and `styles/look.test.tsx`'s theme pin (from *nothing stores a theme* to *only `lib/theme.ts` and the one script*). **Found, a pin the kickoff did not list**: `brand.test.tsx` pinned `index.html` to contain no `covey` at all, and the pre-paint script names `covey-keep:theme` — the slug, never the brand — so the pin reads the brand's spellings (`/covey ?keep/i`, the CK-74 form). **Decided, recorded**: a page inside the frame starts beneath the top bar (`justify-content: flex-start`) rather than in the middle of the window — horizontally the same centred column; *Signed in* under the menu's name and chevrons on You's two link rows, as the mockup draws them; the maker's line is `brand.ts`'s `MAKER_LINE`; the menu's two reads live in `lib/frame.ts::readMenuLists` and the day format in `lib/datetime.ts` (neither file named in the kickoff's scope). Compared with the mockup at 375 and 1440 in both themes through headless Chrome against a local stand-in API (the report's screenshots): the frame's measurements match — the top bar 61px, the tabs 58px, the drawer 338px at 375, the column 304px. Not pushed — the CK-45 precedent. Checks `(ld)`–`(lg)` under the HARNESS RULE's dev-deploy form. Report: `D:\projects\temp\CK-82-report.md`.
 - **1.92.0** (2026-10-31): Phase CK-81 — **The look: CoveyKeep's tokens, type and lifted cards, and every screen restyled with its words unchanged** — the design merge's first phase (`decisions/2026-10-31-the-design-and-how-it-is-merged.md` 1.1.0 — a BUILT banner on §3's first item; `decisions/2026-10-14-honey-a-second-colour-with-one-meaning.md` 1.2.0 — BUILT; `reference/frontend/theme-system.md` 2.0.0 — rewritten to the tokens as built; `reference/frontend/components.md` 1.34.0 — the Styling section, and the Your plan convention's honey line brought current; the design chat's snapshot `D:\projects\temp\design\mockup-2026-10-30`, `app/index.html` at its recorded sha256, and its handoff §2; **frontend only: new `src/styles/tokens.css`, `src/styles/base.css`, `src/styles/look.test.tsx`, `src/components/AuthArt.tsx`, `public/fonts/` (the font and its OFL licence) and `public/img/` (two quail marks, three prints); `index.css`, `App.css`, `index.html`, `vite.config.ts` (the precache alone), `vitest.config.ts` (one CSS include), `routes/SignIn.tsx`, `AuthCallback.tsx`, `InvitationAccept.tsx`, `Tos.tsx`, `Plan.tsx`, `routes/plan.test.tsx`, and one comment in `routes/Groups.tsx` — nothing under `backend/`, no migration, head stays 0034, the verifier at 361 unchanged, neither lock touched, `render.yaml`, `netlify.toml` and `frontend/.nvmrc` untouched**; **501 frontend tests, 9 new** (`styles/look.test.tsx`), the 492 existing green with the two `plan.test.tsx` edits below; build + lint clean; fourteen mutations of the new pins each caught; two commits, one per root). **THE TOKENS** (`src/styles/tokens.css`, the only place a colour is named): the template's lines 8–69 in light (`:root`, `:root[data-theme="light"]`) and dark (`:root[data-theme="dark"]`) — the neutrals, the accent trio, honey and its two tracks, the hero trio and every `--ck-*` token but `--ck-bezel` (the prototype's phone frame) — under the mockup's own names, every name in both theme blocks (a value the mockup keeps in dark restated there), the type, radii, mat and the lifted card's two composite shadows in a theme-free `:root` block; plus **ten `--ck-*` tokens for the mockup's literals the app uses**: the three the handoff lists (the on-hero button and its hover, the hero meter, the recommended badge's shadow) and six it missed on the same hero card (its sheen and transparent sheen, the usage rule, the meter track, the tag's edge and fill). Not the landing page's `--ck-pledge-*`. **The token-fidelity proof** (the report): all 44 template tokens present in each theme with identical values but `--ck-bezel`. **THE THEME IS THE ATTRIBUTE**: `<html lang="en" data-theme="light">` statically, so the page paints light before any script; dark by setting the attribute by hand until CK-82; no `prefers-color-scheme` in any stylesheet; nothing stores a theme. **THE TYPE**: Source Serif 4 self-hosted at `/fonts/sourceserif.woff2` (variable 400–600, `font-display: swap`, the template's fallbacks) with `SourceSerif4-OFL.txt` beside it — headings, card titles, the brand name and the plan's numbers; the body the system stack; §2.2's sizes with the window (`vw`) for the template's `cqi`, matching at 375 and 1440. **THE PAGE** (`src/styles/base.css`): the grain on `body::before` and the glow from 768px, the recipes verbatim; the 3px accent outline offset 2px on `:focus-visible`; the card's .22s lift and the waiting quail's 1.6s breath, all off under `prefers-reduced-motion: reduce`. **THE VOCABULARY** (`App.css`, rewritten, no colour named): every class kept and new ones added; cards radius 18 with `--ck-lift` always on; buttons pills at 48px (small 40px), a submit and `.btn-primary` the teal pill, every other the quiet pill, `.danger-button` red with its words; links and `.link-button` in `--ck-active-ink`; fields radius 10; chips 999; a thumbnail and the opened photo in a mat at radius 12; `.form-error` in `--ck-error`, `.form-success` in the text colour and weight 600 (no success colour exists in the mockup); the update notice and the newer-version line as cards; each screen still one centred column — 16px gutters on phones, the main column's padding from 900px, the cards' 22rem. **THE SCREENS DRAWN IN FULL**, the mockup's design with their own words: sign-in and its sent state (the three matted, tilted prints, the lockup — quail then name, tagline beneath — two columns from 900px, the `API:` line kept and quiet), the invitation landing and its checking state, `/auth/callback`'s waiting screen and its failure in the prototype's expired-link design, the notice's styling (its text version 2, unchanged), and **Your plan** — the hero, *Current plan*, the meter and Manage your plan in the on-hero tokens, honey on the recommended card through one class, `.plan-card-recommended`, and nowhere else, the other plans two-up from 640px, the no-data line tinted with the mockup's check drawn inline, and the quail on the waiting page. **THE ONE COPY CHANGE**: Your plan's lede, *Space for the photos in the groups and gatherings you keep.* (the record §1.4). **THE IMAGES**: `covey-keep-quail-640.webp` and `-head-192.webp` copied as they are; the prints derived from the snapshot's web layers at the smallest short edge that covers each one's largest frame at 2× (656, 752 and 640 px — 94,172 + 131,226 + 87,448 B, against 700,802 B for the web layers). **THE PRECACHE**: `workbox.globPatterns` is workbox-build's default `**/*.{js,wasm,css,html}` — the plugin sets none of its own — kept whole, plus `**/*.{woff2,webp}`; `injectRegister`, `registerType` and the manifest unchanged; 11 precache entries, from 5. **The moved pins, each with its reason in the test**: `routes/plan.test.tsx`'s lede pin moved to the new line with the old pinned absent; its honey assertion unchanged and passing, its comment restated (honey is reached only through its tokens, in CSS). **Found and fixed before commit**: vitest blanks every CSS import, `?raw` included, so the first draft of the stylesheet pins read three empty strings and passed — `vitest.config.ts` now processes `?raw` CSS alone (the Gotcha). **Decided, recorded**: the small brand mark (the quail's head and the product name from `brand.ts`) above the heading on the invitation landing, the callback's failure and the notice, as the mockup draws them — it adds the product name as text there; the price line stays one string (`priceLabel`; pins read it whole), so the amount is not bolded apart as the mockup bolds it; `.form-success` takes the text colour; the hero's focus ring is the hero ink, because the accent outline vanishes on the accent gradient; the dead invitation screens keep their markup and take the look; *Signing you in…* carries no new `role="status"`, its behaviour unchanged; the `Groups.tsx` comment that called pinning and last-active ordering *the theming phase's* now points at the record's §4. Not pushed — the CK-45 precedent. Checks `(kz)`–`(lc)` under the HARNESS RULE's dev-deploy form. Report: `D:\projects\temp\CK-81-report.md`.
 - **1.91.0** (2026-10-29): **The last three Deploys bullets that still described their phase's moment are rewritten to the current state, and one claim of 1.89.0's is corrected** — the sixth doc audit's last open item (Hub `covey-keep/audits/2026-10-28-doc-audit.md`; recorded in this file's 1.90.0 entry), at Steven's go. They carried no amendment mark, so 1.89.0's rewrite did not reach them. **The publication gate (CK-41)**: the belongs-to link exists since CK-76 and the template rung is reached through the home group (the household template is `false`), so a group's gathering resolves open at TEMPLATE; *every gathering today resolves open* now names its exception, a host who turned review on; the override is writable, with no *until CK-44* left. **Groups (CK-45)**: the creator is keeper too since CK-75; renaming is the admin's or a co-admin's; an only member may leave a group empty, so *a group never exists with zero members* is now a claim about creation alone; *no leave* is gone (leaving is CK-75's) and *no delete* is the archive record's *never deleted*; the deletion leg promotes the longest-serving co-admin; *Not built* lists only what is unbuilt. **The sweep (CK-59)**: on since `(gt)`; the two decline rows destroyed on its first pass; restore, the bin surfaces and CK-57's `last_error` built, so *Not built* names emptying a bin in one act and a per-account ceiling. **The correction**: the removal bullet (CK-54) said the account-level bin was still to be built; the two-bins record §6 withdrew it on 2026-09-27, and the line now names what is unbuilt — emptying a bin in one act. **The three original bullets are in `CLAUDE-history.md` 1.2.0, verbatim and in their original order**, proved against `git show HEAD:` at `ef8eee3`. Every claim was checked against the code: the groups router's ten routes and `_group_body`, the publication resolver, the two admission paths' `Membership` writes, `lapse_group_roles`. No code, test, migration or deploy file changed.
 - **1.90.0** (2026-10-28): **The stale code comments the sixth doc audit found are corrected, and two lines of this file with them** (Hub `covey-keep/audits/2026-10-28-doc-audit.md`, its *Owed to code phases* list), at Steven's go. **This file**: the CK-74.2 Gotcha's rule (1) said `(jk)` was still to come and named its fallback; `(jk)` passed on 2026-10-22 (Link gone from Checkout, *Bank* with it) and the fallback was never needed. The CK-64 Deploys bullet said the sweep ships off and nothing clears a bin; it has been on since `(gt)`, 2026-10-19. **The code: comments, docstrings and one server string, in fourteen files** — the audit's nine and five more carrying the same stale facts. `frontend/src/auth/context.ts`: no gate compares account ids since CK-69. `frontend/src/lib/session.ts` and `backend/app/models/auth.py`: a session is 90 days sliding with a 365-day cap (CK-9), not 30 days. `frontend/vite.config.ts`: `AppUpdateProvider.tsx` owns registration since CK-75.1. `frontend/src/lib/media.ts` (twice): the sweep is on. `backend/app/api/media.py`: the restore reads the gate through `_gate_destination` and `_home_facts` (named `_host_kind` until CK-76). `backend/app/api/profile.py`: the deletion leg's keeping lapse as it runs since CK-49b and CK-68. `backend/app/services/keeping.py` (six sites) and `backend/app/models/gathering.py`: the 30/90 grace and the v2 §5 ladder meant to replace it are RETIRED in design (2026-09-27), so `grace_state` and its constants decide nothing; and since CK-76 a gathering resolves through its group. `backend/app/models/group.py`: the resolver's first rung reachable since CK-76. `backend/app/services/billing.py` (twice): `(jk)` passed. `frontend/src/routes/Plan.tsx`: since CK-76 a group's gatherings are charged to its keeper, so whether the line should name groups again is a copy decision not yet made. `frontend/src/lib/media-bin.test.ts` (three comments): the sweep is on; the pins are unchanged. **The one behaviour change**: `_review_refusal`'s message for declining a `live` photograph said taking one down *isn't supported yet*, false since CK-54, and now reads *this photo is already published — to take it down, remove it*. The code (`not_pending`) and the body's shape are unchanged, the frontend switches on the code and never showed the message, and `tests/test_review.py` pins it — red first against the old string, its stale *the takedown is unbuilt* comment rewritten. **Found and not fixed here**: three Deploys bullets that carried no amendment mark, so the 1.89.0 rewrite did not reach them, still describe their phase's moment as current — the publication gate (CK-41: *no belongs-to link*, built at CK-76), Groups (CK-45: *no leave*, rename *admin only*, the admin relinquished with the backup never promoted, and *Not built: membership of anyone else, invitations … the belongs-to link* — all built at CK-75 and CK-76) and the sweep (CK-59: *Not built: … restore-from-bin*, *CK-57 should follow*, and the two decline rows still to go — restore built at CK-63, CK-57 done, the rows destroyed at `(gt)`). Steven's call. No migration, no lock, no deploy file changed.
@@ -131,7 +132,8 @@ npm run test       # vitest (jsdom) — brand pins (CK-14) + gathering surface (
                    #   clearing nothing; the copy as literals; a failed
                    #   deletion's line with nothing moved; the signal one
                    #   boolean naming nothing; no request after the delete)
-                   # + your groups (CK-78: Home's link above the gatherings;
+                   # + your groups (CK-78: the way to the list above the
+                   #   gatherings — Home's link until CK-82, the frame's tabs since;
                    #   the list in one request with the count and the
                    #   caller's role, the empty state as literals, a failed
                    #   read's Try again re-reading once per press; starting a
@@ -149,8 +151,9 @@ npm run test       # vitest (jsdom) — brand pins (CK-14) + gathering surface (
                    # + joining (CK-79: the sign-in return through the real
                    #   route table and the real AuthProvider — signed out at
                    #   a gated page, parked without its fragment, and the
-                   #   callback landing back there; nothing parked, Home; a
-                   #   CK-25 token, its screen; a hostile or stale path, Home;
+                   #   callback landing back there; nothing parked, Groups (Home
+                   #   until CK-82); a CK-25 token, its screen; a hostile or
+                   #   stale path, Groups; an old /home bookmark parked;
                    #   a sign-out and a 401 mid-page parking nothing; the
                    #   validator against every hostile shape; the link's
                    #   `{ expiresAt, share }` with no property holding the URL,
@@ -185,6 +188,23 @@ npm run test       # vitest (jsdom) — brand pins (CK-14) + gathering surface (
                    #   block; the sign-in heading still the product name with
                    #   every image decorative; the precache patterns; and in
                    #   plan.test.tsx the new lede, the old one absent)
+                   # + the frame (CK-82: through the real route table, every
+                   #   signed-in route carrying the frame and no frameless one,
+                   #   one <main> a page, every nav labelled; the bottom bar's
+                   #   three tabs with the current one per section and no
+                   #   Calendar; the drawer a modal dialog — focus in and kept,
+                   #   Escape, the scrim and navigation closing it, focus back on
+                   #   the button, the page behind stilled; the column from
+                   #   900px under a stubbed matchMedia; the menu's groups in the
+                   #   server's order, at most five gatherings coming up, soonest
+                   #   first, none past or photos-only, the day in the profile's
+                   #   zone, no chevron or pin, a failed read's Try again, the
+                   #   re-read on navigation, the footer; You's words as
+                   #   literals, Appearance writing covey-keep:theme and the
+                   #   attribute at once, an unknown value light; the pre-paint
+                   #   script executed against every stored value; /home and a
+                   #   signed-in / landing on /groups; Settings on the one mapper
+                   #   and EmailChangeResult's cancelled read)
 ```
 
 ### Dev database (repo root)
@@ -1311,7 +1331,8 @@ is Steven's call, not a session's: `.env` is his file.
 - Your groups (CK-78; frontend only): **Groups 3a — the list, a group's
   page, its members, and running it**, the screens for CK-45's and CK-75's
   backend (`decisions/2026-10-23-joining-a-group-and-co-admins.md` §5–§7).
-  Three routes behind `RequireAuth`, linked from Home's *Your groups*:
+  Three routes behind `RequireAuth`, reached from the frame's Groups (the
+  CK-82 bullet below; from Home's *Your groups* until Home was retired):
   `/groups` (one request; name, count, the caller's role; a real empty
   state; Try again on a failed read), `/groups/new` (one field, **no type
   control**, `group_type` never sent) and `/groups/:id` (the member list
@@ -1395,8 +1416,9 @@ is Steven's call, not a session's: `.env` is his file.
   track, tag, meter and button; the recommended badge's shadow); not
   `--ck-bezel` nor the landing page's `--ck-pledge-*` (the Gotcha below).
   **The theme is the attribute**: `index.html` carries `data-theme="light"`
-  statically, dark is the attribute set by hand until CK-82 builds the
-  switch, no stylesheet follows the device, and nothing stores a theme.
+  statically, dark is `data-theme="dark"` — chosen on You and stored on the
+  device since CK-82 (the bullet below) — and no stylesheet follows the
+  device.
   **The type**: Source Serif 4, variable 400–600, self-hosted at
   `/fonts/sourceserif.woff2` with its SIL OFL 1.1 licence beside it, for
   headings, card titles, the brand name and the plan's numbers; the body
@@ -1420,10 +1442,63 @@ is Steven's call, not a session's: `.env` is his file.
   `workbox.globPatterns` keeps workbox-build's default
   `**/*.{js,wasm,css,html}` whole and adds `**/*.{woff2,webp}`;
   `injectRegister` stays `null` and the manifest is untouched (the app icon
-  and theme colour are the design chat's question). Not built here: the
-  frame (CK-82), covers (CK-83, CK-84), the mockup's page layouts (CK-85 to
-  CK-87), the photo grid and viewer (CK-88). Detail:
+  and theme colour are the design chat's question). The frame is CK-82's
+  (the bullet below); not built: covers (CK-83, CK-84), the mockup's page
+  layouts (CK-85 to CK-87), the photo grid and viewer (CK-88). Detail:
   `reference/frontend/components.md` 1.34.0, the Styling convention.
+- The frame (CK-82; frontend only): **the menu, the top and bottom bars,
+  You with its theme switch, and Home retired** — the design merge's second
+  phase (`decisions/2026-10-31-the-design-and-how-it-is-merged.md` §1.4,
+  §3; the handoff §3; the mockup's screens 01, 02, 05 and 13). **One layout
+  route carries every signed-in page**: `App.tsx`'s pathless route whose
+  element is `RequireAuth` around `components/Frame.tsx`, the page through
+  its `<Outlet />` with its own `<main>` — the two gathering lists and forms,
+  a gathering's page, the groups list and form, a group's page and its
+  gathering form, Settings, Your plan, You and `/home`; `RequireAuth`'s
+  behaviour is unchanged. **The frameless routes stay outside** — `/`,
+  `/auth/callback`, `/invitations/accept`, `/groups/join`,
+  `/groups/invitations/accept`, `/tos`, `/email-change`,
+  `/account-deleted` and the catch-all. **Below 900px** — the window,
+  through `matchMedia`, so the bars are absent on a wide screen rather than
+  hidden — a sticky top bar (the 48px menu button, the quail's head and the
+  product name from `brand.ts`), the bottom bar's tabs **Groups, Gatherings
+  and You** (58px, the current one tinted with `aria-current="page"`;
+  Calendar joins at CK-91), and **the menu as a drawer that is a modal
+  dialog** — `role="dialog"`, `aria-modal`, the label *Menu*; focus moves
+  in and Tab wraps inside it, the page behind is inert and does not scroll;
+  Escape, the scrim and any navigation close it and focus returns to the
+  menu button; closed, it is inert and hidden. **From 900px** the menu is a
+  304px column, no bars, the frame pinned to the window so the menu and the
+  page column scroll separately. **The menu** (`components/Menu.tsx`, One
+  list): the brand, the three sections, *Your groups* (the server's order,
+  the empty cover, *{n} members*) and *Gatherings coming up* (the full-view
+  items still ahead, soonest first, at most five, the day in the profile's
+  zone — *Thu, Oct 15*; a photos-only item never), each row opening its
+  page directly — no chevron, pin, activity line or details panel; an empty
+  list leaves its heading out; a failed read is one quiet line with Try
+  again; both lists re-read on every page change; the footer's initials,
+  name, *Signed in*, a way to Settings and *a Paper Goose product*
+  (`brand.ts`'s `MAKER_LINE`). **You** (`routes/You.tsx`, `/you`): the
+  initials and name, *Initials until you add a profile picture*, Display →
+  Appearance (**Light**, *Paper by day.*; **Dark**, *Easier on the eyes at
+  night.*), Settings, Your plan with `planLine` from `GET /billing`, Sign
+  out, and the maker's line; no Favorites, no Menu layout. **The theme is
+  stored on the device by `lib/theme.ts` alone** — `covey-keep:theme`,
+  `light` or `dark`, anything else or a throwing storage light — and
+  **applied before the first paint** by the one inline script in
+  `index.html`'s `<head>`, which sets `data-theme="dark"` for exactly
+  `dark`; no "match my device" (the Gotcha below). **Home is retired**:
+  sign-in lands on `/groups`, `/home` forwards there inside the layout (a
+  signed-out visit parks it), and Sign out lives on You. **The riders**:
+  Settings' two forms are on the one mapper (`lib/formErrors.ts`,
+  `components/FieldError.tsx`), the email form keeping *That doesn't look
+  like an email address.* for a 422 on `new_email`; `EmailChangeResult`'s
+  effect cancels on unmount; both *Back to your gatherings* links point at
+  `/gatherings`. Not built: Calendar (CK-90, CK-91), Rail and panel and the
+  menu-layout setting (CK-89), the details panel, covers (CK-83, CK-84),
+  pins, activity times, Favorites. Detail:
+  `reference/frontend/components.md` 1.35.0, the Frame, You and Theme
+  storage conventions.
 - Browser session (CK-6, lifetime CK-9): `/auth/verify` 302s to
   `${APP_BASE_URL}/auth/callback#token=<jwt>` — the JWT rides the URL
   **fragment**, never the query string; the frontend stores it in
@@ -1462,7 +1537,7 @@ is Steven's call, not a session's: `.env` is his file.
 
 ## Gotchas & lessons learned
 
-- ⚠️ **A colour is named in `src/styles/tokens.css` and nowhere else; the theme is the `data-theme` attribute on `<html>`, never the device's setting; honey is reached by the recommended plan card alone — and vitest blanks every CSS import, `?raw` included, unless `test.css.include` names it, so a stylesheet pin left off that list reads an empty string and passes.** Since CK-81 every stylesheet but the token file, and every `.ts` and `.tsx`, names colours only through tokens — no hex, `rgb(`, `rgba(` or `hsl(` (pinned over every source with comments stripped; the test files are the one named exception, because they hold literals as assertions) — and the light and dark blocks carry the same names (pinned). Four rules. **(1)** A new colour is a new token, in BOTH theme blocks: a value the mockup keeps the same in dark is restated there, never left to inherit, and a literal found in the mockup becomes a `--ck-*` token where the app uses it (CK-81 made ten). **(2)** No stylesheet may contain `prefers-color-scheme`: the page always carries `data-theme` (`index.html` statically until CK-82's switch), so a device-following rule could never apply in the app and would only mislead the next reader; nothing stores a theme until CK-82 decides where. **(3)** Honey (`--pg-events-honey`, `-ink`, `-tint`) is referenced only by rules whose selector begins `.plan-card-recommended` (pinned): a fill carrying its own ink, never text on paper, never a state or an action (the honey record); a second use is a recorded decision first. **(4)** `vitest.config.ts` carries `css: { include: [/\.css\?raw$/] }` because vitest's `vitest:css-disable` plugin turns every CSS id it is not told to process into `export default ""`: the first draft of `styles/look.test.tsx` passed its no-colour-literal pin over three empty strings and failed only when a token-block lookup found nothing (found before commit). A component's own `import './App.css'` stays blank under tests, as before; never set `css: true`, which would inject the stylesheets into jsdom, where `[hidden]` and layout rules can change what the role queries see. (CK-81.)
+- ⚠️ **A colour is named in `src/styles/tokens.css` and nowhere else; the theme is the `data-theme` attribute on `<html>`, never the device's setting; honey is reached by the recommended plan card alone — and vitest blanks every CSS import, `?raw` included, unless `test.css.include` names it, so a stylesheet pin left off that list reads an empty string and passes.** Since CK-81 every stylesheet but the token file, and every `.ts` and `.tsx`, names colours only through tokens — no hex, `rgb(`, `rgba(` or `hsl(` (pinned over every source with comments stripped; the test files are the one named exception, because they hold literals as assertions) — and the light and dark blocks carry the same names (pinned). Four rules. **(1)** A new colour is a new token, in BOTH theme blocks: a value the mockup keeps the same in dark is restated there, never left to inherit, and a literal found in the mockup becomes a `--ck-*` token where the app uses it (CK-81 made ten). **(2)** No stylesheet may contain `prefers-color-scheme`: the page always carries `data-theme`, so a device-following rule could never apply in the app and would only mislead the next reader. **Amended at CK-82: a theme is stored, by one module, and applied before paint.** A person chooses Light or Dark on You; `lib/theme.ts` is the ONE module that reads or writes the stored choice (`covey-keep:theme`, `light` or `dark`; anything else, a missing key or storage that throws reads as light) or the attribute, and the one inline script in `index.html`'s `<head>` — before the stylesheet and the bundle — sets `data-theme="dark"` for exactly `dark`, so a person who chose dark never sees a flash of light. Nothing else names the key or the attribute (pinned in `styles/look.test.tsx`, the pin moved at CK-82 from "nothing" to "one module and one script"); a second reader or writer would be a second truth about the person's choice. There is still no "match my device" (the merge record §1.4). **(3)** Honey (`--pg-events-honey`, `-ink`, `-tint`) is referenced only by rules whose selector begins `.plan-card-recommended` (pinned): a fill carrying its own ink, never text on paper, never a state or an action (the honey record); a second use is a recorded decision first. **(4)** `vitest.config.ts` carries `css: { include: [/\.css\?raw$/] }` because vitest's `vitest:css-disable` plugin turns every CSS id it is not told to process into `export default ""`: the first draft of `styles/look.test.tsx` passed its no-colour-literal pin over three empty strings and failed only when a token-block lookup found nothing (found before commit). A component's own `import './App.css'` stays blank under tests, as before; never set `css: true`, which would inject the stylesheets into jsdom, where `[hidden]` and layout rules can change what the role queries see. (CK-81.)
 
 - ⚠️ **A body's withheld field is NULL and is never read as empty: `viewOf` decides what the page asks for, and in the photos-only view nothing reads `occurrences`, `rsvp_list_visibility`, `next_occurrence` or `occurrence_count`.** Since CK-77 a member only shared with a group's gathering reads the memory view — `caller_view: "memory"` with those four NULL — and until CK-80 the gathering page read `gathering.occurrences` unguarded, so opening such a gathering broke the page. Three rules. **(1)** The view is read in one place, `lib/gatherings.ts::viewOf`, and only exactly `'full'` is the full view: `'memory'`, null, a missing field and a value this build does not know are the photos-only view, so a body the page does not understand shows less, never the dates (the `roleFlags` rule, applied to the view). A fixture that omits `caller_view` therefore renders the photos-only view — every detail fixture carries `caller_view: 'full'` since CK-80. **(2)** Never turn a withheld NULL into `[]` or 0 to make a render branch work — that claims a gathering with no dates (the CK-30 precedent: withheld is not empty). The photos-only branch returns before anything reads the dates, and the full branch reads them with a fallback that only satisfies the type. **(3)** The view decides what is ASKED FOR, not just what is shown: the photos-only page requests nothing the server withholds from it (no RSVP list, no places, no invitations, no co-hosts — pinned at one request) and offers nothing it refuses (no upload). A new read on the gathering page asks `viewOf` first. (CK-80.)
 
@@ -1497,7 +1572,7 @@ covey-keep/            # the code root (this repo)
 │   ├── .nvmrc             # Netlify's Node version, exact (22.23.4); moving it is a reviewed one-line change
 │   ├── .oxlintrc.json     # oxlint: rules-of-hooks and only-export-components
 │   ├── README.md          # install, run and build
-│   ├── index.html         # the app shell; its %PRODUCT_NAME% title is filled at build by vite.config.ts's brandTitle
+│   ├── index.html         # the app shell: data-theme="light", then the one pre-paint script that sets a stored dark; its %PRODUCT_NAME% title is filled at build by vite.config.ts's brandTitle
 │   ├── package.json       # scripts (dev, build = tsc -b && vite build, lint = oxlint, test = vitest run) and dependencies
 │   ├── package-lock.json  # npm's lockfile; generated, never edited by hand
 │   ├── tsconfig.json      # references the app and node configs
@@ -1519,15 +1594,15 @@ covey-keep/            # the code root (this repo)
 │   │       └── thanksgiving-print.webp        # a sign-in print (stock, no people), sized to its largest frame at 2×
 │   └── src/               # the application; each test sits beside its subject (*.test.ts, *.test.tsx)
 │       ├── main.tsx       # the entry: StrictMode, BrowserRouter, AuthProvider, App
-│       ├── App.tsx        # the route table inside AppUpdateProvider, with PwaUpdatePrompt; `*` renders PageNotAvailable, never a redirect
-│       ├── App.css        # the class vocabulary every screen reuses, in the look; names no colour (the Gotcha)
+│       ├── App.tsx        # the route table inside AppUpdateProvider, with PwaUpdatePrompt; ONE layout route (RequireAuth around Frame) for every signed-in page; `*` renders PageNotAvailable, never a redirect
+│       ├── App.css        # the class vocabulary every screen reuses, in the look, and the frame's and You's; names no colour (the Gotcha)
 │       ├── index.css      # the stylesheet entry: styles/tokens.css, then styles/base.css
 │       ├── styles/        # the look (CK-81)
 │       │   ├── tokens.css     # THE ONLY PLACE A COLOUR IS NAMED: the mockup's tokens, a light and a dark block with the same names
 │       │   ├── base.css       # the font face, the page, the grain and the glow, focus, the type, motion
-│       │   └── look.test.tsx  # the tokens, one home for colour, honey's one use, the theme attribute, the font, focus and motion, the lockup, the precache
+│       │   └── look.test.tsx  # the tokens, one home for colour, honey's one use, the theme attribute and its one module and one script, the font, focus and motion, the lockup, the precache
 │       ├── vite-env.d.ts  # type references for Vite and vite-plugin-pwa
-│       ├── brand.ts       # PRODUCT_NAME and TAGLINE — the only frontend home for user-visible brand strings
+│       ├── brand.ts       # PRODUCT_NAME, TAGLINE and MAKER_LINE — the only frontend home for user-visible brand strings
 │       ├── brand.test.tsx # pins the heading, tagline and title to brand.ts
 │       ├── auth/          # session state
 │       │   ├── AuthContext.tsx # AuthProvider: the session, signIn/signOut, the /auth/me load, signedOutSinceLoad; signOut clears the sign-in return
@@ -1535,7 +1610,12 @@ covey-keep/            # the code root (this repo)
 │       │   └── useAuth.ts      # the useAuth() hook
 │       ├── components/    # shared components and the app-update provider
 │       │   ├── AppUpdateProvider.tsx # THE one owner of the service worker: useRegisterSW exactly once; hourly and on-visible checks
-│       │   ├── AuthArt.tsx           # the pictures before the app: the sign-in prints, the quail, the small brand mark; every image alt=""
+│       │   ├── AuthArt.tsx           # the pictures before the app — the sign-in prints, the quail, the small brand mark — and the frame's quail head and empty cover; every image alt=""
+│       │   ├── Frame.tsx             # the frame around every signed-in page: the top bar, the bottom bar, the menu as a drawer (a modal dialog) or a column from 900px
+│       │   ├── frame.test.tsx        # the frame through the real route table: which routes carry it, the bars, the drawer as a dialog, the column, Home retired
+│       │   ├── Menu.tsx              # the menu, One list: the sections, Your groups, Gatherings coming up, the footer; no chevron, pin or details panel
+│       │   ├── menu.test.tsx         # the two lists, at most five coming up, never photos-only, Try again, the re-read on navigation, the footer
+│       │   ├── Icons.tsx             # the mockup's hand-drawn icons, 24px, currentColor, aria-hidden; no icon set
 │       │   ├── appUpdate.ts          # the update-state context and its type
 │       │   ├── useAppUpdate.ts       # useAppUpdate(), every reader's hook
 │       │   ├── PwaUpdatePrompt.tsx   # the update notice (Reload, Not now), a reader of the provider
@@ -1548,7 +1628,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── api.ts                # API_URL, apiFetch, authFetch (a 401 clears the session); TOS_VERSION = 2, never renumbered
 │       │   ├── session.ts            # the session token in localStorage
 │       │   ├── timezone.ts           # IANA zone helpers: zone names, never offsets
-│       │   ├── datetime.ts           # wall clock ↔ instant in an explicit IANA zone (the profile zone); formatDay
+│       │   ├── datetime.ts           # wall clock ↔ instant in an explicit IANA zone (the profile zone); formatDay, formatWeekdayDay
 │       │   ├── datetime.test.ts      # conversions against a zone forced to differ from the runner's
 │       │   ├── formErrors.ts         # the one path from a 422 body to inline field errors, with each field's error type
 │       │   ├── formErrors.test.ts    # the mapper: loc to field, form-level fallbacks, error types
@@ -1570,6 +1650,10 @@ covey-keep/            # the code root (this repo)
 │       │   ├── groupJoining.test.ts  # no property holds the URL; the device is called inside the click
 │       │   ├── returnPath.ts         # the sign-in return: a same-origin relative path, never a fragment, fresh for 30 minutes
 │       │   ├── returnPath.test.ts    # every hostile path refused at park and at take
+│       │   ├── frame.ts              # the sections, a page's section, the menu's gatherings coming up and its two reads
+│       │   ├── frame.test.ts         # the sections, sectionOf, at most five coming up and never photos-only
+│       │   ├── theme.ts              # THE ONE MODULE that reads or writes the stored theme (covey-keep:theme) or the attribute; light by default
+│       │   ├── theme.test.ts         # exactly dark is dark; storage failures; index.html's pre-paint script, executed
 │       │   ├── media.ts              # media types, the upload and read helpers (a presigned URL never leaves its call), every photo state's copy
 │       │   ├── media.test.ts         # the HEIC fallback, the state lines, the upload helpers
 │       │   ├── media-words.test.ts   # size from the File, the trimmed filename, the caption and tags patches
@@ -1581,8 +1665,7 @@ covey-keep/            # the code root (this repo)
 │       │   └── passkeys.ts           # WebAuthn ceremonies and usernameless sign-in
 │       ├── routes/        # one screen per route in App.tsx's table, tests beside them
 │       │   ├── SignIn.tsx                   # `/`: the prints, the lockup, the magic-link form with the private-test consent checkbox, and Use a passkey
-│       │   ├── AuthCallback.tsx             # `/auth/callback`: the session from the fragment, then the sign-in return, a parked invitation or /home
-│       │   ├── Home.tsx                     # `/home`: links to groups, gatherings and settings; sign out
+│       │   ├── AuthCallback.tsx             # `/auth/callback`: the session from the fragment, then the sign-in return, a parked invitation or /groups
 │       │   ├── Gatherings.tsx               # `/gatherings`: the list, its empty state, Try again
 │       │   ├── GatheringNew.tsx             # `/gatherings/new`: the gathering form; with inGroup, a group's form with Who it's for
 │       │   ├── GatheringDetail.tsx          # `/gatherings/:id`: view and edit, dates, RSVP, Photos, places, invitations, co-hosts; the photos-only view
@@ -1593,12 +1676,13 @@ covey-keep/            # the code root (this repo)
 │       │   ├── GroupJoin.tsx                # `/groups/join`, signed in or out: the link's landing; asking to join is a press, never an opening
 │       │   ├── GroupInvitationAccept.tsx    # `/groups/invitations/accept`: an emailed group invitation's landing; opening accepts
 │       │   ├── InvitationAccept.tsx         # `/invitations/accept`, signed in or out: a gathering invitation's landing; accepts when signed in
-│       │   ├── Settings.tsx                 # `/settings`: profile, Your plan, sign-in email, passkeys, deleting the account (whose 204 only navigates)
+│       │   ├── Settings.tsx                 # `/settings`: profile, Your plan, sign-in email, passkeys, deleting the account (whose 204 only navigates); both forms on the one mapper
 │       │   ├── Plan.tsx                     # `/plan`: the current plan, usage, the other plans, Checkout's return wait
 │       │   ├── Tos.tsx                      # `/tos`: the private test notice, version 2 — a living description of what is stored (the Gotcha)
 │       │   ├── EmailChangeResult.tsx        # `/email-change`: an email-change confirmation's outcome
 │       │   ├── AccountDeleted.tsx           # `/account-deleted`: ends the session once rendered, on the deletion's one-shot signal alone
 │       │   ├── PageNotAvailable.tsx         # `*`: keeps the address, reads nothing from it, offers Reload when a newer version waits
+│       │   ├── You.tsx                      # `/you`: the person, Display → Appearance (Light or Dark, stored through lib/theme.ts), Settings, Your plan, Sign out
 │       │   ├── account-deleted.test.tsx     # the deletion through the real route table lands on /account-deleted, then signs out
 │       │   ├── co-hosts.test.tsx            # the role from caller_role; co-host management from both seats
 │       │   ├── gathering-in-group.test.tsx  # a group's gathering: the photos-only view, Who it's for, the prompt to share
@@ -1607,7 +1691,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── group-gathering-new.test.tsx # the group form and its exact create body
 │       │   ├── group-invitation-accept.test.tsx # the emailed group invitation's landing
 │       │   ├── group-join.test.tsx          # the link's landing: nothing sent before the press
-│       │   ├── groups.test.tsx              # Home's link, the list, starting a group
+│       │   ├── groups.test.tsx              # the Groups tab before Gatherings, the list, starting a group
 │       │   ├── invitations.test.tsx         # a gathering invitation's landing and the host's invite form
 │       │   ├── media-bin.test.tsx           # your own photographs: Send to bin, Put back, Delete permanently
 │       │   ├── media-failure.test.tsx       # a failed row's line and controls by reason
@@ -1620,8 +1704,10 @@ covey-keep/            # the code root (this repo)
 │       │   ├── plan.test.tsx                # the plan screen in every state
 │       │   ├── rsvps.test.tsx               # the RSVP block, companions, arrival time
 │       │   ├── settings.test.tsx            # Settings' Your plan section
+│       │   ├── settings-errors.test.tsx     # Settings' two forms on the one mapper; the two Back to your gatherings links; EmailChangeResult's cancelled read
 │       │   ├── sign-in-return.test.tsx      # the sign-in return through the real route table
-│       │   └── tos.test.tsx                 # the notice's load-bearing statements and TOS_VERSION
+│       │   ├── tos.test.tsx                 # the notice's load-bearing statements and TOS_VERSION
+│       │   └── you.test.tsx                 # You's words, Appearance and the stored theme, the rows, Sign out; no Favorites, no Menu layout
 │       └── test-support/  # files only the test suite loads
 │           └── pwaRegister.ts # the inert virtual:pwa-register/react the tests resolve to; never imported by app code
 ├── backend/           # Python 3.13 + FastAPI; Render builds both services from it, the API and the worker

@@ -43,16 +43,25 @@ export function EmailChangeResult() {
 
   useEffect(() => {
     // When THIS browser holds the surviving session, refetch the profile so
-    // the app shows the new address everywhere without a reload.
+    // the app shows the new address everywhere without a reload. Cancelled
+    // on unmount (the CK-17 pattern; this screen was its named exception
+    // until CK-82): a read that lands after the screen has gone never
+    // touches the session's person.
     if (status !== 'success' || !getToken()) return
+    let cancelled = false
     void (async () => {
       try {
         const response = await authFetch('/auth/me')
-        if (response.ok) updatePerson((await response.json()) as Person)
+        if (!response.ok) return
+        const person = (await response.json()) as Person
+        if (!cancelled) updatePerson(person)
       } catch {
         // Best effort — the next full load reflects the change regardless.
       }
     })()
+    return () => {
+      cancelled = true
+    }
   }, [status, updatePerson])
 
   if (status === 'success') {
@@ -65,7 +74,7 @@ export function EmailChangeResult() {
           change is still signed in.
         </p>
         {authStatus === 'signedIn' ? (
-          <Link to="/home">Back to your gatherings</Link>
+          <Link to="/gatherings">Back to your gatherings</Link>
         ) : (
           <Link to="/">Go to sign in</Link>
         )}

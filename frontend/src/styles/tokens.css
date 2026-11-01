@@ -9,13 +9,15 @@
 
    THE THEME IS THE ATTRIBUTE. `index.html` carries `data-theme="light"`
    statically, so the page paints light before any script runs; dark is
-   `data-theme="dark"` on <html>, set by hand until CK-82 builds the switch.
-   No stylesheet asks the device which scheme it prefers, on purpose: the
-   app never follows the device's setting, and stores no theme.
+   `data-theme="dark"` on <html>. Since CK-82 a person chooses it on You,
+   the choice is stored on the device by lib/theme.ts, and a small inline
+   script in index.html's <head> sets a stored `dark` before the first
+   paint. No stylesheet asks the device which scheme it prefers, on
+   purpose: the app never follows the device's setting.
 
    Every stylesheet but this one names colours ONLY through these tokens —
    no hex, rgb(), rgba() or hsl() — and so does every .ts and .tsx (pinned
-   by styles/look.test.ts). A new colour is a new token here, in BOTH theme
+   by styles/look.test.tsx). A new colour is a new token here, in BOTH theme
    blocks: the two blocks always carry the same names (pinned). Not here:
    `--ck-bezel` (the prototype's phone frame) and the landing page's
    `--ck-pledge-*` set, neither of which the app draws. */
@@ -34,7 +36,7 @@
   --ck-lift-hover: inset 0 1px 0 var(--ck-lift-hi), 0 2px 5px var(--ck-lift-near), 0 20px 38px -16px var(--ck-lift-mid), 0 48px 90px -36px var(--ck-lift-far);
 }
 
-/* Light — the default, and the only theme a person sees until CK-82. */
+/* Light — the default. */
 :root,
 :root[data-theme="light"] {
   /* the neutrals */
@@ -100,7 +102,7 @@
   color-scheme: light;
 }
 
-/* Dark — reached by setting data-theme="dark" on <html>. Every name the
+/* Dark — data-theme="dark" on <html>, chosen on You (CK-82). Every name the
    light block carries, and no other: a value the mockup keeps the same in
    both themes is restated here as it is above. */
 :root[data-theme="dark"] {

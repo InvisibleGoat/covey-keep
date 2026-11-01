@@ -5,7 +5,9 @@
    removed, none — and a new screen reuses these before inventing its own
    (reference/frontend/components.md, Styling). Each screen is still one
    centred column of cards; the mockup's wide layouts come with their
-   screens' phases. The recipes are the mockup's
+   screens' phases. Since CK-82 the frame — the menu, the top and bottom
+   bars — sits around every signed-in page (its section at the end of this
+   file), and You is styled beside it. The recipes are the mockup's
    (app-template.html lines 71–658). */
 
 /* ---------- the screen: one centred column ---------- */
@@ -1176,4 +1178,503 @@
   padding: 1.5rem 0;
   color: var(--ck-muted);
   font-size: 1.0625rem;
+}
+
+/* ---------- the frame (CK-82; the mockup's screens 01, 02, 05 and 13) ---------- */
+
+/* The frame's icons: 24px, drawn in currentColor (components/Icons.tsx). */
+.ico {
+  flex: none;
+  width: 24px;
+  height: 24px;
+}
+
+/* Phones first. The page column fills the window, and a page inside the
+   frame starts beneath the top bar rather than in the middle of the window
+   — horizontally it is the same centred column as before. */
+.frame-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.frame-col > .auth-screen {
+  flex: 1 0 auto;
+  min-height: 0;
+  justify-content: flex-start;
+}
+
+/* The top bar: sticky, translucent over the page, a hairline under it. */
+.topbar {
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.375rem 8px;
+  border-bottom: 1px solid var(--pg-hairline);
+  background: color-mix(in srgb, var(--pg-bg) 90%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* A 48px icon button: the menu button, the footer's way to Settings. */
+.iconbtn {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--pg-text);
+  cursor: pointer;
+}
+
+.iconbtn:hover {
+  background: var(--ck-tint);
+}
+
+/* The quail's head and the product name, in Source Serif. */
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-display);
+  font-size: 1.3125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--pg-text);
+  text-decoration: none;
+}
+
+.brand img {
+  width: 36px;
+  height: 36px;
+}
+
+/* The bottom bar: one column per tab, each an icon in a pill, the current
+   one tinted. */
+.tabbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 4px;
+  padding: 0.375rem 8px calc(0.375rem + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--pg-hairline);
+  background: color-mix(in srgb, var(--pg-surface) 92%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 58px;
+  border-radius: 16px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ck-muted);
+  text-decoration: none;
+}
+
+.tab .pill {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 32px;
+  border-radius: 999px;
+}
+
+.tab[aria-current='page'] {
+  color: var(--ck-active-ink);
+}
+
+.tab[aria-current='page'] .pill {
+  background: var(--ck-tint);
+}
+
+/* The update notice sits above the bottom bar, never under it. */
+:root:has(.tabbar) .update-notice {
+  bottom: calc(71px + 16px + env(safe-area-inset-bottom, 0px));
+}
+
+/* The menu as a drawer from the left, min(90%, 384px), over a scrim.
+   Closed, it waits past the edge, hidden once its slide has finished. */
+.frame-side {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 40;
+  display: flex;
+  width: min(90%, 384px);
+  padding-top: env(safe-area-inset-top, 0px);
+  border-right: 1px solid var(--pg-surface-edge);
+  background: var(--pg-surface);
+  box-shadow: var(--ck-lift);
+  transform: translateX(-105%);
+  visibility: hidden;
+  transition:
+    transform 0.26s cubic-bezier(0.2, 0.7, 0.2, 1),
+    visibility 0s linear 0.26s;
+}
+
+.frame-side.is-open {
+  transform: none;
+  visibility: visible;
+  transition: transform 0.26s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.frame-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  background: var(--ck-overlay);
+}
+
+/* The page behind an open drawer does not scroll. */
+body.menu-open {
+  overflow: hidden;
+}
+
+/* ---------- the menu (One list) ---------- */
+
+.menu {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.nav-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 14px 16px 6px;
+}
+
+/* A list's heading: small capitals in the body face. */
+.nav-label {
+  margin: 1.25rem 20px 0.375rem;
+  font-family: var(--font-body);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.5;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ck-muted);
+}
+
+.nrows {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* A row: the menu's sections and lists, and You's rows. */
+.nrow {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 52px;
+  padding: 0.375rem 10px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--pg-text);
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.nrow:hover {
+  background: var(--ck-tint);
+}
+
+.nrow[aria-current='page'] {
+  background: var(--ck-tint);
+  color: var(--ck-active-ink);
+}
+
+.nrow .t {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.nrow .t b {
+  overflow: hidden;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nrow .t span {
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  color: var(--ck-muted);
+}
+
+.nrow .chev {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--ck-muted);
+}
+
+/* A thumbnail in its small mat. Until covers exist every one is the empty
+   cover: the quail on mint. */
+.nthumb {
+  flex: none;
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+  object-fit: cover;
+  box-shadow:
+    0 0 0 2px var(--pg-surface),
+    0 0 0 3px var(--pg-surface-edge);
+}
+
+.noimg {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: var(--ck-empty);
+}
+
+.noimg img {
+  width: 80%;
+  height: 80%;
+  object-fit: contain;
+}
+
+/* A failed read: one quiet line, and Try again. */
+.menu-failed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 1.25rem 18px 0;
+  font-size: 0.875rem;
+  color: var(--ck-muted);
+}
+
+.menu-failed p {
+  margin: 0;
+}
+
+.nav-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: auto;
+  padding: 14px 16px 16px;
+  border-top: 1px solid var(--pg-hairline);
+}
+
+.me {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.me .iconbtn {
+  margin-left: auto;
+}
+
+.me-name {
+  min-width: 0;
+}
+
+.me-name b {
+  display: block;
+  overflow: hidden;
+  font-size: 0.9375rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.me-name span {
+  font-size: 0.8125rem;
+  color: var(--ck-muted);
+}
+
+/* The initials in a tinted circle, until profile pictures exist. */
+.avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: var(--ck-tint);
+  color: var(--ck-active-ink);
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* The maker's line. */
+.badge,
+.auth-screen > .badge {
+  font-size: 0.75rem;
+  letter-spacing: 0.01em;
+  color: var(--ck-muted);
+}
+
+/* From 900px: the menu as a column beside the page, no bars, and the frame
+   pinned to the window's height so the menu and the page scroll
+   separately. */
+@media (min-width: 900px) {
+  .frame {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    height: 100vh;
+    height: 100dvh;
+  }
+
+  .frame-side {
+    position: relative;
+    z-index: 1;
+    width: 304px;
+    min-height: 0;
+    padding-top: 0;
+    overflow: hidden;
+    box-shadow: none;
+    transform: none;
+    visibility: visible;
+    transition: none;
+  }
+
+  .frame-col {
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .topbar,
+  .tabbar,
+  .frame-scrim {
+    display: none;
+  }
+}
+
+/* ---------- You (CK-82; the mockup's screen 13, in today's single column) ---------- */
+
+.you-who {
+  flex-direction: row;
+  align-items: center;
+  gap: 1rem;
+}
+
+.you-who .avatar {
+  width: 56px;
+  height: 56px;
+  font-size: 1.125rem;
+}
+
+.auth-screen .you-name {
+  font-family: var(--font-display);
+  font-size: 1.375rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.you-display h2 {
+  font-size: 1.25rem;
+}
+
+.you-choice {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.you-choice legend {
+  margin-bottom: 0.5rem;
+  padding: 0;
+  font-weight: 700;
+}
+
+/* A choice in its own box, the checked one outlined and tinted. */
+.opts {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.auth-card .opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 14px;
+  background: var(--pg-bg);
+  font-size: 1rem;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.auth-card .opt:has(input:checked) {
+  border-color: var(--pg-events-accent);
+  background: var(--ck-tint);
+}
+
+.opt b {
+  display: block;
+  font-weight: 600;
+}
+
+.opt b + span {
+  display: block;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  color: var(--ck-muted);
+}
+
+.you-rows {
+  padding: 6px;
+}
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.you-rows .nrow {
+  min-height: 56px;
+  font-weight: 600;
 }

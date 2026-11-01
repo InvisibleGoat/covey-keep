@@ -60,7 +60,6 @@ export function Groups() {
         <button type="button" onClick={tryAgain}>
           Try again
         </button>
-        <Link to="/home">Back home</Link>
       </main>
     )
   }
@@ -72,7 +71,6 @@ export function Groups() {
         <h1>No groups yet</h1>
         <p>Groups you start or join will be listed here.</p>
         <Link to="/groups/new">Start a group</Link>
-        <Link to="/home">Back home</Link>
       </main>
     )
   }
@@ -97,7 +95,6 @@ export function Groups() {
         })}
       </ul>
       <Link to="/groups/new">Start a group</Link>
-      <Link to="/home">Back home</Link>
     </main>
   )
 }

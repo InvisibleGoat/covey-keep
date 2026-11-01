@@ -69,7 +69,6 @@ export function Gatherings() {
         >
           Try again
         </button>
-        <Link to="/home">Back home</Link>
       </main>
     )
   }
@@ -84,7 +83,6 @@ export function Gatherings() {
         <h1>No gatherings yet</h1>
         <p>Gatherings you start or are invited to will be listed here.</p>
         <Link to="/gatherings/new">Create your first gathering</Link>
-        <Link to="/home">Back home</Link>
       </main>
     )
   }
@@ -113,7 +111,6 @@ export function Gatherings() {
         ))}
       </ul>
       <Link to="/gatherings/new">New gathering</Link>
-      <Link to="/home">Back home</Link>
     </main>
   )
 }

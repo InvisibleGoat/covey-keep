@@ -2,6 +2,18 @@
 <html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
+    <!-- The theme, before the first paint (CK-82): light is the default
+         above, and a stored `dark` (src/lib/theme.ts, chosen on You) is set
+         here, before the stylesheet or the bundle loads, so a person who
+         chose dark never sees a flash of light. Exactly `dark` and nothing
+         else; storage that throws leaves light. This script and
+         src/lib/theme.ts are the only places that touch the key or the
+         attribute. -->
+    <script>
+      try {
+        if (localStorage.getItem('covey-keep:theme') === 'dark') document.documentElement.setAttribute('data-theme', 'dark')
+      } catch {}
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- %PRODUCT_NAME% is injected at build time from src/brand.ts (the

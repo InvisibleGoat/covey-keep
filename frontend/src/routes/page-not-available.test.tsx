@@ -115,8 +115,15 @@ function locationText() {
   return screen.getByTestId('location').textContent
 }
 
+// MOVED AT CK-82, with its reason: this read Home's "Welcome" heading, and
+// Home is retired — the heading exists nowhere now, so the check would pass
+// over nothing. The signed-in landing is Groups, inside the frame: the
+// catch-all renders neither the frame nor the Groups page.
 function expectNoHomeOrSignIn() {
   expect(screen.queryByRole('heading', { name: /welcome/i })).toBeNull()
+  expect(document.querySelector('.frame')).toBeNull()
+  expect(screen.queryByRole('navigation')).toBeNull()
+  expect(screen.queryByRole('heading', { name: /your groups|no groups yet/i })).toBeNull()
   expect(screen.queryByRole('textbox')).toBeNull()
   expect(screen.queryByRole('button', { name: /email me a sign-in link/i })).toBeNull()
   expect(screen.queryByText(/^API:/)).toBeNull()
