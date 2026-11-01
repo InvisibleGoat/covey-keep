@@ -1,6 +1,7 @@
 // Gathering API types and shared helpers (CK-17). Shapes mirror
 // backend/app/api/gatherings.py's response bodies exactly — see
 // reference/backend/api-reference.md, Gatherings router.
+import type { CoverBody } from './covers'
 import { formatInstant } from './datetime'
 
 export interface Occurrence {
@@ -56,6 +57,12 @@ export interface Gathering {
   // photographs and nothing else. Read through `viewOf` below and nowhere
   // by hand (CK-80), so anything unknown shows less.
   caller_view: CallerView
+  // The cover (CK-83a/CK-83b, on every gathering body, list items and the
+  // memory view included): one of the gathering's published photographs —
+  // named by `media_id` — or an uploaded picture, with `set_at` its version;
+  // null until an organiser sets one. Optional: a body without it reads as
+  // none and draws the empty cover (lib/covers.ts, CK-84).
+  cover?: CoverBody | null
   created_at: string
   updated_at: string | null
 }

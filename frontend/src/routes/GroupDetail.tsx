@@ -70,10 +70,24 @@
 // gathering, for every member (any member of a household group may start
 // one, CK-76), opens `/groups/<id>/gatherings/new` with the group's member
 // list.
+//
+// THE COVER (CK-84; decisions/2026-10-31-the-design-and-how-it-is-merged.md
+// §1.3): the page opens on its cover card — the group's cover, or the empty
+// cover, with the group's name, the page's <h1>, over it
+// (components/PageCover.tsx). The admin and co-admins get Change cover —
+// Upload a picture, and Remove cover behind a second step that is one of
+// this page's steps, so it closes any other and any other closes it. A
+// cover from a photograph is chosen in a group gathering's opened photo
+// (Use as the group's cover), and nothing on this page ever names that
+// photograph or its gathering — no group body does. Each row of the
+// Gatherings section starts with its gathering's cover thumbnail.
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { Cover } from '../components/Cover'
 import { FieldError, FormLevelErrors } from '../components/FieldError'
+import { PageCover } from '../components/PageCover'
+import { COVER_HINT_GROUP, REMOVE_PHOTO_SENTENCE_GROUP } from '../lib/covers'
 import { effectiveZone, formatDay } from '../lib/datetime'
 import { describedBy, noErrors, type FormErrors } from '../lib/formErrors'
 import { listItemLine, viewOf, type GatheringListItem } from '../lib/gatherings'
@@ -149,13 +163,15 @@ type SectionLoad<T> = { status: 'loading' } | { status: 'loaded'; value: T } | {
 type RowStepAct = 'remove_co_admin' | 'step_down' | 'make_admin' | 'remove_member'
 
 // One second step open on the whole page: a member's row, the leave card,
-// a request's approval, or the link's replacement or turning off (CK-79).
+// a request's approval, the link's replacement or turning off (CK-79), or
+// removing the cover (CK-84).
 type Step =
   | { act: RowStepAct; membershipId: string }
   | { act: 'leave' }
   | { act: 'approve'; requestId: string }
   | { act: 'replace_link' }
   | { act: 'turn_off_link' }
+  | { act: 'remove_cover' }
 
 // What each second step says and offers. The sentence names what the
 // person loses; the confirm acts; the keep button does nothing.
@@ -629,7 +645,21 @@ export function GroupDetail({ device }: { device?: ShareDevice } = {}) {
 
   return (
     <main className="auth-screen">
-      <h1>{group.name}</h1>
+      <PageCover
+        subject="group"
+        id={group.id}
+        cover={group.cover}
+        organises={organises}
+        hint={COVER_HINT_GROUP}
+        photoRemovalSentence={REMOVE_PHOTO_SENTENCE_GROUP}
+        onChanged={() => setGroupKey((key) => key + 1)}
+        removeStep={{
+          open: step?.act === 'remove_cover',
+          setOpen: (next) => (next ? openStep({ act: 'remove_cover' }) : setStep(null)),
+        }}
+      >
+        <h1>{group.name}</h1>
+      </PageCover>
       <p>{memberCountLabel(group.member_count)}</p>
       {roleLine && <p>{roleLine}</p>}
 
@@ -688,9 +718,12 @@ export function GroupDetail({ device }: { device?: ShareDevice } = {}) {
             <ul className="gathering-list" aria-label="The group's gatherings">
               {groupGatherings.map((gathering) => (
                 <li key={gathering.id}>
-                  <Link className="gathering-item" to={`/gatherings/${gathering.id}`}>
-                    <strong>{gathering.title}</strong>
-                    <p>{listItemLine(gathering, zone, false)}</p>
+                  <Link className="gathering-item cover-row" to={`/gatherings/${gathering.id}`}>
+                    <Cover subject="gathering" id={gathering.id} cover={gathering.cover} variant="thumb" />
+                    <div className="cover-row-text">
+                      <strong>{gathering.title}</strong>
+                      <p>{listItemLine(gathering, zone, false)}</p>
+                    </div>
                   </Link>
                 </li>
               ))}

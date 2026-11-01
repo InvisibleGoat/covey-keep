@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { Cover } from '../components/Cover'
 import { authFetch } from '../lib/api'
 import { effectiveZone } from '../lib/datetime'
 import { listItemLine, viewOf, type GatheringListItem } from '../lib/gatherings'
@@ -100,12 +101,17 @@ export function Gatherings() {
       <ul className="gathering-list">
         {gatherings.map((gathering) => (
           <li key={gathering.id}>
-            <Link className="gathering-item" to={`/gatherings/${gathering.id}`}>
-              <strong>{gathering.title}</strong>
-              {/* The type, then the date — or "You can see its photos" in
-                  the photos-only view, where no date was sent — then the
-                  group's name on a group's gathering (CK-80). */}
-              <p>{listItemLine(gathering, zone, true)}</p>
+            <Link className="gathering-item cover-row" to={`/gatherings/${gathering.id}`}>
+              {/* The cover (CK-84) — in both views: the memory tier reads a
+                  gathering's cover with its photographs. */}
+              <Cover subject="gathering" id={gathering.id} cover={gathering.cover} variant="thumb" />
+              <div className="cover-row-text">
+                <strong>{gathering.title}</strong>
+                {/* The type, then the date — or "You can see its photos" in
+                    the photos-only view, where no date was sent — then the
+                    group's name on a group's gathering (CK-80). */}
+                <p>{listItemLine(gathering, zone, true)}</p>
+              </div>
             </Link>
           </li>
         ))}

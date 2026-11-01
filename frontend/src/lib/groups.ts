@@ -28,6 +28,7 @@
 // NOBODY IS TOLD they were made a co-admin, removed, or handed the admin
 // role: no notification exists (record §12).
 import { authFetch } from './api'
+import type { CoverBody } from './covers'
 import { errorsFromResponse, networkErrors, type FormErrors } from './formErrors'
 import type { GatheringListItem } from './gatherings'
 
@@ -42,6 +43,11 @@ export interface Group {
   admin_person_id: string | null
   member_count: number
   caller_role: GroupRole
+  // The cover (CK-83a/CK-83b): its source and version, NEVER the photograph
+  // — a group's cover is seen by every member, including one who cannot see
+  // the gathering it came from, so no group body names it. Null until an
+  // organiser sets one; optional, so a body without it draws the empty cover.
+  cover?: CoverBody | null
   created_at: string
   updated_at: string | null
 }

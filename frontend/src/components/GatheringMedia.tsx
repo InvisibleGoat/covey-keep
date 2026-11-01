@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { authFetch } from '../lib/api'
+import {
+  announceCoverChange,
+  COVER_REFUSED,
+  groupCoverConfirmSentence,
+  groupCoverSetLine,
+  NOT_NOW,
+  setCoverFromPhoto,
+  USE_AS_COVER,
+  USE_AS_GROUP_COVER,
+  type CoverBody,
+} from '../lib/covers'
 import { formatInstant } from '../lib/datetime'
 import {
   describedBy,
@@ -10,7 +21,8 @@ import {
   noErrors,
   type FormErrors,
 } from '../lib/formErrors'
-import { type Occurrence } from '../lib/gatherings'
+import { type GatheringGroup, type Occurrence } from '../lib/gatherings'
+import { groupRoleFlags, readGroup } from '../lib/groups'
 import {
   anyInFlight,
   anyWaiting,
@@ -241,6 +253,30 @@ import { FieldError, FormLevelErrors } from './FieldError'
 //    their Try again are untouched — those rows are not `failed` on the
 //    server, and are reaped at 24 hours.
 //
+// And, since CK-84, covers (decisions/2026-10-31-the-design-and-how-it-is-merged.md
+// §1.3; the CK-84 kickoff, Steven's answers of 2026-11-01):
+//
+// 11. A COVER IS CHOSEN FROM THE OPENED PHOTO, AND ONLY FROM A PUBLISHED ONE.
+//    On a `ready`, `live` photograph — never a pending, removed or failed
+//    one, which the server would refuse — the viewer offers Use as cover to
+//    the gathering's organisers (`organises`), in ONE click: a gathering's
+//    cover is seen by its memory tier, the same people who see the live
+//    photograph. It is hidden on the photograph that already is the cover
+//    (the gathering body names it), and a success hands the PUT's `cover`
+//    to the page, whose card draws it at once. On a group's gathering the
+//    viewer offers Use as the group's cover to the GROUP's admin and
+//    co-admins — no gathering role is needed, since a member only shared
+//    with the gathering may run the group — read from `GET /groups/{id}`'s
+//    `caller_role` once, when this section opens (so the page itself stays
+//    one request), and only on a group's gathering. It always shows for
+//    them, because no group body names its photograph, and it takes a
+//    second step saying who will see the photograph — everyone in the group,
+//    including people who cannot see this gathering. A success says the
+//    group's cover is set; a refusal of either reads the house line, and
+//    nothing is re-read. Each landing tells the menu (announceCoverChange).
+//    Nothing else in this section changes: no cover is listed among the
+//    photos, and a cover is never counted.
+//
 // Collapsed by default (the CK-25/CK-27 pattern): the detail page stays one
 // request until the person opens this section.
 
@@ -275,6 +311,16 @@ interface Props {
   // row offers a retry that would open the picker. Default true: every
   // pre-CK-80 site means exactly what it meant.
   canUpload?: boolean
+  // The gathering's cover (CK-84), read to hide Use as cover on the
+  // photograph that already is it. Absent reads as none.
+  cover?: CoverBody | null
+  // The group the gathering belongs to (CK-84), or null: on a group's
+  // gathering the group's admin and co-admins get Use as the group's cover.
+  group?: GatheringGroup | null
+  // The gathering's title, for the group's confirming step.
+  gatheringTitle?: string
+  // The page's card draws the cover the PUT answered with.
+  onCoverSet?: (cover: CoverBody | null) => void
   zone: string
   // Overridable for tests only; the product uses the one constant each.
   pollIntervalMs?: number
@@ -523,6 +569,10 @@ export function GatheringMedia({
   requiresApproval,
   occurrences,
   canUpload = true,
+  cover = null,
+  group = null,
+  gatheringTitle = '',
+  onCoverSet,
   zone,
   pollIntervalMs = POLL_INTERVAL_MS,
   searchDebounceMs = SEARCH_DEBOUNCE_MS,
@@ -595,6 +645,19 @@ export function GatheringMedia({
   const [batchSent, setBatchSent] = useState<string[]>([])
   const [publishing, setPublishing] = useState(false)
 
+  // Covers (CK-84; point 11). The caller's seat in the gathering's group,
+  // read once the section opens on a group's gathering — null until then,
+  // and for good when the read fails, which gates the group's button closed.
+  // One cover act at a time; the group's second step, a refusal and the
+  // group's success line are each held for the photograph they are about.
+  const [groupSeat, setGroupSeat] = useState<{ name: string; organises: boolean } | null>(null)
+  const [coverActing, setCoverActing] = useState(false)
+  const [groupStepFor, setGroupStepFor] = useState<string | null>(null)
+  const [coverNote, setCoverNote] = useState<{ mediaId: string; kind: 'refused' | 'group_set' } | null>(
+    null,
+  )
+  const groupId = group?.id ?? null
+
   const fileInput = useRef<HTMLInputElement>(null)
   const alive = useRef(true)
   useEffect(() => {
@@ -603,6 +666,18 @@ export function GatheringMedia({
       alive.current = false
     }
   }, [])
+
+  useEffect(() => {
+    if (!open || groupId === null) return
+    let cancelled = false
+    void readGroup(groupId).then((result) => {
+      if (cancelled || result.status !== 'loaded') return
+      setGroupSeat({ name: result.value.name, organises: groupRoleFlags(result.value.caller_role).organises })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [open, groupId])
 
   useEffect(() => {
     const timer = setTimeout(() => setTerm(searchInput.trim()), searchDebounceMs)
@@ -682,6 +757,28 @@ export function GatheringMedia({
     setBatchSent([])
     setDecliningId(null)
   }, [reviewer, view])
+
+  // Use as cover / Use as the group's cover (point 11): one PUT, the
+  // photograph's id and nothing else. The gathering's answer goes to the
+  // page's card; the group's is a line here, because the group's cover
+  // changes on a page the person is not looking at.
+  async function chooseAsCover(item: MediaItem, subject: 'gathering' | 'group') {
+    const target = subject === 'gathering' ? gatheringId : groupId
+    if (coverActing || target === null) return
+    setCoverActing(true)
+    setCoverNote(null)
+    const outcome = await setCoverFromPhoto(subject, target, item.id)
+    if (!alive.current) return
+    setCoverActing(false)
+    setGroupStepFor(null)
+    if (!outcome.ok) {
+      setCoverNote({ mediaId: item.id, kind: 'refused' })
+      return
+    }
+    if (subject === 'gathering') onCoverSet?.(outcome.cover)
+    else setCoverNote({ mediaId: item.id, kind: 'group_set' })
+    announceCoverChange()
+  }
 
   function noteProblem(mediaId: string, problem: LocalProblem) {
     setProblems((prev) => ({ ...prev, [mediaId]: problem }))
@@ -1718,6 +1815,68 @@ export function GatheringMedia({
           <p className="field-hint">
             {mediaStateMessage(opened, { isHost, organises, gatheringBin: binView })}
           </p>
+          {opened.status === 'ready' && opened.publication_state === 'live' && (
+            // Covers (point 11): only on a published photograph.
+            <>
+              {organises && !(cover?.source === 'photo' && cover.media_id === opened.id) && (
+                <div className="media-review">
+                  <button type="button" disabled={coverActing} onClick={() => void chooseAsCover(opened, 'gathering')}>
+                    {USE_AS_COVER}
+                  </button>
+                </div>
+              )}
+              {groupSeat?.organises &&
+                (groupStepFor === opened.id ? (
+                  // The second, deliberate step: the first click only asked,
+                  // and Not now does nothing.
+                  <div className="media-decline" role="group" aria-label={USE_AS_GROUP_COVER}>
+                    <p>{groupCoverConfirmSentence(groupSeat.name, gatheringTitle)}</p>
+                    <div className="media-review">
+                      <button
+                        type="button"
+                        disabled={coverActing}
+                        onClick={() => void chooseAsCover(opened, 'group')}
+                      >
+                        {USE_AS_GROUP_COVER}
+                      </button>
+                      <button
+                        type="button"
+                        className="link-button"
+                        disabled={coverActing}
+                        onClick={() => setGroupStepFor(null)}
+                      >
+                        {NOT_NOW}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="media-review">
+                    <button
+                      type="button"
+                      disabled={coverActing}
+                      onClick={() => {
+                        setCoverNote(null)
+                        setGroupStepFor(opened.id)
+                      }}
+                    >
+                      {USE_AS_GROUP_COVER}
+                    </button>
+                  </div>
+                ))}
+              {groupSeat?.organises && (
+                <p className="form-success" role="status">
+                  {coverNote?.mediaId === opened.id && coverNote.kind === 'group_set'
+                    ? groupCoverSetLine(groupSeat.name)
+                    : ''}
+                </p>
+              )}
+              {coverNote?.mediaId === opened.id && coverNote.kind === 'refused' && (
+                <p className="form-error" role="alert">
+                  {COVER_REFUSED}
+                </p>
+              )}
+            </>
+          )}
           <button type="button" onClick={() => setOpenedId(null)}>
             Close
           </button>

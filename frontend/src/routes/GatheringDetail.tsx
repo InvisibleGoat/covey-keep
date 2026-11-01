@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { FieldError, FormLevelErrors } from '../components/FieldError'
 import { GatheringMedia } from '../components/GatheringMedia'
+import { PageCover } from '../components/PageCover'
 import { authFetch } from '../lib/api'
 import {
   effectiveZone,
@@ -21,6 +22,7 @@ import {
   type CoHost,
   type CoHostList,
 } from '../lib/coHosts'
+import { COVER_HINT_GATHERING, removePhotoSentence, type CoverBody } from '../lib/covers'
 import { type InvitationLists } from '../lib/invitations'
 import {
   describedBy,
@@ -882,12 +884,33 @@ export function GatheringDetail() {
   const { gathering } = state
   const isMemorial = gathering.gathering_type === 'memorial'
 
-  // The header every view shares: the title, the type, the decedent line,
+  // The cover a page act landed, drawn at once from the server's answer (the
+  // PUT's `cover` from the viewer's Use as cover — CK-84).
+  function coverSet(cover: CoverBody | null) {
+    setState((current) =>
+      current.status === 'loaded' ? { status: 'loaded', gathering: { ...current.gathering, cover } } : current,
+    )
+  }
+
+  // The header every view shares: the cover card with the title over it
+  // (CK-84; components/PageCover.tsx — the empty cover until one is set, and
+  // Change cover for the organisers in the full view alone: the photos-only
+  // view gives no role whatever arrives), then the type, the decedent line,
   // and on a group's gathering the group line (CK-80) — a link to the
   // group's page, for everyone who can read the gathering.
   const header = (
     <>
-      <h1>{gathering.title}</h1>
+      <PageCover
+        subject="gathering"
+        id={gathering.id}
+        cover={gathering.cover}
+        organises={viewOf(gathering.caller_view).full && roleFlags(gathering.caller_role).organises}
+        hint={COVER_HINT_GATHERING}
+        photoRemovalSentence={removePhotoSentence(gathering.title)}
+        onChanged={() => setReloadKey((key) => key + 1)}
+      >
+        <h1>{gathering.title}</h1>
+      </PageCover>
       <p>{gatheringTypeLabel(gathering.gathering_type)}</p>
       {gathering.memorial_decedent_name && (
         <p>In memory of {gathering.memorial_decedent_name}</p>
@@ -924,6 +947,10 @@ export function GatheringDetail() {
             requiresApproval={gathering.requires_approval}
             occurrences={null}
             canUpload={false}
+            cover={gathering.cover}
+            group={gathering.group}
+            gatheringTitle={gathering.title}
+            onCoverSet={coverSet}
             zone={zone}
           />
         </section>
@@ -1698,6 +1725,10 @@ export function GatheringDetail() {
           organises={organises}
           requiresApproval={gathering.requires_approval}
           occurrences={occurrences}
+          cover={gathering.cover}
+          group={group}
+          gatheringTitle={gathering.title}
+          onCoverSet={coverSet}
           zone={zone}
         />
       </section>

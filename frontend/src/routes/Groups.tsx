@@ -5,9 +5,12 @@
 // own (decisions/2026-10-31-the-design-and-how-it-is-merged.md §4).
 // The empty state is a real screen that promises nothing without a screen
 // yet (no invitation, gathering or photo); a failed read can be retried,
-// never "Try again." with nothing to press.
+// never "Try again." with nothing to press. Since CK-84 each row starts
+// with the group's cover, the thumbnail in its ring mat (components/Cover.tsx
+// — the empty cover until one is set); the words are unchanged.
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Cover } from '../components/Cover'
 import { listGroups, memberCountLabel, roleLabel, type Group } from '../lib/groups'
 
 type LoadStatus = 'loading' | 'loaded' | 'failed'
@@ -83,12 +86,15 @@ export function Groups() {
           const role = roleLabel(group.caller_role)
           return (
             <li key={group.id}>
-              <Link className="gathering-item" to={`/groups/${group.id}`}>
-                <strong>{group.name}</strong>
-                <p>
-                  {memberCountLabel(group.member_count)}
-                  {role && ` · ${role}`}
-                </p>
+              <Link className="gathering-item cover-row" to={`/groups/${group.id}`}>
+                <Cover subject="group" id={group.id} cover={group.cover} variant="thumb" />
+                <div className="cover-row-text">
+                  <strong>{group.name}</strong>
+                  <p>
+                    {memberCountLabel(group.member_count)}
+                    {role && ` · ${role}`}
+                  </p>
+                </div>
               </Link>
             </li>
           )

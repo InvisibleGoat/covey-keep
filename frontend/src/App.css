@@ -722,6 +722,135 @@
   font-size: 0.9375rem;
 }
 
+/* ---------- covers (CK-84; the mockup's cover(), .nthumb, .photo, .gcover, .pin) ---------- */
+
+/* A list row that starts with its cover: the thumbnail in its ring mat,
+   then the row's words. */
+.gathering-item.cover-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.cover-row-text {
+  flex: 1;
+  min-width: 0;
+}
+
+/* A cover that exists and has not arrived — or could not be shown: the
+   ground alone, no quail and no words. */
+.cover-ground {
+  display: block;
+  background: var(--ck-empty);
+}
+
+/* A page's cover card: the mat (the card's padding), the photograph at the
+   photo radius, 16/10. It takes the width today's column gives its cards,
+   and the mockup's phone measure inside it — the wide 3/1 rule and the
+   larger title come with the page layouts (CK-86, CK-87). */
+.cover-card {
+  position: relative;
+  width: 100%;
+  max-width: 22rem;
+  padding: var(--mat);
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: var(--r-card);
+  background: var(--pg-surface);
+  box-shadow: var(--ck-lift);
+  text-align: left;
+}
+
+.cover-photo {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border-radius: var(--r-photo);
+  background: var(--ck-empty);
+}
+
+.cover-photo > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The empty cover on the card: the quail and its line, beneath the scrim.
+   The mockup draws this cover under no title, and as it is written its line
+   would fall behind the page's heading, where the scrim is darkest — so on
+   the card the two sit above the heading's band, and the line takes the
+   text colour, which reads on the scrim where the muted one does not. */
+.cover-empty {
+  display: grid;
+  place-items: center;
+  align-content: start;
+  gap: 0.25rem;
+  height: 100%;
+  padding: 14px 16px 64px;
+  color: var(--pg-text);
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+.cover-empty img {
+  width: 26%;
+  max-width: 104px;
+  height: auto;
+  object-fit: contain;
+}
+
+/* The scrim and the page's heading over it. First in the markup, drawn
+   above the picture. */
+.cover-over {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 16px;
+  background: linear-gradient(to top, var(--ck-scrim) 0%, var(--ck-scrim-mid) 45%, var(--ck-scrim-0) 80%);
+  color: var(--ck-on-photo);
+}
+
+.cover-over h1 {
+  margin: 0;
+  color: var(--ck-on-photo);
+  font-size: 2rem;
+  line-height: 1.04;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* Change cover: a frosted pill at the card's top right (the mockup's .pin
+   place), 44px tall. */
+.auth-screen .cover-change {
+  position: absolute;
+  top: calc(var(--mat) + 8px);
+  right: calc(var(--mat) + 8px);
+  z-index: 3;
+  min-height: 44px;
+  padding: 0 1rem;
+  border: 0;
+  background: var(--ck-frost);
+  color: var(--ck-frost-ink);
+  font-size: 0.9375rem;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+/* The panel beneath the card: its controls, a card of their own. The
+   upload's status line is always there — a live region must exist before
+   its words arrive — and takes no room while it has none. */
+.cover-panel button:where(:not(.link-button)) {
+  align-self: flex-start;
+}
+
+.cover-panel .cover-status:empty {
+  margin-top: -0.75rem;
+}
+
 /* ---------- the screens before the app (the mockup's 17–21) ---------- */
 
 /* Sign-in, and the landings beside it: the prints, then the side; two
@@ -1449,8 +1578,8 @@ body.menu-open {
   color: var(--ck-muted);
 }
 
-/* A thumbnail in its small mat. Until covers exist every one is the empty
-   cover: the quail on mint. */
+/* A thumbnail in its small mat: the cover, or the empty cover — the quail
+   on mint — until one is set (CK-84; the covers section, below). */
 .nthumb {
   flex: none;
   width: 42px;

@@ -2,10 +2,12 @@ import { useEffect, useId, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { MAKER_LINE, PRODUCT_NAME } from '../brand'
+import { onCoverChange } from '../lib/covers'
 import { effectiveZone, formatWeekdayDay } from '../lib/datetime'
 import { readMenuLists, SECTIONS, sectionOf, upcomingGatherings, type MenuLists } from '../lib/frame'
 import { initials, memberCountLabel } from '../lib/groups'
-import { EmptyCover, QuailHead } from './AuthArt'
+import { QuailHead } from './AuthArt'
+import { Cover } from './Cover'
 import { Icon } from './Icons'
 
 // The menu, in the One list layout (CK-82; the design handoff §3, the
@@ -14,8 +16,12 @@ import { Icon } from './Icons'
 // groups and Gatherings coming up; and a footer with the person, a way to
 // Settings and the maker's line.
 //
-// What it leaves out, each a later phase: no covers (every thumbnail is the
-// empty cover, the quail on mint — CK-83, CK-84), no pins and no "Active …
+// Every row's thumbnail is its cover (CK-84; components/Cover.tsx) — the
+// picture an organiser set, or the empty cover, the quail on mint — read
+// through lib/covers.ts's cache, so a re-read of the lists fetches no
+// picture it already holds at the same version.
+//
+// What it leaves out, each a later phase: no pins and no "Active …
 // ago" (neither has a backend — a group's row shows its member count, in
 // today's words), no Calendar (CK-91), and no details panel — a row opens
 // its group's or gathering's page directly (Steven, 2026-10-31), so no row
@@ -49,6 +55,10 @@ export function Menu() {
       cancelled = true
     }
   }, [pathname, reloadKey])
+
+  // A cover act landed on a page (CK-84): the two lists again at once, so a
+  // thumbnail does not wait for the next navigation to show the new cover.
+  useEffect(() => onCoverChange(() => setReloadKey((key) => key + 1)), [])
 
   function tryAgain() {
     setLists(null)
@@ -102,7 +112,7 @@ export function Menu() {
             {groups.map((group) => (
               <li key={group.id}>
                 <Link className="nrow" to={`/groups/${group.id}`}>
-                  <EmptyCover className="nthumb" />
+                  <Cover subject="group" id={group.id} cover={group.cover} variant="thumb" />
                   <span className="t">
                     <b>{group.name}</b>
                     <span>{memberCountLabel(group.member_count)}</span>
@@ -123,7 +133,7 @@ export function Menu() {
             {upcoming.map((gathering) => (
               <li key={gathering.id}>
                 <Link className="nrow" to={`/gatherings/${gathering.id}`}>
-                  <EmptyCover className="nthumb" />
+                  <Cover subject="gathering" id={gathering.id} cover={gathering.cover} variant="thumb" />
                   <span className="t">
                     <b>{gathering.title}</b>
                     {gathering.next_occurrence && (

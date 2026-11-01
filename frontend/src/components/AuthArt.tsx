@@ -4,7 +4,8 @@ import { PRODUCT_NAME } from '../brand'
 // mockup, screens 17 to 21): the three matted prints beside sign-in, the
 // quail in the lockup and the waiting screens, and the small brand mark —
 // and since CK-82 the frame's two: the quail's head beside the product name
-// in the top bar and the menu, and the empty cover on the menu's rows.
+// in the top bar and the menu, and the empty cover on the menu's rows — the
+// list rows' and a page's cover card's too since CK-84.
 // Every image here is decorative — `alt=""`, and the prints' frame is
 // aria-hidden — so a screen reader hears each screen's words and nothing
 // else. The files are served from the app's own origin (public/img/) and
@@ -44,13 +45,28 @@ export function QuailHead() {
 }
 
 /**
- * The empty cover, the quail on mint (the mockup's `noimg`): every thumbnail
- * in the menu until covers exist (CK-83, CK-84). Decorative, like the rest.
+ * The empty cover, the quail on mint (the mockup's `noimg`): a thumbnail —
+ * in the menu and on the list rows — wherever no cover is set (CK-82; covers
+ * since CK-84). Decorative, like the rest: the row's name is the text.
  */
 export function EmptyCover({ className }: { className: string }) {
   return (
     <span className={`noimg ${className}`} aria-hidden="true">
       <img src={QUAIL_SRC} alt="" width={640} height={640} />
+    </span>
+  )
+}
+
+/**
+ * The empty cover on a page's cover card (CK-84; the mockup's `.photo.empty`):
+ * the quail and its line, beneath the card's scrim. The line is words a
+ * reader hears; the quail is decorative.
+ */
+export function EmptyCoverCard({ line }: { line: string }) {
+  return (
+    <span className="cover-empty">
+      <img src={QUAIL_SRC} alt="" width={640} height={640} />
+      <span>{line}</span>
     </span>
   )
 }
