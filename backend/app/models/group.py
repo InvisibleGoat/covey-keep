@@ -19,10 +19,13 @@ from app.models.enums import (
 class Group(Base):
     __tablename__ = "groups"
     __table_args__ = (
-        # A COVER IS ONE FACT IN THREE COLUMNS (0035, CK-83a) — the gatherings
-        # table's CHECK, on a group: all set or all NULL.
+        # A COVER IS ONE FACT (0035, CK-83a; WIDENED at 0036, CK-83b) — the
+        # gatherings table's CHECK, on a group: at most one source, and a
+        # cover set iff its version and its setter are.
         CheckConstraint(
-            "num_nonnulls(cover_media_id, cover_set_at, cover_set_by_person_id) IN (0, 3)",
+            "num_nonnulls(cover_media_id, cover_image_id) <= 1"
+            " AND num_nonnulls(cover_media_id, cover_image_id, cover_set_at,"
+            " cover_set_by_person_id) IN (0, 3)",
             name="cover_all_or_none",
         ),
         # The clearing statement's reader (services/covers.py). Partial.
@@ -30,6 +33,12 @@ class Group(Base):
             "ix_groups_cover_media_id",
             "cover_media_id",
             postgresql_where=text("cover_media_id IS NOT NULL"),
+        ),
+        # The uploaded cover's pointer (0036, CK-83b), indexed the same way.
+        Index(
+            "ix_groups_cover_image_id",
+            "cover_image_id",
+            postgresql_where=text("cover_image_id IS NOT NULL"),
         ),
     )
 
@@ -110,6 +119,15 @@ class Group(Base):
     # (media -> gatherings -> groups), so it is `use_alter`; no delete rule.
     cover_media_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("media.id", use_alter=True), nullable=True
+    )
+    # THE COVER'S SECOND SOURCE (0036, CK-83b): a picture an organiser
+    # uploaded for the group — a `cover_images` row of this group's, written
+    # by the worker at `ready` and cleared (the image retired) by the latest
+    # act (services/covers.py). Like the photograph, never named by a group
+    # body. At most one of the two sources (the CHECK above); `use_alter`,
+    # for the cycle (cover_images -> groups); no delete rule.
+    cover_image_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("cover_images.id", use_alter=True), nullable=True
     )
     # The cover's version — setting the same photograph again writes nothing.
     # Never `updated_at`, which stays the rename's.

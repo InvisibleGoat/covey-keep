@@ -3,13 +3,15 @@ import { PRODUCT_NAME } from '../brand'
 import { BrandMark } from '../components/AuthArt'
 
 // The private test notice — the text the sign-in checkbox records agreement
-// to, as ToS VERSION 2 (CK-73.3). Version 1 was CK-26's text; it went false
-// the day the first photograph was stored (CK-36) and stood six weeks, and
-// it lives word for word in decisions/2026-08-31-private-alpha-scope.md §3.1,
-// where every version's text is kept. This is NOT the Terms of Service: the
-// real terms and privacy policy are with counsel and publish later as
-// VERSION 3, and the notice must never share a version number with them
-// (the record's §3).
+// to, as ToS VERSION 3 (CK-83b): version 2 (CK-73.3) word for word, with one
+// paragraph added after the photographs paragraph, on covers — chosen from a
+// photo or uploaded — because an uploaded cover is a new kind of stored
+// image. Version 1 was CK-26's text; it went false the day the first
+// photograph was stored (CK-36) and stood six weeks. Every version's text
+// lives word for word in decisions/2026-08-31-private-alpha-scope.md §3.1.
+// This is NOT the Terms of Service: the real terms and privacy policy are
+// with counsel and publish later as VERSION 4, and the notice must never
+// share a version number with them (the record's §3).
 //
 // THIS PAGE IS A LIVING DESCRIPTION OF WHAT THE PRODUCT STORES. Every phase
 // that stores a new kind of data, or changes what deletion does, amends it
@@ -28,7 +30,8 @@ import { BrandMark } from '../components/AuthArt'
 // The look (CK-81) is the mockup's notice page, screen 19 — its STYLING
 // only: the mark, the heading, the text on one card, the way back. The
 // mockup's text is version 1 and stale (the design handoff §5.3); the
-// words below are version 2, unchanged.
+// words below are version 3 — version 2's, unchanged, and CK-83b's covers
+// paragraph.
 export function Tos() {
   return (
     <main className="auth-screen notice-screen">
@@ -65,6 +68,18 @@ export function Tos() {
             "a former member". Delete your photos first if you'd rather they went. Answers
             can't be deleted, but you can change yours to "Can't make it" and remove anyone
             you said you were bringing.
+          </p>
+          <p>
+            A group or gathering can also have a cover picture, chosen by the people who run
+            it: a gathering's host or co-hosts, a group's admin or co-admins. A cover can be one
+            of its photos. A gathering's cover is seen by the people in that gathering, and a
+            group's cover by everyone in the group, including people who can't see the
+            gathering the photo came from. A photo stops being a cover when it's sent to a bin
+            or deleted. Instead, they can upload a cover picture: {PRODUCT_NAME} keeps two
+            copies of it at different sizes and deletes the file uploaded, with location and
+            other camera details removed. An uploaded cover isn't one of the photos. It stays
+            until one of them changes or removes it, which deletes it — even if the person who
+            uploaded it has deleted their account.
           </p>
           <p>
             {PRODUCT_NAME} may show paid plans during the test. They run in Stripe's test mode:

@@ -19,6 +19,7 @@ from sqlalchemy import func, select
 from app.api.auth import MAX_REQUESTS_PER_EMAIL, RATE_WINDOW
 from app.api.profile import EMAIL_CHANGE_TOKEN_TTL
 from app.models import (
+    CoverImage,
     EmailChangeRequest,
     MagicLinkToken,
     Media,
@@ -165,6 +166,11 @@ async def test_purge_stale_refuses_a_content_table_without_a_criterion(db_sessio
     async with db_session_factory() as db:
         with pytest.raises(ValueError, match="not an ephemeral table"):
             await purge_stale(db, Media, Media.created_at, _now())
+        # And `cover_images` (CK-83b): covers beside abandoned intents, so a
+        # content table like `media` and never in EPHEMERAL_TABLES — refused
+        # by age alone, before anything executes. Its reap passes a `where`.
+        with pytest.raises(ValueError, match="not an ephemeral table"):
+            await purge_stale(db, CoverImage, CoverImage.created_at, _now())
 
 
 async def test_a_where_criterion_narrows_the_purge(db_session_factory):

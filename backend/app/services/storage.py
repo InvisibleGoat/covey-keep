@@ -70,8 +70,10 @@ photograph.
 
 No router, no FastAPI import: the callers are api/media.py (the intent
 endpoint and the confirm step, CK-34), services/ingest.py (the worker's
-claim service, CK-35; the publish transaction, CK-36), and the verifier
-script. botocore is
+claim service, CK-35; the publish transaction, CK-36), api/covers.py and
+services/cover_ingest.py (an uploaded cover's intent, confirm, URL and
+ladder, CK-83b — `cover_quarantine_key` and `cover_published_key`, the
+`covers/` keyspace), and the verifier script. botocore is
 synchronous — presigning is pure computation (no network) and safe to call
 from async code; the object operations below block on the network, and an
 async caller runs them via asyncio.to_thread. Client construction loads the
@@ -169,6 +171,40 @@ def published_key(media_id: UUID, layer: MediaLayer) -> str:
     after a crash writes the same three keys again and overwrites its own
     earlier attempt, never leaving a second set of objects to orphan."""
     return f"{PUBLISHED_PREFIX}{media_id}/{layer.value}"
+
+
+# THE UPLOADED COVER'S KEYSPACE (CK-83b): one prefix, in BOTH buckets, of its
+# own — never `uploads/` and never `media/` — so a cover picture's object is
+# visibly apart from every photograph's in a listing, and an uploaded cover's
+# presigned URL (whose path is the key) names no photograph. Nothing else
+# changes for it: the quarantine bucket's 24-hour lifecycle rule is
+# bucket-wide by design (pipeline record §6.3 — no prefix on that rule), and
+# every R2 credential is scoped to a bucket, never a prefix (§11), so the
+# keyspace needs nothing in a dashboard.
+COVER_PREFIX = "covers/"
+
+# The layers a cover has: a cover is never printed, so it has no archival.
+COVER_LAYERS = frozenset({MediaLayer.WEB, MediaLayer.THUMBNAIL})
+
+
+def cover_quarantine_key(cover_image_id: UUID) -> str:
+    """The quarantine key of one uploaded cover's original — `covers/<id>`,
+    a pure function of the `cover_images` row's id and nothing else, for the
+    reasons `quarantine_key` gives. The cover upload route signs a PUT for
+    it, the cover confirm HEADs it, and the worker reads and deletes it —
+    all through this one function."""
+    return f"{COVER_PREFIX}{cover_image_id}"
+
+
+def cover_published_key(cover_image_id: UUID, layer: MediaLayer) -> str:
+    """The published key of one layer of one uploaded cover —
+    `covers/<id>/<layer>` — a pure function of (row id, layer), so the
+    worker's writes are idempotent exactly as a photograph's are. Only the
+    web and thumbnail layers exist for a cover; asking for any other is a
+    bug, refused here before a key is made."""
+    if layer not in COVER_LAYERS:
+        raise ValueError(f"a cover has no {layer.value} layer")
+    return f"{COVER_PREFIX}{cover_image_id}/{layer.value}"
 
 
 def _client(access_key_id: str, secret_access_key: str, endpoint_url: str):

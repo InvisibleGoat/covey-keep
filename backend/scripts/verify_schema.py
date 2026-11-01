@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0035"
+EXPECTED_REVISION = "0036"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -2020,7 +2020,7 @@ async def verify(conn, ck: Checks) -> None:
         )
         ck.check(
             f"ck_{subject}_cover_all_or_none" in check_constraints,
-            f"CHECK ck_{subject}_cover_all_or_none exists (the three cover columns all set or all NULL)",
+            f"CHECK ck_{subject}_cover_all_or_none exists (at most one cover source, set iff its version and setter are)",
             "constraint missing",
         )
         cover_index = await index_shape(conn, f"ix_{subject}_cover_media_id")
@@ -2075,22 +2075,322 @@ async def verify(conn, ck: Checks) -> None:
         )
         # (3) The CHECKs above, re-asserted as DATA (the 0031 pattern): if a
         # constraint were ever dropped its shape line fails and so does this.
+        # WIDENED AT CK-83b with the CHECK (0036): a cover's source is a
+        # photograph OR an uploaded cover image — at most one — and either
+        # one is set iff its version and its setter are. Below 0036 the
+        # second source is not there to read, and the 0035 form is asked.
         for subject in ("gatherings", "groups"):
-            half_covers = await scalar(
-                conn,
-                f"SELECT count(*) FROM {subject} "
-                "WHERE num_nonnulls(cover_media_id, cover_set_at, cover_set_by_person_id) NOT IN (0, 3)",
-            )
+            if "cover_image_id" in columns.get(subject, {}):
+                half_covers = await scalar(
+                    conn,
+                    f"SELECT count(*) FROM {subject} "
+                    "WHERE num_nonnulls(cover_media_id, cover_image_id) > 1 "
+                    "OR num_nonnulls(cover_media_id, cover_image_id, cover_set_at, "
+                    "cover_set_by_person_id) NOT IN (0, 3)",
+                )
+            else:
+                half_covers = await scalar(
+                    conn,
+                    f"SELECT count(*) FROM {subject} "
+                    "WHERE num_nonnulls(cover_media_id, cover_set_at, cover_set_by_person_id) NOT IN (0, 3)",
+                )
             ck.check(
                 half_covers == 0,
-                f"no {subject} row carries part of a cover (all three columns or none)",
-                f"{half_covers} {subject} row(s) with part of a cover",
+                f"no {subject} row carries part of a cover, or two sources "
+                "(one source with its version and setter, or nothing)",
+                f"{half_covers} {subject} row(s) with part of a cover or two sources",
             )
     else:
         ck.check(
             False,
             "cover integrity",
             "gatherings / groups cover columns or media missing",
+        )
+
+    print("\n-- uploaded covers (0036, CK-83b) --")
+    # AN UPLOADED COVER IS A SIBLING OF A PHOTOGRAPH, NEVER A KIND OF ONE (the
+    # merge record §1.3; the CK-77 Gotcha's sibling-relation rule): one
+    # `cover_images` row per upload and its job — the media row's pattern —
+    # with exactly one subject, the uploader as provenance (NOT NULL, no
+    # delete rule — the cover outlives the uploader's account), the declared
+    # type and size, the media ladder's own `status` enum with no default,
+    # the job columns, the media failure enum, `superseded_at`, and the two
+    # layers' facts (four columns, all or none). And on each subject the
+    # second source, `cover_image_id`, with the 0035 CHECK widened to admit
+    # it. Every line is the 0036 shape read back from the catalog.
+    ck.check("cover_images" in tables, "table cover_images exists", "table missing")
+    assert_columns(
+        ck,
+        columns,
+        "cover_images",
+        not_null=("id", "uploaded_by_person_id", "content_type", "size_bytes", "status", "attempts", "created_at"),
+        nullable=(
+            "gathering_id",
+            "group_id",
+            "available_at",
+            "claimed_at",
+            "last_error",
+            "failure_reason",
+            "superseded_at",
+            "web_content_type",
+            "web_size_bytes",
+            "thumbnail_content_type",
+            "thumbnail_size_bytes",
+        ),
+    )
+    image_pk = await pk_columns(conn, "pk_cover_images")
+    ck.check(image_pk == ["id"], "cover_images primary key is (id)", f"found {image_pk!r}")
+    for column, target in (
+        ("gathering_id", "gatherings"),
+        ("group_id", "groups"),
+        ("uploaded_by_person_id", "people"),
+    ):
+        fk = await fk_rule(conn, f"fk_cover_images_{column}")
+        ck.check(
+            fk is not None and fk[0] == target,
+            f"cover_images.{column} references {target}",
+            f"found {fk!r}",
+        )
+        ck.check(
+            fk is not None and fk[1] == "a",
+            f"cover_images.{column} has no delete rule",
+            f"delete rule is {fk[1] if fk else None!r}",
+        )
+    for column, typname, label in (
+        ("status", "media_status", "the media ladder's own enum, no default (a writer states the rung)"),
+        ("failure_reason", "media_failure_reason", "the media failure enum, no default"),
+    ):
+        typed = (
+            await conn.execute(
+                text(
+                    "SELECT udt_name, column_default FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'cover_images' "
+                    "AND column_name = :c"
+                ),
+                {"c": column},
+            )
+        ).first()
+        ck.check(
+            typed is not None and typed[0] == typname and typed[1] is None,
+            f"cover_images.{column} is of type {typname} ({label})",
+            f"found {typed!r}",
+        )
+    for constraint, meaning in (
+        ("ck_cover_images_one_subject", "exactly one of gathering_id and group_id"),
+        ("ck_cover_images_layers_all_or_none", "the two layers' four facts all set or all NULL"),
+    ):
+        ck.check(constraint in check_constraints, f"CHECK {constraint} exists ({meaning})", "constraint missing")
+    for column in ("gathering_id", "group_id"):
+        name = f"ix_cover_images_{column}"
+        shape = await index_shape(conn, name)
+        ck.check(
+            shape is not None
+            and shape[0] == "cover_images"
+            and f"({column})" in shape[1]
+            and f"WHERE ({column} IS NOT NULL)" in shape[1],
+            f"partial index {name} exists on cover_images.{column} WHERE {column} IS NOT NULL "
+            "(the supersede statement's reader)",
+            "index missing" if shape is None else f"found on {shape[0]!r}: {shape[1]}",
+        )
+    for subject in ("gatherings", "groups"):
+        assert_columns(ck, columns, subject, nullable=("cover_image_id",))
+        fk = await fk_rule(conn, f"fk_{subject}_cover_image_id")
+        ck.check(
+            fk is not None and fk[0] == "cover_images",
+            f"{subject}.cover_image_id references cover_images",
+            f"found {fk!r}",
+        )
+        ck.check(
+            fk is not None and fk[1] == "a",
+            f"{subject}.cover_image_id has no delete rule",
+            f"delete rule is {fk[1] if fk else None!r}",
+        )
+        image_index = await index_shape(conn, f"ix_{subject}_cover_image_id")
+        ck.check(
+            image_index is not None
+            and image_index[0] == subject
+            and "(cover_image_id)" in image_index[1]
+            and "WHERE (cover_image_id IS NOT NULL)" in image_index[1],
+            f"partial index ix_{subject}_cover_image_id exists on {subject}.cover_image_id "
+            "WHERE cover_image_id IS NOT NULL",
+            "index missing" if image_index is None else f"found on {image_index[0]!r}: {image_index[1]}",
+        )
+        # The widened CHECK, read back by its definition: the 0035 form would
+        # refuse every uploaded cover, and a name alone cannot tell them apart.
+        definition = (
+            await conn.execute(
+                text(
+                    "SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c "
+                    "WHERE c.conname = :n AND c.contype = 'c'"
+                ),
+                {"n": f"ck_{subject}_cover_all_or_none"},
+            )
+        ).scalar_one_or_none()
+        ck.check(
+            definition is not None and "cover_image_id" in definition and "cover_media_id" in definition,
+            f"CHECK ck_{subject}_cover_all_or_none admits the uploaded source (0036's widened form)",
+            "constraint missing" if definition is None else f"found {definition}",
+        )
+
+    print("\n-- uploaded cover integrity (CK-83b) --")
+    # Guarded on the table and the columns (the CK-43 lesson): below 0036 a
+    # query over them is a crash, not a FAIL. Properties of whatever rows
+    # exist — never a count of them; detail prints counts only.
+    if "cover_images" in tables and all(
+        "cover_image_id" in columns.get(subject, {}) for subject in ("gatherings", "groups")
+    ):
+        # (1)(2) EVERY UPLOADED COVER IS A READY COVER IMAGE OF ITS OWN
+        # SUBJECT. The worker writes the pointer in the transaction that moves
+        # the row to `ready`, holding the subject's lock; every later act
+        # retires it and moves the pointer in the same transaction. A pointer
+        # at any other rung, or at another subject's image, is a writer that
+        # went around both — and the URL route refuses to serve it.
+        bad_gathering_images = await scalar(
+            conn,
+            "SELECT count(*) FROM gatherings g JOIN cover_images ci ON ci.id = g.cover_image_id "
+            "WHERE ci.status <> 'ready' OR ci.gathering_id IS DISTINCT FROM g.id",
+        )
+        ck.check(
+            bad_gathering_images == 0,
+            "every gathering's uploaded cover is a ready cover image of that gathering",
+            f"{bad_gathering_images} gathering(s) whose uploaded cover is not",
+        )
+        bad_group_images = await scalar(
+            conn,
+            "SELECT count(*) FROM groups gr JOIN cover_images ci ON ci.id = gr.cover_image_id "
+            "WHERE ci.status <> 'ready' OR ci.group_id IS DISTINCT FROM gr.id",
+        )
+        ck.check(
+            bad_group_images == 0,
+            "every group's uploaded cover is a ready cover image of that group",
+            f"{bad_group_images} group(s) whose uploaded cover is not",
+        )
+        # (3) AND THE CONVERSE: EVERY READY COVER IMAGE IS ITS SUBJECT'S COVER.
+        # A row leaves `ready` (retired) in the transaction that points its
+        # subject elsewhere; a `ready` row nothing points at is a replaced
+        # picture stored forever — the failure the latest-act rule exists to
+        # prevent, and the one the subject's lock order guards.
+        orphaned = await scalar(
+            conn,
+            "SELECT count(*) FROM cover_images ci WHERE ci.status = 'ready' AND NOT EXISTS ("
+            "SELECT 1 FROM gatherings g WHERE g.cover_image_id = ci.id AND g.id = ci.gathering_id) "
+            "AND NOT EXISTS (SELECT 1 FROM groups gr WHERE gr.cover_image_id = ci.id AND gr.id = ci.group_id)",
+        )
+        ck.check(
+            orphaned == 0,
+            "every ready cover image is its subject's cover (none replaced and still stored)",
+            f"{orphaned} ready cover image(s) no subject points at",
+        )
+        # (4) The CHECK, re-asserted as data: exactly one subject.
+        two_subjects = await scalar(
+            conn, "SELECT count(*) FROM cover_images WHERE num_nonnulls(gathering_id, group_id) <> 1"
+        )
+        ck.check(
+            two_subjects == 0,
+            "every cover image names exactly one subject",
+            f"{two_subjects} cover image(s) with two subjects or none",
+        )
+        # (5) A REASON IF AND ONLY IF `failed` — the media row's rule (CK-71):
+        # every path that writes `failed` writes the reason in the same
+        # guarded statement, and `failed` is terminal.
+        reason_mismatch = await scalar(
+            conn,
+            "SELECT count(*) FROM cover_images WHERE (failure_reason IS NOT NULL) <> (status = 'failed')",
+        )
+        ck.check(
+            reason_mismatch == 0,
+            "every failed cover image says why, and no other cover image does",
+            f"{reason_mismatch} cover image(s) whose failure_reason disagrees with status",
+        )
+        # (6) A dead-lettered upload carries its operator reason too.
+        silent_failures = await scalar(
+            conn,
+            "SELECT count(*) FROM cover_images WHERE status = 'failed' "
+            "AND (last_error IS NULL OR btrim(last_error) = '')",
+        )
+        ck.check(
+            silent_failures == 0,
+            "every failed cover image carries a last_error",
+            f"{silent_failures} failed cover image(s) with no last_error",
+        )
+        # (7) `claimed_at` MEANS "A WORKER HOLDS THIS ROW", ON THIS LADDER AS
+        # ON THE MEDIA LADDERS (the CK-56 Gotcha): always set on `processing`,
+        # and set only on `processing` or `destroying` — a destruction is
+        # claimed in place, so a held one carries the stamp and a fresh one
+        # does not.
+        claim_mismatch = await scalar(
+            conn,
+            "SELECT count(*) FROM cover_images "
+            "WHERE (status = 'processing' AND claimed_at IS NULL) "
+            "OR (claimed_at IS NOT NULL AND status NOT IN ('processing', 'destroying'))",
+        )
+        ck.check(
+            claim_mismatch == 0,
+            "claimed_at is always set on a processing cover image, "
+            "and set only on a processing or destroying one",
+            f"{claim_mismatch} cover image(s) whose claimed_at disagrees with status",
+        )
+        # (8) The destruction ladder's counterpart (the media line's CK-57
+        # shape, constant-free): a spent or retrying destruction, not held,
+        # says why. A fresh one (attempts 0) legitimately says nothing.
+        silent_destructions = await scalar(
+            conn,
+            "SELECT count(*) FROM cover_images WHERE status = 'destroying' "
+            "AND attempts > 0 AND claimed_at IS NULL "
+            "AND (last_error IS NULL OR btrim(last_error) = '')",
+        )
+        ck.check(
+            silent_destructions == 0,
+            "every destroying cover image that has spent an attempt and is not held carries a last_error",
+            f"{silent_destructions} destroying cover image(s) that spent an attempt, are not held, "
+            "and carry no last_error",
+        )
+        # (9) A `ready` row has its layers' facts: the worker records them in
+        # the statement that moves it to `ready`.
+        factless = await scalar(
+            conn,
+            "SELECT count(*) FROM cover_images WHERE status = 'ready' "
+            "AND num_nonnulls(web_content_type, web_size_bytes, thumbnail_content_type, "
+            "thumbnail_size_bytes) <> 4",
+        )
+        ck.check(
+            factless == 0,
+            "every ready cover image carries its two layers' facts",
+            f"{factless} ready cover image(s) without them",
+        )
+        # (10) ...and only a row that holds or owes objects carries them:
+        # recorded at `ready`, kept while `destroying`, cleared at
+        # `destroyed` — a tombstone carries no image.
+        stray_facts = await scalar(
+            conn,
+            "SELECT count(*) FROM cover_images WHERE status NOT IN ('ready', 'destroying') "
+            "AND num_nonnulls(web_content_type, web_size_bytes, thumbnail_content_type, "
+            "thumbnail_size_bytes) > 0",
+        )
+        ck.check(
+            stray_facts == 0,
+            "no cover image outside ready or destroying carries layer facts",
+            f"{stray_facts} cover image(s) with layer facts on another rung",
+        )
+        # (11) `superseded_at` ONLY ON A ROW THAT IS `processing` (flagged for
+        # the worker), `destroying` or `destroyed` — a superseded upload never
+        # becomes `ready`, never rests at `failed`, `uploaded` or
+        # `pending_upload`, and is never the cover.
+        stray_supersede = await scalar(
+            conn,
+            "SELECT count(*) FROM cover_images WHERE superseded_at IS NOT NULL "
+            "AND status NOT IN ('processing', 'destroying', 'destroyed')",
+        )
+        ck.check(
+            stray_supersede == 0,
+            "superseded_at is only on a processing, destroying or destroyed cover image",
+            f"{stray_supersede} cover image(s) superseded on another rung",
+        )
+    else:
+        ck.check(
+            False,
+            "uploaded cover integrity",
+            "cover_images or a subject's cover_image_id column missing",
         )
 
     print("\n-- media upload integrity (CK-34) --")

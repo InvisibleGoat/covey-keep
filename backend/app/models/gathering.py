@@ -88,13 +88,17 @@ class Gathering(Base):
             "owning_group_id IS NOT NULL OR NOT invitees_chosen",
             name="invitees_chosen_needs_group",
         ),
-        # A COVER IS ONE FACT IN THREE COLUMNS (0035, CK-83a): the photograph,
-        # when it was set and who set it — all set or all NULL. The set path
-        # writes the three together, and the clearing statement and the
-        # organisers' DELETE clear them together (api/covers.py,
-        # services/covers.py).
+        # A COVER IS ONE FACT (0035, CK-83a; WIDENED at 0036, CK-83b): its
+        # source — a photograph (`cover_media_id`) or an uploaded cover
+        # (`cover_image_id`), AT MOST ONE — when it was set and who set it,
+        # all present or all NULL. With at most one pointer, three non-nulls
+        # can only be one pointer and both stamps. Every cover writer writes
+        # them together (api/covers.py, services/cover_ingest.py), and the
+        # clearing statement and the organisers' DELETE clear them together.
         CheckConstraint(
-            "num_nonnulls(cover_media_id, cover_set_at, cover_set_by_person_id) IN (0, 3)",
+            "num_nonnulls(cover_media_id, cover_image_id) <= 1"
+            " AND num_nonnulls(cover_media_id, cover_image_id, cover_set_at,"
+            " cover_set_by_person_id) IN (0, 3)",
             name="cover_all_or_none",
         ),
         # The clearing statement's reader (services/covers.py — `WHERE
@@ -104,6 +108,12 @@ class Gathering(Base):
             "ix_gatherings_cover_media_id",
             "cover_media_id",
             postgresql_where=text("cover_media_id IS NOT NULL"),
+        ),
+        # The uploaded cover's pointer (0036, CK-83b), indexed the same way.
+        Index(
+            "ix_gatherings_cover_image_id",
+            "cover_image_id",
+            postgresql_where=text("cover_image_id IS NOT NULL"),
         ),
     )
 
@@ -293,6 +303,18 @@ class Gathering(Base):
     # the house habit, and nothing deletes a `ready` photograph's row.
     cover_media_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("media.id", use_alter=True), nullable=True
+    )
+    # THE COVER'S SECOND SOURCE (0036, CK-83b): a picture an organiser
+    # UPLOADED for this gathering — a `cover_images` row, never a photograph
+    # (it is in no photo list and counts against nobody). Written by the
+    # worker when the upload is `ready` (services/cover_ingest.py), in the
+    # transaction that holds this row's lock; cleared, and the image retired
+    # to `destroying`, by the latest act — a later upload's `ready`, a set
+    # from a photograph, or a clear (services/covers.py). At most one of the
+    # two sources (the CHECK above). The FK closes a cycle (cover_images ->
+    # gatherings), so it is `use_alter`; no delete rule.
+    cover_image_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("cover_images.id", use_alter=True), nullable=True
     )
     # When the cover was set — its VERSION: setting the same photograph again
     # writes nothing, so a client's cached image stays valid. Not

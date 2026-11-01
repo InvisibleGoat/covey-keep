@@ -78,8 +78,8 @@ ENTRY_KEYS = {"membership_id", "display_name", "role", "is_self"}
 # HOUSEHOLD group.
 # 339 at CK-76; 361 since CK-77's twenty-three lines less the backup-NULL
 # line it replaced; 385 since CK-83a's twenty-four (the cover columns'
-# shapes on gatherings and groups, and four data lines).
-VERIFIER_TOTAL = 385
+# shapes on gatherings and groups, and four data lines); 438 since CK-83b's fifty-three — cover_images' shape (the table, its eighteen columns' nullability, the PK, three FKs with their delete rules, the two enum types, two CHECKs, two partial indexes), each subject's cover_image_id (nullability, FK and delete rule, partial index, the widened CHECK's definition), and eleven data lines.
+VERIFIER_TOTAL = 438
 
 
 def _now() -> datetime:

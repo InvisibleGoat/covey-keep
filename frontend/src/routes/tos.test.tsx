@@ -11,9 +11,13 @@
 // upload doesn't exist yet"; version 2's first "Delete them first"); the
 // sign-in checkbox agrees to the test rather
 // than to Terms that do not exist yet — with its mechanism intact (unchecked
-// by default, submit disabled until checked) — and TOS_VERSION is 2: this
-// text's number, version 1 being the CK-26 text and the published terms
-// taking 3 (decisions/2026-08-31-private-alpha-scope.md §3, §3.1).
+// by default, submit disabled until checked) — and TOS_VERSION is 3: this
+// text's number since CK-83b, version 1 being the CK-26 text, version 2
+// CK-73.3's, and the published terms taking 4
+// (decisions/2026-08-31-private-alpha-scope.md §3, §3.1). Version 3 is
+// version 2 word for word with ONE paragraph added after the photographs
+// paragraph — covers, chosen from a photo or uploaded — pinned below as the
+// whole card, paragraph by paragraph, so a word moved anywhere fails.
 //
 // THE LESSON THIS FILE CARRIES: from CK-26 to CK-73.3 it pinned "Photo upload
 // doesn't exist yet" — a sentence about something not built yet — and that
@@ -215,15 +219,93 @@ test('the sign-in checkbox agrees to the private test; the mechanism is unchange
   await screen.findByText('API: ok')
 })
 
-test('TOS_VERSION is 2 — this notice; version 1 is the CK-26 text, the published terms take 3', () => {
+// Version 2, paragraph by paragraph, as it renders — §3.1's text, the
+// product's name from the brand module. Every one of its sentences stands in
+// version 3, unchanged and in order.
+const VERSION_2 = [
+  `You're here because Steven invited you personally. ${PRODUCT_NAME} isn't a finished service yet — this is a small family test, so please don't rely on it for anything that matters.`,
+  "Nothing you put here will be kept. Everything is stored on test systems and will be deleted when the test ends; none of it carries over to the real product. If you add something you'd like to keep, a photo especially, keep a copy somewhere else too.",
+  `While you take part, ${PRODUCT_NAME} stores your email address, the display name you choose and your timezone; the gatherings and groups you create or join, and your answers to invitations, including the names of anyone you say you're bringing; the email addresses of people you invite, which are cleared after the invitation runs out a week later; routine sign-in records (like the time and network address a sign-in link was requested from), and a passkey if you add one.`,
+  `Photos you add can be seen by the people in that gathering, with any caption, tags and file name. ${PRODUCT_NAME} keeps three copies of each photo at different sizes and deletes the file you uploaded; location and other camera details are removed from the copies. You can delete your own photos at any time, and a photo sent to a bin is deleted for good 30 days later. Deleting your account removes your email address and name, but photos and answers you added stay in their gatherings under "a former member". Delete your photos first if you'd rather they went. Answers can't be deleted, but you can change yours to "Can't make it" and remove anyone you said you were bringing.`,
+  `${PRODUCT_NAME} may show paid plans during the test. They run in Stripe's test mode: no real payment is taken, and a real card won't work. Stripe holds what you enter on its page; ${PRODUCT_NAME} keeps a record of which plan you're on, never your card.`,
+  "One thing worth knowing: during this test, sign-in links, invitations and email-change confirmations are printed to a server log, with the email address each one is for, and Steven — who runs the server — can see them. That's temporary, and it's told to you here because you should hear it rather than find out.",
+  "A real Terms of Service and privacy policy are being written and reviewed. When they're published, you'll be asked to read and accept them before continuing.",
+  "Questions, or want to stop taking part? Tell Steven — he invited you, so you already know how to reach him. You can also delete your account at any time from the Settings page.",
+]
+
+// Version 3's one new paragraph (approved by Steven 2026-11-01), word for
+// word, after the photographs paragraph. Each sentence was checked against
+// the product (the /tos Gotcha's rule (4)): the organisers — a gathering's
+// host or co-hosts, a group's admin or co-admins — set and clear a cover
+// (api/covers.py); a group's cover reaches every member, a gathering's its
+// readers; removal and destruction clear a photograph cover
+// (services/covers.py::clear_covers_of); an uploaded cover is two layers,
+// web and thumbnail, its original deleted after `ready`, every byte of
+// metadata stripped by the photographs' own path
+// (processing.render_cover_layers); it is in no photo list; a later set,
+// upload or clear retires and destroys it; account deletion leaves it.
+const COVERS_PARAGRAPH = `A group or gathering can also have a cover picture, chosen by the people who run it: a gathering's host or co-hosts, a group's admin or co-admins. A cover can be one of its photos. A gathering's cover is seen by the people in that gathering, and a group's cover by everyone in the group, including people who can't see the gathering the photo came from. A photo stops being a cover when it's sent to a bin or deleted. Instead, they can upload a cover picture: ${PRODUCT_NAME} keeps two copies of it at different sizes and deletes the file uploaded, with location and other camera details removed. An uploaded cover isn't one of the photos. It stays until one of them changes or removes it, which deletes it — even if the person who uploaded it has deleted their account.`
+
+const VERSION_3 = [...VERSION_2.slice(0, 4), COVERS_PARAGRAPH, ...VERSION_2.slice(4)]
+
+function noticeParagraphs(): string[] {
+  return Array.from(document.querySelectorAll('.notice-card p')).map((p) =>
+    (p.textContent ?? '').replace(/\s+/g, ' ').trim(),
+  )
+}
+
+test("the notice is version 3: version 2's every sentence, unchanged and in order, and the covers paragraph after the photographs", () => {
+  renderNotice()
+  // The whole card, paragraph by paragraph — the strongest form of "version
+  // 2's sentences all still present": nothing reworded, nothing reordered,
+  // exactly one paragraph added and nowhere else.
+  expect(noticeParagraphs()).toEqual(VERSION_3)
+  for (const paragraph of VERSION_2) {
+    expect(noticeParagraphs()).toContain(paragraph)
+  }
+  expect(noticeParagraphs().indexOf(COVERS_PARAGRAPH)).toBe(
+    noticeParagraphs().findIndex((p) => p.startsWith('Photos you add')) + 1,
+  )
+})
+
+test('the covers paragraph, sentence by sentence, as literals', () => {
+  renderNotice()
+  expect(
+    screen.getByText(
+      /A group or gathering can also have a cover picture, chosen by the people who run it: a gathering's host or co-hosts, a group's admin or co-admins\./,
+    ),
+  ).toBeTruthy()
+  const paragraph = screen.getByText(/A cover can be one of its photos\./)
+  const text = (paragraph.textContent ?? '').replace(/\s+/g, ' ')
+  for (const sentence of [
+    'A cover can be one of its photos.',
+    "A gathering's cover is seen by the people in that gathering, and a group's cover by everyone in the group, including people who can't see the gathering the photo came from.",
+    "A photo stops being a cover when it's sent to a bin or deleted.",
+    `Instead, they can upload a cover picture: ${PRODUCT_NAME} keeps two copies of it at different sizes and deletes the file uploaded, with location and other camera details removed.`,
+    "An uploaded cover isn't one of the photos.",
+    'It stays until one of them changes or removes it, which deletes it — even if the person who uploaded it has deleted their account.',
+  ]) {
+    expect(text).toContain(sentence)
+  }
+  // And it promises nothing the product does not do: no claim that a photo
+  // used as a group's cover is never named (its cover URL's path carries the
+  // photograph's id — CK-83a's finding), and no number of days on a cover.
+  expect(text).not.toMatch(/never named|isn't named|never identif/i)
+  expect(text).not.toMatch(/\d+ days/)
+})
+
+test('TOS_VERSION is 3 — this notice; 1 is the CK-26 text, 2 is CK-73.3\'s, the published terms take 4', () => {
   // One number means one text, forever. Version 1 is CK-26's notice and the
   // acceptance rows recorded against it (every account created before
-  // CK-73.3 — all Steven's household); 2 is the text in Tos.tsx today, true
-  // about what is stored; 3 is the published terms', set by the phase that
-  // publishes them. Never renumber an existing version in either direction —
-  // the acceptance records would then name the wrong text, the exact defect
-  // the ToS work exists to close (private-alpha decision record §3, §3.1).
-  // The next change to what the product stores, or to what deletion does,
-  // moves this to 3 and the terms to 4 — with the text, never without it.
-  expect(TOS_VERSION).toBe(2)
+  // CK-73.3 — all Steven's household); 2 is CK-73.3's, true about what was
+  // stored until covers; 3 is the text in Tos.tsx today, version 2 with the
+  // covers paragraph (CK-83b); 4 is the published terms', set by the phase
+  // that publishes them. Never renumber an existing version in either
+  // direction — the acceptance records would then name the wrong text, the
+  // exact defect the ToS work exists to close (private-alpha decision record
+  // §3, §3.1). THE PIN MOVED at CK-83b, with its reason: uploaded covers are
+  // a new kind of stored image, so the notice took a new number — with the
+  // text, never without it. The next change to what the product stores, or
+  // to what deletion does, moves this to 4 and the terms to 5.
+  expect(TOS_VERSION).toBe(3)
 })

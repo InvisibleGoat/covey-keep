@@ -114,8 +114,8 @@ URL_KEYS = {"layer", "content_type", "size_bytes", "url", "method", "expires_in"
 # The verifier's total at 0035: 361 at CK-77, and CK-83a's twenty-four — the
 # six cover columns' shapes on gatherings and groups (nullability, the two
 # FKs each with no delete rule, cover_set_at's type, the CHECKs and the
-# partial indexes: ten a table) and four data lines.
-VERIFIER_TOTAL = 385
+# partial indexes: ten a table) and four data lines; 438 since CK-83b's fifty-three — cover_images' shape (the table, its eighteen columns' nullability, the PK, three FKs with their delete rules, the two enum types, two CHECKs, two partial indexes), each subject's cover_image_id (nullability, FK and delete rule, partial index, the widened CHECK's definition), and eleven data lines.
+VERIFIER_TOTAL = 438
 
 
 def _now() -> datetime:
@@ -1127,19 +1127,31 @@ async def test_the_verifier_asserts_every_cover_is_a_published_photograph_of_its
                      "AND cover_set_by_person_id IS NULL"),
                 {"s": UUID(subject_id)},
             ) == 1, "the plant did not land"
+        # Three FAILs since CK-83b (the pin moved with this reason): the data
+        # line and the CHECK's existence line, both relabelled for the widened
+        # rule, and the line reading the CHECK's definition (0036's form).
         passed, failed, code, out = _verifier()
-        assert (passed, failed, code) == (VERIFIER_TOTAL - 2, 2, 1), (table, out)
-        assert f"FAIL  no {table} row carries part of a cover (all three columns or none)" in out
-        assert f"FAIL  CHECK {constraint} exists (the three cover columns all set or all NULL)" in out
+        assert (passed, failed, code) == (VERIFIER_TOTAL - 3, 3, 1), (table, out)
+        assert (
+            f"FAIL  no {table} row carries part of a cover, or two sources "
+            "(one source with its version and setter, or nothing)"
+        ) in out
+        assert (
+            f"FAIL  CHECK {constraint} exists (at most one cover source, set iff its version and setter are)"
+        ) in out
+        assert f"FAIL  CHECK {constraint} admits the uploaded source (0036's widened form)" in out
         async with db_session_factory() as db:
             await db.execute(
                 text(f"UPDATE {table} SET cover_set_by_person_id = :p WHERE id = :s"),
                 {"p": w.admin_person, "s": UUID(subject_id)},
             )
+            # Restored in 0036's WIDENED form (CK-83b): the 0035 form would
+            # refuse every uploaded cover for the rest of the session.
             await db.execute(
                 text(
                     f"ALTER TABLE {table} ADD CONSTRAINT {constraint} CHECK "
-                    "(num_nonnulls(cover_media_id, cover_set_at, cover_set_by_person_id) IN (0, 3))"
+                    "(num_nonnulls(cover_media_id, cover_image_id) <= 1 AND "
+                    "num_nonnulls(cover_media_id, cover_image_id, cover_set_at, cover_set_by_person_id) IN (0, 3))"
                 )
             )
             await db.commit()

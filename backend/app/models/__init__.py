@@ -15,6 +15,7 @@ from app.models.base import Base
 from app.models.billing import BillingCustomer, Subscription
 from app.models.capability import CapabilityProfile, Role, RoleLadder
 from app.models.consent import ConsentRecord
+from app.models.cover_image import CoverImage
 from app.models.enums import (
     AccountKind,
     BillingPlan,
@@ -66,6 +67,7 @@ __all__ = [
     "BillingProvider",
     "CapabilityProfile",
     "ConsentRecord",
+    "CoverImage",
     "EmailChangeRequest",
     "Gathering",
     "GatheringCoHost",

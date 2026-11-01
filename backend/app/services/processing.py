@@ -86,6 +86,15 @@ work), UNREADABLE from every other raise (no copy of this file will). Set
 at the raise, from the branch that raised, and never parsed back out of
 the text — `reason` stays operator text, as it is.
 
+AN UPLOADED COVER TAKES THE SAME PATH (CK-83b): `render_cover_layers` runs
+steps 1-4 through the one shared function (`_pixels`) and encodes the web
+and thumbnail layers through the same two encoders — it skips only the
+archival ENCODE, because a cover is never printed. The archival-sized
+pixels are still made, because the web layer is derived from them; so for
+the same bytes a cover's two layers are byte-for-byte a photograph's web and
+thumbnail layers (pinned against the real fixtures, the MPO and the HEIC
+among them), and the metadata promise is the same promise.
+
 DATA-HANDLING: this is the code that makes the EXIF promise true. Nothing
 here logs, and nothing here retains: the decoded original lives in this
 function's frame and is dropped before it returns.
@@ -319,10 +328,12 @@ def _open(data: bytes) -> Image.Image:
     return image
 
 
-def render_layers(data: bytes) -> tuple[Rendition, Rendition, Rendition]:
-    """The three layers of one photograph, from its uploaded bytes — see the
-    module docstring for the order and why. Raises Undecodable (permanent)
-    for anything that is not a photograph this pipeline processes."""
+def _pixels(data: bytes) -> tuple[Image.Image, Image.Image, Image.Image]:
+    """Steps 1-4 — open, guard, decode, transpose, strip, convert, fit — for
+    a photograph and an uploaded cover alike: the archival-, web- and
+    thumbnail-sized PIXELS, nothing encoded. ONE PATH FOR BOTH, so a cover's
+    metadata is stripped by exactly the code that strips a photograph's.
+    Raises Undecodable (permanent)."""
     image = _open(data)
 
     # For an MPO this is frame 0 and stays frame 0: nothing below seeks, so
@@ -367,7 +378,36 @@ def render_layers(data: bytes) -> tuple[Rendition, Rendition, Rendition]:
         archival = _to_srgb(archival, icc_profile)
     web = _fit(archival, WEB_LONG_EDGE)
     thumbnail = _fit(web, THUMBNAIL_LONG_EDGE)
+    return archival, web, thumbnail
 
+
+def _web_rendition(web: Image.Image) -> Rendition:
+    return Rendition(
+        MediaLayer.WEB,
+        CONTENT_TYPE_WEBP,
+        STORAGE_CLASS_STANDARD,
+        _encode(web, "WEBP", quality=WEB_WEBP_QUALITY, method=4),
+        web.width,
+        web.height,
+    )
+
+
+def _thumbnail_rendition(thumbnail: Image.Image) -> Rendition:
+    return Rendition(
+        MediaLayer.THUMBNAIL,
+        CONTENT_TYPE_WEBP,
+        STORAGE_CLASS_STANDARD,
+        _encode_thumbnail(thumbnail),
+        thumbnail.width,
+        thumbnail.height,
+    )
+
+
+def render_layers(data: bytes) -> tuple[Rendition, Rendition, Rendition]:
+    """The three layers of one photograph, from its uploaded bytes — see the
+    module docstring for the order and why. Raises Undecodable (permanent)
+    for anything that is not a photograph this pipeline processes."""
+    archival, web, thumbnail = _pixels(data)
     return (
         Rendition(
             MediaLayer.ARCHIVAL,
@@ -377,20 +417,16 @@ def render_layers(data: bytes) -> tuple[Rendition, Rendition, Rendition]:
             archival.width,
             archival.height,
         ),
-        Rendition(
-            MediaLayer.WEB,
-            CONTENT_TYPE_WEBP,
-            STORAGE_CLASS_STANDARD,
-            _encode(web, "WEBP", quality=WEB_WEBP_QUALITY, method=4),
-            web.width,
-            web.height,
-        ),
-        Rendition(
-            MediaLayer.THUMBNAIL,
-            CONTENT_TYPE_WEBP,
-            STORAGE_CLASS_STANDARD,
-            _encode_thumbnail(thumbnail),
-            thumbnail.width,
-            thumbnail.height,
-        ),
+        _web_rendition(web),
+        _thumbnail_rendition(thumbnail),
     )
+
+
+def render_cover_layers(data: bytes) -> tuple[Rendition, Rendition]:
+    """The two layers of one UPLOADED COVER (CK-83b) — web and thumbnail —
+    through the photographs' own path (`_pixels`) and their own two
+    encoders, with no archival layer encoded: a cover is never printed. For
+    the same bytes, each is byte-for-byte the layer `render_layers` makes
+    (pinned). Raises Undecodable (permanent), exactly as for a photograph."""
+    _archival, web, thumbnail = _pixels(data)
+    return _web_rendition(web), _thumbnail_rendition(thumbnail)

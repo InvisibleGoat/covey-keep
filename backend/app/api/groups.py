@@ -386,10 +386,13 @@ def _cover_body(group: Group) -> Optional[dict]:
     through `GET /groups/{id}/cover/url` alone, which answers with no id
     either. `set_at` is the cover's version; who set it rides no body. From
     the row the route already holds — no query of its own. Also
-    api/covers.py's answer to a set."""
-    if group.cover_media_id is None:
-        return None
-    return {"source": "photo", "set_at": group.cover_set_at.isoformat()}
+    api/covers.py's answer to a set. AN UPLOADED COVER (CK-83b) reads
+    `{"source": "upload", "set_at"}` — no id on this subject either."""
+    if group.cover_media_id is not None:
+        return {"source": "photo", "set_at": group.cover_set_at.isoformat()}
+    if group.cover_image_id is not None:
+        return {"source": "upload", "set_at": group.cover_set_at.isoformat()}
+    return None
 
 
 def _group_body(group: Group, member_count: int, caller_role: str) -> dict:

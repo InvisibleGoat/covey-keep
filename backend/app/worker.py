@@ -58,6 +58,21 @@ product, reachable from the dashboard without a code deploy. One INFO
 line per pass that marked anything, carrying the count and nothing
 else; a pass that marked nothing logs nothing.
 
+AND SINCE CK-83b A SECOND LADDER: UPLOADED COVERS. A cover picture an
+organiser uploads for a gathering or a group is a `cover_images` row — its
+own job, never a photograph — and services/cover_ingest.py runs it through
+the same rules: claim, retry, dead-letter, release on a rejected credential,
+and destruction in CK-54's order. At `ready` it becomes its subject's cover
+in a transaction that holds the subject's lock (the latest act wins —
+services/covers.py); its quarantine original is deleted after that commit,
+here, as a photograph's is. ONE LOOP SERVES BOTH LADDERS, AND NEITHER WAITS
+BEHIND THE OTHER: every pass of `run` asks `poll_once` (the media ladder,
+exactly as it was) and then `poll_cover_once` — ONE OF EACH PER PASS — so a
+cover job waits behind at most one photograph however long the photo queue
+is, and a burst of covers delays a photograph by at most one cover job.
+`--once` drains both: it exits at the first pass where neither settled
+anything.
+
 `publication_state` moves here only where the gathering resolves open
 (CK-41 — `pending → live` inside the ready transaction, the ladder in
 services/publication.py applied, never approval inferred from completion;
@@ -132,8 +147,10 @@ count. Log lines carry media ids,
 outcomes and byte counts — a row id is not personal data and a key is a
 function of it. Never a URL, never a key id, never a person, never the
 contents of anything, and never a filename, caption or tag: a destroyed
-row keeps its words and this worker never reads them. Uploads on the dev
-deploy remain Steven's own test images (private-alpha scope).
+row keeps its words and this worker never reads them. The cover ladder's
+lines (CK-83b) carry a cover image's id and its outcome in the same terms —
+never a key, a URL, the subject or the uploader. Uploads on the dev deploy
+remain Steven's own test images (private-alpha scope).
 """
 
 from __future__ import annotations
@@ -154,7 +171,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.config import WorkerSettings
 from app.models import MediaStatus, PublicationState
-from app.services import destruction, ingest
+from app.services import cover_ingest, destruction, ingest
 from app.services.storage import WorkerClient, worker_client
 
 # Five seconds when idle, jittered (record §6.2): a fleet of workers restarted
@@ -390,6 +407,143 @@ async def _delete_original(client: WorkerClient, row) -> None:
         )
 
 
+async def poll_cover_once(
+    session_factory: async_sessionmaker[AsyncSession],
+    client: WorkerClient,
+    now: Optional[datetime] = None,
+) -> Poll:
+    """ONE CLAIM ON THE COVER LADDER AND ITS OUTCOME (CK-83b) — `poll_once`'s
+    shape, on services/cover_ingest.py: two commits (the claim, so the row
+    lock is held for the claim alone, and the outcome), then — after a
+    terminal upload outcome has committed — the quarantine original's
+    deletion. Same answers: PROCESSED, IDLE, NOT_READY (the database
+    unreachable, or the schema without `cover_images` yet — the deploy
+    window, when a new worker can start before the web service has
+    migrated), BACKOFF (a rejected credential). Its lines say "cover image"
+    where the media ladder's say "media", and carry an id and an outcome."""
+    now = now or datetime.now(timezone.utc)
+    started = time.monotonic()
+    try:
+        async with session_factory() as db:
+            row = await cover_ingest.claim_next(db, now)
+            await db.commit()
+            if row is None:
+                return Poll.IDLE
+            if row.claimed_at is None:
+                # Settled at reclaim, unclaimed (the media ladders' test: the
+                # stamp, never the rung). Abandoned MAX_ATTEMPTS times: a
+                # failed upload, whose objects go now; a spent destruction,
+                # which stays where it is; or a SUPERSEDED upload, settled to
+                # `destroying` — the destruction step takes it from the queue.
+                if row.status == MediaStatus.FAILED:
+                    log.warning("cover image %s dead-lettered at reclaim: %s", row.id, row.last_error)
+                    await _delete_cover_original(client, row)
+                elif row.last_error is None:
+                    log.info(
+                        "cover image %s: abandoned while superseded; settled for destruction at reclaim",
+                        row.id,
+                    )
+                else:
+                    log.warning("cover image %s: destruction abandoned at reclaim: %s", row.id, row.last_error)
+                return Poll.PROCESSED
+            if row.status == MediaStatus.DESTROYING:
+                outcome = await cover_ingest.handle_destroying(db, client, row, now)
+            else:
+                outcome = await cover_ingest.handle_claimed(db, client, row, now)
+            await db.commit()
+            elapsed_ms = round((time.monotonic() - started) * 1000)
+    except _NOT_READY_ERRORS as exc:
+        log.warning(
+            "cover poll failed (%s): the database is unreachable or the schema is not "
+            "migrated yet; retrying after the idle interval",
+            exc.__class__.__name__,
+        )
+        return Poll.NOT_READY
+
+    if outcome is cover_ingest.Outcome.MISCONFIGURED:
+        log.error(
+            "cover image %s: the store rejected the worker credential — R2_WORKER_* is "
+            "misconfigured; the row is released unpenalized with the reason in last_error, "
+            "and the worker polls again in about %d s (MISCONFIGURED_BACKOFF)",
+            row.id,
+            MISCONFIGURED_BACKOFF,
+        )
+        return Poll.BACKOFF
+    if outcome is cover_ingest.Outcome.READY:
+        # Committed: the two layers written, `ready`, and the subject's cover
+        # pointing at it — the image it replaced, if any, retired in the same
+        # transaction. Only now may the original go.
+        log.info(
+            "cover image %s: ready — two layers written and it is its subject's cover "
+            "(attempt %d, %d ms claim-to-ready)",
+            row.id,
+            row.attempts,
+            elapsed_ms,
+        )
+        await _delete_cover_original(client, row)
+    elif outcome is cover_ingest.Outcome.SUPERSEDED:
+        log.info(
+            "cover image %s: superseded by a later act while processing; settled for "
+            "destruction after its writes",
+            row.id,
+        )
+    elif outcome is cover_ingest.Outcome.DESTROYED:
+        log.info(
+            "cover image %s: destroyed — the stored objects are gone (attempt %d, %d ms)",
+            row.id,
+            row.attempts,
+            elapsed_ms,
+        )
+    elif outcome is cover_ingest.Outcome.DESTROY_ABANDONED:
+        log.error("cover image %s: destruction gave up: %s", row.id, row.last_error)
+    elif outcome is cover_ingest.Outcome.DEAD_LETTERED:
+        log.warning("cover image %s: dead-lettered (attempt %d): %s", row.id, row.attempts, row.last_error)
+        await _delete_cover_original(client, row)
+    elif outcome is cover_ingest.Outcome.RETRY_SCHEDULED:
+        log.warning(
+            "cover image %s: attempt %d failed transiently; next attempt at %s",
+            row.id,
+            row.attempts,
+            row.available_at,
+        )
+    else:
+        log.warning("cover image %s: claim lost to a reclaim; outcome discarded", row.id)
+    return Poll.PROCESSED
+
+
+async def _delete_cover_original(client: WorkerClient, row) -> None:
+    """After a terminal upload outcome has COMMITTED: the quarantine original
+    goes (and, after a dead-letter, any layer a failed write left behind). A
+    failure is logged and is not a failure of the row."""
+    if await cover_ingest.delete_original(client, row):
+        log.info("cover image %s: quarantine original deleted", row.id)
+    else:
+        log.warning(
+            "cover image %s: quarantine original could not be deleted; the 24-hour lifecycle "
+            "rule will remove it",
+            row.id,
+        )
+
+
+# What a pass of the loop answers when it asked both ladders (CK-83b): it
+# settled something if EITHER ladder did — so the loop drains on; otherwise
+# the louder condition decides the pace. BACKOFF before NOT_READY because a
+# rejected credential is the one condition only a dashboard edit clears (and
+# the two ladders share the one credential); NOT_READY before IDLE so that
+# `--once` reports a missing table rather than an empty queue, and so the
+# deploy window — a new worker before 0036 lands — keeps the idle interval
+# and picks the cover ladder up the moment the schema arrives, while the
+# media ladder goes on draining in every pass that settles a photograph.
+_PRECEDENCE = (Poll.PROCESSED, Poll.BACKOFF, Poll.NOT_READY, Poll.IDLE)
+
+
+def _pass_outcome(media: Poll, cover: Poll) -> Poll:
+    for outcome in _PRECEDENCE:
+        if outcome in (media, cover):
+            return outcome
+    return Poll.IDLE
+
+
 def _jittered(interval: float) -> float:
     """`interval` ± IDLE_JITTER. The jitter is an absolute offset and not a
     fraction of the interval, because its job is the same at any interval:
@@ -456,6 +610,11 @@ async def run(
     database or the credential was not ready — and sleeps on none of them.
     `sleep` is injectable so tests drive it without waiting.
 
+    SINCE CK-83b A "POLL" HERE IS A PASS OVER BOTH LADDERS — `poll_once`,
+    then `poll_cover_once`, one job each — and its answer is the louder of
+    the two (`_pass_outcome`): PROCESSED if either settled anything, so
+    `--once` exits only when both queues are drained.
+
     THE SWEEP (CK-59) rides the same loop and is OFF unless `sweep_enabled`
     — the seventh worker variable, defaulting to False at every layer. When
     on: from an IDLE poll and never between drains, once per SWEEP_INTERVAL
@@ -472,6 +631,16 @@ async def run(
         except Exception:  # noqa: BLE001 — a worker that dies takes every upload with it
             log.exception("poll raised unexpectedly; the worker keeps polling")
             outcome = Poll.NOT_READY
+        # THE COVER LADDER, ONE JOB PER PASS BESIDE THE MEDIA LADDER'S ONE
+        # (CK-83b; the module docstring): a cover never waits behind a queue
+        # of photographs, and the media ladder above is asked exactly as
+        # before. The pass's answer is the louder of the two.
+        try:
+            cover_outcome = await poll_cover_once(session_factory, client)
+        except Exception:  # noqa: BLE001 — the same rule for the second ladder
+            log.exception("cover poll raised unexpectedly; the worker keeps polling")
+            cover_outcome = Poll.NOT_READY
+        outcome = _pass_outcome(outcome, cover_outcome)
         if outcome is Poll.PROCESSED:
             continue
         if (

@@ -617,14 +617,21 @@ def _cover_body(gathering: Gathering) -> Optional[dict]:
     moment it stops being published), and everyone who can read the
     gathering — the memory tier — is in the audience its `live` branch
     admits. `set_at` is the cover's version. Who set it rides no body. Also
-    api/covers.py's answer to a set."""
-    if gathering.cover_media_id is None:
-        return None
-    return {
-        "source": "photo",
-        "media_id": str(gathering.cover_media_id),
-        "set_at": gathering.cover_set_at.isoformat(),
-    }
+    api/covers.py's answer to a set.
+
+    AN UPLOADED COVER (CK-83b) reads `{"source": "upload", "set_at"}` and
+    NAMES NO ID — the image is reached through the cover URL alone, from its
+    own `covers/` keyspace, and the cover image's id is its uploader's
+    handle, never a reader's."""
+    if gathering.cover_media_id is not None:
+        return {
+            "source": "photo",
+            "media_id": str(gathering.cover_media_id),
+            "set_at": gathering.cover_set_at.isoformat(),
+        }
+    if gathering.cover_image_id is not None:
+        return {"source": "upload", "set_at": gathering.cover_set_at.isoformat()}
+    return None
 
 
 def _home_joins(statement):

@@ -36,6 +36,14 @@ the same one-line call and no table grows a private copy. Customers:
   and the object leave on ONE number (record §6.3). Restricted to the
   `pending_upload` rung by the `where` criterion below — see THE SECOND
   INVARIANT.
+- `cover_images` rows still in `pending_upload` (CK-83b) — the second
+  content table: an uploaded cover's intent nobody confirmed and nothing
+  superseded. The media intent reap's shape exactly — keyed off
+  `created_at`, the same 24-hour grace (the quarantine bucket's ceiling, so
+  the row and the object leave on one number), restricted to the rung by
+  `where` — called at the top of the cover upload routes (api/covers.py),
+  AFTER the subject's row lock, because its DELETE locks rows other
+  subjects' writers may be waiting on. A `ready` cover is never touched.
 - Dietary requests after their occurrence passes, and guest→host RSVP notes
   with their contact details (both decided 2026-08-29; neither feature
   exists yet). Future callers — which is why `column` is a parameter: they

@@ -698,6 +698,25 @@ async def _head(upload: UploadClient, key: str) -> Optional[tuple[int, str]]:
     return await asyncio.to_thread(head_quarantine_object, upload, key=key)
 
 
+async def _head_or_unavailable(key: str) -> Optional[tuple[int, str]]:
+    """`_head` through the upload credential, with the store's failure to
+    answer turned into the 503 `storage_unavailable` — one body for both
+    confirm steps, this router's and an uploaded cover's (api/covers.py,
+    CK-83b, which imports no botocore). Nothing about the request is logged
+    — the exception class alone rides the response, never a URL, a key id,
+    or the message."""
+    try:
+        return await _head(_upload_client(), key)
+    except (ClientError, BotoCoreError) as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": STORAGE_UNAVAILABLE,
+                "message": f"storage did not answer ({exc.__class__.__name__}); try again",
+            },
+        )
+
+
 def _media_not_found() -> HTTPException:
     # One body for "no such row" and "not your intent" — the uploader alone
     # ever received the id, and a photograph's existence is not public
@@ -738,6 +757,21 @@ def _clean_content_type(value: str) -> str:
         raise ValueError(
             "only photos can be uploaded (JPEG, PNG, WebP, or HEIC) — videos, "
             "including the video half of a Live Photo, aren't supported yet"
+        )
+    return value
+
+
+def _clean_size_bytes(value: int) -> int:
+    # Positive and at most MAX_UPLOAD_BYTES — the cheap early refusal; the
+    # value is signed into the PUT as Content-Length, which is the
+    # enforcement. A module function (CK-83b) so an uploaded cover's intent
+    # (api/covers.py) applies the photographs' cap in the photographs' words,
+    # as it applies `_clean_content_type`.
+    if value <= 0:
+        raise ValueError("a photo's size must be a positive number of bytes")
+    if value > MAX_UPLOAD_BYTES:
+        raise ValueError(
+            f"each photo is limited to {_human_bytes(MAX_UPLOAD_BYTES)}"
         )
     return value
 
@@ -816,13 +850,7 @@ class MediaIntentIn(BaseModel):
     @field_validator("size_bytes")
     @classmethod
     def _size(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("a photo's size must be a positive number of bytes")
-        if value > MAX_UPLOAD_BYTES:
-            raise ValueError(
-                f"each photo is limited to {_human_bytes(MAX_UPLOAD_BYTES)}"
-            )
-        return value
+        return _clean_size_bytes(value)
 
 
 class MediaIntentsIn(BaseModel):
@@ -1125,20 +1153,9 @@ async def confirm_upload(
             },
         )
     key = quarantine_key(row.id)
-    try:
-        found = await _head(_upload_client(), key)
-    except (ClientError, BotoCoreError) as exc:
-        # The store answered with something other than present/absent (or
-        # did not answer). Nothing about the request is logged here — the
-        # exception class alone rides the response, never a URL, a key id,
-        # or the message.
-        raise HTTPException(
-            503,
-            detail={
-                "code": STORAGE_UNAVAILABLE,
-                "message": f"storage did not answer ({exc.__class__.__name__}); try again",
-            },
-        )
+    # The store answering with something other than present/absent (or not
+    # answering) is the 503, raised inside (one body for both confirm steps).
+    found = await _head_or_unavailable(key)
     if found is None:
         raise HTTPException(
             409,

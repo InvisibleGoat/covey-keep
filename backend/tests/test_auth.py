@@ -78,7 +78,7 @@ async def test_happy_path_end_to_end(client, capsys, db_session_factory):
         tos = (await db.execute(select(TosAcceptance))).scalars().all()
         assert len(tos) == 1
         # The row records the version the sign-in form SENT — the current
-        # bundle's TOS_VERSION (2 since CK-73.3; this read 1 until then, when the
+        # bundle's TOS_VERSION (3 since CK-83b, 2 since CK-73.3; this read 1 until then, when the
         # helper sent 1). Version 1 still recording 1 has its own test below.
         assert tos[0].version == auth_api.TOS_VERSION
         assert tos[0].person_id == people[0].id
@@ -208,19 +208,41 @@ async def test_unknown_tos_version_rejected(client):
     assert response.status_code == 422
 
 
-async def test_a_new_account_signing_up_with_version_2_records_2(
+async def test_a_new_account_signing_up_with_version_3_records_3(
     client, capsys, db_session_factory
 ):
-    # CK-73.3: the private test notice is version 2 — the text behind /tos
-    # today, true about what is stored — and a sign-up from the current bundle
-    # sends it. The acceptance row carries what the person actually agreed to,
-    # never a hardcoded number (until CK-73.3 this test monkeypatched the
-    # constant up to 2 to prove that; 2 is the real value now, so the pin on
-    # the constant and the pin on the row are read together).
-    assert auth_api.TOS_VERSION == 2
+    # CK-83b: the private test notice is version 3 — version 2 with the
+    # covers paragraph, the text behind /tos today, true about what is stored
+    # — and a sign-up from the current bundle sends it. The acceptance row
+    # carries what the person actually agreed to, never a hardcoded number.
+    # THE PIN MOVED at CK-83b, with its reason: this test read version 2 from
+    # CK-73.3 until the notice took 3; version 2 keeps its own test below,
+    # as the stale-bundle case it now is.
+    assert auth_api.TOS_VERSION == 3
     response = await client.post(
         "/auth/request-link",
-        json={"email": "versioned@example.com", "tos_accepted": True, "tos_version": 2},
+        json={"email": "versioned@example.com", "tos_accepted": True, "tos_version": 3},
+    )
+    assert response.status_code == 202
+    match = LINK_RE.search(capsys.readouterr().out)
+    assert match, "no magic link in console output"
+    assert TOKEN_REDIRECT_RE.match(await _verify(client, match.group(0)))
+    async with db_session_factory() as db:
+        acceptance = (await db.execute(select(TosAcceptance))).scalars().one()
+        assert acceptance.version == 3
+
+
+async def test_a_sign_up_with_version_2_still_records_2_the_stale_bundle_case(
+    client, capsys, db_session_factory
+):
+    # Since CK-83b version 2 is the stale-bundle case version 1 already was: a
+    # browser on CK-73.3's bundle showed its user version 2's text — every
+    # sentence of it, and no word on covers — so 2 is the TRUE record of what
+    # that person agreed to, accepted and recorded as 2, never corrected up
+    # (the validator keeps `1 <= value <= TOS_VERSION`; the record's §3).
+    response = await client.post(
+        "/auth/request-link",
+        json={"email": "versioned-2@example.com", "tos_accepted": True, "tos_version": 2},
     )
     assert response.status_code == 202
     match = LINK_RE.search(capsys.readouterr().out)
@@ -254,17 +276,18 @@ async def test_a_sign_up_with_version_1_still_records_1_the_stale_bundle_case(
         assert acceptance.version == 1
 
 
-async def test_version_3_is_refused_the_published_terms_are_not_published(
+async def test_version_4_is_refused_the_published_terms_are_not_published(
     client, db_session_factory
 ):
-    # 3 is the published terms' number (the record's §3): no text exists
+    # 4 is the published terms' number since CK-83b (the record's §3; 3 until
+    # the notice took 3 — the pin moved with its reason): no text exists
     # behind it yet, so an acceptance of it would be consent to nothing.
     # Refused before any token is minted, exactly as any unknown version is;
     # the phase that publishes the terms raises TOS_VERSION and this test
-    # moves to 4 with it.
+    # moves to 5 with it.
     response = await client.post(
         "/auth/request-link",
-        json={"email": "early@example.com", "tos_accepted": True, "tos_version": 3},
+        json={"email": "early@example.com", "tos_accepted": True, "tos_version": 4},
     )
     assert response.status_code == 422
     async with db_session_factory() as db:
