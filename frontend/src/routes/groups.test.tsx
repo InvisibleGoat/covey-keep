@@ -1,8 +1,10 @@
 // CK-78 pins on your groups and starting one (Groups 3a). The value under
 // test: the way to the list comes above the gatherings (Home's links until
 // CK-82, the frame's sections since); the list is ONE request
-// and shows each group's name, its count ("1 member" for one) and the
-// caller's own role, in the server's order; the empty state is a real screen
+// and, since CK-85, the mockup's layout — *Groups* and New group, the first
+// group as the featured card and the rest under *More groups*, each card one
+// link with its count in people ("1 person" for one) and the caller's own
+// role, in the server's order; the empty state is a real screen
 // that promises nothing without a screen yet; a failed read can be retried —
 // Try again re-reads once per press — never "Try again." with nothing to
 // press; starting a group sends exactly `{"name"}` (no type, no control for
@@ -112,7 +114,9 @@ test('the way to Your groups comes above the gatherings: the frame’s Groups ta
   renderAppAt('/groups', signedIn, (url) =>
     url.endsWith('/gatherings') ? json(200, { gatherings: [] }) : json(200, { groups: [group()] }),
   )
-  await screen.findByRole('heading', { level: 1, name: 'Your groups' })
+  // MOVED AT CK-85, with its reason: the page's heading is the mockup's
+  // *Groups* since CK-85 (it read *Your groups*); the pin is the tabs' order.
+  await screen.findByRole('heading', { level: 1, name: 'Groups' })
   const bar = screen.getByRole('navigation', { name: 'Sections' })
   const groups = within(bar).getByRole('link', { name: 'Groups' })
   const gatherings = within(bar).getByRole('link', { name: 'Gatherings' })
@@ -122,7 +126,9 @@ test('the way to Your groups comes above the gatherings: the frame’s Groups ta
 
 test('the route table reaches the list, the form and a group page, each behind sign-in', async () => {
   renderAppAt('/groups', signedIn, () => json(200, { groups: [group()] }))
-  expect(await screen.findByRole('heading', { level: 1, name: 'Your groups' })).toBeTruthy()
+  // MOVED AT CK-85, with its reason: the list's heading is the mockup's
+  // *Groups* since CK-85.
+  expect(await screen.findByRole('heading', { level: 1, name: 'Groups' })).toBeTruthy()
   cleanup()
 
   renderAppAt('/groups/new', signedIn, () => json(500, {}))
@@ -168,35 +174,131 @@ for (const [seat, auth] of [
 // /groups — the list.
 // ---------------------------------------------------------------------------
 
-test('the list: one request, each group linking to its page with its name, its count and the caller’s role, in the server’s order', async () => {
-  const groups = [
-    group({ id: 'g-new', name: 'The Lees', member_count: 3, caller_role: 'admin' }),
-    group({ id: 'g-mid', name: 'Hawkins Family', member_count: 1, caller_role: 'co_admin' }),
-    group({ id: 'g-old', name: 'Cousins', member_count: 12, caller_role: 'member' }),
-  ]
-  const mock = vi.fn(() => Promise.resolve(json(200, { groups })))
+// MOVED AT CK-85, with its reason: until CK-85 this was one test over one
+// list — each group a row with its name, "{n} members" and the caller's
+// role, and *Start a group* beneath. CK-85 builds the mockup's layout (the
+// merge record §3 item 5): the page head's *Groups* and **New group**, the
+// first group as the featured card, and the rest under *More groups*; the
+// count says people (Steven, 2026-11-01). What it always held still holds —
+// one request, the server's order, each group one link to its page, the
+// caller's role beside the count, no Back home — and the tests below pin it
+// in the new layout.
+const THREE = [
+  group({ id: 'g-new', name: 'The Lees', member_count: 3, caller_role: 'admin' }),
+  group({ id: 'g-mid', name: 'Hawkins Family', member_count: 1, caller_role: 'co_admin' }),
+  group({ id: 'g-old', name: 'Cousins', member_count: 12, caller_role: 'member' }),
+]
+
+function featuredCard(): HTMLElement {
+  const card = document.querySelector('article.cover-hero')
+  if (!(card instanceof HTMLElement)) throw new Error('no featured card')
+  return card
+}
+
+test('the page head: the heading Groups and New group, a link to /groups/new — no lede, no pin, no Pinned, no Active', async () => {
+  const mock = vi.fn(() => Promise.resolve(json(200, { groups: THREE })))
   vi.stubGlobal('fetch', mock)
   renderList()
-  const list = await screen.findByRole('list', { name: 'Your groups' })
+  const heading = await screen.findByRole('heading', { level: 1, name: 'Groups' })
   expect(mock).toHaveBeenCalledTimes(1)
   expect(String((mock.mock.calls[0] as unknown[])[0])).toMatch(/\/groups$/)
-
-  const links = within(list).getAllByRole('link')
-  expect(links.map((link) => link.getAttribute('href'))).toEqual([
-    '/groups/g-new',
-    '/groups/g-mid',
-    '/groups/g-old',
-  ])
-  expect(links.map((link) => link.textContent)).toEqual([
-    'The Lees3 members · Admin',
-    'Hawkins Family1 member · Co-admin',
-    'Cousins12 members',
-  ])
-  expect(screen.getByRole('link', { name: 'Start a group' }).getAttribute('href')).toBe('/groups/new')
+  const head = heading.closest('.page-head') as HTMLElement
+  const newGroup = within(head).getByRole('link', { name: 'New group' })
+  expect(newGroup.getAttribute('href')).toBe('/groups/new')
+  expect(newGroup.classList.contains('btn-primary')).toBe(true)
+  // The mockup's lede — *Pinned groups first, then the ones with something
+  // new.* — is left out: neither pins nor last-active ordering is built.
+  expect(head.querySelector('.lede')).toBeNull()
+  expect(head.querySelector('p')).toBeNull()
+  const text = document.body.textContent ?? ''
+  expect(text).not.toMatch(/Pinned|\bpin\b|\bActive\b|\bago\b|something new/i)
+  expect(screen.queryByRole('button', { name: /pin/i })).toBeNull()
+  expect(document.querySelector('.pin, .chip')).toBeNull()
+  // The populated list's way to a new group is New group now; *Start a
+  // group* stays the empty state's words and the form's heading.
+  expect(screen.queryByRole('link', { name: 'Start a group' })).toBeNull()
   // MOVED AT CK-82, with its reason: the page's Back home link is gone —
   // Home is retired, and inside the frame the menu is the way around.
   expect(screen.queryByRole('link', { name: 'Back home' })).toBeNull()
-  expect(document.body.textContent).not.toMatch(FORBIDDEN)
+  expect(text).not.toMatch(FORBIDDEN)
+})
+
+test("the featured card is the first group and More groups holds the rest, in the server's order, each card one link to its page", async () => {
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(json(200, { groups: THREE }))))
+  renderList()
+  await screen.findByRole('heading', { level: 1, name: 'Groups' })
+
+  // The featured card: the name over the scrim in an <h2> holding the link.
+  const featured = featuredCard()
+  const title = within(featured).getByRole('heading', { level: 2 })
+  expect(title.textContent).toBe('The Lees')
+  const featuredLinks = within(featured).getAllByRole('link')
+  expect(featuredLinks).toHaveLength(1)
+  expect(featuredLinks[0].getAttribute('href')).toBe('/groups/g-new')
+  expect(featuredLinks[0].closest('h2')).toBe(title)
+  // Open group is a picture of a button: hidden from the accessibility tree,
+  // never a second link or a button.
+  const open = within(featured).getByText('Open group')
+  expect(open.getAttribute('aria-hidden')).toBe('true')
+  expect(open.tagName).toBe('SPAN')
+  expect(within(featured).queryByRole('button')).toBeNull()
+
+  // More groups: a heading and a grid list it names, the rest in order.
+  const moreHeading = screen.getByRole('heading', { level: 2, name: 'More groups' })
+  const more = screen.getByRole('list', { name: 'More groups' })
+  expect(more.getAttribute('aria-labelledby')).toBe(moreHeading.id)
+  expect(featured.compareDocumentPosition(moreHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  const cards = more.querySelectorAll(':scope > li > article.cover-tile')
+  expect(cards).toHaveLength(2)
+  const links = within(more).getAllByRole('link')
+  expect(links.map((link) => link.getAttribute('href'))).toEqual(['/groups/g-mid', '/groups/g-old'])
+  expect(links.map((link) => link.closest('h3')?.textContent)).toEqual(['Hawkins Family', 'Cousins'])
+  // Every card is a whole-card link: one link each, the mockup's stretch.
+  for (const link of [...featuredLinks, ...links]) expect(link.classList.contains('cover-link')).toBe(true)
+  for (const card of cards) expect(within(card as HTMLElement).getAllByRole('link')).toHaveLength(1)
+  // Each group appears once on the page.
+  expect(screen.getAllByText('The Lees')).toHaveLength(1)
+})
+
+test('each meta line is the count in people, with · Admin or · Co-admin only for the caller who holds one', async () => {
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(json(200, { groups: THREE }))))
+  renderList()
+  await screen.findByRole('heading', { level: 1, name: 'Groups' })
+  expect(featuredCard().querySelector('.cover-hero-meta')?.textContent).toBe('3 people · Admin')
+  const more = screen.getByRole('list', { name: 'More groups' })
+  expect([...more.querySelectorAll('.cover-meta')].map((line) => line.textContent)).toEqual([
+    '1 person · Co-admin',
+    '12 people',
+  ])
+  expect(document.body.textContent).not.toMatch(/\bmembers?\b/)
+})
+
+test('one group: the featured card alone, and no More groups heading or list', async () => {
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(json(200, { groups: [group()] }))))
+  renderList()
+  await screen.findByRole('heading', { level: 1, name: 'Groups' })
+  expect(within(featuredCard()).getByRole('heading', { level: 2, name: 'The Lees' })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'More groups' })).toBeNull()
+  expect(screen.queryByRole('list')).toBeNull()
+  expect(document.querySelector('article.cover-tile')).toBeNull()
+})
+
+test('an empty cover on the featured card and on a grid card: the quail and No cover photo yet', async () => {
+  // The fixtures carry no `cover`: every card draws the empty cover, and
+  // no picture is asked for.
+  const mock = vi.fn(() => Promise.resolve(json(200, { groups: THREE })))
+  vi.stubGlobal('fetch', mock)
+  renderList()
+  await screen.findByRole('heading', { level: 1, name: 'Groups' })
+  const cards = [featuredCard(), ...document.querySelectorAll<HTMLElement>('article.cover-tile')]
+  expect(cards).toHaveLength(3)
+  for (const card of cards) {
+    const empty = card.querySelector('.cover-frame .cover-empty')
+    expect(empty?.querySelector('img')?.getAttribute('src')).toBe('/img/covey-keep-quail-640.webp')
+    expect(empty?.querySelector('img')?.getAttribute('alt')).toBe('')
+    expect(empty?.textContent).toBe('No cover photo yet')
+  }
+  expect(mock).toHaveBeenCalledTimes(1)
 })
 
 test('the empty state is a real screen, as literals, promising nothing without a screen yet', async () => {
@@ -235,7 +337,9 @@ test('a failed read says so and can be retried: Try again re-reads once per pres
 
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).toBe('Something went wrong loading your groups.')
-  expect(screen.getByRole('heading', { level: 1, name: 'Your groups' })).toBeTruthy()
+  // MOVED AT CK-85, with its reason: the failed read's heading follows its
+  // page's, *Groups* since CK-85 (it read *Your groups*); its line is today's.
+  expect(screen.getByRole('heading', { level: 1, name: 'Groups' })).toBeTruthy()
   // MOVED AT CK-82, with its reason: Back home is gone with Home.
   expect(screen.queryByRole('link', { name: 'Back home' })).toBeNull()
   expect(mock).toHaveBeenCalledTimes(1)
@@ -248,7 +352,9 @@ test('a failed read says so and can be retried: Try again re-reads once per pres
   expect(mock).toHaveBeenCalledTimes(2)
 
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
-  expect(await screen.findByRole('list', { name: 'Your groups' })).toBeTruthy()
+  // MOVED AT CK-85, with its reason: one group is the featured card alone —
+  // no list — so the read that succeeds is seen by its card's heading.
+  expect(await screen.findByRole('heading', { level: 2, name: 'The Lees' })).toBeTruthy()
   expect(mock).toHaveBeenCalledTimes(3)
   expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
 })

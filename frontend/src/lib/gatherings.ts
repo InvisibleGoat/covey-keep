@@ -2,7 +2,7 @@
 // backend/app/api/gatherings.py's response bodies exactly — see
 // reference/backend/api-reference.md, Gatherings router.
 import type { CoverBody } from './covers'
-import { formatInstant } from './datetime'
+import { formatDayWithYear, formatInstant, formatTime, formatWeekdayDay } from './datetime'
 
 export interface Occurrence {
   id: string
@@ -160,8 +160,9 @@ export const PHOTOS_ONLY_ITEM = 'You can see its photos'
 export const PHOTOS_ONLY_LINE =
   "You can see this gathering's photos. Its dates and plans are for the people invited."
 
-// The line under a list item's title (Your gatherings, and a group's own
-// list): the type, then the next date under the backend's
+// The line under a list item's title on a group's own list of gatherings
+// (Your gatherings' cards have their own lines since CK-85, below): the
+// type, then the next date under the backend's
 // next-or-most-recent rule — or, in the photos-only view, PHOTOS_ONLY_ITEM
 // and no date, because none was sent — then, where asked, the group's name.
 export function listItemLine(item: GatheringListItem, zone: string, withGroup: boolean): string {
@@ -172,5 +173,99 @@ export function listItemLine(item: GatheringListItem, zone: string, withGroup: b
     parts.push(PHOTOS_ONLY_ITEM)
   }
   if (withGroup && item.group) parts.push(item.group.name)
+  return parts.join(' · ')
+}
+
+// --- Your gatherings in the mockup's layout (CK-85) ---------------------------
+
+// The instant an item's date names — its next date under the backend's
+// next-or-most-recent rule — in the FULL view alone. The photos-only view
+// carries no date, so nothing is read there (withheld is not empty).
+function nextStart(item: GatheringListItem): number | null {
+  if (!viewOf(item.caller_view).full || item.next_occurrence === null) return null
+  const at = Date.parse(item.next_occurrence.starts_at)
+  return Number.isFinite(at) ? at : null
+}
+
+// THE ONE RULE FOR "COMING UP" (CK-85): a full-view item whose next date
+// starts at or after `now`. The backend's `next_occurrence` is the earliest
+// date at or after now, or the latest past one when every date has passed,
+// so a date before `now` means nothing is still to come — and a date that
+// has started and not yet ended reads as past by the same rule. The menu's
+// *Gatherings coming up* and the page's *Coming up* both come from
+// `gatheringSections` below, so the two can never disagree.
+export function isComingUp(item: GatheringListItem, now: number): boolean {
+  const at = nextStart(item)
+  return at !== null && at >= now
+}
+
+export interface GatheringSections {
+  // Soonest first: the first is the page's featured card.
+  comingUp: GatheringListItem[]
+  // Most recent first. A full-view item with no date — the backend never
+  // sends one (creation needs a date and the last is undeletable) — goes
+  // last rather than vanishing from the page.
+  past: GatheringListItem[]
+  // The photos-only view, in the server's order: no date to sort by, and
+  // nothing may claim these are over.
+  photosOnly: GatheringListItem[]
+}
+
+// Your gatherings' three sections, from the one list read. Each sort is
+// stable, so equal dates keep the server's order.
+export function gatheringSections(items: GatheringListItem[], now: number): GatheringSections {
+  const comingUp: { item: GatheringListItem; at: number }[] = []
+  const past: { item: GatheringListItem; at: number | null }[] = []
+  const photosOnly: GatheringListItem[] = []
+  for (const item of items) {
+    if (viewOf(item.caller_view).photosOnly) {
+      photosOnly.push(item)
+      continue
+    }
+    const at = nextStart(item)
+    if (at !== null && isComingUp(item, now)) comingUp.push({ item, at })
+    else past.push({ item, at })
+  }
+  comingUp.sort((a, b) => a.at - b.at)
+  past.sort((a, b) => (a.at === null ? (b.at === null ? 0 : 1) : b.at === null ? -1 : b.at - a.at))
+  return {
+    comingUp: comingUp.map(({ item }) => item),
+    past: past.map(({ item }) => item),
+    photosOnly,
+  }
+}
+
+// The mockup's word for a gathering that belongs to no group.
+export const NOT_IN_A_GROUP = 'Not in a group'
+
+// A card's first line: the group — or *Not in a group* — and the type.
+export function cardPlaceLine(item: GatheringListItem): string {
+  return `${item.group ? item.group.name : NOT_IN_A_GROUP} · ${gatheringTypeLabel(item.gathering_type)}`
+}
+
+// A card's second line, every date and time in `zone`: a coming-up item with
+// more than one date — *4 dates · next Thu, Oct 15* — or with one — *Thu,
+// Oct 15 · 6:30 PM*; a past item its day with the year — *Oct 3, 2026*; a
+// photos-only item PHOTOS_ONLY_ITEM and no date, because none was sent. The
+// same `now` as the sections, so a card's line and its section agree.
+export function cardDateLine(item: GatheringListItem, zone: string, now: number): string | null {
+  if (viewOf(item.caller_view).photosOnly) return PHOTOS_ONLY_ITEM
+  if (item.next_occurrence === null) return null
+  const startsAt = item.next_occurrence.starts_at
+  if (!isComingUp(item, now)) return formatDayWithYear(startsAt, zone)
+  const day = formatWeekdayDay(startsAt, zone)
+  const count = item.occurrence_count ?? 1
+  return count > 1 ? `${count} dates · next ${day}` : `${day} · ${formatTime(startsAt, zone)}`
+}
+
+// The featured card's one line: the group, the type, the next date's day
+// and its time — *The Lees · Potluck · Thu, Oct 15 · 6:30 PM*. Only a
+// coming-up item is featured, so it always has its date.
+export function featuredLine(item: GatheringListItem, zone: string): string {
+  const parts = [cardPlaceLine(item)]
+  if (item.next_occurrence) {
+    parts.push(formatWeekdayDay(item.next_occurrence.starts_at, zone))
+    parts.push(formatTime(item.next_occurrence.starts_at, zone))
+  }
   return parts.join(' · ')
 }

@@ -7,7 +7,16 @@ import type { ReactNode } from 'react'
 // name what it marks, or inside a control whose label does. No icon set is
 // added.
 
-export type IconName = 'groups' | 'gatherings' | 'you' | 'menu' | 'gear' | 'plan' | 'signOut' | 'chevron'
+export type IconName =
+  | 'groups'
+  | 'gatherings'
+  | 'you'
+  | 'menu'
+  | 'gear'
+  | 'plan'
+  | 'signOut'
+  | 'chevron'
+  | 'plus'
 
 const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
   groups: {
@@ -63,6 +72,8 @@ const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
     ),
   },
   chevron: { paths: <path d="M9 5l7 7-7 7" />, width: 2 },
+  // The list pages' New group and New gathering (CK-85; the mockup's `plus`).
+  plus: { paths: <path d="M12 5v14M5 12h14" />, width: 2 },
 }
 
 export function Icon({ name, className = 'ico' }: { name: IconName; className?: string }) {

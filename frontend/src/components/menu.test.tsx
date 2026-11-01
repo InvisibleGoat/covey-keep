@@ -1,6 +1,6 @@
 // CK-82 — the menu, One list. The value under test: the brand and the
 // three sections; Your groups in the server's order, each a link to its page
-// with the empty cover and today's member line; Gatherings coming up — at
+// with its cover and its count in people (CK-85); Gatherings coming up — at
 // most five, soonest first, none past and none from a photos-only item,
 // each a link with its date in the profile's zone as the mockup draws it;
 // no chevron, no pin and no activity line; an empty list leaves its heading
@@ -152,7 +152,10 @@ test("Your groups: the server's order, each a link to its page with the empty co
   expect(list.getAttribute('aria-labelledby')).toBe(heading.id)
   const links = within(list).getAllByRole('link')
   expect(links.map((link) => link.getAttribute('href'))).toEqual(['/groups/g-new', '/groups/g-mid', '/groups/g-old'])
-  expect(links.map((link) => link.textContent)).toEqual(['The Lees3 members', 'Hawkins Family1 member', 'Cousins12 members'])
+  // MOVED AT CK-85, with its reason: the count says people — *1 person*,
+  // *{N} people* (Steven, 2026-11-01) — as on the Groups list's cards and a
+  // group page's header, through the one helper.
+  expect(links.map((link) => link.textContent)).toEqual(['The Lees3 people', 'Hawkins Family1 person', 'Cousins12 people'])
   for (const link of links) {
     const cover = link.querySelector('.noimg.nthumb')
     expect(cover?.getAttribute('aria-hidden')).toBe('true')
@@ -198,7 +201,11 @@ test('no chevron, no pin and no activity line on any row', async () => {
   await screen.findByRole('list', { name: 'Gatherings coming up' })
   expect(container.querySelector('.chev')).toBeNull()
   expect(container.querySelector('.pinmark')).toBeNull()
-  expect(container.textContent).not.toMatch(/\bActive\b|\bago\b|Pinned|people/)
+  // MOVED AT CK-85, with its reason: `people` was banned here as half of the
+  // mockup's activity line (*14 people · Active … ago*); since CK-85 it is the
+  // count's word (Steven, 2026-11-01), so the ban keeps the activity line's
+  // other words and the pin, and the count is pinned in the test above.
+  expect(container.textContent).not.toMatch(/\bActive\b|\bago\b|Pinned/)
   expect(menuSource).not.toMatch(/name="chevron"/)
 })
 

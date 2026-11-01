@@ -129,9 +129,14 @@ test('initials: nothing usable gives "?"', () => {
 })
 
 test('the count, the role words and the caller line', () => {
-  expect(memberCountLabel(1)).toBe('1 member')
-  expect(memberCountLabel(0)).toBe('0 members')
-  expect(memberCountLabel(3)).toBe('3 members')
+  // MOVED AT CK-85, with its reason: a count says "people" everywhere
+  // (Steven, 2026-11-01) — this one helper answers the menu's rows, the Groups
+  // list's cards and a group page's header line.
+  expect(memberCountLabel(1)).toBe('1 person')
+  expect(memberCountLabel(0)).toBe('0 people')
+  expect(memberCountLabel(3)).toBe('3 people')
+  expect(memberCountLabel(14)).toBe('14 people')
+  expect(memberCountLabel(3)).not.toMatch(/member/)
   expect(roleLabel('admin')).toBe('Admin')
   expect(roleLabel('co_admin')).toBe('Co-admin')
   expect(roleLabel('member')).toBeNull()

@@ -92,10 +92,15 @@ export function initials(displayName: string | null | undefined): string {
   return letters.length > 0 ? letters.join('').toUpperCase() : '?'
 }
 
-// "1 member", "3 members" — the count the server computes (store who,
-// compute how many), counting the people the member list shows.
+// "1 person", "3 people" — the count the server computes (store who,
+// compute how many), counting the people the member list shows. "people"
+// everywhere a count is shown (Steven, 2026-11-01; CK-85): the menu's rows,
+// the Groups list's cards and a group page's header line read this one
+// helper, so they always agree. A heading or a sentence about BEING a
+// member — *Members*, *isn't a member* — names a membership, not a count,
+// and keeps its word.
 export function memberCountLabel(count: number): string {
-  return count === 1 ? '1 member' : `${count} members`
+  return count === 1 ? '1 person' : `${count} people`
 }
 
 // The word beside a name on the member list; nothing for an ordinary member.

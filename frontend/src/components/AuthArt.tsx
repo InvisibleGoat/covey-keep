@@ -59,8 +59,9 @@ export function EmptyCover({ className }: { className: string }) {
 
 /**
  * The empty cover on a page's cover card (CK-84; the mockup's `.photo.empty`):
- * the quail and its line, beneath the card's scrim. The line is words a
- * reader hears; the quail is decorative.
+ * the quail and its line, beneath the card's scrim — and since CK-85 on the
+ * lists' featured and grid cards, each styled in its place. The line is words
+ * a reader hears; the quail is decorative.
  */
 export function EmptyCoverCard({ line }: { line: string }) {
   return (

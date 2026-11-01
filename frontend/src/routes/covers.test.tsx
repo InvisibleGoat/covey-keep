@@ -1,5 +1,8 @@
 // CK-84 — covers on the surface, through the pages. The value under test:
-// every row of the three lists starts with its cover at the thumbnail layer,
+// every card of the two lists carries its cover — the featured card at the
+// web layer and a grid card at the thumbnail layer since CK-85 — and every
+// row of a group page's gatherings starts with its cover at the thumbnail
+// layer,
 // and both pages open on a cover card at the web layer with the page's <h1>
 // inside it — the photos-only view too; Change cover is offered exactly to
 // the people who may set a cover (a gathering's host and co-host, a group's
@@ -269,28 +272,48 @@ function cardImageSrc(): string | null {
 // Where covers show.
 // ---------------------------------------------------------------------------
 
-test('the Groups list: each row starts with its cover at the thumbnail layer — the empty cover where none is set — and its words are unchanged', async () => {
+// MOVED AT CK-85, with its reason: until CK-85 every row of the two lists
+// started with its 42px thumbnail. The lists take the mockup's layout: the
+// first group, and the soonest gathering coming up, are each a featured card
+// at the WEB layer; every other card is a grid card at the THUMBNAIL layer —
+// the layer still following the variant alone, never archival. An empty grid
+// card draws the quail and its line (the mockup's `.photo.empty`), not the
+// thumbnail's ring. What the two tests always held still holds: the cover,
+// or the empty cover, on every card, a `blob:` URL and `alt=""`, and the
+// photos-only items' covers read too.
+test('the Groups list: the featured card draws its cover at the web layer, a grid card at the thumbnail layer — the empty cover where none is set', async () => {
   const mock = stubServer({
     'GET /groups': () =>
       json(200, {
-        groups: [group({ cover: { source: 'photo', set_at: T1 } }), group({ id: 'grp-2', name: 'Cousins', caller_role: 'member' })],
+        groups: [
+          group({ cover: { source: 'photo', set_at: T1 } }),
+          group({ id: 'grp-2', name: 'Cousins', caller_role: 'member' }),
+          group({ id: 'grp-3', name: 'Hawkins Family', caller_role: 'member', cover: { source: 'upload', set_at: T1 } }),
+        ],
       }),
   })
   renderAt('/groups')
-  const list = await screen.findByRole('list', { name: 'Your groups' })
-  const [lees, cousins] = within(list).getAllByRole('link')
-  await waitFor(() => expect(lees.querySelector('img.nthumb')?.getAttribute('src')).toMatch(/^blob:/))
-  expect(lees.querySelector('img.nthumb')?.getAttribute('alt')).toBe('')
-  expect(lees.querySelector('strong')?.textContent).toBe('The Lees')
-  expect(lees.querySelector('p')?.textContent).toBe('3 members · Admin')
-  expect(lees.textContent).toBe('The Lees3 members · Admin')
-  expect(cousins.querySelector('.noimg.nthumb')).toBeTruthy()
-  expect(requests(mock, 'GET', /\/cover\/url/).map(([url]) => url.replace(/^https?:\/\/[^/]+/, ''))).toEqual([
-    '/groups/grp-1/cover/url?layer=thumbnail',
-  ])
+  await screen.findByRole('heading', { level: 1, name: 'Groups' })
+  const featured = document.querySelector('article.cover-hero') as HTMLElement
+  await waitFor(() => expect(featured.querySelector('.cover-frame > img')?.getAttribute('src')).toMatch(/^blob:/))
+  expect(featured.querySelector('.cover-frame > img')?.getAttribute('alt')).toBe('')
+  expect(within(featured).getByRole('heading', { level: 2 }).textContent).toBe('The Lees')
+  expect(featured.querySelector('.cover-hero-meta')?.textContent).toBe('3 people · Admin')
+  const more = screen.getByRole('list', { name: 'More groups' })
+  const [cousins, hawkins] = more.querySelectorAll<HTMLElement>(':scope > li > article.cover-tile')
+  expect(cousins.querySelector('.cover-frame .cover-empty')?.textContent).toBe('No cover photo yet')
+  expect(cousins.querySelector('.cover-frame > img')).toBeNull()
+  await waitFor(() => expect(hawkins.querySelector('.cover-frame > img')?.getAttribute('src')).toMatch(/^blob:/))
+  expect(
+    requests(mock, 'GET', /\/cover\/url/)
+      .map(([url]) => url.replace(/^https?:\/\/[^/]+/, ''))
+      .sort(),
+  ).toEqual(['/groups/grp-1/cover/url?layer=web', '/groups/grp-3/cover/url?layer=thumbnail'])
+  // No presigned URL past its one fetch: nowhere in the markup.
+  expect(document.body.innerHTML).not.toMatch(/X-Amz|r2\.invalid/)
 })
 
-test('the Gatherings list: both views’ rows start with the cover — the memory tier reads a gathering’s cover — at the thumbnail layer', async () => {
+test('the Gatherings list: the featured card at the web layer, every grid card at the thumbnail layer — a photos-only card too, since the memory tier reads a gathering’s cover', async () => {
   const mock = stubServer({
     'GET /gatherings': () =>
       json(200, {
@@ -303,16 +326,25 @@ test('the Gatherings list: both views’ rows start with the cover — the memor
   })
   renderAt('/gatherings')
   await screen.findByRole('heading', { level: 1, name: 'Your gatherings' })
-  const links = screen.getAllByRole('link').filter((link) => link.classList.contains('gathering-item'))
-  await waitFor(() => expect(links[0].querySelector('img.nthumb')?.getAttribute('src')).toMatch(/^blob:/))
-  await waitFor(() => expect(links[1].querySelector('img.nthumb')?.getAttribute('src')).toMatch(/^blob:/))
-  expect(links[1].querySelector('p')?.textContent).toBe('Potluck · You can see its photos · The Lees')
-  expect(links[2].querySelector('.noimg.nthumb')).toBeTruthy()
+  const featured = document.querySelector('article.cover-hero') as HTMLElement
+  expect(within(featured).getByRole('heading', { level: 2 }).textContent).toBe('The Party')
+  await waitFor(() => expect(featured.querySelector('.cover-frame > img')?.getAttribute('src')).toMatch(/^blob:/))
+  const photosOnly = screen.getByRole('list', { name: 'Photos you can see' })
+  const kept = photosOnly.querySelector<HTMLElement>(':scope > li > article.cover-tile') as HTMLElement
+  await waitFor(() => expect(kept.querySelector('.cover-frame > img')?.getAttribute('src')).toMatch(/^blob:/))
+  expect([...kept.querySelectorAll('p')].map((line) => line.textContent)).toEqual([
+    'The Lees · Potluck',
+    'You can see its photos',
+  ])
+  expect(kept.querySelector('.cover-date')).toBeNull()
+  const comingUp = screen.getByRole('list', { name: 'Coming up' })
+  expect(comingUp.querySelector('.cover-frame .cover-empty')?.textContent).toBe('No cover photo yet')
   expect(
     requests(mock, 'GET', /\/cover\/url/)
       .map(([url]) => url.replace(/^https?:\/\/[^/]+/, ''))
       .sort(),
-  ).toEqual(['/gatherings/g-1/cover/url?layer=thumbnail', '/gatherings/g-2/cover/url?layer=thumbnail'])
+  ).toEqual(['/gatherings/g-1/cover/url?layer=web', '/gatherings/g-2/cover/url?layer=thumbnail'])
+  expect(document.body.innerHTML).not.toMatch(/X-Amz|r2\.invalid/)
 })
 
 test('a group’s page: the cover card at the web layer with the page’s <h1> inside it, still the heading by role and name; the Gatherings section’s rows start with their covers', async () => {
@@ -328,8 +360,9 @@ test('a group’s page: the cover card at the web layer with the page’s <h1> i
   expect(heading.closest('.cover-card')).toBe(coverCard())
   await waitFor(() => expect(cardImageSrc()).toMatch(/^blob:/))
   expect(coverCard().querySelector('.cover-photo > img')?.getAttribute('alt')).toBe('')
-  // The count and the rest stay beneath the card.
-  expect(screen.getByText('3 members').closest('.cover-card')).toBeNull()
+  // The count and the rest stay beneath the card. MOVED AT CK-85, with its
+  // reason: the count says people (Steven, 2026-11-01).
+  expect(screen.getByText('3 people').closest('.cover-card')).toBeNull()
   const list = await screen.findByRole('list', { name: "The group's gatherings" })
   await waitFor(() => expect(within(list).getByRole('link').querySelector('img.nthumb')?.getAttribute('src')).toMatch(/^blob:/))
   const mints = requests(mock, 'GET', /\/cover\/url/).map(([url]) => url.replace(/^https?:\/\/[^/]+/, ''))

@@ -343,7 +343,10 @@ test('the admin: the reserved and delegable acts on every row the table names, n
   renderPage()
   await loaded()
   expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('The Lees')
-  expect(screen.getByText('4 members')).toBeTruthy()
+  // MOVED AT CK-85, with its reason: a count says "people" everywhere —
+  // *1 person*, *{N} people* (Steven, 2026-11-01) — through the one helper the
+  // menu and the Groups list read too.
+  expect(screen.getByText('4 people')).toBeTruthy()
   expect(screen.getByText("You're the admin.")).toBeTruthy()
   expect(screen.queryByText("You're a co-admin.")).toBeNull()
   expect(screen.getByText(CO_ADMIN_HINT)).toBeTruthy()
@@ -670,7 +673,8 @@ for (const seat of ['ada', 'bea'] as const) {
     expect(deletes[0][0]).toMatch(new RegExp(`/groups/g-1/members/${MEMBERSHIP.cal}$`))
     expect(GET_MEMBERS(mock)).toBe(2)
     expect(GET_GROUP(mock)).toBe(2)
-    await waitFor(() => expect(screen.getByText('3 members')).toBeTruthy())
+    // MOVED AT CK-85, with its reason: the count says people (Steven).
+    await waitFor(() => expect(screen.getByText('3 people')).toBeTruthy())
   })
 }
 
@@ -903,7 +907,9 @@ test('the only member: the card says the group will be left with nobody in it, a
   stubServer(server)
   renderPage()
   await loaded()
-  expect(screen.getByText('1 member')).toBeTruthy()
+  // MOVED AT CK-85, with its reason: the count says people — *1 person* for
+  // an only member (Steven, 2026-11-01).
+  expect(screen.getByText('1 person')).toBeTruthy()
   const card = leaveCard()
   expect(within(card).getByText(LEAVE_EXPLAINER)).toBeTruthy()
   expect(within(card).getByText(LEAVE_ONLY_MEMBER)).toBeTruthy()
@@ -1170,7 +1176,8 @@ test('Approve takes a second step: the first click posts nothing, Not yet does n
   fireEvent.click(within(screen.getByRole('group', { name: 'Approve Zoe' })).getByRole('button', { name: 'Approve Zoe' }))
   await within(region('Requests to join')).findByText('No one is waiting to join.')
   await waitFor(() => expect(rowOf('Zoe')).toBeTruthy())
-  expect(await screen.findByText('5 members')).toBeTruthy()
+  // MOVED AT CK-85, with its reason: the count says people (Steven).
+  expect(await screen.findByText('5 people')).toBeTruthy()
 
   const posts = calls(mock, 'POST', /\/join-requests\//)
   expect(posts).toHaveLength(1)

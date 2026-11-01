@@ -22,10 +22,12 @@ import { Icon } from './Icons'
 // picture it already holds at the same version.
 //
 // What it leaves out, each a later phase: no pins and no "Active …
-// ago" (neither has a backend — a group's row shows its member count, in
-// today's words), no Calendar (CK-91), and no details panel — a row opens
-// its group's or gathering's page directly (Steven, 2026-10-31), so no row
-// carries a chevron.
+// ago" (neither has a backend — a group's row shows its count, in people,
+// through the one helper the Groups list and a group's page read too), no
+// Calendar (CK-91), and no details panel — a row opens its group's or
+// gathering's page directly (Steven, 2026-10-31), so no row carries a
+// chevron. Its *Gatherings coming up* is Your gatherings' *Coming up*, the
+// first five (lib/frame.ts::upcomingGatherings, CK-85).
 //
 // The two lists are the caller's own, from the same two reads the list
 // pages make (`GET /groups`, `GET /gatherings`), re-read whenever the page

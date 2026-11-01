@@ -232,9 +232,15 @@ test("the bottom bar: three tabs — Groups, Gatherings and You — the current 
 // Phones: the drawer is a dialog.
 // ---------------------------------------------------------------------------
 
+// MOVED AT CK-85, with its reason: seven tests in this file (here, the 900px
+// crossing and Home retired) wait for the Groups page's heading to know the
+// page has rendered. The page takes the mockup's words
+// since CK-85 — its heading reads *Groups*, where it read *Your groups* —
+// and what each test pins about the frame is unchanged.
+
 test('closed, the drawer is inert and hidden, and no dialog is open', async () => {
   renderAppAt('/groups')
-  await screen.findByRole('heading', { level: 1, name: 'Your groups' })
+  await screen.findByRole('heading', { level: 1, name: 'Groups' })
   const side = document.getElementById('frame-menu')
   expect(side?.hasAttribute('inert')).toBe(true)
   expect(side?.getAttribute('aria-hidden')).toBe('true')
@@ -246,7 +252,7 @@ test('closed, the drawer is inert and hidden, and no dialog is open', async () =
 
 test('the menu button opens the drawer as a modal dialog that takes focus and stills the page; Escape closes it, focus back on the button', async () => {
   renderAppAt('/groups')
-  await screen.findByRole('heading', { level: 1, name: 'Your groups' })
+  await screen.findByRole('heading', { level: 1, name: 'Groups' })
   const button = screen.getByRole('button', { name: 'Open menu' })
   fireEvent.click(button)
 
@@ -272,7 +278,7 @@ test('the menu button opens the drawer as a modal dialog that takes focus and st
 
 test('focus stays in the open drawer: Tab from the last control wraps to the first, Shift+Tab from the first to the last', async () => {
   renderAppAt('/groups')
-  await screen.findByRole('heading', { level: 1, name: 'Your groups' })
+  await screen.findByRole('heading', { level: 1, name: 'Groups' })
   fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
   const dialog = screen.getByRole('dialog', { name: 'Menu' })
   // Wait for the menu's lists, so the last control is the footer's.
@@ -291,7 +297,7 @@ test('focus stays in the open drawer: Tab from the last control wraps to the fir
 
 test('a tap on the scrim closes the drawer, focus back on the button', async () => {
   renderAppAt('/groups')
-  await screen.findByRole('heading', { level: 1, name: 'Your groups' })
+  await screen.findByRole('heading', { level: 1, name: 'Groups' })
   const button = screen.getByRole('button', { name: 'Open menu' })
   fireEvent.click(button)
   expect(screen.getByRole('dialog', { name: 'Menu' })).toBeTruthy()
@@ -358,7 +364,7 @@ test('the window crossing 900px: an open drawer closes into the column, and the 
       </AuthContext.Provider>
     </MemoryRouter>,
   )
-  await screen.findByRole('heading', { level: 1, name: 'Your groups' })
+  await screen.findByRole('heading', { level: 1, name: 'Groups' })
   fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
   expect(screen.getByRole('dialog', { name: 'Menu' })).toBeTruthy()
 
@@ -382,12 +388,12 @@ test('the window crossing 900px: an open drawer closes into the column, and the 
 test('Home is retired: /home lands on /groups', async () => {
   renderAppAt('/home')
   await waitFor(() => expect(locationText()).toBe('/groups'))
-  await screen.findByRole('heading', { level: 1, name: 'Your groups' })
+  await screen.findByRole('heading', { level: 1, name: 'Groups' })
   expect(screen.queryByRole('heading', { name: /welcome/i })).toBeNull()
 })
 
 test('signed in, the sign-in screen sends you to /groups', async () => {
   renderAppAt('/')
   await waitFor(() => expect(locationText()).toBe('/groups'))
-  await screen.findByRole('heading', { level: 1, name: 'Your groups' })
+  await screen.findByRole('heading', { level: 1, name: 'Groups' })
 })

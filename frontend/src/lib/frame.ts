@@ -2,7 +2,7 @@
 // a page belongs to, and which gatherings the menu lists as coming up.
 import type { IconName } from '../components/Icons'
 import { authFetch } from './api'
-import { viewOf, type GatheringListItem } from './gatherings'
+import { gatheringSections, type GatheringListItem } from './gatherings'
 import { listGroups, type Group } from './groups'
 
 export type SectionId = 'groups' | 'gatherings' | 'you'
@@ -35,24 +35,18 @@ export function sectionOf(pathname: string): SectionId | null {
 // How many gatherings the menu lists as coming up (the mockup's five).
 export const MENU_UPCOMING_LIMIT = 5
 
-// The menu's *Gatherings coming up*: the items in the FULL view whose next
-// date is still ahead — the backend's `next_occurrence` is the earliest date
-// at or after now, or the latest past one when every date has passed, so a
-// date before `now` means nothing is coming — soonest first, at most five.
-// An item in the photos-only view carries no date (`viewOf`, the one read of
-// the view) and is never listed here.
+// The menu's *Gatherings coming up*: the first five of Your gatherings'
+// *Coming up* (CK-85) — the same section, from `gatheringSections`, so the
+// menu and the page can never disagree: the items in the FULL view whose
+// next date is still ahead (`isComingUp`, the one rule), soonest first. An
+// item in the photos-only view carries no date (`viewOf`, the one read of the
+// view) and is never listed here.
 export function upcomingGatherings(
   items: GatheringListItem[],
   now: number,
   limit = MENU_UPCOMING_LIMIT,
 ): GatheringListItem[] {
-  return items
-    .filter((item) => viewOf(item.caller_view).full && item.next_occurrence !== null)
-    .map((item) => ({ item, at: Date.parse(item.next_occurrence?.starts_at ?? '') }))
-    .filter(({ at }) => Number.isFinite(at) && at >= now)
-    .sort((a, b) => a.at - b.at)
-    .slice(0, limit)
-    .map(({ item }) => item)
+  return gatheringSections(items, now).comingUp.slice(0, limit)
 }
 
 export type MenuLists = { ok: true; groups: Group[]; gatherings: GatheringListItem[] } | { ok: false }

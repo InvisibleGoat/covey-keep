@@ -232,7 +232,13 @@ test('the component asks only for the two served layers and keeps no presigned U
   const code = coverSource.replace(/\/\/.*$/gm, '')
   expect(code).not.toMatch(/archival/)
   expect(code).not.toMatch(/\.url\b/)
-  expect(code).toMatch(/variant === 'card' \? 'web' : 'thumbnail'/)
+  // MOVED AT CK-85, with its reason: two variants joined — the featured card
+  // (`hero`) and the grid card (`tile`) — so the layer is read from one table
+  // by the variant, rather than one comparison. The rule is the same: the
+  // web layer for a card or a hero, the thumbnail for a thumb or a tile.
+  expect(code).toMatch(/const LAYER: Record<CoverVariant, ServableLayer> = \{/)
+  expect(code).toMatch(/thumb: 'thumbnail',\s*tile: 'thumbnail',\s*card: 'web',\s*hero: 'web',\s*\}/)
+  expect(code).toMatch(/const layer = LAYER\[variant\]/)
 })
 
 test('the covers’ styles name no colour and add no token: every var() they read is one the token file already defines', () => {

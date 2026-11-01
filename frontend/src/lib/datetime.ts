@@ -136,6 +136,44 @@ export function formatWeekdayDay(iso: string, zone: string): string {
   }).format(new Date(iso))
 }
 
+// The time of day alone — "6:30 PM" — for a gathering card's date line
+// (CK-85), as the mockup draws it. Through the explicit zone, like
+// formatDay: the clock a person reads is the one in their profile zone.
+export function formatTime(iso: string, zone: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: zone,
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(iso))
+}
+
+// The day with its year — "Oct 3, 2026" — for a past gathering's card
+// (CK-85), as the mockup draws it. Through the explicit zone, like formatDay.
+export function formatDayWithYear(iso: string, zone: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: zone,
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(new Date(iso))
+}
+
+// The two halves of a card's date badge (CK-85; the mockup's `dateBadge()`):
+// the short month — "Oct", which the badge's style sets in capitals — and
+// the day of the month — "15". One formatter for both, through the explicit
+// zone, so the two halves can never name different days.
+export function badgeParts(iso: string, zone: string): { month: string; day: string } {
+  const parts: Record<string, string> = {}
+  for (const part of new Intl.DateTimeFormat('en-US', {
+    timeZone: zone,
+    month: 'short',
+    day: 'numeric',
+  }).formatToParts(new Date(iso))) {
+    parts[part.type] = part.value
+  }
+  return { month: parts.month ?? '', day: parts.day ?? '' }
+}
+
 // "Sep 1, 2026, 6:00 PM – 9:00 PM" when the end falls on the same day in the
 // zone; the end gets its own full date otherwise.
 export function formatInstantRange(startIso: string, endIso: string | null, zone: string): string {

@@ -6,7 +6,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AuthContext, type AuthState, type Person } from '../auth/context'
-import { formatInstant, wallClockToInstant } from '../lib/datetime'
+import { wallClockToInstant } from '../lib/datetime'
 import { GatheringDetail } from './GatheringDetail'
 import { GatheringNew } from './GatheringNew'
 import { Gatherings } from './Gatherings'
@@ -204,8 +204,12 @@ test('the list renders each date from the list response alone — one request, n
 
   renderWithAuth(<Gatherings />)
   await screen.findByText('Test Potluck')
-  const expectedDate = formatInstant(startsAt, profileZone)
-  expect(screen.getByText((content) => content.includes(expectedDate))).toBeTruthy()
+  // MOVED AT CK-85, with its reason: the date is drawn in the mockup's words
+  // since CK-85 — the featured card's one line, the day and the time in the
+  // profile zone — where it was `formatInstant`'s medium date and time. What
+  // the pin holds is unchanged: the date comes from the list item alone, in
+  // one request.
+  expect(screen.getByText('Not in a group · Potluck · Mon, Jan 1 · 6:00 PM')).toBeTruthy()
   expect(fetchMock).toHaveBeenCalledTimes(1)
 })
 
@@ -263,12 +267,19 @@ test('a group’s gathering carries its group’s name, and a photos-only item r
   )
   renderWithAuth(<Gatherings />)
   await screen.findByText('Sunday Dinner')
-  const date = formatInstant(wallClockToInstant('2035-01-01T18:00', profileZone), profileZone)
-  const lineOf = (title: string) =>
-    screen.getByText(title).closest('a')?.querySelector('p')?.textContent
-  expect(lineOf('Sunday Dinner')).toBe(`Potluck · ${date} · The Lees`)
-  expect(lineOf('The Party')).toBe('Potluck · You can see its photos · The Lees')
-  expect(lineOf('Book Club')).toBe(`Potluck · ${date}`)
+  // MOVED AT CK-85, with its reason: until CK-85 each row had one line — the
+  // type, the date and the group's name. The cards take the mockup's words:
+  // the group — or *Not in a group* — and the type, then the date, or *You
+  // can see its photos* in its place; the featured card has the one line.
+  // What it always held still holds: a group's gathering names its group,
+  // and a photos-only item names no date.
+  const linesOf = (title: string) =>
+    [...(screen.getByRole('link', { name: title }).closest('article')?.querySelectorAll('p') ?? [])].map(
+      (line) => line.textContent,
+    )
+  expect(linesOf('Sunday Dinner')).toEqual(['The Lees · Potluck · Mon, Jan 1 · 6:00 PM'])
+  expect(linesOf('The Party')).toEqual(['The Lees · Potluck', 'You can see its photos'])
+  expect(linesOf('Book Club')).toEqual(['Not in a group · Potluck', 'Mon, Jan 1 · 6:00 PM'])
 })
 
 test('the empty state says what the list holds — gatherings you start or are invited to — and never "keep"', async () => {

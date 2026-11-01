@@ -1,19 +1,35 @@
-// /groups — your groups (CK-78, Groups 3a). ONE request (`GET /groups`),
-// cancelled on unmount; each group links to its page with the member count
-// and, for the caller alone, their role in it. In the server's order —
+// /groups — your groups (CK-78, Groups 3a; the mockup's layout since CK-85).
+// ONE request (`GET /groups`), cancelled on unmount. In the server's order —
 // newest first; pinning and last-active ordering are later phases of their
-// own (decisions/2026-10-31-the-design-and-how-it-is-merged.md §4).
+// own (decisions/2026-10-31-the-design-and-how-it-is-merged.md §4), so the
+// mockup's lede about them is left out until it is true.
+//
+// The page (CK-85; the mockup's screen 01, `groupsPage()`): the list page's
+// column (`.list-screen`), the page head — *Groups* and **New group** — then
+// THE FEATURED CARD, the first group as the cover's `hero` variant (the web
+// layer), and *More groups*, the rest as `tile`s (the thumbnail layer) in a
+// grid. One group: the featured card and no More groups heading. Every card
+// is one link to its group's page, and its meta line is the count in
+// people (`memberCountLabel`) and, for the caller alone, their role in it.
+// No pin, no *Pinned* and no *Active … ago*: none has a backend yet.
+//
 // The empty state is a real screen that promises nothing without a screen
 // yet (no invitation, gathering or photo); a failed read can be retried,
-// never "Try again." with nothing to press. Since CK-84 each row starts
-// with the group's cover, the thumbnail in its ring mat (components/Cover.tsx
-// — the empty cover until one is set); the words are unchanged.
-import { useEffect, useState } from 'react'
+// never "Try again." with nothing to press. Their words are today's.
+import { useEffect, useId, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Cover } from '../components/Cover'
+import { Icon } from '../components/Icons'
 import { listGroups, memberCountLabel, roleLabel, type Group } from '../lib/groups'
 
 type LoadStatus = 'loading' | 'loaded' | 'failed'
+
+// A card's meta line: *14 people*, then *· Admin* or *· Co-admin* when the
+// caller holds one.
+function metaLine(group: Group): string {
+  const role = roleLabel(group.caller_role)
+  return role ? `${memberCountLabel(group.member_count)} · ${role}` : memberCountLabel(group.member_count)
+}
 
 export function Groups() {
   const [status, setStatus] = useState<LoadStatus>('loading')
@@ -21,6 +37,7 @@ export function Groups() {
   // Bumped by Try again: the ordinary read over again, through the loading
   // state (the CK-74.1 idiom on /plan).
   const [reloadKey, setReloadKey] = useState(0)
+  const moreHeading = useId()
 
   useEffect(() => {
     let cancelled = false
@@ -47,7 +64,7 @@ export function Groups() {
 
   if (status === 'loading') {
     return (
-      <main className="auth-screen">
+      <main className="auth-screen list-screen">
         <p>Loading your groups…</p>
       </main>
     )
@@ -55,14 +72,20 @@ export function Groups() {
 
   if (status === 'failed') {
     return (
-      <main className="auth-screen">
-        <h1>Your groups</h1>
-        <p className="form-error" role="alert">
-          Something went wrong loading your groups.
-        </p>
-        <button type="button" onClick={tryAgain}>
-          Try again
-        </button>
+      <main className="auth-screen list-screen">
+        <div className="page-head">
+          <div>
+            <h1>Groups</h1>
+          </div>
+        </div>
+        <div className="list-state">
+          <p className="form-error" role="alert">
+            Something went wrong loading your groups.
+          </p>
+          <button type="button" onClick={tryAgain}>
+            Try again
+          </button>
+        </div>
       </main>
     )
   }
@@ -70,37 +93,68 @@ export function Groups() {
   // The empty state is a real screen — what a person in no group sees.
   if (groups.length === 0) {
     return (
-      <main className="auth-screen">
-        <h1>No groups yet</h1>
-        <p>Groups you start or join will be listed here.</p>
-        <Link to="/groups/new">Start a group</Link>
+      <main className="auth-screen list-screen">
+        <div className="page-head">
+          <div>
+            <h1>No groups yet</h1>
+            <p className="lede">Groups you start or join will be listed here.</p>
+          </div>
+          <Link className="btn btn-primary" to="/groups/new">
+            Start a group
+          </Link>
+        </div>
       </main>
     )
   }
 
+  const [featured, ...more] = groups
+
   return (
-    <main className="auth-screen">
-      <h1>Your groups</h1>
-      <ul className="gathering-list" aria-label="Your groups">
-        {groups.map((group) => {
-          const role = roleLabel(group.caller_role)
-          return (
-            <li key={group.id}>
-              <Link className="gathering-item cover-row" to={`/groups/${group.id}`}>
-                <Cover subject="group" id={group.id} cover={group.cover} variant="thumb" />
-                <div className="cover-row-text">
-                  <strong>{group.name}</strong>
-                  <p>
-                    {memberCountLabel(group.member_count)}
-                    {role && ` · ${role}`}
-                  </p>
-                </div>
-              </Link>
-            </li>
-          )
-        })}
-      </ul>
-      <Link to="/groups/new">Start a group</Link>
+    <main className="auth-screen list-screen">
+      <div className="page-head">
+        <div>
+          <h1>Groups</h1>
+        </div>
+        <Link className="btn btn-primary" to="/groups/new">
+          <Icon name="plus" />
+          New group
+        </Link>
+      </div>
+
+      <Cover subject="group" id={featured.id} cover={featured.cover} variant="hero">
+        <h2>
+          <Link className="cover-link" to={`/groups/${featured.id}`}>
+            {featured.name}
+          </Link>
+        </h2>
+        <p className="cover-hero-meta">{metaLine(featured)}</p>
+        {/* A picture of a button: the card's link already names the page. */}
+        <span className="btn btn-photo" aria-hidden="true">
+          Open group
+        </span>
+      </Cover>
+
+      {more.length > 0 && (
+        <>
+          <h2 className="list-section" id={moreHeading}>
+            More groups
+          </h2>
+          <ul className="cover-tiles" aria-labelledby={moreHeading}>
+            {more.map((group) => (
+              <li key={group.id}>
+                <Cover subject="group" id={group.id} cover={group.cover} variant="tile">
+                  <h3>
+                    <Link className="cover-link" to={`/groups/${group.id}`}>
+                      {group.name}
+                    </Link>
+                  </h3>
+                  <p className="cover-meta">{metaLine(group)}</p>
+                </Cover>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </main>
   )
 }

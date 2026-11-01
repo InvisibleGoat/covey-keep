@@ -4,9 +4,12 @@
 // assertion here runs against a zone guaranteed to differ from the runner's.
 import { expect, test } from 'vitest'
 import {
+  badgeParts,
   effectiveZone,
   formatDay,
+  formatDayWithYear,
   formatInstantRange,
+  formatTime,
   instantToWallClock,
   wallClockToInstant,
 } from './datetime'
@@ -96,4 +99,31 @@ test('formatDay names the day an instant falls on in the given zone — short mo
   expect(formatDay('2026-11-12T02:10:00+00:00', 'UTC')).toBe('Nov 12')
   expect(formatDay('2026-11-12T02:10:00+00:00', 'Pacific/Kiritimati')).toBe('Nov 12')
   expect(formatDay('2026-11-12T23:30:00+00:00', 'Pacific/Kiritimati')).toBe('Nov 13')
+})
+
+// CK-85: the gathering cards' time alone, day with its year, and the date
+// badge's two halves — each through the given zone, never the runner's.
+test('formatTime is the time of day alone in the given zone, as the cards draw it (CK-85)', () => {
+  expect(formatTime(wallClockToInstant('2026-09-01T18:30', zone), zone)).toBe('6:30 PM')
+  expect(formatTime(wallClockToInstant('2026-09-01T00:05', zone), zone)).toBe('12:05 AM')
+  // The same instant reads another clock in another zone.
+  expect(formatTime('2026-11-12T02:10:00+00:00', 'America/Los_Angeles')).toBe('6:10 PM')
+  expect(formatTime('2026-11-12T02:10:00+00:00', 'UTC')).toBe('2:10 AM')
+})
+
+test('formatDayWithYear is the day with its year in the given zone, for a past card (CK-85)', () => {
+  expect(formatDayWithYear(wallClockToInstant('2026-10-03T12:00', zone), zone)).toBe('Oct 3, 2026')
+  // The evening of Dec 31 in Pacific time is already the new year in UTC.
+  expect(formatDayWithYear('2027-01-01T05:00:00+00:00', 'America/Los_Angeles')).toBe('Dec 31, 2026')
+  expect(formatDayWithYear('2027-01-01T05:00:00+00:00', 'UTC')).toBe('Jan 1, 2027')
+})
+
+test("badgeParts: the badge's month and day name the same day, in the given zone and never the runner's (CK-85)", () => {
+  // Half past midnight on Mar 1 in the profile zone is still Feb 28 — or
+  // already Mar 2 — in the runner's.
+  const instant = wallClockToInstant('2035-03-01T00:30', zone)
+  expect(badgeParts(instant, zone)).toEqual({ month: 'Mar', day: '1' })
+  expect(formatDay(instant, runnerZone)).not.toBe('Mar 1')
+  expect(badgeParts('2026-11-12T23:30:00+00:00', 'Pacific/Kiritimati')).toEqual({ month: 'Nov', day: '13' })
+  expect(badgeParts('2026-11-12T23:30:00+00:00', 'UTC')).toEqual({ month: 'Nov', day: '12' })
 })
