@@ -521,6 +521,48 @@ test('an empty cover’s scrim is drawn on the words’ own box at the picture�
 })
 
 // ---------------------------------------------------------------------------
+// CK-87.3 — the featured card opens from anywhere on its picture again. The
+// card's one link is the <h2>'s, and its ::after covers the box of its nearest
+// positioned ancestor. With no cover the words' box sits at the picture's foot
+// (CK-87.2), so while it was positioned the link covered the words' band alone
+// and a click on the quail, its line or the picture above the words did
+// nothing. jsdom cannot hit-test; the proof is the report's probe at every
+// width from 320 to 1440. These pin the rule that makes it true.
+// ---------------------------------------------------------------------------
+
+test('with no cover the featured card’s words’ box is not positioned, so the link covers the whole picture — the frame its box — as it does over a cover', () => {
+  const empty = rule87('.cover-hero .cover-frame:has(> .cover-empty) > .cover-over')
+  expect(empty).toMatch(/position: static;/)
+  expect(empty).not.toMatch(/position: (relative|absolute|fixed|sticky);/)
+  // The frame stays positioned: it is the link's box with no cover.
+  expect(rule87('.cover-frame')).toMatch(/position: relative;/)
+  // The link's ::after is unchanged: absolute over its box, above the picture.
+  const after = rule87('.cover-link::after')
+  expect(after).toMatch(/position: absolute;/)
+  expect(after).toMatch(/inset: 0;/)
+  expect(after).toMatch(/z-index: 1;/)
+  // The badge stays above the link and lets a click through to it.
+  const badge = rule87('.cover-date')
+  expect(badge).toMatch(/z-index: 2;/)
+  expect(badge).toMatch(/pointer-events: none;/)
+  noLiteralNoNewToken(empty)
+})
+
+test('over a cover the featured card’s words’ box stays positioned, so the words still paint over the picture and the link still covers it', () => {
+  const over = rule87('.cover-hero .cover-over')
+  expect(over).toMatch(/position: relative;/)
+  expect(over).toMatch(/flex: 1 0 auto;/)
+  // The base rule keeps the words above the picture.
+  expect(rule87('.cover-over')).toMatch(/z-index: 1;/)
+  // No other featured-card rule unpositions the words: the one static rule is
+  // the empty cover's.
+  const statics = [...css87().matchAll(/([^{}]+)\{[^}]*position: static;[^}]*\}/g)]
+    .map((m) => m[1].trim())
+    .filter((s) => s.includes('.cover-hero'))
+  expect(statics).toEqual(['.cover-hero .cover-frame:has(> .cover-empty) > .cover-over'])
+})
+
+// ---------------------------------------------------------------------------
 // The menu, through the cache.
 // ---------------------------------------------------------------------------
 

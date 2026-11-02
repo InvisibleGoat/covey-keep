@@ -1085,7 +1085,17 @@
   max-width: none;
 }
 
+/* The card's one link covers its whole picture with no cover too (CK-87.3):
+   the link's ::after covers its nearest positioned ancestor, and in its row at
+   the picture's foot the words' box is not the picture — positioned, it made
+   the link the words' band alone, and a click on the quail, its line or the
+   picture above did nothing. Static, the words leave the frame as the link's
+   box, as it was before CK-87.2. Nothing moves: the box had no offsets, the
+   two rows do not overlap, and the base rule's z-index still lifts the words
+   (a grid item's z-index applies unpositioned) and the link above the empty
+   cover, the badge above both. */
 .cover-hero .cover-frame:has(> .cover-empty) > .cover-over {
+  position: static;
   grid-row: 2;
 }
 
