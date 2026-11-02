@@ -365,7 +365,10 @@ test('the empty state keeps its words, as literals, in the page column', async (
   expect(screen.getByText('Gatherings you start or are invited to will be listed here.')).toBeTruthy()
   const cta = screen.getByRole('link', { name: 'Create your first gathering' })
   expect(cta.getAttribute('href')).toBe('/gatherings/new')
-  expect(heading.closest('main')?.classList.contains('list-screen')).toBe(true)
+  // MOVED AT CK-86, with its reason: the page class is `.page-column` since
+  // CK-86 (it was `.list-screen`), named for what it is once a group's page
+  // and its People page took it too.
+  expect(heading.closest('main')?.classList.contains('page-column')).toBe(true)
   expect(screen.getAllByRole('link')).toHaveLength(1)
 })
 
@@ -395,13 +398,19 @@ const routeSources = import.meta.glob(['./*.tsx', '!./*.test.tsx'], {
   eager: true,
 }) as Record<string, string>
 
-test('the list page class is on the two list pages and no other route: every other page keeps its column', () => {
+// MOVED AT CK-86, with its reason: the class is `.page-column` (it was
+// `.list-screen`), and a group's page and its People page take it too — the
+// mockup's page column for the pages whose phases have built their layout.
+// What the pin always held still holds: every other page keeps the centred
+// column, and `.list-screen` is gone from every route.
+test('the page column class is on the two list pages, a group’s page and its People page, and no other route: every other page keeps its column', () => {
   expect(Object.keys(routeSources).length).toBeGreaterThan(15)
   const using = Object.entries(routeSources)
-    .filter(([, source]) => /\blist-screen\b/.test(source))
+    .filter(([, source]) => /\bpage-column\b/.test(source))
     .map(([path]) => path)
     .sort()
-  expect(using).toEqual(['./Gatherings.tsx', './Groups.tsx'])
+  expect(using).toEqual(['./Gatherings.tsx', './GroupDetail.tsx', './GroupPeople.tsx', './Groups.tsx'])
+  expect(Object.values(routeSources).filter((source) => /className="[^"]*\blist-screen\b/.test(source))).toEqual([])
   // And .auth-screen itself is unchanged: still the centred column.
   const authScreen = appCss.slice(appCss.indexOf('.auth-screen {'), appCss.indexOf('}', appCss.indexOf('.auth-screen {')))
   expect(authScreen).toMatch(/align-items: center;/)
@@ -413,7 +422,8 @@ test('the lists’ styles name no colour and add no token: every var() they read
   expect(start).toBeGreaterThan(-1)
   const end = appCss.indexOf('/* ----------', start + 10)
   const section = appCss.slice(start, end).replace(/\/\*[\s\S]*?\*\//g, '')
-  for (const selector of ['.list-screen', '.page-head', '.cover-go', '.cover-hero', '.cover-tile', '.cover-tiles', '.cover-date', '.cover-link::after', '.btn.btn-photo']) {
+  // MOVED AT CK-86, with its reason: the page class is `.page-column`.
+  for (const selector of ['.page-column', '.page-head', '.cover-go', '.cover-hero', '.cover-tile', '.cover-tiles', '.cover-date', '.cover-link::after', '.btn.btn-photo']) {
     expect(section).toContain(selector)
   }
   expect(section).not.toMatch(/#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/)

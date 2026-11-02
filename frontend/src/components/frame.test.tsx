@@ -129,6 +129,8 @@ const SIGNED_IN_ROUTES: [string, 'groups' | 'gatherings' | 'you'][] = [
   ['/groups', 'groups'],
   ['/groups/new', 'groups'],
   ['/groups/g-1', 'groups'],
+  // A group's People page (CK-86): inside the frame, the Groups tab current.
+  ['/groups/g-1/people', 'groups'],
   ['/groups/g-1/gatherings/new', 'groups'],
   ['/gatherings', 'gatherings'],
   ['/gatherings/new', 'gatherings'],

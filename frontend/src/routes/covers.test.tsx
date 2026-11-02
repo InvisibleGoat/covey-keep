@@ -1,8 +1,8 @@
 // CK-84 — covers on the surface, through the pages. The value under test:
 // every card of the two lists carries its cover — the featured card at the
 // web layer and a grid card at the thumbnail layer since CK-85 — and every
-// row of a group page's gatherings starts with its cover at the thumbnail
-// layer,
+// card of a group page's strip of gatherings draws its cover at the
+// thumbnail layer (a row with a thumbnail until CK-86),
 // and both pages open on a cover card at the web layer with the page's <h1>
 // inside it — the photos-only view too; Change cover is offered exactly to
 // the people who may set a cover (a gathering's host and co-host, a group's
@@ -31,6 +31,7 @@ import { PICKER_ACCEPT, POLL_INTERVAL_MS } from '../lib/media'
 import { GatheringDetail } from './GatheringDetail'
 import { Gatherings } from './Gatherings'
 import { GroupDetail } from './GroupDetail'
+import { GroupPeople } from './GroupPeople'
 import { Groups } from './Groups'
 
 const person: Person = {
@@ -194,6 +195,7 @@ function renderAt(path: string) {
         <Routes>
           <Route path="/groups" element={<Groups />} />
           <Route path="/groups/:id" element={<GroupDetail />} />
+          <Route path="/groups/:id/people" element={<GroupPeople />} />
           <Route path="/gatherings" element={<Gatherings />} />
           <Route path="/gatherings/:id" element={<GatheringDetail />} />
         </Routes>
@@ -202,18 +204,29 @@ function renderAt(path: string) {
   )
 }
 
-// The routes a group's page reads beside the group (CK-78 to CK-80): its
-// members, its gatherings, the link and — for organisers — the requests and
-// the invitations; each answered with nothing.
+// The routes a group's page reads beside the group: its gatherings, answered
+// with none. MOVED AT CK-86, with its reason: until CK-86 the page also read
+// its members, the link and — for organisers — the requests and the
+// invitations; those moved with their sections to the People page, so the
+// fake answers them only there (`peoplePageRoutes`) and refuses them loudly
+// on the group's page.
 function groupPageRoutes(body: () => unknown, over: Record<string, Responder> = {}): Record<string, Responder> {
   return {
     'GET /groups/grp-1': () => json(200, body()),
-    'GET /groups/grp-1/members': () => json(200, { members: MEMBERS }),
     'GET /groups/grp-1/gatherings': () => json(200, { gatherings: [] }),
+    ...over,
+  }
+}
+
+// The People page's reads (CK-86): the group, its members, the link and — for
+// organisers — the requests and the invitations; each answered with nothing.
+function peoplePageRoutes(body: () => unknown): Record<string, Responder> {
+  return {
+    'GET /groups/grp-1': () => json(200, body()),
+    'GET /groups/grp-1/members': () => json(200, { members: MEMBERS }),
     'GET /groups/grp-1/link': () => json(200, { url: null, expires_at: null }),
     'GET /groups/grp-1/join-requests': () => json(200, { join_requests: [] }),
     'GET /groups/grp-1/invitations': () => json(200, { pending: [] }),
-    ...over,
   }
 }
 
@@ -347,7 +360,15 @@ test('the Gatherings list: the featured card at the web layer, every grid card a
   expect(document.body.innerHTML).not.toMatch(/X-Amz|r2\.invalid/)
 })
 
-test('a group’s page: the cover card at the web layer with the page’s <h1> inside it, still the heading by role and name; the Gatherings section’s rows start with their covers', async () => {
+// MOVED AT CK-86, with its reason: the group's page takes the mockup's shape.
+// Its cover card is the `wide` card (the mockup's measure), the count — *3
+// people* — sits INSIDE it now, under the name over the scrim (it was the
+// line beneath), and the group's gatherings are the strip's grid cards, each
+// drawing its cover in its frame at the thumbnail layer (they were rows with
+// a 42px thumbnail). What it always held still holds: the card at the web
+// layer with the page's <h1> inside it, and every gathering's cover at the
+// thumbnail layer from a `blob:` URL.
+test('a group’s page: the wide cover card at the web layer with the page’s <h1> and the count inside it, still the heading by role and name; the strip’s cards draw their covers at the thumbnail layer', async () => {
   const mock = stubServer(
     groupPageRoutes(() => group({ caller_role: 'member', cover: { source: 'upload', set_at: T1 } }), {
       'GET /groups/grp-1/gatherings': () =>
@@ -358,13 +379,13 @@ test('a group’s page: the cover card at the web layer with the page’s <h1> i
   const heading = await screen.findByRole('heading', { level: 1, name: 'The Lees' })
   expect(heading.closest('.cover-over')).toBeTruthy()
   expect(heading.closest('.cover-card')).toBe(coverCard())
+  expect(coverCard().classList.contains('cover-card-wide')).toBe(true)
   await waitFor(() => expect(cardImageSrc()).toMatch(/^blob:/))
   expect(coverCard().querySelector('.cover-photo > img')?.getAttribute('alt')).toBe('')
-  // The count and the rest stay beneath the card. MOVED AT CK-85, with its
-  // reason: the count says people (Steven, 2026-11-01).
-  expect(screen.getByText('3 people').closest('.cover-card')).toBeNull()
+  expect(screen.getByText('3 people').closest('.cover-card')).toBe(coverCard())
   const list = await screen.findByRole('list', { name: "The group's gatherings" })
-  await waitFor(() => expect(within(list).getByRole('link').querySelector('img.nthumb')?.getAttribute('src')).toMatch(/^blob:/))
+  await waitFor(() => expect(within(list).getByRole('article').querySelector('.cover-frame > img')?.getAttribute('src')).toMatch(/^blob:/))
+  expect(within(list).getByRole('article').querySelector('.cover-frame > img')?.getAttribute('alt')).toBe('')
   const mints = requests(mock, 'GET', /\/cover\/url/).map(([url]) => url.replace(/^https?:\/\/[^/]+/, ''))
   expect(mints.sort()).toEqual(['/gatherings/g-1/cover/url?layer=thumbnail', '/groups/grp-1/cover/url?layer=web'])
 })
@@ -753,19 +774,41 @@ test('Remove cover’s sentence for a photograph: the gathering’s title on its
   expect(second.container.innerHTML).not.toMatch(/m-1|media/)
 })
 
-test('on a group’s page Remove cover’s step is one of the page’s steps: opening it closes a member’s step, and opening a member’s step closes it', async () => {
+// MOVED AT CK-86, with its reason: until CK-86 a group's page held Remove
+// cover's step as one of its own, beside its members' steps, so opening one
+// closed the other. The members' steps moved to the People page, which
+// offers no Change cover; on the group's page Remove cover's step is the
+// card's own, the only step there — opened by Remove cover, closed by Keep
+// it, posting nothing until its confirm. What it always held still holds: a
+// second step whose first click posts nothing, and never two steps open.
+test('on a group’s page Remove cover’s step is the card’s own, the page’s only step — Keep it closes it and nothing posts; the People page, where the members’ steps went, offers no Change cover', async () => {
   const mock = stubServer(groupPageRoutes(() => group({ cover: { source: 'upload', set_at: T1 } })))
-  renderAt('/groups/grp-1')
+  const view = renderAt('/groups/grp-1')
   fireEvent.click(await screen.findByRole('button', { name: 'Change cover' }))
-  const calRow = (await screen.findAllByRole('listitem')).find((li) => li.querySelector('.member-name')?.textContent === 'Cal Test') as HTMLElement
-  fireEvent.click(within(calRow).getByRole('button', { name: 'Remove from group' }))
-  expect(screen.getByRole('group', { name: 'Remove Cal Test from the group' })).toBeTruthy()
+  // No member, and no step of a member's, on this page.
+  expect(document.querySelector('.member-name')).toBeNull()
+  expect(screen.queryByRole('button', { name: /Remove from group|Make admin|Leave this group/ })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Remove cover' }))
-  expect(screen.getByRole('group', { name: 'Remove cover' })).toBeTruthy()
-  expect(screen.queryByRole('group', { name: 'Remove Cal Test from the group' })).toBeNull()
-  fireEvent.click(within(calRow).getByRole('button', { name: 'Remove from group' }))
+  const step = screen.getByRole('group', { name: 'Remove cover' })
+  expect(screen.getAllByRole('group')).toEqual([step])
+  fireEvent.click(within(step).getByRole('button', { name: 'Keep it' }))
   expect(screen.queryByRole('group', { name: 'Remove cover' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Remove cover' })).toBeTruthy()
   expect(requests(mock, 'DELETE', /./)).toHaveLength(0)
+  view.unmount()
+  vi.unstubAllGlobals()
+
+  for (const role of ['admin', 'co_admin'] as const) {
+    stubServer(peoplePageRoutes(() => group({ caller_role: role, cover: { source: 'upload', set_at: T1 } })))
+    const people = renderAt('/groups/grp-1/people')
+    await screen.findByRole('heading', { level: 1, name: 'People' })
+    await screen.findByRole('list', { name: 'Members' })
+    expect(screen.queryByRole('button', { name: 'Change cover' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Remove cover' })).toBeNull()
+    expect(document.querySelector('.cover-card')).toBeNull()
+    people.unmount()
+    vi.unstubAllGlobals()
+  }
 })
 
 test('a refused Remove cover reads the house line, and nothing is re-read', async () => {

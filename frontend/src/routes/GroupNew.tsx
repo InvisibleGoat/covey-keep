@@ -5,7 +5,11 @@
 // never sent. The button waits for a non-blank character (presence only,
 // the "can plausibly succeed" idiom); every other rule — blank after
 // trimming, over-long — is the server's, and its 422 lands on the field
-// through the one mapper. A 201 lands on the new group's page.
+// through the one mapper. A 201 lands on the new group's page. Headed *New
+// group* since CK-86 — the words of the button that opens it, on the Groups
+// page (Steven, 2026-11-01); it read *Start a group* until then. The submit
+// button keeps *Start group*, and the Groups page's empty state keeps *Start
+// a group*.
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { FieldError, FormLevelErrors } from '../components/FieldError'
@@ -43,7 +47,7 @@ export function GroupNew() {
 
   return (
     <main className="auth-screen">
-      <h1>Start a group</h1>
+      <h1>New group</h1>
 
       <form className="auth-card" onSubmit={(event) => void handleSubmit(event)}>
         <label htmlFor="group-name">Name</label>

@@ -1,9 +1,10 @@
 // /gatherings — your gatherings (CK-17; one request since CK-20; the mockup's
 // layout since CK-85).
 //
-// The page (CK-85; the mockup's screen 05, `cardsView()`): the list page's
-// column (`.list-screen`), the page head — *Your gatherings*, *Times in
-// {zone}.* while any date is on screen, and **New gathering** — then, from
+// The page (CK-85; the mockup's screen 05, `cardsView()`): the mockup's page
+// column (`.page-column`; `.list-screen` until CK-86), the page head — *Your
+// gatherings*, *Times in {zone}.* while any date is on screen, and **New
+// gathering** — then, from
 // the one list read, in the profile's zone, the three sections of
 // `lib/gatherings.ts::gatheringSections`:
 // - **Coming up**: the full-view items whose next date is still ahead, by
@@ -24,10 +25,10 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
-import { Cover } from '../components/Cover'
+import { Cover, DateBadge } from '../components/Cover'
 import { Icon } from '../components/Icons'
 import { authFetch } from '../lib/api'
-import { badgeParts, effectiveZone } from '../lib/datetime'
+import { effectiveZone } from '../lib/datetime'
 import {
   cardDateLine,
   cardPlaceLine,
@@ -39,21 +40,10 @@ import {
 
 type LoadStatus = 'loading' | 'loaded' | 'failed'
 
-// How many past gatherings show before Show all (the mockup's four).
+// How many past gatherings show before Show all (the mockup's four). The
+// date badge is components/Cover.tsx's `DateBadge` since CK-86, when a group
+// page's strip took it too.
 const PAST_SHOWN = 4
-
-// The date badge (the mockup's `dateBadge()`): the month and the day of the
-// next date in the profile's zone, frosted, on a coming-up card's corner.
-// Decorative — the card's date line says the same in words.
-function DateBadge({ startsAt, zone }: { startsAt: string; zone: string }) {
-  const { month, day } = badgeParts(startsAt, zone)
-  return (
-    <span className="cover-date" aria-hidden="true">
-      <span className="cover-date-m">{month}</span>
-      <span className="cover-date-d">{day}</span>
-    </span>
-  )
-}
 
 export function Gatherings() {
   const { person } = useAuth()
@@ -111,7 +101,7 @@ export function Gatherings() {
 
   if (status === 'loading') {
     return (
-      <main className="auth-screen list-screen">
+      <main className="auth-screen page-column">
         <p>Loading your gatherings…</p>
       </main>
     )
@@ -121,7 +111,7 @@ export function Gatherings() {
     // A retry is a control, never a sentence with nothing to press (CK-80;
     // CK-74.1's idiom): Try again re-reads through the loading state.
     return (
-      <main className="auth-screen list-screen">
+      <main className="auth-screen page-column">
         <div className="page-head">
           <div>
             <h1>Your gatherings</h1>
@@ -151,7 +141,7 @@ export function Gatherings() {
   // one in, so a gathering you keep and are none of those is not here.
   if (gatherings.length === 0) {
     return (
-      <main className="auth-screen list-screen">
+      <main className="auth-screen page-column">
         <div className="page-head">
           <div>
             <h1>No gatherings yet</h1>
@@ -202,7 +192,7 @@ export function Gatherings() {
   }
 
   return (
-    <main className="auth-screen list-screen">
+    <main className="auth-screen page-column">
       <div className="page-head">
         <div>
           <h1>Your gatherings</h1>

@@ -5,8 +5,9 @@
    removed, none — and a new screen reuses these before inventing its own
    (reference/frontend/components.md, Styling). Each screen is still one
    centred column of cards — but the Groups and Gatherings lists, which take
-   the mockup's page column since CK-85 (their section, after the covers');
-   the other wide layouts come with their screens' phases. Since CK-82 the frame — the menu, the top and bottom
+   the mockup's page column since CK-85 (their section, after the covers'),
+   and a group's page and its People page, which take it since CK-86 (their
+   section, after the lists'); a gathering's page comes with CK-87. Since CK-82 the frame — the menu, the top and bottom
    bars — sits around every signed-in page (its section at the end of this
    file), and You is styled beside it. The recipes are the mockup's
    (app-template.html lines 71–658). */
@@ -747,8 +748,9 @@
 
 /* A page's cover card: the mat (the card's padding), the photograph at the
    photo radius, 16/10. It takes the width today's column gives its cards,
-   and the mockup's phone measure inside it — the wide 3/1 rule and the
-   larger title come with the page layouts (CK-86, CK-87). */
+   and the mockup's phone measure inside it — a gathering's page, until
+   CK-87. A group's page takes the mockup's measure since CK-86: the `wide`
+   card, in the group page's section below. */
 .cover-card {
   position: relative;
   width: 100%;
@@ -854,11 +856,13 @@
 
 /* ---------- the two lists (CK-85; the mockup's .main, .page-head, .lede, h2.section, .card.go, .hero, .tiles, .tile, .photo.empty, .date, .stretch, .btn-photo) ---------- */
 
-/* The Groups and Gatherings pages' column: the mockup's page column — up to
-   1180px, its words at the left — in place of the centred column every other
-   screen keeps until its own phase (CK-86, CK-87). The padding is
+/* The mockup's page column — up to 1180px, its words at the left — in place
+   of the centred column every other screen keeps until its own phase (a
+   gathering's page, CK-87): the Groups and Gatherings lists (CK-85), and a
+   group's page and its People page (CK-86) — `.list-screen` until CK-86,
+   named for what it is once it served more than the lists. The padding is
    .auth-screen's, which is the mockup's at each width. */
-.auth-screen.list-screen {
+.auth-screen.page-column {
   display: block;
   width: 100%;
   max-width: 1180px;
@@ -906,14 +910,14 @@
 }
 
 /* A section's heading: More groups, Coming up, Past, Photos you can see. */
-.list-screen .list-section {
+.page-column .list-section {
   margin: 2rem 0 0.875rem;
   font-size: 1.375rem;
   line-height: 1.2;
   letter-spacing: -0.01em;
 }
 
-.list-screen .list-more {
+.page-column .list-more {
   margin: 1.25rem 0 0;
 }
 
@@ -1146,6 +1150,196 @@
 @media (min-width: 900px) {
   .cover-hero .cover-frame {
     aspect-ratio: 2.25 / 1;
+  }
+}
+
+/* ---------- a group's page and its People page (CK-86; the mockup's .gcover, .gmeta, .gactions, .gstrip, .strip-label, .crumb, .card.sect, .plans) ---------- */
+
+/* The group page's cover card at the mockup's measure (`.card.gcover`): the
+   page column's width, the picture 16:10 on a phone and 3:1 from 640px, the
+   title's clamp and the scrim's padding — with the window for the mockup's
+   cqi (CK-81's mapping). */
+.cover-card.cover-card-wide {
+  max-width: none;
+  margin-bottom: 0.875rem;
+}
+
+/* The picture's height is its least height: the words over it are in the
+   flow and the picture is drawn beneath them, so a name that wraps grows the
+   picture instead of running off its top (a 3:1 picture is short — at 900px
+   a two-line name is taller than it). `overflow: clip` keeps the rounded
+   corners without making the box a scroll container, which would hold it to
+   its ratio. */
+.cover-card-wide .cover-photo {
+  display: flex;
+  flex-direction: column;
+  overflow: clip;
+}
+
+.cover-card-wide .cover-over {
+  position: relative;
+  flex: 1 0 auto;
+  padding: clamp(16px, 4vw, 32px);
+}
+
+.cover-card-wide .cover-photo > img,
+.cover-card-wide .cover-empty {
+  position: absolute;
+  inset: 0;
+}
+
+.cover-card-wide .cover-over h1 {
+  font-size: clamp(2rem, 1.4rem + 2.6vw, 3.25rem);
+}
+
+/* The meta line under the name: *{N} people* (the mockup's .gmeta). */
+.cover-card-meta {
+  font-size: 0.9375rem;
+}
+
+/* The empty cover on the wide card: the quail beside its line at the top
+   left, clear of the title's band (CK-85's phone treatment for the featured
+   card) and of Change cover at the top right. Stacked, as CK-84's card draws
+   it, the quail met a name on two lines at 375px, and at 3:1 it meets a name
+   on one. */
+.cover-card-wide .cover-empty {
+  grid-auto-flow: column;
+  justify-content: start;
+  align-items: center;
+  align-content: start;
+  gap: 0.5rem;
+  height: auto;
+  padding: 12px 16px;
+}
+
+.cover-card-wide .cover-empty img {
+  width: auto;
+  height: 32px;
+  max-width: none;
+}
+
+/* With the empty cover on the card, the words over it keep below its row
+   (12px, the 32px quail, 12px): a name that wraps on a short 3:1 picture
+   grows the picture rather than rising into the quail. */
+.cover-card-wide .cover-photo:has(> .cover-empty) > .cover-over {
+  padding-top: 56px;
+}
+
+/* Change cover's panel, beneath the card in the page column's flow. */
+.page-column .cover-panel {
+  margin-bottom: 0.875rem;
+}
+
+/* The actions under the card (the mockup's .gactions): New gathering, the
+   primary pill, and People, the quiet one. */
+.group-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.625rem;
+  margin: 0 0 1.5rem;
+}
+
+.group-actions .btn .ico {
+  width: 20px;
+  height: 20px;
+}
+
+/* The strip's label (the mockup's .strip-label): small capitals in the body
+   face, a heading by role. */
+.page-column .strip-label {
+  margin: 0 0 0.5rem;
+  font-family: var(--font-body);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.5;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ck-muted);
+}
+
+.group-strip {
+  margin-bottom: 1.5rem;
+}
+
+.group-strip > .field-hint {
+  margin-bottom: 0.5rem;
+}
+
+/* The strip (the mockup's .gstrip): the group's gatherings as grid cards 168px
+   wide, scrolling sideways with scroll snap, bleeding into the page column's
+   gutter on each side. The snap keeps a card at the gutter, in line with the
+   label — the mockup's mandatory snap without a scroll padding pulls the
+   first card to the window's edge. */
+.cover-strip {
+  display: flex;
+  gap: 12px;
+  margin: 0 -16px;
+  padding: 4px 16px 18px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scroll-padding-inline: 16px;
+  scrollbar-width: thin;
+  list-style: none;
+}
+
+.cover-strip > li {
+  flex: 0 0 168px;
+  scroll-snap-align: start;
+}
+
+.cover-strip .cover-tile-body {
+  padding: 0.5rem 0.3rem 0.2rem;
+}
+
+.cover-strip .cover-tile h3 {
+  font-size: 1rem;
+}
+
+/* The People page (not drawn; composed from the mockup's own pieces). */
+
+/* The crumb back to the group (the mockup's .crumb .nrow). */
+.crumb {
+  margin: -0.25rem 0 0.625rem;
+}
+
+.crumb .nrow {
+  display: inline-flex;
+  width: auto;
+  max-width: 100%;
+  min-height: 40px;
+  padding: 0.25rem 0.625rem 0.25rem 0.25rem;
+  font-weight: 600;
+  color: var(--ck-active-ink);
+}
+
+/* The cards at a reading width inside the page column, at the left — the
+   measure the mockup gives its plans grid — and spaced as its section cards
+   (.card.sect). */
+.people-screen > .auth-card {
+  max-width: 720px;
+  margin-bottom: 1.25rem;
+}
+
+/* At this width a button keeps to its words rather than spanning the card
+   (the cover panel's rule, CK-84). */
+.people-screen .auth-card button:where(:not(.link-button)) {
+  align-self: flex-start;
+}
+
+/* From 640px the wide card's picture is 3:1. */
+@media (min-width: 640px) {
+  .cover-card-wide .cover-photo {
+    aspect-ratio: 3 / 1;
+  }
+}
+
+/* From 900px the page column's gutter is wider, and the strip bleeds into
+   that one. */
+@media (min-width: 900px) {
+  .cover-strip {
+    margin-inline: calc(-1 * clamp(24px, 4vw, 48px));
+    padding-inline: clamp(24px, 4vw, 48px);
+    scroll-padding-inline: clamp(24px, 4vw, 48px);
   }
 }
 

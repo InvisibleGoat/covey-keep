@@ -16,6 +16,8 @@ import { GroupJoin } from './GroupJoin'
 import joinSource from './GroupJoin.tsx?raw'
 import acceptSource from './GroupInvitationAccept.tsx?raw'
 import detailSource from './GroupDetail.tsx?raw'
+// Joining's sections live on the People page since CK-86.
+import peopleSource from './GroupPeople.tsx?raw'
 import callbackSource from './AuthCallback.tsx?raw'
 import invitationSource from './InvitationAccept.tsx?raw'
 import guardSource from '../components/RequireAuth.tsx?raw'
@@ -347,6 +349,7 @@ test('no new or changed source spells the product name — it flows from brand.t
     joinSource,
     acceptSource,
     detailSource,
+    peopleSource,
     callbackSource,
     invitationSource,
     guardSource,

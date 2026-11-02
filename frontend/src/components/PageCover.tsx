@@ -44,25 +44,31 @@ import { Cover } from './Cover'
 //   unmount (the cancel-on-unmount convention).
 // - REMOVE COVER, only while a cover is set: a second step saying what
 //   happens — an uploaded picture is deleted, a photograph stays in its
-//   gathering — with Remove cover and Keep it. Where the page keeps one step
-//   open at a time (GroupDetail), the page holds this step's state
-//   (`removeStep`); elsewhere the card holds its own.
+//   gathering — with Remove cover and Keep it. The card holds this step's
+//   state. (Until CK-86 a group's page held it, as one of the page's steps
+//   beside its members' — `removeStep`; those steps moved to the People
+//   page, and the cover's is the only step left on the group's page.)
 // - The hint: the way to a cover from a photograph, in the page's words.
+//
+// `variant`: the card at the width today's centred column gives (`card`, a
+// gathering's page until CK-87) or at the mockup's measure (`wide`, a
+// group's page since CK-86) — components/Cover.tsx.
 export function PageCover({
   subject,
   id,
   cover,
+  variant = 'card',
   organises,
   hint,
   photoRemovalSentence,
   onChanged,
-  removeStep,
   pollIntervalMs = POLL_INTERVAL_MS,
   children,
 }: {
   subject: CoverSubject
   id: string
   cover: CoverBody | null | undefined
+  variant?: 'card' | 'wide'
   organises: boolean
   hint: string
   // Remove cover's sentence when the cover is a photograph: the gathering's
@@ -71,7 +77,6 @@ export function PageCover({
   photoRemovalSentence: string
   // The page re-reads its subject: a cover act landed.
   onChanged: () => void
-  removeStep?: { open: boolean; setOpen: (open: boolean) => void }
   // Overridable for tests only; the product uses the one constant.
   pollIntervalMs?: number
   children: ReactNode
@@ -84,9 +89,7 @@ export function PageCover({
     | { state: 'preparing'; coverImageId: string }
     | { state: 'failed'; code: CoverFailure }
   >({ state: 'idle' })
-  const [ownRemoveOpen, setOwnRemoveOpen] = useState(false)
-  const removeOpen = removeStep ? removeStep.open : ownRemoveOpen
-  const setRemoveOpen = removeStep ? removeStep.setOpen : setOwnRemoveOpen
+  const [removeOpen, setRemoveOpen] = useState(false)
   const [removing, setRemoving] = useState(false)
   const [refusal, setRefusal] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -191,7 +194,7 @@ export function PageCover({
 
   return (
     <>
-      <Cover subject={subject} id={id} cover={cover} variant="card" action={action}>
+      <Cover subject={subject} id={id} cover={cover} variant={variant} action={action}>
         {children}
       </Cover>
       {organises && (

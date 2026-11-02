@@ -4,9 +4,10 @@
 // own (decisions/2026-10-31-the-design-and-how-it-is-merged.md §4), so the
 // mockup's lede about them is left out until it is true.
 //
-// The page (CK-85; the mockup's screen 01, `groupsPage()`): the list page's
-// column (`.list-screen`), the page head — *Groups* and **New group** — then
-// THE FEATURED CARD, the first group as the cover's `hero` variant (the web
+// The page (CK-85; the mockup's screen 01, `groupsPage()`): the mockup's page
+// column (`.page-column`; `.list-screen` until CK-86), the page head —
+// *Groups* and **New group** — then THE FEATURED CARD, the first group as the
+// cover's `hero` variant (the web
 // layer), and *More groups*, the rest as `tile`s (the thumbnail layer) in a
 // grid. One group: the featured card and no More groups heading. Every card
 // is one link to its group's page, and its meta line is the count in
@@ -64,7 +65,7 @@ export function Groups() {
 
   if (status === 'loading') {
     return (
-      <main className="auth-screen list-screen">
+      <main className="auth-screen page-column">
         <p>Loading your groups…</p>
       </main>
     )
@@ -72,7 +73,7 @@ export function Groups() {
 
   if (status === 'failed') {
     return (
-      <main className="auth-screen list-screen">
+      <main className="auth-screen page-column">
         <div className="page-head">
           <div>
             <h1>Groups</h1>
@@ -93,7 +94,7 @@ export function Groups() {
   // The empty state is a real screen — what a person in no group sees.
   if (groups.length === 0) {
     return (
-      <main className="auth-screen list-screen">
+      <main className="auth-screen page-column">
         <div className="page-head">
           <div>
             <h1>No groups yet</h1>
@@ -110,7 +111,7 @@ export function Groups() {
   const [featured, ...more] = groups
 
   return (
-    <main className="auth-screen list-screen">
+    <main className="auth-screen page-column">
       <div className="page-head">
         <div>
           <h1>Groups</h1>

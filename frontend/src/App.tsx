@@ -15,6 +15,7 @@ import { GroupGatheringNew } from './routes/GroupGatheringNew'
 import { GroupInvitationAccept } from './routes/GroupInvitationAccept'
 import { GroupJoin } from './routes/GroupJoin'
 import { GroupNew } from './routes/GroupNew'
+import { GroupPeople } from './routes/GroupPeople'
 import { Groups } from './routes/Groups'
 import { InvitationAccept } from './routes/InvitationAccept'
 import { PageNotAvailable } from './routes/PageNotAvailable'
@@ -56,6 +57,10 @@ function App() {
           <Route path="/groups" element={<Groups />} />
           <Route path="/groups/new" element={<GroupNew />} />
           <Route path="/groups/:id" element={<GroupDetail />} />
+          {/* A group's People page (CK-86; the merge record §1.3): Members,
+              Requests to join, Invite people, rename and Leave, moved from
+              the group's page, which reaches it through its People button. */}
+          <Route path="/groups/:id/people" element={<GroupPeople />} />
           {/* A gathering in the group (CK-80): the group page's New gathering
               opens the form with the group's member list. */}
           <Route path="/groups/:id/gatherings/new" element={<GroupGatheringNew />} />

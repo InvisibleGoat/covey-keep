@@ -24,6 +24,9 @@ import groupNewSource from './GroupNew.tsx?raw'
 import { Groups } from './Groups'
 import groupsSource from './Groups.tsx?raw'
 import groupDetailSource from './GroupDetail.tsx?raw'
+// The People page holds what the group's page held until CK-86, so the brand
+// pin reads it too.
+import groupPeopleSource from './GroupPeople.tsx?raw'
 
 const person: Person = {
   id: 'person-1',
@@ -124,7 +127,7 @@ test('the way to Your groups comes above the gatherings: the frame’s Groups ta
   expect(groups.compareDocumentPosition(gatherings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 })
 
-test('the route table reaches the list, the form and a group page, each behind sign-in', async () => {
+test('the route table reaches the list, the form, a group page and its People page, each behind sign-in', async () => {
   renderAppAt('/groups', signedIn, () => json(200, { groups: [group()] }))
   // MOVED AT CK-85, with its reason: the list's heading is the mockup's
   // *Groups* since CK-85.
@@ -132,7 +135,8 @@ test('the route table reaches the list, the form and a group page, each behind s
   cleanup()
 
   renderAppAt('/groups/new', signedIn, () => json(500, {}))
-  expect(screen.getByRole('heading', { level: 1, name: 'Start a group' })).toBeTruthy()
+  // MOVED AT CK-86, with its reason: the form is headed *New group*.
+  expect(screen.getByRole('heading', { level: 1, name: 'New group' })).toBeTruthy()
   cleanup()
 
   renderAppAt('/groups/g-1', signedIn, (url) =>
@@ -141,6 +145,16 @@ test('the route table reaches the list, the form and a group page, each behind s
       : json(200, group()),
   )
   expect(await screen.findByRole('heading', { level: 1, name: 'The Lees' })).toBeTruthy()
+  cleanup()
+
+  // The People page (CK-86): its own route, `/groups/:id/people`.
+  renderAppAt('/groups/g-1/people', signedIn, (url) =>
+    url.endsWith('/members')
+      ? json(200, { members: [{ membership_id: 'm-1', display_name: 'Ada', role: 'admin', is_self: true }] })
+      : json(200, group()),
+  )
+  expect(await screen.findByRole('heading', { level: 1, name: 'People' })).toBeTruthy()
+  expect(screen.getByTestId('location').textContent).toBe('/groups/g-1/people')
   cleanup()
 
   // Signed out, a group route is RequireAuth's like every other.
@@ -382,7 +396,11 @@ function renderNew() {
 test('starting a group: one field and no type control, the button waiting for a non-blank character', () => {
   vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('no request expected'))))
   renderNew()
-  expect(screen.getByRole('heading', { level: 1, name: 'Start a group' })).toBeTruthy()
+  // MOVED AT CK-86, with its reason: the form is headed *New group*, the
+  // words of the button that opens it (Steven, 2026-11-01); its submit keeps
+  // *Start group*, pinned below, and the empty state's *Start a group* holds.
+  expect(screen.getByRole('heading', { level: 1, name: 'New group' })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Start a group' })).toBeNull()
   const input = screen.getByLabelText('Name') as HTMLInputElement
   expect(input.maxLength).toBe(200)
   expect(screen.getAllByRole('textbox')).toHaveLength(1)
@@ -467,7 +485,7 @@ test("starting a group: the server's 422 on name lands on the field, wired to th
 // ---------------------------------------------------------------------------
 
 test('no new source spells the product name — it flows from brand.ts', () => {
-  for (const source of [groupsLibSource, groupsSource, groupNewSource, groupDetailSource]) {
+  for (const source of [groupsLibSource, groupsSource, groupNewSource, groupDetailSource, groupPeopleSource]) {
     expect(source.toLowerCase()).not.toContain('covey')
   }
 })

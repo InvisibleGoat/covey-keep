@@ -17,6 +17,7 @@ export type IconName =
   | 'signOut'
   | 'chevron'
   | 'plus'
+  | 'back'
 
 const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
   groups: {
@@ -74,6 +75,8 @@ const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
   chevron: { paths: <path d="M9 5l7 7-7 7" />, width: 2 },
   // The list pages' New group and New gathering (CK-85; the mockup's `plus`).
   plus: { paths: <path d="M12 5v14M5 12h14" />, width: 2 },
+  // The People page's crumb back to its group (CK-86; the mockup's `back`).
+  back: { paths: <path d="M15 5l-7 7 7 7" />, width: 2 },
 }
 
 export function Icon({ name, className = 'ico' }: { name: IconName; className?: string }) {

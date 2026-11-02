@@ -236,8 +236,11 @@ test('the component asks only for the two served layers and keeps no presigned U
   // (`hero`) and the grid card (`tile`) — so the layer is read from one table
   // by the variant, rather than one comparison. The rule is the same: the
   // web layer for a card or a hero, the thumbnail for a thumb or a tile.
+  // MOVED AT CK-86, with its reason: the `wide` card joined — a group page's
+  // cover card at the mockup's measure — and it reads the web layer, as the
+  // card does. The rule is the same.
   expect(code).toMatch(/const LAYER: Record<CoverVariant, ServableLayer> = \{/)
-  expect(code).toMatch(/thumb: 'thumbnail',\s*tile: 'thumbnail',\s*card: 'web',\s*hero: 'web',\s*\}/)
+  expect(code).toMatch(/thumb: 'thumbnail',\s*tile: 'thumbnail',\s*card: 'web',\s*wide: 'web',\s*hero: 'web',\s*\}/)
   expect(code).toMatch(/const layer = LAYER\[variant\]/)
 })
 
