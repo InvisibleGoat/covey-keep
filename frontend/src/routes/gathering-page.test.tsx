@@ -12,7 +12,8 @@
 //   the form; focus to Upload; Upload through today's calls — and Edit
 //   gathering for the organisers over today's form; no row in the
 //   photos-only view.
-// - WHEN: each date's chip from the body's `caller_response` as literals;
+// - WHEN: each date's line naming its weekday as literals (CK-87.1); each
+//   date's chip from the body's `caller_response` as literals;
 //   the chip following an answer saved in the block without the gathering
 //   read again; the place and the map on one line, each half alone, an
 //   unsafe map as text; the row's order; the organisers' date controls with
@@ -24,6 +25,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { AuthContext, type AuthState, type Person } from '../auth/context'
 import appCss from '../App.css?raw'
+import { wallClockToInstant } from '../lib/datetime'
 import gatheringsLibSource from '../lib/gatherings.ts?raw'
 import tokensCss from '../styles/tokens.css?raw'
 import { GatheringDetail } from './GatheringDetail'
@@ -286,7 +288,13 @@ test('THE BADGE: the soonest date still ahead, read in the profile’s zone — 
   })
   renderPage()
   await loaded()
-  const badge = coverCard().querySelector('.cover-photo > .cover-date') as HTMLElement
+  // MOVED AT CK-87.1, with its reason: this gathering has no cover, and on
+  // an empty cover the badge leads the empty cover's row (`.cover-lead`) in
+  // the same corner, where it was the picture's own child laid over the
+  // corner. Over a cover it still is (components/cover.test.tsx). What the
+  // pin holds is unchanged: one badge, decorative, on the soonest date ahead
+  // in the profile's zone.
+  const badge = coverCard().querySelector('.cover-photo > .cover-lead > .cover-date') as HTMLElement
   expect(badge.getAttribute('aria-hidden')).toBe('true')
   expect(badge.querySelector('.cover-date-m')?.textContent).toBe('Mar')
   expect(badge.querySelector('.cover-date-d')?.textContent).toBe(SOONEST_DAY)
@@ -549,6 +557,30 @@ test('THE CHIP FOLLOWS A SAVED ANSWER without the gathering read again: Not answ
   expect(chip().classList.contains('answer-none')).toBe(false)
   await screen.findByRole('button', { name: 'Update RSVP' })
   expect(requests(mock, 'GET', '/gatherings/g-1')).toHaveLength(1)
+})
+
+test("When's date line names its weekday, in the profile's zone, as literals: the same day, across midnight, and with no end (CK-87.1)", async () => {
+  const at = (wallClock: string) => wallClockToInstant(wallClock, ZONE)
+  stubServer({
+    'GET /gatherings/g-1': () =>
+      json(
+        200,
+        detail({
+          occurrences: [
+            occurrence({ id: 'o1', starts_at: at('2026-07-04T16:00'), ends_at: at('2026-07-04T23:00') }),
+            occurrence({ id: 'o2', starts_at: at('2026-07-04T22:00'), ends_at: at('2026-07-05T01:00') }),
+            occurrence({ id: 'o3', starts_at: at('2026-07-05T16:00') }),
+          ],
+        }),
+      ),
+  })
+  renderPage()
+  await loaded()
+  expect(dateItems().map((item) => item.querySelector('.occurrence-when')?.textContent)).toEqual([
+    'Sat, Jul 4, 2026, 4:00 PM – 11:00 PM',
+    'Sat, Jul 4, 2026, 10:00 PM – Sun, Jul 5, 1:00 AM',
+    'Sun, Jul 5, 2026, 4:00 PM',
+  ])
 })
 
 test('the place and the map on one line: place · Map, the map alone, the place alone, an unsafe map as text, neither', async () => {

@@ -16,7 +16,7 @@ import { EmptyCover, EmptyCoverCard } from './AuthArt'
 //   (`.card.gcover`) — the mat, the page column's width, the photograph
 //   16:10 on a phone and 3:1 from 640px, `children` (the page's <h1> and its
 //   meta line) over the scrim at the title's and the scrim's fluid sizes,
-//   and `action` (Change cover) at its top right; a group's page since
+//   and `action` (Change cover) at the picture's top right; a group's page since
 //   CK-86, a gathering's since CK-87. The photograph's height is its LEAST
 //   height: a name that wraps grows the picture rather than running off its
 //   top. (Until CK-87 a `card` variant drew the same card at the width the
@@ -31,7 +31,8 @@ import { EmptyCover, EmptyCoverCard } from './AuthArt'
 //   the meta lines) beneath it. The words come first in the markup, so the
 //   name reads first, and the picture is drawn above them by CSS.
 //   `badge` (hero, tile, and since CK-87 the wide card): the date badge over
-//   the picture's corner — `DateBadge`, below.
+//   the picture's corner — `DateBadge`, below. On a wide card with no cover
+//   it leads the empty cover's row instead (CK-87.1), in the same corner.
 // - THE LAYER FOLLOWS THE VARIANT AND NOTHING ELSE (`LAYER`, below): the
 //   thumbnail for a thumb or a tile, the web layer for a wide card or a hero
 //   — so no caller can ask for a print master (`archival` is never served).
@@ -184,15 +185,30 @@ export function Cover({
 
   // The wide card: the heading comes first in the markup — it reads first —
   // and the picture is drawn beneath the words by CSS, the badge at its
-  // corner.
+  // corner. THE EMPTY COVER IS A ROW OF ITS OWN (CK-87.1): the badge and the
+  // empty cover share `.cover-lead`, which CSS lays in the flow above the
+  // words, beside Change cover — so each takes the room it needs, the line
+  // drops beneath the badge and the quail when the row is crowded, and the
+  // words start below whatever height the row takes. Change cover sits in the
+  // picture, last, in both states: the same element whether a cover is set or
+  // not, so setting or clearing one never remounts the button under the
+  // person's focus. (Until CK-87.1 it followed the picture in the card, and
+  // the empty cover's row was laid over the picture with fixed insets.)
   return (
     <div className="cover-card cover-card-wide">
       <div className="cover-photo">
         <div className="cover-over">{children}</div>
-        {picture}
-        {badge}
+        {empty ? (
+          <div className="cover-lead">
+            {badge}
+            {picture}
+          </div>
+        ) : (
+          picture
+        )}
+        {empty ? null : badge}
+        {action}
       </div>
-      {action}
     </div>
   )
 }

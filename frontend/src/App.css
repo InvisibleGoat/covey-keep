@@ -836,12 +836,14 @@
   overflow-wrap: anywhere;
 }
 
-/* Change cover: a frosted pill at the card's top right (the mockup's .pin
-   place), 44px tall. */
+/* Change cover: a frosted pill at the picture's top right (the mockup's .pin
+   place), 44px tall. It sits in the picture since CK-87.1 — 8px in, where it
+   was drawn when it followed the picture in the card — and on an empty cover
+   it takes its own room in the empty cover's row (below). */
 .auth-screen .cover-change {
   position: absolute;
-  top: calc(var(--mat) + 8px);
-  right: calc(var(--mat) + 8px);
+  top: 8px;
+  right: 8px;
   z-index: 3;
   min-height: 44px;
   padding: 0 1rem;
@@ -1197,8 +1199,7 @@
   padding: clamp(16px, 4vw, 32px);
 }
 
-.cover-card-wide .cover-photo > img,
-.cover-card-wide .cover-empty {
+.cover-card-wide .cover-photo > img {
   position: absolute;
   inset: 0;
 }
@@ -1212,32 +1213,89 @@
   font-size: 0.9375rem;
 }
 
-/* The empty cover on the wide card: the quail beside its line at the top
-   left, clear of the title's band (CK-85's phone treatment for the featured
-   card) and of Change cover at the top right. Stacked, as CK-84's card draws
-   it, the quail met a name on two lines at 375px, and at 3:1 it meets a name
-   on one. */
-.cover-card-wide .cover-empty {
-  grid-auto-flow: column;
-  justify-content: start;
+/* THE EMPTY COVER ON THE WIDE CARD (CK-86; a row in the flow since
+   CK-87.1): the quail beside its line at the top left (CK-85's phone
+   treatment for the featured card — stacked, as CK-84's card draws it, the
+   quail met a name on two lines at 375px, and at 3:1 one on one line), the
+   badge before them where a gathering has one, and Change cover at the top
+   right. Until CK-87.1 the row was laid over the picture with fixed insets
+   (72px beside the badge, 148px beside Change cover, the words 56px or 64px
+   down), so its line's column shrank with the card — four lines into the
+   title at 360px, under Change cover at 320px. Now:
+   - the picture is two rows: the empty cover's row, then the words. The row
+     is two columns — `.cover-lead` (the badge, the quail and the line) and
+     Change cover's own, as wide as the pill — so each takes the room it
+     needs and nothing is placed by a guess at another's size;
+   - the lead wraps: where the line fits beside the quail it keeps today's
+     single row; where it does not, it drops to a line of its own beneath
+     the badge and the quail, still in the lead's column, clear of the pill;
+     it wraps only between words, and never narrower than its longest one;
+   - the words start below the row, whatever height it takes, and the
+     picture grows to hold both (CK-86's least height, the ratio kept);
+   - the scrim is drawn on the picture itself, over the empty ground, so it
+     spans the whole picture as it did when the words did — the title reads
+     on the same dark band — and the row is drawn over it rather than under
+     it, where the scrim is all but clear. */
+.cover-card-wide .cover-photo:has(> .cover-lead) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto 1fr;
+  background:
+    linear-gradient(to top, var(--ck-scrim) 0%, var(--ck-scrim-mid) 45%, var(--ck-scrim-0) 80%),
+    var(--ck-empty);
+}
+
+.cover-card-wide .cover-photo:has(> .cover-lead) > .cover-over {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  padding-top: 12px;
+  background: none;
+}
+
+.cover-lead {
+  grid-row: 1;
+  grid-column: 1;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  align-content: start;
+  align-content: flex-start;
   gap: 0.5rem;
-  height: auto;
-  padding: 12px 16px;
+  padding: 12px 8px 0 16px;
+}
+
+/* The quail and the line are the lead's own items. */
+.cover-lead > .cover-empty {
+  display: contents;
+  text-align: left;
 }
 
 .cover-card-wide .cover-empty img {
+  flex: none;
   width: auto;
   height: 32px;
   max-width: none;
 }
 
-/* With the empty cover on the card, the words over it keep below its row
-   (12px, the 32px quail, 12px): a name that wraps on a short 3:1 picture
-   grows the picture rather than rising into the quail. */
-.cover-card-wide .cover-photo:has(> .cover-empty) > .cover-over {
-  padding-top: 56px;
+/* The badge leads the row from the picture's corner, 9px in, where it sits
+   over a cover; the quail beside it. */
+.cover-lead:has(> .cover-date) {
+  padding-top: 9px;
+  padding-left: 9px;
+}
+
+.cover-lead > .cover-date {
+  position: static;
+  margin-right: 0.25rem;
+}
+
+/* Change cover in its own column, 8px in from the picture's corner as it
+   sits over a cover — never shrunk, never below its 44px. */
+.auth-screen .cover-photo:has(> .cover-lead) > .cover-change {
+  position: static;
+  grid-row: 1;
+  grid-column: 2;
+  align-self: start;
+  margin: 8px 8px 0 0;
 }
 
 /* Change cover's panel, beneath the card in the page column's flow. */
@@ -1462,25 +1520,14 @@
   color: var(--ck-muted);
 }
 
-/* The date badge on the wide card (the mockup's .gcover .date, at the
-   picture's top left): the words over the picture keep below it (9px, the
-   badge's 46px, 9px) — a title that wraps grows the picture rather than
-   running under the badge — and the empty cover's quail sits beside it
-   rather than beneath it, both in the top left. */
+/* The date badge on the wide card over a cover (the mockup's .gcover .date,
+   at the picture's top left): the words over the picture keep below it
+   (9px, the badge's 46px, 9px) — a title that wraps grows the picture
+   rather than running under the badge. On an empty cover the badge leads
+   the empty cover's row instead, and the words keep below that row (above,
+   CK-87.1). */
 .cover-card-wide .cover-photo:has(> .cover-date) > .cover-over {
   padding-top: 64px;
-}
-
-.cover-card-wide .cover-photo:has(> .cover-date) > .cover-empty {
-  padding-left: 72px;
-}
-
-/* With the badge and Change cover both on the card, the empty cover's line
-   keeps clear of the pill at the top right (its 125px and the 8px each side)
-   and wraps beside the quail on a phone, where one row cannot hold all four
-   (checked in the screenshots at 375px). */
-.cover-card-wide:has(> .cover-change) .cover-photo:has(> .cover-date) > .cover-empty {
-  padding-right: 148px;
 }
 
 @media (min-width: 900px) {

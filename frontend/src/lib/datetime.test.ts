@@ -80,15 +80,28 @@ test('effectiveZone prefers the profile zone over the browser zone', () => {
   expect(effectiveZone(null)).toBe(runnerZone)
 })
 
-test('same-day ranges render the end as a time, cross-day ends carry a date', () => {
-  const start = wallClockToInstant('2026-09-01T18:00', zone)
-  const sameDayEnd = wallClockToInstant('2026-09-01T21:00', zone)
-  const sameDay = formatInstantRange(start, sameDayEnd, zone)
-  expect(sameDay).toContain(' – ')
-  // The end half must not repeat the date when it falls on the same day.
-  expect(sameDay.split(' – ')[1]).not.toMatch(/2026/)
-  const nextDayEnd = wallClockToInstant('2026-09-02T01:00', zone)
-  expect(formatInstantRange(start, nextDayEnd, zone).split(' – ')[1]).toMatch(/2026/)
+// MOVED AT CK-87.1, with its reason: When's date line takes the mockup's
+// form, naming its weekday (`rangeLine()`; Steven, 2026-11-02) — so a
+// cross-day end carries its day and weekday and NOT its year, where the
+// CK-17 pin required the year there. The rules this test held stay held: a
+// same-day end is a time alone, a cross-day end carries its day, and "the
+// same day" is read in the given zone, never the runner's.
+test("When's date line names its weekday, as literals: the same day, across two days and with no end — in the given zone, never the runner's (CK-87.1)", () => {
+  const start = wallClockToInstant('2026-07-04T16:00', zone)
+  expect(formatInstantRange(start, wallClockToInstant('2026-07-04T23:00', zone), zone)).toBe(
+    'Sat, Jul 4, 2026, 4:00 PM – 11:00 PM',
+  )
+  expect(
+    formatInstantRange(wallClockToInstant('2026-07-04T22:00', zone), wallClockToInstant('2026-07-05T01:00', zone), zone),
+  ).toBe('Sat, Jul 4, 2026, 10:00 PM – Sun, Jul 5, 1:00 AM')
+  expect(formatInstantRange(start, null, zone)).toBe('Sat, Jul 4, 2026, 4:00 PM')
+  // The same day in the zone though the two instants fall on different days
+  // in UTC (in either zone) — the day is the zone's, so the end is a time.
+  expect(
+    formatInstantRange(wallClockToInstant('2026-07-04T10:00', zone), wallClockToInstant('2026-07-04T16:00', zone), zone),
+  ).toBe('Sat, Jul 4, 2026, 10:00 AM – 4:00 PM')
+  // The runner's zone reads another clock for the same instant.
+  expect(formatInstantRange(start, null, runnerZone)).not.toBe('Sat, Jul 4, 2026, 4:00 PM')
 })
 
 test('formatDay names the day an instant falls on in the given zone — short month and day (CK-74)', () => {

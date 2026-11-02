@@ -8,7 +8,10 @@
 // fetches again; the presigned URL is in no markup and no second request;
 // and in the menu every row's thumbnail is its cover, a re-read after a
 // navigation fetches no picture already held, and a cover act announced by
-// a page re-reads the lists at once.
+// a page re-reads the lists at once. Since CK-87.1, the empty cover on the
+// wide card is a row in the flow: its markup, Change cover kept the same
+// element across a set and a clear, and the rules that lay it with no fixed
+// inset.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
@@ -16,7 +19,7 @@ import { AuthContext, type AuthState, type Person } from '../auth/context'
 import { announceCoverChange, clearCoverPictures, type CoverBody } from '../lib/covers'
 import appCss from '../App.css?raw'
 import tokensCss from '../styles/tokens.css?raw'
-import { Cover } from './Cover'
+import { Cover, DateBadge } from './Cover'
 import coverSource from './Cover.tsx?raw'
 import { Menu } from './Menu'
 
@@ -269,6 +272,147 @@ test('the covers’ styles name no colour and add no token: every var() they rea
   expect(used).toEqual(
     expect.arrayContaining(['--ck-empty', '--ck-scrim', '--ck-on-photo', '--ck-frost', '--ck-frost-ink', '--mat']),
   )
+  for (const name of used) expect(tokensCss, name).toMatch(new RegExp(`${name}\\s*:`))
+})
+
+// ---------------------------------------------------------------------------
+// The empty cover on the wide card, a row in the flow (CK-87.1). jsdom lays
+// nothing out, so the layout's proof is the report's matrix — every width
+// from 320 to 1440, each box measured in Chrome; these pin the markup the
+// layout stands on and the rules that lay it.
+// ---------------------------------------------------------------------------
+
+const BADGE_AT = '2035-03-01T12:00:00+00:00'
+
+function wideCard(cover: CoverBody | null, { badge = true, action = true } = {}) {
+  return (
+    <Cover
+      subject="gathering"
+      id="g-1"
+      cover={cover}
+      variant="wide"
+      badge={badge ? <DateBadge startsAt={BADGE_AT} zone="UTC" /> : undefined}
+      action={action ? <button type="button" className="cover-change">Change cover</button> : undefined}
+    >
+      <h1>The Party</h1>
+    </Cover>
+  )
+}
+
+const shape = (parent: Element) =>
+  Array.from(parent.children).map((child) => `${child.tagName.toLowerCase()}${child.className ? `.${child.className}` : ''}`)
+
+test('THE EMPTY COVER’S ROW: with no cover the badge and the empty cover share .cover-lead, Change cover is the picture’s last child, and the words read first; with a cover set there is no lead — the picture, the badge and Change cover each the picture’s own', async () => {
+  stubServer()
+  const empty = render(wideCard(null))
+  const photo = empty.container.querySelector('.cover-card-wide > .cover-photo') as HTMLElement
+  expect(shape(photo)).toEqual(['div.cover-over', 'div.cover-lead', 'button.cover-change'])
+  const lead = photo.querySelector(':scope > .cover-lead') as HTMLElement
+  expect(shape(lead)).toEqual(['span.cover-date', 'span.cover-empty'])
+  expect(lead.querySelector('.cover-date')?.getAttribute('aria-hidden')).toBe('true')
+  expect(lead.querySelector('.cover-empty img')?.getAttribute('alt')).toBe('')
+  expect(lead.querySelector('.cover-empty > span')?.textContent).toBe('No cover photo yet')
+  // Nothing of the card sits outside the picture now (Change cover followed
+  // it in the card until CK-87.1).
+  expect(shape(empty.container.querySelector('.cover-card-wide') as HTMLElement)).toEqual(['div.cover-photo'])
+  // The reading order: the heading, the line, Change cover — the badge and
+  // the quail are decorative.
+  expect(photo.textContent).toBe('The PartyMar1No cover photo yetChange cover')
+  empty.unmount()
+
+  // No badge and no Change cover (a member, the photos-only view): the lead
+  // holds the empty cover alone.
+  const bare = render(wideCard(null, { badge: false, action: false }))
+  const barePhoto = bare.container.querySelector('.cover-photo') as HTMLElement
+  expect(shape(barePhoto)).toEqual(['div.cover-over', 'div.cover-lead'])
+  expect(shape(barePhoto.querySelector('.cover-lead') as HTMLElement)).toEqual(['span.cover-empty'])
+  bare.unmount()
+
+  // A cover set: the CK-86 and CK-87 shape — the picture, the badge over its
+  // corner, Change cover — with no lead and no empty cover.
+  const set = render(wideCard(COVER))
+  await waitFor(() => expect(set.container.querySelector('.cover-photo > img')).toBeTruthy())
+  expect(shape(set.container.querySelector('.cover-photo') as HTMLElement)).toEqual([
+    'div.cover-over',
+    'img',
+    'span.cover-date',
+    'button.cover-change',
+  ])
+  expect(set.container.querySelector('.cover-lead')).toBeNull()
+  expect(set.queryByText('No cover photo yet')).toBeNull()
+})
+
+test('Change cover is the same element, keeping the person’s focus, when a cover is set or cleared — the empty cover’s row never remounts it', async () => {
+  stubServer()
+  const card = render(wideCard(null))
+  const button = card.getByRole('button', { name: 'Change cover' })
+  button.focus()
+  card.rerender(wideCard(COVER))
+  await waitFor(() => expect(card.container.querySelector('.cover-photo > img')).toBeTruthy())
+  expect(card.getByRole('button', { name: 'Change cover' })).toBe(button)
+  expect(document.activeElement).toBe(button)
+  card.rerender(wideCard(null))
+  expect(card.getByText('No cover photo yet')).toBeTruthy()
+  expect(card.getByRole('button', { name: 'Change cover' })).toBe(button)
+  expect(document.activeElement).toBe(button)
+})
+
+test('the empty cover’s row is laid by the flow, never by fixed insets — the 72px, 148px and 56px are gone — and its rules name no colour and add no token; Change cover keeps its 44px', () => {
+  const css = appCss.replace(/\/\*[\s\S]*?\*\//g, '')
+  // Until CK-87.1: the row laid over the picture (`position: absolute`), 72px
+  // in beside the badge, 148px clear of Change cover, the words 56px down.
+  expect(css).not.toMatch(/padding-right: 148px/)
+  expect(css).not.toMatch(/padding-left: 72px/)
+  expect(css).not.toMatch(/padding-top: 56px/)
+  expect(css).not.toMatch(/\.cover-card-wide \.cover-empty\s*\{/)
+  expect(css).not.toMatch(/:has\(> \.cover-empty\)/)
+  // The badge's 64px keeps the words below it over a cover alone: it reads
+  // the badge as the picture's own child, which on an empty cover it is not.
+  expect(css).toMatch(/\.cover-card-wide \.cover-photo:has\(> \.cover-date\) > \.cover-over \{\s*padding-top: 64px;\s*\}/)
+
+  const rule = (selector: string) => {
+    const start = css.indexOf(`${selector} {`)
+    expect(start, selector).toBeGreaterThan(-1)
+    return css.slice(start, css.indexOf('}', start) + 1)
+  }
+  // The picture is two rows — the empty cover's row, then the words — and the
+  // row two columns, the lead and Change cover's own.
+  const photo = rule('.cover-card-wide .cover-photo:has(> .cover-lead)')
+  expect(photo).toMatch(/display: grid;/)
+  expect(photo).toMatch(/grid-template-columns: minmax\(0, 1fr\) auto;/)
+  expect(photo).toMatch(/grid-template-rows: auto 1fr;/)
+  // The scrim drawn on the picture itself, over the empty ground.
+  expect(photo).toMatch(
+    /background:\s*linear-gradient\(to top, var\(--ck-scrim\) 0%, var\(--ck-scrim-mid\) 45%, var\(--ck-scrim-0\) 80%\),\s*var\(--ck-empty\);/,
+  )
+  const over = rule('.cover-card-wide .cover-photo:has(> .cover-lead) > .cover-over')
+  expect(over).toMatch(/grid-row: 2;/)
+  expect(over).toMatch(/grid-column: 1 \/ -1;/)
+  expect(over).toMatch(/background: none;/)
+  const lead = rule('.cover-lead')
+  expect(lead).toMatch(/grid-row: 1;/)
+  expect(lead).toMatch(/grid-column: 1;/)
+  expect(lead).toMatch(/flex-wrap: wrap;/)
+  expect(lead).not.toMatch(/position:/)
+  expect(rule('.cover-lead > .cover-empty')).toMatch(/display: contents;/)
+  expect(rule('.cover-lead > .cover-date')).toMatch(/position: static;/)
+  const change = rule('.auth-screen .cover-photo:has(> .cover-lead) > .cover-change')
+  expect(change).toMatch(/position: static;/)
+  expect(change).toMatch(/grid-column: 2;/)
+  expect(rule('.auth-screen .cover-change')).toMatch(/min-height: 44px;/)
+
+  const block = [
+    photo,
+    over,
+    lead,
+    rule('.cover-lead > .cover-empty'),
+    rule('.cover-lead:has(> .cover-date)'),
+    rule('.cover-lead > .cover-date'),
+    change,
+  ].join('\n')
+  expect(block).not.toMatch(/#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/)
+  const used = [...new Set([...block.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]))]
+  expect(used).toEqual(expect.arrayContaining(['--ck-scrim', '--ck-scrim-mid', '--ck-scrim-0', '--ck-empty']))
   for (const name of used) expect(tokensCss, name).toMatch(new RegExp(`${name}\\s*:`))
 })
 

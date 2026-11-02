@@ -174,17 +174,28 @@ export function badgeParts(iso: string, zone: string): { month: string; day: str
   return { month: parts.month ?? '', day: parts.day ?? '' }
 }
 
-// "Sep 1, 2026, 6:00 PM – 9:00 PM" when the end falls on the same day in the
-// zone; the end gets its own full date otherwise.
+// When's date line (CK-87.1; the mockup's `rangeLine()`), naming its
+// weekday: the start's day with its weekday and year and its time — "Sat,
+// Jul 4, 2026, 4:00 PM" — then, when the end falls on the same day in the
+// zone, its time alone — "– 11:00 PM" — or, when it does not, its day with
+// its weekday and no year, and its time — "– Sun, Jul 5, 1:00 AM". Through
+// the explicit zone, like everything here, in the mockup's words (en-US, as
+// formatTime and formatWeekdayDay are). (Until CK-87.1 the line was
+// formatInstant's medium date, no weekday, with a cross-day end's year.)
 export function formatInstantRange(startIso: string, endIso: string | null, zone: string): string {
-  const start = formatInstant(startIso, zone)
+  const startDay = new Intl.DateTimeFormat('en-US', {
+    timeZone: zone,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(new Date(startIso))
+  const start = `${startDay}, ${formatTime(startIso, zone)}`
   if (!endIso) return start
   const sameDay =
     instantToWallClock(startIso, zone).slice(0, 10) === instantToWallClock(endIso, zone).slice(0, 10)
   const end = sameDay
-    ? new Intl.DateTimeFormat(undefined, { timeZone: zone, timeStyle: 'short' }).format(
-        new Date(endIso),
-      )
-    : formatInstant(endIso, zone)
+    ? formatTime(endIso, zone)
+    : `${formatWeekdayDay(endIso, zone)}, ${formatTime(endIso, zone)}`
   return `${start} – ${end}`
 }
