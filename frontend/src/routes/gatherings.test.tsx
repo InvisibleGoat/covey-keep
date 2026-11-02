@@ -209,7 +209,18 @@ test('the list renders each date from the list response alone — one request, n
   // profile zone — where it was `formatInstant`'s medium date and time. What
   // the pin holds is unchanged: the date comes from the list item alone, in
   // one request.
-  expect(screen.getByText('Not in a group · Potluck · Mon, Jan 1 · 6:00 PM')).toBeTruthy()
+  // MOVED AT CK-87, with its reason: the line keeps its day and its time
+  // whole on the card, each in an element that does not wrap (Steven's
+  // rider), so the line's text spans three nodes and a plain text matcher,
+  // which reads one element's own text, no longer finds it. The line is read
+  // whole — the paragraph's text — and is the same line, character for
+  // character.
+  expect(
+    screen.getByText(
+      (_, element) =>
+        element?.tagName === 'P' && element.textContent === 'Not in a group · Potluck · Mon, Jan 1 · 6:00 PM',
+    ),
+  ).toBeTruthy()
   expect(fetchMock).toHaveBeenCalledTimes(1)
 })
 

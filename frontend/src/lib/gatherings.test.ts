@@ -4,14 +4,15 @@
 // anything else (null, a missing field, a value this build does not know,
 // any near-miss spelling) gates CLOSED on both, in one place.
 import { expect, test } from 'vitest'
-import { formatInstant } from './datetime'
 import {
   cardDateLine,
+  cardDatePieces,
   cardPlaceLine,
   featuredLine,
+  featuredPieces,
   gatheringSections,
   isComingUp,
-  listItemLine,
+  lineText,
   NOT_IN_A_GROUP,
   PHOTOS_ONLY_ITEM,
   PHOTOS_ONLY_LINE,
@@ -43,46 +44,11 @@ test('viewOf: exactly "full" is the full view; "memory", null, a missing field a
   }
 })
 
-// The list item's line: the type, the next date or — photos-only — the
-// line in place of it, and the group's name where asked. A withheld summary
-// is never read: the photos-only item's null summary yields no date.
-test('listItemLine: the date in the full view, "You can see its photos" and no date in the photos-only view, the group name where asked', () => {
-  const base = {
-    id: 'g-9',
-    gathering_type: 'potluck',
-    title: 'The Party',
-    memorial_decedent_name: null,
-    requires_approval: false,
-    requires_approval_override: null,
-    publication_state: 'live',
-    created_by_account_id: 'acct-1',
-    host_account_id: 'acct-1',
-    caller_role: null,
-    created_at: '2026-10-27T12:00:00+00:00',
-    updated_at: null,
-  } as const
-  const full = {
-    ...base,
-    rsvp_list_visibility: 'INVITEES',
-    caller_view: 'full' as const,
-    group: { id: 'grp-1', name: 'The Lees' },
-    next_occurrence: { id: 'occ-1', starts_at: '2035-01-01T18:00:00+00:00' },
-    occurrence_count: 1,
-  }
-  const date = formatInstant('2035-01-01T18:00:00+00:00', 'America/Chicago')
-  expect(listItemLine(full, 'America/Chicago', true)).toBe(`Potluck · ${date} · The Lees`)
-  expect(listItemLine(full, 'America/Chicago', false)).toBe(`Potluck · ${date}`)
-  expect(listItemLine({ ...full, group: null }, 'America/Chicago', true)).toBe(`Potluck · ${date}`)
-  const memory = {
-    ...base,
-    rsvp_list_visibility: null,
-    caller_view: 'memory' as const,
-    group: { id: 'grp-1', name: 'The Lees' },
-    next_occurrence: null,
-    occurrence_count: null,
-  }
-  expect(listItemLine(memory, 'America/Chicago', true)).toBe(`Potluck · ${PHOTOS_ONLY_ITEM} · The Lees`)
-  expect(listItemLine(memory, 'America/Chicago', false)).toBe(`Potluck · ${PHOTOS_ONLY_ITEM}`)
+// The photos-only lines as literals (CK-80). Until CK-87 these two pins rode
+// the test of `listItemLine`, a group page's old line, which CK-86's strip
+// left with no caller and CK-87 removed (Steven's rider); the pins stay, on
+// their own.
+test('the photos-only lines, as literals', () => {
   expect(PHOTOS_ONLY_ITEM).toBe('You can see its photos')
   expect(PHOTOS_ONLY_LINE).toBe(
     "You can see this gathering's photos. Its dates and plans are for the people invited.",
@@ -190,6 +156,40 @@ test('the card lines, as literals: the group or Not in a group with the type; N 
   // Even a photos-only body that carried a date never shows one.
   const carried = item('carried', '2026-11-12T00:30:00Z', { caller_view: 'memory', group: lees })
   expect(cardDateLine(carried, ZONE, NOW)).toBe('You can see its photos')
+})
+
+// CK-87's rider: a card keeps each date and each time whole. The pieces join
+// to exactly the line — no character replaced — and only a date or a time is
+// a kept piece; the separators and "N dates · next" may break.
+test('the card lines in pieces: every date and time kept whole, the text unchanged', () => {
+  const lees = { id: 'grp-1', name: 'The Lees' }
+  const one = item('one', '2026-11-12T00:30:00Z', { gathering_type: 'hosted' })
+  expect(cardDatePieces(one, ZONE, NOW)).toEqual([
+    { text: 'Wed, Nov 11', keep: true },
+    { text: ' · ', keep: false },
+    { text: '6:30 PM', keep: true },
+  ])
+  const season = item('season', '2026-11-12T00:30:00Z', { gathering_type: 'season', group: lees, occurrence_count: 12 })
+  expect(cardDatePieces(season, ZONE, NOW)).toEqual([
+    { text: '12 dates · next ', keep: false },
+    { text: 'Wed, Nov 11', keep: true },
+  ])
+  const past = item('past', '2026-10-03T17:00:00Z', { occurrence_count: 3 })
+  expect(cardDatePieces(past, ZONE, NOW)).toEqual([{ text: 'Oct 3, 2026', keep: true }])
+  const photos = item('photos', null, { caller_view: 'memory', group: lees, rsvp_list_visibility: null })
+  expect(cardDatePieces(photos, ZONE, NOW)).toEqual([{ text: PHOTOS_ONLY_ITEM, keep: false }])
+  expect(cardDatePieces(item('dateless', null), ZONE, NOW)).toBeNull()
+  expect(featuredPieces(season, ZONE)).toEqual([
+    { text: 'The Lees · Season', keep: false },
+    { text: ' · ', keep: false },
+    { text: 'Wed, Nov 11', keep: true },
+    { text: ' · ', keep: false },
+    { text: '6:30 PM', keep: true },
+  ])
+  for (const x of [one, season, past, photos]) {
+    expect(lineText(cardDatePieces(x, ZONE, NOW) ?? [])).toBe(cardDateLine(x, ZONE, NOW))
+    expect(lineText(featuredPieces(x, ZONE))).toBe(featuredLine(x, ZONE))
+  }
 })
 
 test("the card lines read every date in the given zone, never the runner's", () => {

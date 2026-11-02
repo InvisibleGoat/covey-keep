@@ -329,6 +329,26 @@ test('each card: its title an <h3> holding the card’s one link, and ONE line �
   expect((await strip()).textContent).not.toMatch(/The Lees|Not in a group/)
 })
 
+// CK-87's rider (Steven): a card in the strip is 168px wide, and its date
+// line broke inside a date — *3 dates · next Thu, Dec* / *24* in CK-86's
+// screenshot. Each date and each time is in an element that does not wrap;
+// the line's text is unchanged, character for character.
+test('every date and time on a strip card is kept whole — in a no-wrap element — and every line reads exactly as before', async () => {
+  stubServer({ gatherings: () => json(200, { gatherings: STRIP }) })
+  renderPage()
+  await loaded()
+  await strip()
+  const line = (title: string) => cardOf(title).querySelector('.cover-meta') as HTMLElement
+  const kept = (title: string) => [...line(title).querySelectorAll('.nowrap')].map((piece) => piece.textContent)
+  expect(line('Biscuit Turns One').textContent).toBe('Thu, Mar 1 · 12:30 AM')
+  expect(kept('Biscuit Turns One')).toEqual(['Thu, Mar 1', '12:30 AM'])
+  expect(line('Spring Season').textContent).toBe('12 dates · next Sun, May 6')
+  expect(kept('Spring Season')).toEqual(['Sun, May 6'])
+  expect(kept('Fall Camping Trip')).toEqual(['Oct 3, 2026'])
+  expect(line('The Party').textContent).toBe('You can see its photos')
+  expect(kept('The Party')).toEqual([])
+})
+
 test('the date badge on a coming-up card alone, its month and day in the profile zone — forced to differ from the runner’s', async () => {
   stubServer({ gatherings: () => json(200, { gatherings: STRIP }) })
   renderPage()

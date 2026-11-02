@@ -147,7 +147,7 @@ in the request body. Blank is NOT a clear: `""` keeps its field-level 422
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Literal, Optional
+from typing import Literal, Mapping, Optional
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -584,6 +584,26 @@ def _occurrence_body(occurrence: Occurrence) -> dict:
     }
 
 
+async def _caller_responses(
+    db: AsyncSession, person_id: UUID, occurrence_ids: list[UUID]
+) -> dict[UUID, str]:
+    """The caller's OWN answer on each of a body's dates (CK-87) — the
+    gathering page's answer chip — in ONE statement for every date the body
+    carries, never one per date: `{occurrence_id: "yes" | "maybe" | "no"}`,
+    a date the caller has not answered simply absent. Matched by the
+    caller's PERSON, so a guest's row (no person) never matches anyone.
+    Nothing new is disclosed: the caller reads the same answer as `own` from
+    `GET /occurrences/{id}/rsvps`."""
+    if not occurrence_ids:
+        return {}
+    rows = await db.execute(
+        select(RSVP.occurrence_id, RSVP.response).where(
+            RSVP.person_id == person_id, RSVP.occurrence_id.in_(occurrence_ids)
+        )
+    )
+    return {occurrence_id: response.value for occurrence_id, response in rows}
+
+
 @dataclass(frozen=True)
 class HomeFacts:
     """The three facts a gathering body needs beyond its own row, read
@@ -675,6 +695,7 @@ def _gathering_body(
     facts: HomeFacts,
     caller_role: Optional[str],
     caller_view: str,
+    caller_responses: Optional[Mapping[UUID, str]] = None,
 ) -> dict:
     # The gate, resolved for this body (CK-41): `requires_approval` is the
     # EFFECTIVE value — a plain boolean, the same field every consumer has
@@ -744,9 +765,22 @@ def _gathering_body(
         # The dates are LOGISTICS: in the memory view the key is carried and
         # NULL — withheld is not empty (the CK-30 precedent: `[]` would claim
         # a gathering with no dates, a state this product does not have).
-        body["occurrences"] = (
-            [_occurrence_body(o) for o in occurrences] if caller_view == VIEW_FULL else None
-        )
+        if caller_view == VIEW_FULL:
+            # Each date carries the caller's own answer (CK-87): `yes`,
+            # `maybe`, `no`, or null where they have not answered — read by
+            # the caller of this function in one statement
+            # (`_caller_responses`) and handed in, so a body with dates can
+            # never forget the read and silently say nobody answered.
+            if caller_responses is None:
+                raise ValueError("a full-view body with dates needs the caller's answers")
+            body["occurrences"] = [
+                {**_occurrence_body(o), "caller_response": caller_responses.get(o.id)}
+                for o in occurrences
+            ]
+        else:
+            # No dates, so no answers: the memory view carries no
+            # `caller_response` anywhere.
+            body["occurrences"] = None
     return body
 
 
@@ -1237,6 +1271,9 @@ async def create_gathering(
         ),
         caller_role=ROLE_HOST,
         caller_view=VIEW_FULL,
+        # Nobody has answered a date that did not exist a moment ago: every
+        # date carries null, and nothing is read to say so (CK-87).
+        caller_responses={},
     )
 
 
@@ -1539,17 +1576,22 @@ async def get_gathering(
             ).all()
         )
         caller_role = await _role_of(db, gathering, ctx)
+        # The caller's own answer on each date, in one statement (CK-87).
+        responses = await _caller_responses(db, ctx.person.id, [o.id for o in occurrences])
     else:
         # Not read at all in the memory view — the body carries the key as
-        # null — and a member only shared with is neither host nor co-host.
+        # null — and a member only shared with is neither host nor co-host;
+        # with no dates there are no answers to read (CK-87).
         occurrences = []
         caller_role = None
+        responses = None
     return _gathering_body(
         gathering,
         occurrences,
         facts=await _home_facts(db, gathering),
         caller_role=caller_role,
         caller_view=view,
+        caller_responses=responses,
     )
 
 

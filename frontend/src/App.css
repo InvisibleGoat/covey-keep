@@ -6,8 +6,9 @@
    (reference/frontend/components.md, Styling). Each screen is still one
    centred column of cards — but the Groups and Gatherings lists, which take
    the mockup's page column since CK-85 (their section, after the covers'),
-   and a group's page and its People page, which take it since CK-86 (their
-   section, after the lists'); a gathering's page comes with CK-87. Since CK-82 the frame — the menu, the top and bottom
+   a group's page and its People page, which take it since CK-86 (their
+   section, after the lists'), and a gathering's page, which takes it since
+   CK-87 (its section, after theirs). Since CK-82 the frame — the menu, the top and bottom
    bars — sits around every signed-in page (its section at the end of this
    file), and You is styled beside it. The recipes are the mockup's
    (app-template.html lines 71–658). */
@@ -360,11 +361,6 @@
   font-size: 0.9375rem;
 }
 
-/* A date's own controls stand inline, so they need their own space. */
-.occurrence-item > button + button {
-  margin-left: 0.75rem;
-}
-
 /* A set of fields in its own quiet box, its legend inside it. */
 .occurrence-fields {
   display: flex;
@@ -387,11 +383,25 @@
   font-weight: 700;
 }
 
+/* The RSVP block: the mockup's .rsvp box beneath the date's row (CK-87) —
+   the quiet ground, the hairline, the 14px radius — and its fieldset inside
+   it without a box of its own (the mockup's .rsvp fieldset). */
 .rsvp-block {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  margin-top: 0.25rem;
+  margin-top: 0.75rem;
+  padding: 14px;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 14px;
+  background: var(--pg-bg);
+}
+
+.rsvp-block .occurrence-fields {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
 }
 
 .companion-row {
@@ -747,14 +757,15 @@
 }
 
 /* A page's cover card: the mat (the card's padding), the photograph at the
-   photo radius, 16/10. It takes the width today's column gives its cards,
-   and the mockup's phone measure inside it — a gathering's page, until
-   CK-87. A group's page takes the mockup's measure since CK-86: the `wide`
-   card, in the group page's section below. */
+   photo radius, 16/10. Its measure — the page column's width, 3:1 from
+   640px, the title's and the scrim's fluid sizes — is the `wide` card's, in
+   the group page's section below: a group's page since CK-86, a gathering's
+   since CK-87. (Until CK-87 a `card` variant took the width the old centred
+   column gave its cards, 22rem, with a 2rem title; it went with its last
+   user.) */
 .cover-card {
   position: relative;
   width: 100%;
-  max-width: 22rem;
   padding: var(--mat);
   border: 1px solid var(--pg-surface-edge);
   border-radius: var(--r-card);
@@ -820,7 +831,6 @@
 .cover-over h1 {
   margin: 0;
   color: var(--ck-on-photo);
-  font-size: 2rem;
   line-height: 1.04;
   text-align: left;
   overflow-wrap: anywhere;
@@ -1065,6 +1075,12 @@
   color: var(--ck-muted);
 }
 
+/* A date or a time on a card's line, kept whole (CK-87): the line may break
+   between its pieces, never inside *Thu, Dec 24* or *6:30 PM*. */
+.nowrap {
+  white-space: nowrap;
+}
+
 /* An empty grid card: the quail and its line, centred, muted. */
 .cover-tile .cover-empty {
   align-content: center;
@@ -1155,12 +1171,11 @@
 
 /* ---------- a group's page and its People page (CK-86; the mockup's .gcover, .gmeta, .gactions, .gstrip, .strip-label, .crumb, .card.sect, .plans) ---------- */
 
-/* The group page's cover card at the mockup's measure (`.card.gcover`): the
-   page column's width, the picture 16:10 on a phone and 3:1 from 640px, the
-   title's clamp and the scrim's padding — with the window for the mockup's
-   cqi (CK-81's mapping). */
+/* The page's cover card at the mockup's measure (`.card.gcover`) — a group's
+   page, and since CK-87 a gathering's: the page column's width, the picture
+   16:10 on a phone and 3:1 from 640px, the title's clamp and the scrim's
+   padding — with the window for the mockup's cqi (CK-81's mapping). */
 .cover-card.cover-card-wide {
-  max-width: none;
   margin-bottom: 0.875rem;
 }
 
@@ -1231,15 +1246,18 @@
 }
 
 /* The actions under the card (the mockup's .gactions): New gathering, the
-   primary pill, and People, the quiet one. */
-.group-actions {
+   primary pill, and People, the quiet one — and on a gathering's page since
+   CK-87, Add photos and Edit gathering. */
+.group-actions,
+.gathering-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.625rem;
   margin: 0 0 1.5rem;
 }
 
-.group-actions .btn .ico {
+.group-actions .btn .ico,
+.gathering-actions .btn .ico {
   width: 20px;
   height: 20px;
 }
@@ -1340,6 +1358,134 @@
     margin-inline: calc(-1 * clamp(24px, 4vw, 48px));
     padding-inline: clamp(24px, 4vw, 48px);
     scroll-padding-inline: clamp(24px, 4vw, 48px);
+  }
+}
+
+/* ---------- a gathering's page (CK-87; the mockup's .crumb, .gcover, .gactions, .card.sect, .occs, .occ, .occ-row, .answer, .where, .rsvp, .find) ---------- */
+
+/* The page column is the lists' (.page-column), the crumb and the cover card
+   a group page's, and the actions take .group-actions' rules above. The
+   page's cards are the column's width, as the mockup draws its sections
+   (.card.sect) — not the People page's 720px, which was composed for a page
+   the mockup never drew — and spaced as its sections. Change cover's panel
+   keeps its own measure. */
+.gathering-page > .auth-card:not(.cover-panel) {
+  max-width: none;
+  margin-bottom: 1.25rem;
+  padding: 16px 16px 18px;
+}
+
+/* A form's fields keep a reading width — the mockup's invite form and Find a
+   photo, 420px — and a button keeps to its words (the cover panel's rule,
+   CK-84). The buttons in a row of controls keep their row's alignment. */
+.gathering-page > .auth-card :where(
+    input:not([type='checkbox'], [type='radio'], [type='file']),
+    select,
+    textarea
+  ) {
+  max-width: 420px;
+}
+
+.gathering-page :is(.auth-card, form, fieldset) > button:where(:not(.link-button)) {
+  align-self: flex-start;
+}
+
+/* The photos-only view's line beneath the cover, spaced as a section. */
+.gathering-page > p {
+  margin-bottom: 1.25rem;
+}
+
+/* A section brought into view by Add photos stops below the phone's top bar
+   (61px); from 900px there is no top bar. */
+.gathering-page > section {
+  scroll-margin-top: 72px;
+}
+
+/* When (the mockup's .occs and .occ): each date set apart by a hairline,
+   12px above and below. */
+.occurrence-dates {
+  gap: 0;
+  margin-top: 0.5rem;
+}
+
+.occurrence-dates > .occurrence-item {
+  padding: 12px 0;
+}
+
+.occurrence-dates > .occurrence-item:first-child {
+  padding-top: 0;
+}
+
+.occurrence-dates > .occurrence-item + .occurrence-item {
+  padding-top: 12px;
+}
+
+/* The place and the map on one line (the mockup's .where). */
+.occurrence-item .occurrence-where {
+  margin-top: 0.125rem;
+  color: var(--ck-muted);
+}
+
+.occurrence-where a {
+  color: var(--ck-active-ink);
+  font-weight: 600;
+}
+
+/* The date's row (the mockup's .occ-row): the answer chip, RSVP and who's
+   coming, and the organisers' two date controls. */
+.occurrence-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin-top: 0.5rem;
+}
+
+/* The answer chip (the mockup's .answer): the caller's own answer, tinted —
+   or, unanswered, a dashed chip in the muted ink (.answer.none). Text in
+   the row, never a control. */
+.answer {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  background: var(--ck-tint);
+  color: var(--ck-active-ink);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.answer.answer-none {
+  border: 1px dashed var(--pg-surface-edge);
+  background: transparent;
+  color: var(--ck-muted);
+}
+
+/* The date badge on the wide card (the mockup's .gcover .date, at the
+   picture's top left): the words over the picture keep below it (9px, the
+   badge's 46px, 9px) — a title that wraps grows the picture rather than
+   running under the badge — and the empty cover's quail sits beside it
+   rather than beneath it, both in the top left. */
+.cover-card-wide .cover-photo:has(> .cover-date) > .cover-over {
+  padding-top: 64px;
+}
+
+.cover-card-wide .cover-photo:has(> .cover-date) > .cover-empty {
+  padding-left: 72px;
+}
+
+/* With the badge and Change cover both on the card, the empty cover's line
+   keeps clear of the pill at the top right (its 125px and the 8px each side)
+   and wraps beside the quail on a phone, where one row cannot hold all four
+   (checked in the screenshots at 375px). */
+.cover-card-wide:has(> .cover-change) .cover-photo:has(> .cover-date) > .cover-empty {
+  padding-right: 148px;
+}
+
+@media (min-width: 900px) {
+  .gathering-page > section {
+    scroll-margin-top: 16px;
   }
 }
 

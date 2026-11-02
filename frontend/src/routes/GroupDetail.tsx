@@ -6,7 +6,7 @@
 // and this page keeps the mockup's shape, top to bottom:
 //
 // - THE COVER CARD AT THE MOCKUP'S MEASURE (`.card.gcover`; the cover's
-//   `wide` variant through components/PageCover.tsx): the group's cover, or
+//   `wide` variant, through components/PageCover.tsx): the group's cover, or
 //   the empty cover, the page column's width, the picture 16:10 on a phone
 //   and 3:1 from 640px, and over its scrim the group's name — the page's
 //   <h1> — and the meta line, *{N} people* (`memberCountLabel`). The admin
@@ -29,7 +29,8 @@
 //   most recent first, then the photos-only items in the server's order.
 //   Each card is the cover's `tile` (the thumbnail layer), 168px wide,
 //   scrolling sideways: its title (an <h3> holding the card's link) and ONE
-//   line, `cardDateLine` — the line a card's date reads everywhere — with no
+//   line, `cardDateLine`'s — the line a card's date reads everywhere, each
+//   date and time in it kept whole (CK-87, `cardDatePieces`) — with no
 //   group line, since every card is this group's; the date badge on a
 //   coming-up card alone; a photos-only card says *You can see its photos*
 //   and carries no date and no badge, and nothing here reads its
@@ -55,12 +56,12 @@
 import { useEffect, useId, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
-import { Cover, DateBadge } from '../components/Cover'
+import { CardLine, Cover, DateBadge } from '../components/Cover'
 import { Icon } from '../components/Icons'
 import { PageCover } from '../components/PageCover'
 import { COVER_HINT_GROUP, REMOVE_PHOTO_SENTENCE_GROUP } from '../lib/covers'
 import { effectiveZone } from '../lib/datetime'
-import { cardDateLine, gatheringSections, viewOf, type GatheringListItem } from '../lib/gatherings'
+import { cardDatePieces, gatheringSections, viewOf, type GatheringListItem } from '../lib/gatherings'
 import {
   groupRoleFlags,
   memberCountLabel,
@@ -198,7 +199,6 @@ export function GroupDetail() {
         subject="group"
         id={group.id}
         cover={group.cover}
-        variant="wide"
         organises={organises}
         hint={COVER_HINT_GROUP}
         photoRemovalSentence={REMOVE_PHOTO_SENTENCE_GROUP}
@@ -246,7 +246,7 @@ export function GroupDetail() {
         {strip !== null && strip.cards.length > 0 && (
           <ul className="cover-strip" aria-label="The group's gatherings">
             {strip.cards.map(({ item, upcoming }) => {
-              const line = cardDateLine(item, zone, strip.readAt)
+              const line = cardDatePieces(item, zone, strip.readAt)
               return (
                 <li key={item.id}>
                   <Cover
@@ -265,7 +265,11 @@ export function GroupDetail() {
                         {item.title}
                       </Link>
                     </h3>
-                    {line !== null && <p className="cover-meta">{line}</p>}
+                    {line !== null && (
+                      <p className="cover-meta">
+                        <CardLine pieces={line} />
+                      </p>
+                    )}
                   </Cover>
                 </li>
               )

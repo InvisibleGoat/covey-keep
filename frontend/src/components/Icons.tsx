@@ -18,6 +18,7 @@ export type IconName =
   | 'chevron'
   | 'plus'
   | 'back'
+  | 'addpic'
 
 const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
   groups: {
@@ -77,6 +78,17 @@ const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
   plus: { paths: <path d="M12 5v14M5 12h14" />, width: 2 },
   // The People page's crumb back to its group (CK-86; the mockup's `back`).
   back: { paths: <path d="M15 5l-7 7 7 7" />, width: 2 },
+  // A gathering page's Add photos (CK-87; the mockup's `addpic`).
+  addpic: {
+    paths: (
+      <>
+        <rect x="3" y="5" width="15" height="14" rx="3" />
+        <circle cx="8.5" cy="10" r="1.6" />
+        <path d="M4 17l4.5-4 3 2.5 2.5-2 4 3.5" />
+        <path d="M19.5 3v5M17 5.5h5" />
+      </>
+    ),
+  },
 }
 
 export function Icon({ name, className = 'ico' }: { name: IconName; className?: string }) {

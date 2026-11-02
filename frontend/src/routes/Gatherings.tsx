@@ -25,14 +25,14 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
-import { Cover, DateBadge } from '../components/Cover'
+import { CardLine, Cover, DateBadge } from '../components/Cover'
 import { Icon } from '../components/Icons'
 import { authFetch } from '../lib/api'
 import { effectiveZone } from '../lib/datetime'
 import {
-  cardDateLine,
+  cardDatePieces,
   cardPlaceLine,
-  featuredLine,
+  featuredPieces,
   gatheringSections,
   viewOf,
   type GatheringListItem,
@@ -165,7 +165,9 @@ export function Gatherings() {
   const pastShown = allPast ? past : past.slice(0, PAST_SHOWN)
 
   function tile(gathering: GatheringListItem, upcoming: boolean) {
-    const dateLine = cardDateLine(gathering, zone, readAt)
+    // Each date and time kept whole on the card (CK-87's rider): the line's
+    // pieces, its text the same as `cardDateLine`'s.
+    const dateLine = cardDatePieces(gathering, zone, readAt)
     return (
       <li key={gathering.id}>
         <Cover
@@ -185,7 +187,11 @@ export function Gatherings() {
             </Link>
           </h3>
           <p className="cover-meta">{cardPlaceLine(gathering)}</p>
-          {dateLine !== null && <p className="cover-meta">{dateLine}</p>}
+          {dateLine !== null && (
+            <p className="cover-meta">
+              <CardLine pieces={dateLine} />
+            </p>
+          )}
         </Cover>
       </li>
     )
@@ -221,7 +227,9 @@ export function Gatherings() {
               {featured.title}
             </Link>
           </h2>
-          <p className="cover-hero-meta">{featuredLine(featured, zone)}</p>
+          <p className="cover-hero-meta">
+            <CardLine pieces={featuredPieces(featured, zone)} />
+          </p>
           {/* A picture of a button: the card's link already names the page. */}
           <span className="btn btn-photo" aria-hidden="true">
             Open gathering

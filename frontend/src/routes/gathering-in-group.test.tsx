@@ -267,7 +267,12 @@ const PHOTOS_ONLY_LINE =
 // The photos-only view.
 // ---------------------------------------------------------------------------
 
-test('THE PHOTOS-ONLY VIEW from a memory body with occurrences null: the header, the group line and the line — no When, no RSVP, no Edit, no Invitations, no places, and none of their requests', async () => {
+// MOVED AT CK-87, with its reason: the group line beneath the header (*In
+// {group}*, CK-80) gave way to the crumb back to the group (the gathering page
+// in the mockup's layout) — the same link to the same page, by the group's
+// name, now in the crumb, and *In The Lees* nowhere. Every other assertion
+// here is unedited: one request, nothing read from the dates, no upload.
+test('THE PHOTOS-ONLY VIEW from a memory body with occurrences null: the header, the crumb to the group and the line — no When, no RSVP, no Edit, no Invitations, no places, and none of their requests', async () => {
   const mock = stubServer({ detail: () => json(200, memoryDetail()) })
   renderPage()
   await loaded()
@@ -275,7 +280,8 @@ test('THE PHOTOS-ONLY VIEW from a memory body with occurrences null: the header,
   expect(screen.getByText(PHOTOS_ONLY_LINE)).toBeTruthy()
   const groupLink = screen.getByRole('link', { name: 'The Lees' })
   expect(groupLink.getAttribute('href')).toBe('/groups/grp-lees-1')
-  expect(groupLink.closest('p')?.textContent).toBe('In The Lees')
+  expect(groupLink.closest('.crumb')).toBeTruthy()
+  expect(screen.queryByText('In The Lees')).toBeNull()
   const headings = screen.getAllByRole('heading').map((h) => h.textContent)
   expect(headings).toEqual(['The Party', 'Photos'])
   for (const absent of [/edit gathering/i, /rsvp/i, /invite people/i, /show co-hosts/i, /edit this date/i, /add another date/i]) {

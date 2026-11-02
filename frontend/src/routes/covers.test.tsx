@@ -390,16 +390,24 @@ test('a group’s page: the wide cover card at the web layer with the page’s <
   expect(mints.sort()).toEqual(['/gatherings/g-1/cover/url?layer=thumbnail', '/groups/grp-1/cover/url?layer=web'])
 })
 
-test('a gathering’s page: the cover card at the web layer, the <h1> inside it; the type and the group line beneath', async () => {
+// MOVED AT CK-87, with its reason: a gathering's page is in the mockup's
+// layout — its cover card is the `wide` card at the mockup's measure (the
+// `card` variant retired), the type is the meta line INSIDE the card, over
+// the scrim, and the group line beneath it (*In {group}*, CK-80) gave way to
+// the crumb back to the group. What the pin always held still holds: the
+// card asks for the web layer alone, through a blob: URL, the <h1> inside it.
+test('a gathering’s page: the wide cover card at the web layer, the <h1> and the type inside it; the crumb to the group and no group line', async () => {
   const mock = stubServer({
     'GET /gatherings/g-1': () => json(200, gathering({ caller_role: null, group: GROUP_REF, cover: { source: 'upload', set_at: T1 } })),
   })
   renderAt('/gatherings/g-1')
   const heading = await screen.findByRole('heading', { level: 1, name: 'The Party' })
   expect(heading.closest('.cover-card')).toBe(coverCard())
+  expect(coverCard().classList.contains('cover-card-wide')).toBe(true)
   await waitFor(() => expect(cardImageSrc()).toMatch(/^blob:/))
-  expect(screen.getByText('Potluck').closest('.cover-card')).toBeNull()
-  expect(screen.getByRole('link', { name: 'The Lees' }).closest('p')?.textContent).toBe('In The Lees')
+  expect(screen.getByText('Potluck').closest('.cover-card')).toBe(coverCard())
+  expect(screen.getByRole('link', { name: 'The Lees' }).closest('.crumb')).toBeTruthy()
+  expect(screen.queryByText('In The Lees')).toBeNull()
   expect(requests(mock, 'GET', /\/cover\/url/).map(([url]) => url.replace(/^https?:\/\/[^/]+/, ''))).toEqual([
     '/gatherings/g-1/cover/url?layer=web',
   ])

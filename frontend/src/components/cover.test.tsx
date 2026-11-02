@@ -83,6 +83,14 @@ const COVER: CoverBody = { source: 'upload', set_at: '2026-11-01T10:00:00+00:00'
 
 // ---------------------------------------------------------------------------
 // The component.
+//
+// MOVED AT CK-87, with its reason: the five tests below drew the page's
+// cover card as the `card` variant, the column-width card a gathering's page
+// used until CK-87 put that page at the mockup's measure; the `card` variant
+// went with its last user, and the page card is the `wide` variant alone. The
+// card's states are the same on it — the empty cover, the picture at the web
+// layer, the ground, a 409 — so each test now draws the `wide` card and
+// asserts what it asserted.
 // ---------------------------------------------------------------------------
 
 test('no cover — null or absent — is the empty cover: the quail in the ring mat on a thumbnail, the quail and its line on the card; nothing is asked for', async () => {
@@ -96,7 +104,7 @@ test('no cover — null or absent — is the empty cover: the quail in the ring 
     thumb.unmount()
 
     const card = render(
-      <Cover subject="gathering" id="g-1" cover={cover} variant="card">
+      <Cover subject="gathering" id="g-1" cover={cover} variant="wide">
         <h1>The Party</h1>
       </Cover>,
     )
@@ -119,7 +127,7 @@ test('a set cover is fetched once at the variant’s layer — thumbnail for the
   expect(thumb.container.querySelector('.noimg')).toBeNull()
 
   const card = render(
-    <Cover subject="gathering" id="g-1" cover={COVER} variant="card">
+    <Cover subject="gathering" id="g-1" cover={COVER} variant="wide">
       <h1>The Party</h1>
     </Cover>,
   )
@@ -143,7 +151,7 @@ test('while a set cover loads, and when it fails, the ground shows alone — no 
   })
   const thumb = render(<Cover subject="group" id="grp-1" cover={COVER} variant="thumb" />)
   const card = render(
-    <Cover subject="gathering" id="g-1" cover={COVER} variant="card">
+    <Cover subject="gathering" id="g-1" cover={COVER} variant="wide">
       <h1>The Party</h1>
     </Cover>,
   )
@@ -178,7 +186,7 @@ test('a 409 no_cover — cleared since the body was read — is the empty cover'
   stubServer({ mint: () => json(409, { detail: { code: 'no_cover', message: "there's no cover to show yet" } }) })
   const thumb = render(<Cover subject="group" id="grp-1" cover={COVER} variant="thumb" />)
   const card = render(
-    <Cover subject="group" id="grp-1" cover={COVER} variant="card">
+    <Cover subject="group" id="grp-1" cover={COVER} variant="wide">
       <h1>The Lees</h1>
     </Cover>,
   )
@@ -209,7 +217,7 @@ test('THE PRESIGNED URL is spent on one fetch: it appears in no markup and no ot
   const view = render(
     <>
       <Cover subject="group" id="grp-1" cover={COVER} variant="thumb" />
-      <Cover subject="group" id="grp-1" cover={COVER} variant="card">
+      <Cover subject="group" id="grp-1" cover={COVER} variant="wide">
         <h1>The Lees</h1>
       </Cover>
     </>,
@@ -239,8 +247,14 @@ test('the component asks only for the two served layers and keeps no presigned U
   // MOVED AT CK-86, with its reason: the `wide` card joined — a group page's
   // cover card at the mockup's measure — and it reads the web layer, as the
   // card does. The rule is the same.
+  // MOVED AT CK-87, with its reason: the `card` variant is retired — a
+  // gathering's page, its last user, takes the `wide` card — so its row
+  // left the table. The rule is the same; the pin also holds that no `card`
+  // variant is left to draw.
   expect(code).toMatch(/const LAYER: Record<CoverVariant, ServableLayer> = \{/)
-  expect(code).toMatch(/thumb: 'thumbnail',\s*tile: 'thumbnail',\s*card: 'web',\s*wide: 'web',\s*hero: 'web',\s*\}/)
+  expect(code).toMatch(/thumb: 'thumbnail',\s*tile: 'thumbnail',\s*wide: 'web',\s*hero: 'web',\s*\}/)
+  expect(code).toMatch(/export type CoverVariant = 'thumb' \| 'wide' \| 'hero' \| 'tile'$/m)
+  expect(code).not.toMatch(/'card'/)
   expect(code).toMatch(/const layer = LAYER\[variant\]/)
 })
 

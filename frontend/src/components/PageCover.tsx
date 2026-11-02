@@ -50,14 +50,17 @@ import { Cover } from './Cover'
 //   page, and the cover's is the only step left on the group's page.)
 // - The hint: the way to a cover from a photograph, in the page's words.
 //
-// `variant`: the card at the width today's centred column gives (`card`, a
-// gathering's page until CK-87) or at the mockup's measure (`wide`, a
-// group's page since CK-86) — components/Cover.tsx.
+// The card is the cover's `wide` variant, the mockup's measure
+// (components/Cover.tsx) — a group's page since CK-86, a gathering's since
+// CK-87. (A `variant` prop chose between it and the old column-width `card`
+// until CK-87 retired that one; with one left, the prop went too.) `badge`:
+// the date badge on the picture's corner — a gathering's page passes it in
+// the full view while a date is still ahead (CK-87).
 export function PageCover({
   subject,
   id,
   cover,
-  variant = 'card',
+  badge,
   organises,
   hint,
   photoRemovalSentence,
@@ -68,7 +71,7 @@ export function PageCover({
   subject: CoverSubject
   id: string
   cover: CoverBody | null | undefined
-  variant?: 'card' | 'wide'
+  badge?: ReactNode
   organises: boolean
   hint: string
   // Remove cover's sentence when the cover is a photograph: the gathering's
@@ -194,7 +197,7 @@ export function PageCover({
 
   return (
     <>
-      <Cover subject={subject} id={id} cover={cover} variant={variant} action={action}>
+      <Cover subject={subject} id={id} cover={cover} variant="wide" action={action} badge={badge}>
         {children}
       </Cover>
       {organises && (

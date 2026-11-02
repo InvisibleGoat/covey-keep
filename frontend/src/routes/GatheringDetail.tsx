@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { DateBadge } from '../components/Cover'
 import { FieldError, FormLevelErrors } from '../components/FieldError'
-import { GatheringMedia } from '../components/GatheringMedia'
+import { GatheringMedia, type GatheringMediaHandle } from '../components/GatheringMedia'
+import { Icon } from '../components/Icons'
 import { PageCover } from '../components/PageCover'
 import { authFetch } from '../lib/api'
 import {
@@ -221,6 +223,12 @@ const GATHERING_FIELDS = [
 const REVIEW_OFF_STATEMENT =
   "Turning this off means photos are published as soon as they're ready — everyone in this gathering can see them, and nobody looks at them first. Photos already waiting still need your decision, and “Awaiting your review” stays until they get it."
 const OCCURRENCE_FIELDS = ['starts_at', 'ends_at', 'location', 'map_url']
+// The answer chip's word for a date the caller has not answered (CK-87; the
+// mockup's `.answer.none`, adopted by the merge record's §1.4 rule).
+const NOT_ANSWERED = 'Not answered'
+// The crumb's word for a gathering that belongs to no group (CK-87; the
+// mockup's crumb back to the Gatherings list).
+const CRUMB_GATHERINGS = 'Gatherings'
 const INVITE_FIELDS = ['destination', 'channel']
 const RSVP_FIELDS = ['response', 'stay_included', 'companions', 'arrival_time']
 
@@ -286,16 +294,28 @@ function rsvpDirty(form: RsvpFormState, own: OwnRsvp | null): boolean {
 // the delegable flag (CK-69): the full list in every mode, the companion
 // names and the computed total are the organisers' — the host's or a
 // co-host's — as the server's `may_administer` decides (CK-68).
+//
+// Since CK-87 the button that opens it — *RSVP and who's coming* — sits in
+// the date's row on the page, beside the answer chip (the mockup's
+// `.occ-row`), `aria-expanded` over this block, which the page renders
+// beneath the row while it is open and which loads when it mounts. A second
+// press closes it, as the mockup's button does. `onAnswer` hands the page the
+// caller's answer whenever this block learns it — a save that landed, or the
+// block's own read — so the date's chip follows without the gathering being
+// read again. Nothing else here changed.
 function OccurrenceRsvp({
   occurrenceId,
   zone,
   organises,
+  blockId,
+  onAnswer,
 }: {
   occurrenceId: string
   zone: string
   organises: boolean
+  blockId: string
+  onAnswer: (response: string | null) => void
 }) {
-  const [open, setOpen] = useState(false)
   const [data, setData] = useState<RsvpLists | null>(null)
   const [failed, setFailed] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -311,8 +331,14 @@ function OccurrenceRsvp({
     }
   }, [])
 
+  // The page's callback, read when it is needed — the page passes a fresh
+  // arrow on every render, and the read must not re-run on each one.
+  const onAnswerRef = useRef(onAnswer)
   useEffect(() => {
-    if (!open) return
+    onAnswerRef.current = onAnswer
+  })
+
+  useEffect(() => {
     let cancelled = false
     async function load() {
       try {
@@ -323,6 +349,8 @@ function OccurrenceRsvp({
           setData(body)
           setForm(rsvpFormFromOwn(body.own))
           setFailed(false)
+          // The server's answer for the caller — the date's chip follows it.
+          onAnswerRef.current(body.own?.response ?? null)
         } else {
           setFailed(true)
         }
@@ -334,7 +362,7 @@ function OccurrenceRsvp({
     return () => {
       cancelled = true
     }
-  }, [occurrenceId, open, reloadKey])
+  }, [occurrenceId, reloadKey])
 
   async function save(event: FormEvent) {
     event.preventDefault()
@@ -359,6 +387,9 @@ function OccurrenceRsvp({
       })
       if (!alive.current) return
       if (response.ok) {
+        // The answer the server took is the chip's at once (CK-87); the
+        // re-read below confirms it.
+        onAnswerRef.current(form.response)
         setReloadKey((key) => key + 1)
       } else {
         // Item-level errors index the SENT list ("companions.0", …).
@@ -375,14 +406,6 @@ function OccurrenceRsvp({
     if (alive.current) setSubmitting(false)
   }
 
-  if (!open) {
-    return (
-      <button type="button" className="link-button" onClick={() => setOpen(true)}>
-        RSVP and who's coming
-      </button>
-    )
-  }
-
   // The server enforces visibility; this mirror only picks the hint text.
   // An organiser sees the list in every mode, and the caller always has
   // `own`.
@@ -393,7 +416,7 @@ function OccurrenceRsvp({
       (data.visibility === 'ATTENDEES' && data.own?.response === 'yes'))
 
   return (
-    <div className="rsvp-block">
+    <div className="rsvp-block" id={blockId}>
       {failed && (
         <p className="form-error" role="alert">
           <span aria-hidden="true">⚠ </span>
@@ -625,12 +648,32 @@ function OccurrenceRsvp({
 // with no upload and no date label — and the page then reads neither
 // `occurrences` nor `rsvp_list_visibility` (NULL: withheld, not empty) and
 // asks for nothing the view withholds. On a GROUP's gathering (CK-80, Groups
-// 3c) everyone who can read it gets the group line; the organisers get Who
-// it's for (each member's place, one tap each, `organises` — delegable),
-// the prompt to share once a date has started, and an Invitations section
-// that is co-host management alone — no email form and no Waiting on,
-// because every emailed invitation to a group's gathering is the 409
-// `members_only`. Nobody is told their place.
+// 3c) the organisers get Who it's for (each member's place, one tap each,
+// `organises` — delegable), the prompt to share once a date has started, and
+// an Invitations section that is co-host management alone — no email form
+// and no Waiting on, because every emailed invitation to a group's gathering
+// is the 409 `members_only`. Nobody is told their place.
+//
+// THE MOCKUP'S LAYOUT (CK-87; its screens 08 and 09, `gatheringPage()`; the
+// merge record §3 item 7; Steven's answers of 2026-11-01). The page column
+// (`.page-column`), top to bottom: THE CRUMB — the group by name back to its
+// page, or *Gatherings* back to the list for a gathering in no group (it
+// replaces CK-80's group line and the loaded page's *Back to your
+// gatherings*); THE COVER CARD at the mockup's measure (the cover's `wide`
+// variant), the title as the <h1>, the type beneath it and, for a memorial,
+// *In memory of {name}*, all over the scrim, with the date badge in the
+// full view while a date is still ahead; THE ACTIONS — Add photos (the
+// invited tier: one press opens the device's picker with the Photos section
+// open beneath, GatheringMedia's handle) and Edit gathering (the organisers:
+// today's form, beneath the actions); the prompt to share; WHEN, each date
+// with its time range, its place and map on one line, and its row — the
+// answer chip from the body's `caller_response`, *RSVP and who's coming*,
+// and the organisers' Edit this date and Remove this date — with the remove
+// step and the RSVP block beneath the row; PHOTOS; Who it's for; and the
+// Co-hosts or Invitations section. Every section's behaviour is as it was;
+// this phase arranged them. Not here, because none is built (the merge
+// record §4): *Hosted by*, Chat and the chat preview, the Photos heading's
+// count, the grid and *See all* (CK-88).
 export function GatheringDetail() {
   const { id } = useParams()
   const { person } = useAuth()
@@ -640,6 +683,13 @@ export function GatheringDetail() {
   // by starts_at and stamps updated_at, so the page re-renders from a fresh
   // GET rather than from a locally-guessed merge (optimistic-free).
   const [reloadKey, setReloadKey] = useState(0)
+  // The Photos section's handle (CK-87): the page's Add photos opens the
+  // device's picker through it, inside the click.
+  const mediaRef = useRef<GatheringMediaHandle>(null)
+  const editFormId = useId()
+  // Which dates' RSVP blocks are open (CK-87: their buttons sit in the
+  // dates' rows, each over its own block, as independent as they were).
+  const [rsvpOpen, setRsvpOpen] = useState<string[]>([])
 
   const [editingGathering, setEditingGathering] = useState(false)
   const [gatheringForm, setGatheringForm] = useState<GatheringForm>({
@@ -892,51 +942,63 @@ export function GatheringDetail() {
     )
   }
 
-  // The header every view shares: the cover card with the title over it
-  // (CK-84; components/PageCover.tsx — the empty cover until one is set, and
-  // Change cover for the organisers in the full view alone: the photos-only
-  // view gives no role whatever arrives), then the type, the decedent line,
-  // and on a group's gathering the group line (CK-80) — a link to the
-  // group's page, for everyone who can read the gathering.
-  const header = (
-    <>
-      <PageCover
-        subject="gathering"
-        id={gathering.id}
-        cover={gathering.cover}
-        organises={viewOf(gathering.caller_view).full && roleFlags(gathering.caller_role).organises}
-        hint={COVER_HINT_GATHERING}
-        photoRemovalSentence={removePhotoSentence(gathering.title)}
-        onChanged={() => setReloadKey((key) => key + 1)}
-      >
-        <h1>{gathering.title}</h1>
-      </PageCover>
-      <p>{gatheringTypeLabel(gathering.gathering_type)}</p>
-      {gathering.memorial_decedent_name && (
-        <p>In memory of {gathering.memorial_decedent_name}</p>
-      )}
-      {gathering.group && (
-        <p>
-          In <Link to={`/groups/${gathering.group.id}`}>{gathering.group.name}</Link>
-        </p>
-      )}
-    </>
-  )
+  // The head every view shares (CK-87): THE CRUMB (the mockup's `.crumb
+  // .nrow`, CK-86's markup) — the gathering's group by name, back to its
+  // page, or *Gatherings*, back to the list, for a gathering in no group —
+  // then THE COVER CARD at the mockup's measure (CK-84's components/
+  // PageCover.tsx, the cover's `wide` variant since CK-87 — the empty cover
+  // until one is set, and Change cover for the organisers in the full view
+  // alone: the photos-only view gives no role whatever arrives), with the
+  // title, the type and, for a memorial, the decedent line over the scrim.
+  // `badge` is the full view's alone: the photos-only view has no dates.
+  function head(badge: ReactNode | undefined) {
+    const group = gathering.group
+    return (
+      <>
+        <div className="crumb">
+          <Link className="nrow" to={group ? `/groups/${group.id}` : '/gatherings'}>
+            <Icon name="back" />
+            <span className="t">
+              <b>{group ? group.name : CRUMB_GATHERINGS}</b>
+            </span>
+          </Link>
+        </div>
+        <PageCover
+          subject="gathering"
+          id={gathering.id}
+          cover={gathering.cover}
+          badge={badge}
+          organises={viewOf(gathering.caller_view).full && roleFlags(gathering.caller_role).organises}
+          hint={COVER_HINT_GATHERING}
+          photoRemovalSentence={removePhotoSentence(gathering.title)}
+          onChanged={() => setReloadKey((key) => key + 1)}
+        >
+          <h1>{gathering.title}</h1>
+          <p className="cover-card-meta">{gatheringTypeLabel(gathering.gathering_type)}</p>
+          {gathering.memorial_decedent_name && (
+            <p className="cover-card-meta">In memory of {gathering.memorial_decedent_name}</p>
+          )}
+        </PageCover>
+      </>
+    )
+  }
 
   // THE PHOTOS-ONLY VIEW (CK-80; CK-77's memory view), wherever `viewOf`
   // does not say `full` — a member only shared with a group's gathering, or
   // a body this build does not understand (an unknown view shows less). The
-  // header, one line saying what this is, and the Photos section with no
-  // upload and no date label: no When, no RSVP, no Edit gathering, no
-  // Invitations, no places. This branch NEVER reads `occurrences` or
-  // `rsvp_list_visibility` — the server sends them NULL, and withheld is
-  // not empty (the CK-30 precedent) — and asks for nothing the view
-  // withholds. The memory view carries no role (`caller_role` null), and
-  // the photos-only view gives none whatever arrives.
+  // head — the crumb and the cover card, with no badge and no Change cover —
+  // one line saying what this is, and the Photos section with no upload and
+  // no date label: no actions, no When, no RSVP, no Edit gathering, no
+  // Invitations, no places. This branch NEVER reads `occurrences`,
+  // `rsvp_list_visibility` or any date's `caller_response` — the server
+  // sends the first two NULL, and withheld is not empty (the CK-30
+  // precedent) — and asks for nothing the view withholds. The memory view
+  // carries no role (`caller_role` null), and the photos-only view gives
+  // none whatever arrives.
   if (viewOf(gathering.caller_view).photosOnly) {
     return (
-      <main className="auth-screen">
-        {header}
+      <main className="auth-screen page-column gathering-page">
+        {head(undefined)}
         <p>{PHOTOS_ONLY_LINE}</p>
         <section className="auth-card" aria-labelledby="photos-heading">
           <h2 id="photos-heading">Photos</h2>
@@ -954,7 +1016,6 @@ export function GatheringDetail() {
             zone={zone}
           />
         </section>
-        <Link to="/gatherings">Back to your gatherings</Link>
       </main>
     )
   }
@@ -976,6 +1037,50 @@ export function GatheringDetail() {
   // CK-69 the gate was `host_account_id === person.account_id`: right while
   // the host was the one organiser, and blind to a co-host.)
   const { isHost, organises } = roleFlags(gathering.caller_role)
+  // Who may add photographs: the invited tier, which is exactly the full view
+  // (CK-77) — the Photos section's `canUpload` and the page's Add photos read
+  // the same fact (CK-87).
+  const canUpload = viewOf(gathering.caller_view).full
+
+  // The one `now` this render reads its dates against: the prompt to share
+  // (a date has started) and the badge (a date still ahead).
+  const now = Date.now()
+  // THE DATE BADGE (CK-87; CK-85's `DateBadge`, in the profile's zone): the
+  // soonest date that starts at or after now — a date in progress reads as
+  // past, the one rule's meaning (CK-85) — and none once every date has
+  // started.
+  const soonestAhead = occurrences.reduce<Occurrence | null>((soonest, occurrence) => {
+    const at = Date.parse(occurrence.starts_at)
+    if (!Number.isFinite(at) || at < now) return soonest
+    return soonest === null || at < Date.parse(soonest.starts_at) ? occurrence : soonest
+  }, null)
+  const badge =
+    soonestAhead !== null ? <DateBadge startsAt={soonestAhead.starts_at} zone={zone} /> : undefined
+
+  // The answer the RSVP block learned — a save that landed, or its read —
+  // becomes the date's chip at once, without the gathering read again (the
+  // CK-84 coverSet idiom).
+  function answerChanged(occurrenceId: string, response: string | null) {
+    setState((current) =>
+      current.status === 'loaded' && current.gathering.occurrences !== null
+        ? {
+            status: 'loaded',
+            gathering: {
+              ...current.gathering,
+              occurrences: current.gathering.occurrences.map((occurrence) =>
+                occurrence.id === occurrenceId ? { ...occurrence, caller_response: response } : occurrence,
+              ),
+            },
+          }
+        : current,
+    )
+  }
+
+  function toggleRsvp(occurrenceId: string) {
+    setRsvpOpen((open) =>
+      open.includes(occurrenceId) ? open.filter((id) => id !== occurrenceId) : [...open, occurrenceId],
+    )
+  }
 
   const gatheringDirty =
     Object.keys(gatheringPatch(gatheringForm, gathering, { isHost })).length > 0
@@ -1247,7 +1352,7 @@ export function GatheringDetail() {
   // member still kept a surprise — so a surprise is never left hidden by
   // forgetting. No dialog, no notification.
   const anyDateStarted = occurrences.some(
-    (occurrence) => new Date(occurrence.starts_at).getTime() <= Date.now(),
+    (occurrence) => new Date(occurrence.starts_at).getTime() <= now,
   )
   const stillASurprise =
     organises && group !== null && anyDateStarted && places !== null
@@ -1297,42 +1402,39 @@ export function GatheringDetail() {
   }
 
   return (
-    <main className="auth-screen">
-      {header}
+    <main className="auth-screen page-column gathering-page">
+      {head(badge)}
 
-      {stillASurprise.length > 0 && group !== null && (
-        // The prompt (CK-80): one line per member still kept a surprise once
-        // a date has started, the one tap beside it — PUT shared_with, and
-        // the line goes. Nothing is sent to the member.
-        <section className="auth-card" aria-label={PLACE_LABELS.left_out}>
-          <ul className="occurrence-list">
-            {stillASurprise.map((member) => (
-              <li key={member.membership_id}>
-                <p>{promptLine(member.display_name)}</p>
-                <button
-                  type="button"
-                  disabled={placeActing !== null}
-                  onClick={() => void changePlace(member, 'shared_with', 'prompt')}
-                >
-                  {promptAction(member.display_name)}
-                </button>
-                {placeRefusal?.where === 'prompt' &&
-                  placeRefusal.membershipId === member.membership_id && (
-                    <FormLevelErrors errors={{ fields: {}, form: [placeRefusal.message] }} />
-                  )}
-              </li>
-            ))}
-          </ul>
-        </section>
+      {/* THE ACTIONS (CK-87; the mockup's `.gactions`): Add photos for
+          everyone who can upload — ONE press opens the device's picker, the
+          Photos section opening beneath it (GatheringMedia's handle, called
+          inside the click) — and Edit gathering for the organisers, over
+          today's form beneath this row. No Chat: the chat is not built. */}
+      {(canUpload || organises) && (
+        <div className="gathering-actions">
+          {canUpload && (
+            <button type="button" className="btn btn-primary" onClick={() => mediaRef.current?.pickPhotos()}>
+              <Icon name="addpic" />
+              Add photos
+            </button>
+          )}
+          {organises && (
+            <button
+              type="button"
+              className="btn"
+              aria-expanded={editingGathering}
+              aria-controls={editFormId}
+              onClick={() => (editingGathering ? setEditingGathering(false) : openGatheringEdit())}
+            >
+              Edit gathering
+            </button>
+          )}
+        </div>
       )}
 
-      {organises && !editingGathering && (
-        <button type="button" className="link-button" onClick={openGatheringEdit}>
-          Edit gathering
-        </button>
-      )}
       {organises && editingGathering && (
         <form
+          id={editFormId}
           className="auth-card gathering-form"
           aria-labelledby="edit-gathering-heading"
           onSubmit={(event) => void saveGathering(event)}
@@ -1448,10 +1550,36 @@ export function GatheringDetail() {
         </form>
       )}
 
+      {stillASurprise.length > 0 && group !== null && (
+        // The prompt (CK-80): one line per member still kept a surprise once
+        // a date has started, the one tap beside it — PUT shared_with, and
+        // the line goes. Nothing is sent to the member.
+        <section className="auth-card" aria-label={PLACE_LABELS.left_out}>
+          <ul className="occurrence-list">
+            {stillASurprise.map((member) => (
+              <li key={member.membership_id}>
+                <p>{promptLine(member.display_name)}</p>
+                <button
+                  type="button"
+                  disabled={placeActing !== null}
+                  onClick={() => void changePlace(member, 'shared_with', 'prompt')}
+                >
+                  {promptAction(member.display_name)}
+                </button>
+                {placeRefusal?.where === 'prompt' &&
+                  placeRefusal.membershipId === member.membership_id && (
+                    <FormLevelErrors errors={{ fields: {}, form: [placeRefusal.message] }} />
+                  )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="auth-card" aria-labelledby="occurrences-heading">
         <h2 id="occurrences-heading">When</h2>
         <p className="field-hint">Times in {zone}.</p>
-        <ul className="occurrence-list">
+        <ul className="occurrence-list occurrence-dates">
           {occurrences.map((occurrence) => (
             <li key={occurrence.id} className="occurrence-item">
               {organises && editingOccurrenceId === occurrence.id ? (
@@ -1531,47 +1659,79 @@ export function GatheringDetail() {
                 </form>
               ) : (
                 <>
-                  <p>
+                  <p className="occurrence-when">
                     <strong>
                       {formatInstantRange(occurrence.starts_at, occurrence.ends_at, zone)}
                     </strong>
                   </p>
-                  {occurrence.location && <p>{occurrence.location}</p>}
-                  {occurrence.map_url &&
-                    (safeHttpUrl(occurrence.map_url) ? (
-                      <p>
-                        <a href={occurrence.map_url} target="_blank" rel="noreferrer">
-                          Map
-                        </a>
-                      </p>
-                    ) : (
-                      // A stored value that fails the scheme guard renders as
-                      // plain text — the person can see what is stored (a
-                      // silently vanished field is its own bug), but nothing
-                      // navigates to it.
-                      <p>{occurrence.map_url}</p>
-                    ))}
+                  {/* The place and the map on one line (CK-87; the mockup's
+                      `.where`): *{place} · Map*, the link alone with no
+                      place, or the place alone with no map. A stored map
+                      value that fails the scheme guard renders as plain text
+                      — the person can see what is stored (a silently
+                      vanished field is its own bug), but nothing navigates
+                      to it (CK-21). */}
+                  {(occurrence.location || occurrence.map_url) && (
+                    <p className="occurrence-where">
+                      {occurrence.location && <span>{occurrence.location}</span>}
+                      {occurrence.location && occurrence.map_url && ' · '}
+                      {occurrence.map_url &&
+                        (safeHttpUrl(occurrence.map_url) ? (
+                          <a href={occurrence.map_url} target="_blank" rel="noreferrer">
+                            Map
+                          </a>
+                        ) : (
+                          <span>{occurrence.map_url}</span>
+                        ))}
+                    </p>
+                  )}
+                  {/* The date's row (CK-87; the mockup's `.occ-row`): the
+                      answer chip — the caller's own answer from the body's
+                      `caller_response`, or *Not answered* in the dashed chip
+                      — then RSVP and who's coming, then the organisers'
+                      Edit this date and Remove this date. The chip is text in
+                      the row, never the button's name. */}
+                  <div className="occurrence-row">
+                    <span className={occurrence.caller_response ? 'answer' : 'answer answer-none'}>
+                      {occurrence.caller_response
+                        ? rsvpResponseLabel(occurrence.caller_response)
+                        : NOT_ANSWERED}
+                    </span>
+                    <button
+                      type="button"
+                      className="link-button"
+                      aria-expanded={rsvpOpen.includes(occurrence.id)}
+                      aria-controls={`rsvp-block-${occurrence.id}`}
+                      onClick={() => toggleRsvp(occurrence.id)}
+                    >
+                      RSVP and who's coming
+                    </button>
+                    {organises && (
+                      <>
+                        <button
+                          type="button"
+                          className="link-button"
+                          onClick={() => openOccurrenceEdit(occurrence)}
+                        >
+                          Edit this date
+                        </button>
+                        <button
+                          type="button"
+                          className="link-button"
+                          aria-describedby={
+                            removeErrors?.occurrenceId === occurrence.id
+                              ? describedBy(removeErrors.errors, 'occurrence_id', occurrence.id)
+                              : undefined
+                          }
+                          onClick={() => void removeOccurrence(occurrence.id)}
+                        >
+                          Remove this date
+                        </button>
+                      </>
+                    )}
+                  </div>
                   {organises && (
                     <>
-                      <button
-                        type="button"
-                        className="link-button"
-                        onClick={() => openOccurrenceEdit(occurrence)}
-                      >
-                        Edit this date
-                      </button>{' '}
-                      <button
-                        type="button"
-                        className="link-button"
-                        aria-describedby={
-                          removeErrors?.occurrenceId === occurrence.id
-                            ? describedBy(removeErrors.errors, 'occurrence_id', occurrence.id)
-                            : undefined
-                        }
-                        onClick={() => void removeOccurrence(occurrence.id)}
-                      >
-                        Remove this date
-                      </button>
                       {removeErrors?.occurrenceId === occurrence.id && (
                         <>
                           <FieldError
@@ -1610,11 +1770,15 @@ export function GatheringDetail() {
                       )}
                     </>
                   )}
-                  <OccurrenceRsvp
-                    occurrenceId={occurrence.id}
-                    zone={zone}
-                    organises={organises}
-                  />
+                  {rsvpOpen.includes(occurrence.id) && (
+                    <OccurrenceRsvp
+                      occurrenceId={occurrence.id}
+                      zone={zone}
+                      organises={organises}
+                      blockId={`rsvp-block-${occurrence.id}`}
+                      onAnswer={(response) => answerChanged(occurrence.id, response)}
+                    />
+                  )}
                 </>
               )}
             </li>
@@ -1720,11 +1884,13 @@ export function GatheringDetail() {
       <section className="auth-card" aria-labelledby="photos-heading">
         <h2 id="photos-heading">Photos</h2>
         <GatheringMedia
+          ref={mediaRef}
           gatheringId={gathering.id}
           isHost={isHost}
           organises={organises}
           requiresApproval={gathering.requires_approval}
           occurrences={occurrences}
+          canUpload={canUpload}
           cover={gathering.cover}
           group={group}
           gatheringTitle={gathering.title}
@@ -2041,8 +2207,6 @@ export function GatheringDetail() {
           )}
         </section>
       )}
-
-      <Link to="/gatherings">Back to your gatherings</Link>
     </main>
   )
 }

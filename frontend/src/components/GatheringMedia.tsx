@@ -1,4 +1,13 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import {
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+  type Ref,
+} from 'react'
+import { flushSync } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { authFetch } from '../lib/api'
 import {
@@ -277,8 +286,29 @@ import { FieldError, FormLevelErrors } from './FieldError'
 //    Nothing else in this section changes: no cover is listed among the
 //    photos, and a cover is never counted.
 //
+// And, since CK-87, the page's Add photos (the gathering page in the mockup's
+// layout; Steven's answer 2 of 2026-11-01):
+//
+// 12. ONE PRESS UNDER THE COVER OPENS THE DEVICE'S PICKER. The page holds a
+//    handle on this section (`ref`, `GatheringMediaHandle`) and its Add
+//    photos calls `pickPhotos()` inside the click: the section opens
+//    synchronously (`flushSync`, so its upload form — and the file input in
+//    it — is rendered before the handler goes on) and the input is clicked
+//    in the same handler, before anything is awaited, because a picker
+//    needs the click's user activation (CK-79's lesson). The chosen files
+//    wait in the form as before, and Upload sends them as before — nothing
+//    about uploading changes. When the picker closes with files chosen after
+//    that press, the section is brought into view and focus moves to Upload;
+//    a choice made in the form itself leaves focus where it was, as before.
+//    Without the upload form (`canUpload` false) the handle does nothing.
+//
 // Collapsed by default (the CK-25/CK-27 pattern): the detail page stays one
 // request until the person opens this section.
+
+// What the page holds on this section (CK-87, point 12).
+export interface GatheringMediaHandle {
+  pickPhotos: () => void
+}
 
 interface Props {
   gatheringId: string
@@ -325,6 +355,8 @@ interface Props {
   // Overridable for tests only; the product uses the one constant each.
   pollIntervalMs?: number
   searchDebounceMs?: number
+  // The page's handle for Add photos (CK-87, point 12).
+  ref?: Ref<GatheringMediaHandle>
 }
 
 // What this device knows about a row that the server cannot: whether the
@@ -576,6 +608,7 @@ export function GatheringMedia({
   zone,
   pollIntervalMs = POLL_INTERVAL_MS,
   searchDebounceMs = SEARCH_DEBOUNCE_MS,
+  ref,
 }: Props) {
   // The delegable flag (point 9): a host organises by definition.
   const organises = organisesProp ?? isHost
@@ -659,6 +692,14 @@ export function GatheringMedia({
   const groupId = group?.id ?? null
 
   const fileInput = useRef<HTMLInputElement>(null)
+  // Add photos (CK-87, point 12): the root, to bring the section into view;
+  // the Upload button, to move focus to it; and whether the picker open now
+  // was opened by the page's press — a choice made in the form itself moves
+  // nothing — and, once files are chosen after that press, a focus owed.
+  const blockRef = useRef<HTMLDivElement>(null)
+  const uploadButton = useRef<HTMLButtonElement>(null)
+  const pickedFromPage = useRef(false)
+  const [focusUploadOwed, setFocusUploadOwed] = useState(false)
   const alive = useRef(true)
   useEffect(() => {
     alive.current = true
@@ -666,6 +707,42 @@ export function GatheringMedia({
       alive.current = false
     }
   }, [])
+
+  // The page's Add photos (point 12): open the section NOW — flushSync
+  // renders it, file input and all, before this handler goes on — then click
+  // the input in the same press, so the picker keeps the click's activation.
+  useImperativeHandle(
+    ref,
+    () => ({
+      pickPhotos() {
+        if (!canUpload) return
+        flushSync(() => setOpen(true))
+        const input = fileInput.current
+        if (input === null) return
+        pickedFromPage.current = true
+        // A picker closed with nothing chosen owes nothing.
+        input.addEventListener(
+          'cancel',
+          () => {
+            pickedFromPage.current = false
+          },
+          { once: true },
+        )
+        input.click()
+      },
+    }),
+    [canUpload],
+  )
+
+  // Files chosen after the page's press: bring the section into view and
+  // move focus to Upload, once the button is enabled by the chosen files.
+  useEffect(() => {
+    if (!focusUploadOwed || files.length === 0) return
+    setFocusUploadOwed(false)
+    const section = blockRef.current?.closest('section') ?? blockRef.current
+    section?.scrollIntoView?.({ block: 'start' })
+    uploadButton.current?.focus({ preventScroll: true })
+  }, [focusUploadOwed, files])
 
   useEffect(() => {
     if (!open || groupId === null) return
@@ -1120,7 +1197,7 @@ export function GatheringMedia({
         : `Showing ${matchCount} removed from this gathering.`
 
   return (
-    <div className="media-block">
+    <div className="media-block" ref={blockRef}>
       {/* The upload form is the invited tier's (CK-80): none in the
           photos-only view, where the server refuses an intent. */}
       {canUpload && (
@@ -1134,8 +1211,13 @@ export function GatheringMedia({
             accept={PICKER_ACCEPT}
             aria-describedby={describedBy(errors, 'items')}
             onChange={(event) => {
-              setFiles(Array.from(event.target.files ?? []))
+              const chosen = Array.from(event.target.files ?? [])
+              setFiles(chosen)
               setErrors(noErrors())
+              // Chosen after the page's Add photos (point 12): focus is owed
+              // to Upload once the button is enabled.
+              if (pickedFromPage.current && chosen.length > 0) setFocusUploadOwed(true)
+              pickedFromPage.current = false
             }}
           />
           {/* The product's first promise about a photograph, in the real
@@ -1175,7 +1257,7 @@ export function GatheringMedia({
               <Link to="/plan">Get more space</Link>
             </p>
           )}
-          <button type="submit" disabled={files.length === 0 || progress !== null}>
+          <button ref={uploadButton} type="submit" disabled={files.length === 0 || progress !== null}>
             {progress !== null
               ? `Uploading ${Math.min(progress.done + 1, progress.total)} of ${progress.total}…`
               : files.length > 1

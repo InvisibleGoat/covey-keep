@@ -1,6 +1,7 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useState, type ReactNode } from 'react'
 import { EMPTY_COVER_LINE, loadCoverPicture, type CoverBody, type CoverSubject } from '../lib/covers'
 import { badgeParts } from '../lib/datetime'
+import type { LinePiece } from '../lib/gatherings'
 import type { ServableLayer } from '../lib/media'
 import { EmptyCover, EmptyCoverCard } from './AuthArt'
 
@@ -11,15 +12,16 @@ import { EmptyCover, EmptyCoverCard } from './AuthArt'
 // the cover card at the top of a group's or a gathering's page.
 //
 // - `variant="thumb"`: the 42px thumbnail in its small ring mat.
-//   `variant="card"`: the page's cover card — the mat, the photograph at
-//   16/10, and `children` (the page's <h1>) over the scrim, `action` (Change
-//   cover) at its top right — at the width today's centred column gives its
-//   cards (a gathering's page, until CK-87).
-//   `variant="wide"` (CK-86): the same card at the mockup's measure
-//   (`.card.gcover`) — the page column's width, the photograph 16:10 on a
-//   phone and 3:1 from 640px, the title's and the scrim's fluid sizes; the
-//   group's page. The photograph's height is its LEAST height: a name that
-//   wraps grows the picture rather than running off its top.
+//   `variant="wide"` (CK-86): a page's cover card at the mockup's measure
+//   (`.card.gcover`) — the mat, the page column's width, the photograph
+//   16:10 on a phone and 3:1 from 640px, `children` (the page's <h1> and its
+//   meta line) over the scrim at the title's and the scrim's fluid sizes,
+//   and `action` (Change cover) at its top right; a group's page since
+//   CK-86, a gathering's since CK-87. The photograph's height is its LEAST
+//   height: a name that wraps grows the picture rather than running off its
+//   top. (Until CK-87 a `card` variant drew the same card at the width the
+//   old centred column gave its cards; a gathering's page was its last user,
+//   and it went with its styles and its `LAYER` row.)
 //   `variant="hero"` (CK-85): the featured card of a list — the mat, the
 //   photograph at 4:3 (16:9 from 640px, 2.25:1 from 900px), and `children`
 //   (the <h2> holding the card's link, its meta line and the visual Open
@@ -28,16 +30,15 @@ import { EmptyCover, EmptyCoverCard } from './AuthArt'
 //   photograph at 4:3, and `children` (the <h3> holding the card's link and
 //   the meta lines) beneath it. The words come first in the markup, so the
 //   name reads first, and the picture is drawn above them by CSS.
-//   `badge` (hero and tile): the date badge over the picture's corner —
-//   `DateBadge`, below.
+//   `badge` (hero, tile, and since CK-87 the wide card): the date badge over
+//   the picture's corner — `DateBadge`, below.
 // - THE LAYER FOLLOWS THE VARIANT AND NOTHING ELSE (`LAYER`, below): the
-//   thumbnail for a thumb or a tile, the web layer for a card, a wide card or
-//   a hero — so no caller can ask for a print master (`archival` is never
-//   served).
+//   thumbnail for a thumb or a tile, the web layer for a wide card or a hero
+//   — so no caller can ask for a print master (`archival` is never served).
 // - No cover (`cover` null or absent — the many bodies and fixtures that
-//   carry none): the empty cover — the quail in the ring mat, or on a card,
-//   a hero or a tile the quail and *No cover photo yet*. A 409 `no_cover`
-//   (cleared since the body was read) draws the same.
+//   carry none): the empty cover — the quail in the ring mat, or on a wide
+//   card, a hero or a tile the quail and *No cover photo yet*. A 409
+//   `no_cover` (cleared since the body was read) draws the same.
 // - A cover: the picture, `alt=""` — the name beside or over it is the text.
 //   While it loads, and if it fails, the `--ck-empty` ground alone shows:
 //   no quail and no words, because a cover does exist.
@@ -47,12 +48,11 @@ import { EmptyCover, EmptyCoverCard } from './AuthArt'
 //   The cache owns every object URL: this component never revokes one.
 //   Nothing here ever holds a presigned URL — only the `blob:` reference.
 
-export type CoverVariant = 'thumb' | 'card' | 'wide' | 'hero' | 'tile'
+export type CoverVariant = 'thumb' | 'wide' | 'hero' | 'tile'
 
 const LAYER: Record<CoverVariant, ServableLayer> = {
   thumb: 'thumbnail',
   tile: 'thumbnail',
-  card: 'web',
   wide: 'web',
   hero: 'web',
 }
@@ -68,6 +68,27 @@ export function DateBadge({ startsAt, zone }: { startsAt: string; zone: string }
       <span className="cover-date-m">{month}</span>
       <span className="cover-date-d">{day}</span>
     </span>
+  )
+}
+
+// A card's line from its pieces (CK-87; lib/gatherings.ts's `LinePiece`):
+// each date and each time in an element that does not wrap, so a narrow card
+// never breaks inside one, and the separators between them free to break.
+// The text is the pieces as they are — nothing replaced — so the line reads
+// exactly as its string does.
+export function CardLine({ pieces }: { pieces: LinePiece[] }) {
+  return (
+    <>
+      {pieces.map((piece, index) =>
+        piece.keep ? (
+          <span key={index} className="nowrap">
+            {piece.text}
+          </span>
+        ) : (
+          <Fragment key={index}>{piece.text}</Fragment>
+        ),
+      )}
+    </>
   )
 }
 
@@ -127,7 +148,7 @@ export function Cover({
     return <span className="nthumb cover-ground" aria-hidden="true" />
   }
 
-  // A card's, a hero's or a tile's picture: the empty cover, the picture, or
+  // A wide card's, a hero's or a tile's picture: the empty cover, the picture, or
   // — while it loads or if it cannot be shown — nothing over the ground.
   const picture = empty ? (
     <EmptyCoverCard line={EMPTY_COVER_LINE} />
@@ -161,13 +182,15 @@ export function Cover({
     )
   }
 
-  // The card: the heading comes first in the markup — it reads first — and
-  // the scrim it sits on is drawn above the picture by CSS.
+  // The wide card: the heading comes first in the markup — it reads first —
+  // and the picture is drawn beneath the words by CSS, the badge at its
+  // corner.
   return (
-    <div className={variant === 'wide' ? 'cover-card cover-card-wide' : 'cover-card'}>
+    <div className="cover-card cover-card-wide">
       <div className="cover-photo">
         <div className="cover-over">{children}</div>
         {picture}
+        {badge}
       </div>
       {action}
     </div>

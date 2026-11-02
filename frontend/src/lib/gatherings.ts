@@ -2,7 +2,7 @@
 // backend/app/api/gatherings.py's response bodies exactly — see
 // reference/backend/api-reference.md, Gatherings router.
 import type { CoverBody } from './covers'
-import { formatDayWithYear, formatInstant, formatTime, formatWeekdayDay } from './datetime'
+import { formatDayWithYear, formatTime, formatWeekdayDay } from './datetime'
 
 export interface Occurrence {
   id: string
@@ -11,6 +11,14 @@ export interface Occurrence {
   ends_at: string | null
   location: string | null
   map_url: string | null
+  // The caller's OWN answer on this date (CK-87), on every occurrence a
+  // gathering body carries — the create body and the detail: `yes`, `maybe`,
+  // `no`, or null where they have not answered. The page's answer chip reads
+  // it (labels in lib/rsvps.ts). Optional because the occurrence routes' own
+  // bodies carry none — the page re-reads the gathering after every date act
+  // — and because the photos-only view carries no occurrences at all, so the
+  // field is never read there (the CK-80 Gotcha).
+  caller_response?: string | null
 }
 
 export interface Gathering {
@@ -160,22 +168,6 @@ export const PHOTOS_ONLY_ITEM = 'You can see its photos'
 export const PHOTOS_ONLY_LINE =
   "You can see this gathering's photos. Its dates and plans are for the people invited."
 
-// The line under a list item's title on a group's own list of gatherings
-// (Your gatherings' cards have their own lines since CK-85, below): the
-// type, then the next date under the backend's
-// next-or-most-recent rule — or, in the photos-only view, PHOTOS_ONLY_ITEM
-// and no date, because none was sent — then, where asked, the group's name.
-export function listItemLine(item: GatheringListItem, zone: string, withGroup: boolean): string {
-  const parts = [gatheringTypeLabel(item.gathering_type)]
-  if (viewOf(item.caller_view).full) {
-    if (item.next_occurrence) parts.push(formatInstant(item.next_occurrence.starts_at, zone))
-  } else {
-    parts.push(PHOTOS_ONLY_ITEM)
-  }
-  if (withGroup && item.group) parts.push(item.group.name)
-  return parts.join(' · ')
-}
-
 // --- Your gatherings in the mockup's layout (CK-85) ---------------------------
 
 // The instant an item's date names — its next date under the backend's
@@ -243,29 +235,59 @@ export function cardPlaceLine(item: GatheringListItem): string {
   return `${item.group ? item.group.name : NOT_IN_A_GROUP} · ${gatheringTypeLabel(item.gathering_type)}`
 }
 
+// A card's line in its pieces (CK-87): each date — *Thu, Dec 24*, *Oct 3,
+// 2026* — and each time — *6:30 PM* — is a piece the card keeps whole on
+// screen (`keep`), so a narrow card never breaks inside one (*3 dates · next
+// Thu, Dec* / *24* in CK-86's screenshot); the line may still break between
+// its pieces, at *·* or before *next*. The text is the pieces joined, with
+// no character replaced, so every line reads exactly as it did.
+export interface LinePiece {
+  text: string
+  keep: boolean
+}
+
+export function lineText(pieces: LinePiece[]): string {
+  return pieces.map((piece) => piece.text).join('')
+}
+
+const kept = (text: string): LinePiece => ({ text, keep: true })
+const loose = (text: string): LinePiece => ({ text, keep: false })
+
 // A card's second line, every date and time in `zone`: a coming-up item with
 // more than one date — *4 dates · next Thu, Oct 15* — or with one — *Thu,
 // Oct 15 · 6:30 PM*; a past item its day with the year — *Oct 3, 2026*; a
 // photos-only item PHOTOS_ONLY_ITEM and no date, because none was sent. The
 // same `now` as the sections, so a card's line and its section agree.
-export function cardDateLine(item: GatheringListItem, zone: string, now: number): string | null {
-  if (viewOf(item.caller_view).photosOnly) return PHOTOS_ONLY_ITEM
+export function cardDatePieces(item: GatheringListItem, zone: string, now: number): LinePiece[] | null {
+  if (viewOf(item.caller_view).photosOnly) return [loose(PHOTOS_ONLY_ITEM)]
   if (item.next_occurrence === null) return null
   const startsAt = item.next_occurrence.starts_at
-  if (!isComingUp(item, now)) return formatDayWithYear(startsAt, zone)
+  if (!isComingUp(item, now)) return [kept(formatDayWithYear(startsAt, zone))]
   const day = formatWeekdayDay(startsAt, zone)
   const count = item.occurrence_count ?? 1
-  return count > 1 ? `${count} dates · next ${day}` : `${day} · ${formatTime(startsAt, zone)}`
+  return count > 1
+    ? [loose(`${count} dates · next `), kept(day)]
+    : [kept(day), loose(' · '), kept(formatTime(startsAt, zone))]
+}
+
+export function cardDateLine(item: GatheringListItem, zone: string, now: number): string | null {
+  const pieces = cardDatePieces(item, zone, now)
+  return pieces === null ? null : lineText(pieces)
 }
 
 // The featured card's one line: the group, the type, the next date's day
-// and its time — *The Lees · Potluck · Thu, Oct 15 · 6:30 PM*. Only a
-// coming-up item is featured, so it always has its date.
-export function featuredLine(item: GatheringListItem, zone: string): string {
-  const parts = [cardPlaceLine(item)]
+// and its time — *The Lees · Potluck · Thu, Oct 15 · 6:30 PM*, the day and
+// the time each kept whole. Only a coming-up item is featured, so it always
+// has its date.
+export function featuredPieces(item: GatheringListItem, zone: string): LinePiece[] {
+  const pieces = [loose(cardPlaceLine(item))]
   if (item.next_occurrence) {
-    parts.push(formatWeekdayDay(item.next_occurrence.starts_at, zone))
-    parts.push(formatTime(item.next_occurrence.starts_at, zone))
+    pieces.push(loose(' · '), kept(formatWeekdayDay(item.next_occurrence.starts_at, zone)))
+    pieces.push(loose(' · '), kept(formatTime(item.next_occurrence.starts_at, zone)))
   }
-  return parts.join(' · ')
+  return pieces
+}
+
+export function featuredLine(item: GatheringListItem, zone: string): string {
+  return lineText(featuredPieces(item, zone))
 }

@@ -204,6 +204,34 @@ test('Coming up: the rest of the gatherings still ahead, soonest first, without 
   }
 })
 
+// CK-87's rider (Steven): on a narrow card a date never breaks inside
+// itself — *3 dates · next Thu, Dec* / *24* in CK-86's screenshot. Each date
+// and each time is in an element that does not wrap, and the line's text is
+// unchanged, character for character; the line may still break between its
+// pieces, at · or before next.
+test('every date and time on a card is kept whole — in a no-wrap element — and every line reads exactly as before', async () => {
+  stubList(LIST)
+  renderPage()
+  await loaded()
+  const kept = (line: Element) => [...line.querySelectorAll('.nowrap')].map((piece) => piece.textContent)
+  const heroLine = featured().querySelector('.cover-hero-meta') as HTMLElement
+  expect(heroLine.textContent).toBe('The Lees · Season · Thu, Mar 1 · 12:30 AM')
+  expect(kept(heroLine)).toEqual(['Thu, Mar 1', '12:30 AM'])
+  const [, biscuitDate] = cardOf('Biscuit Turns One').querySelectorAll('p')
+  expect(biscuitDate.textContent).toBe('Sun, Apr 15 · 3:00 PM')
+  expect(kept(biscuitDate)).toEqual(['Sun, Apr 15', '3:00 PM'])
+  const [seasonPlace, seasonDate] = cardOf('Spring Season').querySelectorAll('p')
+  expect(seasonDate.textContent).toBe('12 dates · next Sun, May 6')
+  expect(kept(seasonDate)).toEqual(['Sun, May 6'])
+  // The place line has no date in it, and keeps nothing.
+  expect(kept(seasonPlace)).toEqual([])
+  const [, campingDate] = cardOf('Fall Camping Trip').querySelectorAll('p')
+  expect(kept(campingDate)).toEqual(['Oct 3, 2026'])
+  const [, photosLine] = cardOf('The Party').querySelectorAll('p')
+  expect(photosLine.textContent).toBe('You can see its photos')
+  expect(kept(photosLine)).toEqual([])
+})
+
 test('Past: most recent first — a date in progress included — four, then Show all {N} past gatherings, which shows the rest in place and goes away', async () => {
   stubList(LIST)
   renderPage()
@@ -403,13 +431,21 @@ const routeSources = import.meta.glob(['./*.tsx', '!./*.test.tsx'], {
 // mockup's page column for the pages whose phases have built their layout.
 // What the pin always held still holds: every other page keeps the centred
 // column, and `.list-screen` is gone from every route.
-test('the page column class is on the two list pages, a group’s page and its People page, and no other route: every other page keeps its column', () => {
+// MOVED AT CK-87, with its reason: a gathering's page takes the page column
+// too, its phase having built its layout — five routes now. The rest holds.
+test('the page column class is on the two list pages, a group’s page and its People page, a gathering’s page, and no other route: every other page keeps its column', () => {
   expect(Object.keys(routeSources).length).toBeGreaterThan(15)
   const using = Object.entries(routeSources)
     .filter(([, source]) => /\bpage-column\b/.test(source))
     .map(([path]) => path)
     .sort()
-  expect(using).toEqual(['./Gatherings.tsx', './GroupDetail.tsx', './GroupPeople.tsx', './Groups.tsx'])
+  expect(using).toEqual([
+    './GatheringDetail.tsx',
+    './Gatherings.tsx',
+    './GroupDetail.tsx',
+    './GroupPeople.tsx',
+    './Groups.tsx',
+  ])
   expect(Object.values(routeSources).filter((source) => /className="[^"]*\blist-screen\b/.test(source))).toEqual([])
   // And .auth-screen itself is unchanged: still the centred column.
   const authScreen = appCss.slice(appCss.indexOf('.auth-screen {'), appCss.indexOf('}', appCss.indexOf('.auth-screen {')))
