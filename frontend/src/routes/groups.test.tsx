@@ -287,6 +287,27 @@ test('each meta line is the count in people, with · Admin or · Co-admin only f
   expect(document.body.textContent).not.toMatch(/\bmembers?\b/)
 })
 
+// CK-87.2: on a narrow grid card *Co-admin* broke at its hyphen (*Co-* /
+// *admin*, at 320–335px). The role is a no-wrap piece of the line, as a card's
+// date is (CK-87) — the text unchanged, a real hyphen, the line free to break
+// before the role.
+test('the role is kept whole in a no-wrap piece on the featured card and a grid card, the line’s text unchanged', async () => {
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(json(200, { groups: THREE }))))
+  renderList()
+  await screen.findByRole('heading', { level: 1, name: 'Groups' })
+  const heroLine = featuredCard().querySelector('.cover-hero-meta') as HTMLElement
+  expect(heroLine.textContent).toBe('3 people · Admin')
+  expect([...heroLine.querySelectorAll('.nowrap')].map((piece) => piece.textContent)).toEqual(['Admin'])
+  const lines = [...screen.getByRole('list', { name: 'More groups' }).querySelectorAll('.cover-meta')] as HTMLElement[]
+  expect(lines[0].textContent).toBe('1 person · Co-admin')
+  expect([...lines[0].querySelectorAll('.nowrap')].map((piece) => piece.textContent)).toEqual(['Co-admin'])
+  // No non-breaking hyphen (U+2011): the character is the one the label holds.
+  expect(lines[0].textContent).not.toMatch(/‑/)
+  // A member's card has no role and nothing kept.
+  expect(lines[1].textContent).toBe('12 people')
+  expect(lines[1].querySelectorAll('.nowrap')).toHaveLength(0)
+})
+
 test('one group: the featured card alone, and no More groups heading or list', async () => {
   vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(json(200, { groups: [group()] }))))
   renderList()

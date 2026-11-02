@@ -365,7 +365,9 @@ test('the empty cover’s row is laid by the flow, never by fixed insets — the
   expect(css).not.toMatch(/padding-left: 72px/)
   expect(css).not.toMatch(/padding-top: 56px/)
   expect(css).not.toMatch(/\.cover-card-wide \.cover-empty\s*\{/)
-  expect(css).not.toMatch(/:has\(> \.cover-empty\)/)
+  // Narrowed at CK-87.2 to the wide card's picture: the featured card's own
+  // empty row (CK-87.2) is laid by `.cover-hero .cover-frame:has(> .cover-empty)`.
+  expect(css).not.toMatch(/\.cover-photo:has\(> \.cover-empty\)/)
   // The badge's 64px keeps the words below it over a cover alone: it reads
   // the badge as the picture's own child, which on an empty cover it is not.
   expect(css).toMatch(/\.cover-card-wide \.cover-photo:has\(> \.cover-date\) > \.cover-over \{\s*padding-top: 64px;\s*\}/)
@@ -381,14 +383,14 @@ test('the empty cover’s row is laid by the flow, never by fixed insets — the
   expect(photo).toMatch(/display: grid;/)
   expect(photo).toMatch(/grid-template-columns: minmax\(0, 1fr\) auto;/)
   expect(photo).toMatch(/grid-template-rows: auto 1fr;/)
-  // The scrim drawn on the picture itself, over the empty ground.
-  expect(photo).toMatch(
-    /background:\s*linear-gradient\(to top, var\(--ck-scrim\) 0%, var\(--ck-scrim-mid\) 45%, var\(--ck-scrim-0\) 80%\),\s*var\(--ck-empty\);/,
-  )
+  // MOVED AT CK-87.2: the scrim is no longer drawn on the picture — CK-87.1's
+  // gradient over the whole picture left a title's top line on the near-clear
+  // ground (1.1–2.7:1, measured) — but on the words' own box, pinned in the
+  // empty cover's scrim test below. The picture keeps the empty ground alone.
+  expect(photo).not.toMatch(/background/)
   const over = rule('.cover-card-wide .cover-photo:has(> .cover-lead) > .cover-over')
   expect(over).toMatch(/grid-row: 2;/)
   expect(over).toMatch(/grid-column: 1 \/ -1;/)
-  expect(over).toMatch(/background: none;/)
   const lead = rule('.cover-lead')
   expect(lead).toMatch(/grid-row: 1;/)
   expect(lead).toMatch(/grid-column: 1;/)
@@ -412,8 +414,110 @@ test('the empty cover’s row is laid by the flow, never by fixed insets — the
   ].join('\n')
   expect(block).not.toMatch(/#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/)
   const used = [...new Set([...block.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]))]
-  expect(used).toEqual(expect.arrayContaining(['--ck-scrim', '--ck-scrim-mid', '--ck-scrim-0', '--ck-empty']))
   for (const name of used) expect(tokensCss, name).toMatch(new RegExp(`${name}\\s*:`))
+})
+
+// ---------------------------------------------------------------------------
+// CK-87.2 — the cover cards at every width, and an empty cover's scrim. jsdom
+// lays nothing out, so the layout's proof is the report's probes at every
+// width from 320 to 1440 and its contrast table; these pin the rules.
+// ---------------------------------------------------------------------------
+
+const css87 = () => appCss.replace(/\/\*[\s\S]*?\*\//g, '')
+const rule87 = (selector: string) => {
+  const css = css87()
+  const start = css.indexOf(`${selector} {`)
+  expect(start, selector).toBeGreaterThan(-1)
+  return css.slice(start, css.indexOf('}', start) + 1)
+}
+const noLiteralNoNewToken = (block: string) => {
+  expect(block).not.toMatch(/#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/)
+  const used = [...new Set([...block.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]))]
+  for (const name of used) expect(tokensCss, name).toMatch(new RegExp(`${name}\\s*:`))
+}
+
+test('over a set cover the words keep below Change cover, as below the badge — and never on an empty cover, where the pill has its own column', () => {
+  const change = rule87('.cover-card-wide .cover-photo:has(> .cover-change):not(:has(> .cover-lead)) > .cover-over')
+  expect(change).toMatch(/padding-top: 64px;/)
+  // The badge's own rule stands as it was.
+  expect(rule87('.cover-card-wide .cover-photo:has(> .cover-date) > .cover-over')).toMatch(/padding-top: 64px;/)
+  // Change cover itself does not move: 8px in, 44px tall.
+  const pill = rule87('.auth-screen .cover-change')
+  expect(pill).toMatch(/top: 8px;/)
+  expect(pill).toMatch(/right: 8px;/)
+  expect(pill).toMatch(/min-height: 44px;/)
+  noLiteralNoNewToken(change)
+})
+
+test('the featured card’s ratio is its least height, the words in the flow; with no cover the empty cover is a row above them; the badge keeps the words below it', () => {
+  const frame = rule87('.cover-hero .cover-frame')
+  expect(frame).toMatch(/display: flex;/)
+  expect(frame).toMatch(/flex-direction: column;/)
+  // clip, not hidden: hidden would make a scroll container held to its ratio.
+  expect(frame).toMatch(/overflow: clip;/)
+  expect(rule87('.cover-hero .cover-frame > img')).toMatch(/position: absolute;/)
+  const over = rule87('.cover-hero .cover-over')
+  expect(over).toMatch(/position: relative;/)
+  expect(over).toMatch(/flex: 1 0 auto;/)
+  // The look over a cover is the mockup's, unchanged.
+  expect(over).toMatch(/background: linear-gradient\(to top, var\(--ck-scrim\) 0%, var\(--ck-scrim-mid\) 42%, var\(--ck-scrim-0\) 75%\);/)
+  expect(rule87('.cover-hero .cover-frame:has(> .cover-date) > .cover-over')).toMatch(/padding-top: 70px;/)
+  const empty = rule87('.cover-hero .cover-frame:has(> .cover-empty)')
+  expect(empty).toMatch(/display: grid;/)
+  expect(empty).toMatch(/grid-template-rows: auto 1fr;/)
+  const row = rule87('.cover-hero .cover-frame > .cover-empty')
+  expect(row).toMatch(/grid-row: 1;/)
+  expect(row).toMatch(/height: auto;/)
+  // CK-85's look: the quail beside its line on a phone, centred.
+  expect(row).toMatch(/grid-auto-flow: column;/)
+  expect(row).toMatch(/justify-content: center;/)
+  expect(rule87('.cover-hero .cover-frame:has(> .cover-empty) > .cover-over')).toMatch(/grid-row: 2;/)
+  // Clear of the badge on both sides, so it stays centred.
+  expect(rule87('.cover-hero .cover-frame:has(> .cover-date) > .cover-empty')).toMatch(/padding-inline: 70px;/)
+  // Until CK-87.2 the words were laid over the whole picture and the empty
+  // cover kept 64px clear at its foot.
+  expect(css87()).not.toMatch(/\.cover-hero \.cover-empty \{/)
+  noLiteralNoNewToken([frame, over, empty, row].join('\n'))
+})
+
+test('a grid card’s quail is sized to fit its 4:3 frame — the 54% where there is room, shrinking where there is not, the line keeping its height', () => {
+  const empty = rule87('.cover-tile .cover-empty')
+  expect(empty).toMatch(/display: flex;/)
+  expect(empty).toMatch(/flex-direction: column;/)
+  expect(empty).toMatch(/justify-content: center;/)
+  expect(empty).toMatch(/padding: 4px 10px;/)
+  const quail = rule87('.cover-tile .cover-empty img')
+  expect(quail).toMatch(/flex: 0 1 auto;/)
+  expect(quail).toMatch(/min-height: 0;/)
+  expect(quail).toMatch(/width: 54%;/)
+  expect(quail).toMatch(/max-width: 150px;/)
+  // The frame keeps its 4:3 and its clip.
+  const frame = rule87('.cover-frame')
+  expect(frame).toMatch(/aspect-ratio: 4 \/ 3;/)
+  expect(frame).toMatch(/overflow: hidden;/)
+  noLiteralNoNewToken([empty, quail].join('\n'))
+})
+
+test('an empty cover’s scrim is drawn on the words’ own box at the picture’s foot, reaching the title’s top line, in the three scrim tokens alone', () => {
+  const css = css87()
+  const start = css.indexOf('.cover-hero .cover-frame:has(> .cover-empty) > .cover-over,')
+  expect(start).toBeGreaterThan(-1)
+  const band = css.slice(start, css.indexOf('}', start) + 1)
+  // One rule for both cards.
+  expect(band).toMatch(/\.cover-card-wide \.cover-photo:has\(> \.cover-lead\) > \.cover-over \{/)
+  expect(band).toMatch(/align-self: end;/)
+  // The title's top line 28px down, past the mid scrim at 16px.
+  expect(band).toMatch(/padding-top: 28px;/)
+  expect(band).toMatch(
+    /background: linear-gradient\(to bottom, var\(--ck-scrim-0\) 0, var\(--ck-scrim-mid\) 16px, var\(--ck-scrim\) 56px\);/,
+  )
+  const used = [...new Set([...band.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]))].sort()
+  expect(used).toEqual(['--ck-scrim', '--ck-scrim-0', '--ck-scrim-mid'])
+  noLiteralNoNewToken(band)
+  // The empty cover's line keeps its colours: the text colour on a page's
+  // card and the featured card, muted on a grid card.
+  expect(rule87('.cover-empty')).toMatch(/color: var\(--pg-text\);/)
+  expect(rule87('.cover-tile .cover-empty')).toMatch(/color: var\(--ck-muted\);/)
 })
 
 // ---------------------------------------------------------------------------

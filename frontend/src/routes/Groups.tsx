@@ -19,17 +19,21 @@
 // never "Try again." with nothing to press. Their words are today's.
 import { useEffect, useId, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Cover } from '../components/Cover'
+import { CardLine, Cover } from '../components/Cover'
 import { Icon } from '../components/Icons'
+import type { LinePiece } from '../lib/gatherings'
 import { listGroups, memberCountLabel, roleLabel, type Group } from '../lib/groups'
 
 type LoadStatus = 'loading' | 'loaded' | 'failed'
 
 // A card's meta line: *14 people*, then *· Admin* or *· Co-admin* when the
-// caller holds one.
-function metaLine(group: Group): string {
+// caller holds one — the role kept whole (CK-87.2), as a card's date is
+// (CK-87): on a narrow card the line may break before the role, never at
+// *Co-admin*'s hyphen. The text is the pieces joined, unchanged.
+function metaPieces(group: Group): LinePiece[] {
+  const count = { text: memberCountLabel(group.member_count), keep: false }
   const role = roleLabel(group.caller_role)
-  return role ? `${memberCountLabel(group.member_count)} · ${role}` : memberCountLabel(group.member_count)
+  return role ? [count, { text: ' · ', keep: false }, { text: role, keep: true }] : [count]
 }
 
 export function Groups() {
@@ -128,7 +132,9 @@ export function Groups() {
             {featured.name}
           </Link>
         </h2>
-        <p className="cover-hero-meta">{metaLine(featured)}</p>
+        <p className="cover-hero-meta">
+          <CardLine pieces={metaPieces(featured)} />
+        </p>
         {/* A picture of a button: the card's link already names the page. */}
         <span className="btn btn-photo" aria-hidden="true">
           Open group
@@ -149,7 +155,9 @@ export function Groups() {
                       {group.name}
                     </Link>
                   </h3>
-                  <p className="cover-meta">{metaLine(group)}</p>
+                  <p className="cover-meta">
+                    <CardLine pieces={metaPieces(group)} />
+                  </p>
                 </Cover>
               </li>
             ))}

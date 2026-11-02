@@ -983,10 +983,36 @@
   object-fit: cover;
 }
 
-/* The featured card: the name, its line and the Open pill over the scrim. */
+/* The featured card: the name, its line and the Open pill over the scrim.
+   The picture's ratio is its LEAST height (CK-87.2; the wide card's rule
+   since CK-86): the words are in the flow and the picture is drawn beneath
+   them, so a long name grows the picture instead of rising into the badge's
+   corner, the empty cover or off the picture's top. `overflow: clip` keeps
+   the rounded corners without making a scroll container, which would hold
+   the box to its ratio. A name that fits sits where it did. */
+.cover-hero .cover-frame {
+  display: flex;
+  flex-direction: column;
+  overflow: clip;
+}
+
+.cover-hero .cover-frame > img {
+  position: absolute;
+  inset: 0;
+}
+
 .cover-hero .cover-over {
+  position: relative;
+  inset: auto;
+  flex: 1 0 auto;
   padding: clamp(16px, 4vw, 36px);
   background: linear-gradient(to top, var(--ck-scrim) 0%, var(--ck-scrim-mid) 42%, var(--ck-scrim-0) 75%);
+}
+
+/* With the badge, the words keep below it (12px, the badge's 46px, 12px),
+   as the wide card's do below its badge and Change cover. */
+.cover-hero .cover-frame:has(> .cover-date) > .cover-over {
+  padding-top: 70px;
 }
 
 .cover-hero h2 {
@@ -1024,23 +1050,43 @@
   color: var(--ck-on-photo-ink);
 }
 
-/* An empty featured card: CK-84's card treatment — the quail and its line
-   above the title's band, the line in the text colour. On a phone the band
-   (a name on two lines, its line, the pill) leaves too little room above it
-   for the two stacked, so the quail sits beside its line at the top, clear
-   of the band and the date badge; from 640px they stack, as on the card. */
-.cover-hero .cover-empty {
+/* An empty featured card: CK-84's card treatment — the quail and its line,
+   the line in the text colour. On a phone the quail sits beside its line,
+   centred at the top; from 640px they stack, as on the card. SINCE CK-87.2
+   THE EMPTY COVER IS A ROW OF ITS OWN ABOVE THE WORDS, in the flow, as on a
+   page's card since CK-87.1: the picture is two rows — the empty cover, then
+   the words — and grows to hold both, so a long name can no longer rise into
+   the quail and the line (until CK-87.2 the words were laid over the whole
+   picture and the empty cover kept 64px clear at its foot, which a name on
+   two lines at 320px, or on one from 900px, outgrew). With the badge, the row
+   keeps clear of it on both sides, so it stays centred. */
+.cover-hero .cover-frame:has(> .cover-empty) {
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.cover-hero .cover-frame > .cover-empty {
+  grid-row: 1;
   grid-auto-flow: column;
   justify-content: center;
   align-items: center;
   gap: 0.5rem;
-  padding-top: 12px;
+  height: auto;
+  padding: 12px 16px 0;
+}
+
+.cover-hero .cover-frame:has(> .cover-date) > .cover-empty {
+  padding-inline: 70px;
 }
 
 .cover-hero .cover-empty img {
   width: auto;
   height: 32px;
   max-width: none;
+}
+
+.cover-hero .cover-frame:has(> .cover-empty) > .cover-over {
+  grid-row: 2;
 }
 
 /* A grid card: the words first in the markup, the picture drawn above them. */
@@ -1083,14 +1129,27 @@
   white-space: nowrap;
 }
 
-/* An empty grid card: the quail and its line, centred, muted. */
+/* An empty grid card: the quail and its line, centred, muted. The quail is
+   the mockup's 54% where the frame has room for it and shrinks to fit where
+   it has not (CK-87.2): the two are a column centred in the frame, the line
+   keeps its height — two lines where it must — and the quail gives way, so
+   neither runs past the frame (until CK-87.2 a 4:3 frame on a phone at
+   320–340px cut off the line's *yet*). Its box keeps the 54% width and its
+   picture shrinks inside it (`object-fit: contain`). The frame's own 4px
+   above and below stand for the mockup's 10px, which its quail at 375px
+   already ran into — so from 375px up the card is as it was. */
 .cover-tile .cover-empty {
-  align-content: center;
-  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
   color: var(--ck-muted);
 }
 
 .cover-tile .cover-empty img {
+  flex: 0 1 auto;
+  min-height: 0;
   width: 54%;
   max-width: 150px;
 }
@@ -1154,7 +1213,7 @@
     aspect-ratio: 16 / 9;
   }
 
-  .cover-hero .cover-empty {
+  .cover-hero .cover-frame > .cover-empty {
     grid-auto-flow: row;
     gap: 0.25rem;
     padding-top: 20px;
@@ -1232,24 +1291,39 @@
      it wraps only between words, and never narrower than its longest one;
    - the words start below the row, whatever height it takes, and the
      picture grows to hold both (CK-86's least height, the ratio kept);
-   - the scrim is drawn on the picture itself, over the empty ground, so it
-     spans the whole picture as it did when the words did — the title reads
-     on the same dark band — and the row is drawn over it rather than under
-     it, where the scrim is all but clear. */
+   - the scrim is drawn on the words' own box, at the picture's foot (the
+     empty cover's scrim, below; CK-87.2): the title's
+     top line 28px below the row, in the dark band however many lines it
+     takes. From CK-87.1 to CK-87.2 the scrim was the mockup's gradient on
+     the whole picture, and the words 12px below the row — which left a
+     title's top line on the near-clear ground (1.1–2.7:1). */
 .cover-card-wide .cover-photo:has(> .cover-lead) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-rows: auto 1fr;
-  background:
-    linear-gradient(to top, var(--ck-scrim) 0%, var(--ck-scrim-mid) 45%, var(--ck-scrim-0) 80%),
-    var(--ck-empty);
 }
 
 .cover-card-wide .cover-photo:has(> .cover-lead) > .cover-over {
   grid-row: 2;
   grid-column: 1 / -1;
-  padding-top: 12px;
-  background: none;
+}
+
+/* THE EMPTY COVER'S SCRIM (CK-87.2; the featured card and a page's wide
+   card): over the empty ground a white title is read against the scrim alone,
+   and laid over the whole picture the mockup's gradient leaves a title's top
+   line on the near-clear ground — 1.1–2.7:1 measured, against large text's
+   3:1, even for a title on one line. So with no cover the scrim is drawn on
+   the words' own box, which sits at the picture's foot below the empty
+   cover's row: clear at the box's top, the mid scrim 16px down, the full
+   scrim 56px down and on to the foot — so the title's top line, 28px down,
+   always sits in the dark band, however many lines it takes, and the empty
+   cover's row above is left on its own ground. The three scrim tokens and no
+   other; the look over a cover is unchanged. */
+.cover-hero .cover-frame:has(> .cover-empty) > .cover-over,
+.cover-card-wide .cover-photo:has(> .cover-lead) > .cover-over {
+  align-self: end;
+  padding-top: 28px;
+  background: linear-gradient(to bottom, var(--ck-scrim-0) 0, var(--ck-scrim-mid) 16px, var(--ck-scrim) 56px);
 }
 
 .cover-lead {
@@ -1527,6 +1601,18 @@
    the empty cover's row instead, and the words keep below that row (above,
    CK-87.1). */
 .cover-card-wide .cover-photo:has(> .cover-date) > .cover-over {
+  padding-top: 64px;
+}
+
+/* Change cover over a cover (CK-87.2): the words keep below it as they keep
+   below the badge — the pill 8px down and 44px tall, the words 12px under
+   it — so a title that wraps grows the picture rather than running under the
+   pill (until CK-87.2 a group's name at 320–374px and a gathering's title at
+   320–433px ran under it). A title that fits sits where it did, and where
+   there is no Change cover — a member, an invitee, the photos-only view —
+   nothing changes. On an empty cover the pill has its own column in the
+   empty cover's row (CK-87.1). */
+.cover-card-wide .cover-photo:has(> .cover-change):not(:has(> .cover-lead)) > .cover-over {
   padding-top: 64px;
 }
 
