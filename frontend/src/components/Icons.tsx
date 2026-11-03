@@ -19,6 +19,12 @@ export type IconName =
   | 'plus'
   | 'back'
   | 'addpic'
+  | 'prev'
+  | 'next'
+  | 'expand'
+  | 'shrink'
+  | 'zoomIn'
+  | 'zoomOut'
 
 const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
   groups: {
@@ -88,6 +94,31 @@ const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
         <path d="M19.5 3v5M17 5.5h5" />
       </>
     ),
+  },
+  // The photo viewer (CK-88; the mockup's `prev`, `next`, `expand`,
+  // `shrink`, `zoomIn` and `zoomOut`): the arrows, Full screen and Leave full
+  // screen, and the zoom button in full screen.
+  prev: { paths: <path d="M15 5l-7 7 7 7" />, width: 2 },
+  next: { paths: <path d="M9 5l7 7-7 7" />, width: 2 },
+  expand: { paths: <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />, width: 2 },
+  shrink: { paths: <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />, width: 2 },
+  zoomIn: {
+    paths: (
+      <>
+        <circle cx="10.5" cy="10.5" r="6.5" />
+        <path d="M20 20l-4.8-4.8M10.5 7.5v6M7.5 10.5h6" />
+      </>
+    ),
+    width: 2,
+  },
+  zoomOut: {
+    paths: (
+      <>
+        <circle cx="10.5" cy="10.5" r="6.5" />
+        <path d="M20 20l-4.8-4.8M7.5 10.5h6" />
+      </>
+    ),
+    width: 2,
   },
 }
 

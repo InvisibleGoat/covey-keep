@@ -1,5 +1,6 @@
-// CK-38 upload-surface pins. The value under test: the section is collapsed
-// until opened (the detail page stays one request); a HEIC with an EMPTY
+// CK-38 upload-surface pins. The value under test: the section reads its
+// list once on mount (CK-88 — until then it was collapsed until opened and
+// the detail page stayed one request); a HEIC with an EMPTY
 // file.type still declares a type and the PUT sends exactly the header R2
 // signed — and never Content-Length; a video is refused with the SERVER's
 // message rendered inline against the file it names, and no PUT follows;
@@ -148,18 +149,22 @@ function renderDetail() {
 }
 
 function renderMedia(over: Partial<Parameters<typeof GatheringMedia>[0]> = {}) {
+  // CK-88: GatheringMedia reads the router (the viewer's history entry), so a
+  // direct render is wrapped in one at the gathering's own address.
   return render(
-    <GatheringMedia
-      gatheringId="g-1"
-      isHost={false}
-      // The gathering resolves open — every gathering these pins were written
-      // against (CK-43.1 added the prop; the review surface has its own pins).
-      requiresApproval={false}
-      occurrences={detailBody().occurrences}
-      zone="America/Chicago"
-      pollIntervalMs={20}
-      {...over}
-    />,
+    <MemoryRouter initialEntries={['/gatherings/g-1']}>
+      <GatheringMedia
+        gatheringId="g-1"
+        isHost={false}
+        // The gathering resolves open — every gathering these pins were written
+        // against (CK-43.1 added the prop; the review surface has its own pins).
+        requiresApproval={false}
+        occurrences={detailBody().occurrences}
+        zone="America/Chicago"
+        pollIntervalMs={20}
+        {...over}
+      />
+    </MemoryRouter>,
   )
 }
 
@@ -191,7 +196,10 @@ async function sleep(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-test('the photos section is collapsed until opened, and opening it loads the list exactly once when nothing is in flight', async () => {
+// CK-88: renamed from "the photos section is collapsed until opened, and
+// opening it loads the list exactly once when nothing is in flight" — the
+// section is open on load now (no toggle), so the list is read on mount.
+test('the photos section reads the list on mount, exactly once when nothing is in flight', async () => {
   const mock = stubRoutes([
     { method: 'GET', match: endsWith('/gatherings/g-1'), response: () => json(200, detailBody()) },
     { method: 'GET', match: endsWith('/gatherings/g-1/media'), response: () => json(200, { media: [] }) },
@@ -199,11 +207,13 @@ test('the photos section is collapsed until opened, and opening it loads the lis
 
   renderDetail()
   await screen.findByText('Test Potluck')
-  // Collapsed: the detail page stays one request.
-  expect(calls(mock, 'GET', endsWith('/media'))).toHaveLength(0)
-
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  // CK-88: was "Collapsed: the detail page stays one request" (no media read
+  // before the toggle). The section is open on load: there is no toggle to
+  // press, and the list is read without one.
+  expect(screen.queryByRole('button', { name: /show photos/i })).toBeNull()
   expect(await screen.findByText('No photos yet.')).toBeTruthy()
+  expect(calls(mock, 'GET', endsWith('/gatherings/g-1'))).toHaveLength(1)
+  expect(calls(mock, 'GET', endsWith('/media'))).toHaveLength(1)
   expect(screen.getByLabelText(/add photos/i)).toBeTruthy()
   // Nothing in flight: no polling. (The interval is the product's 3 s here;
   // a poll timer that existed would be visible as a pending re-read once the
@@ -248,7 +258,7 @@ test('a HEIC whose file.type is empty declares image/heic, the PUT sends exactly
   ])
 
   renderMedia()
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  // CK-88: the section is open on mount — no toggle to press.
   await screen.findByText('No photos yet.')
 
   // The iPhone default, as the browser hands it over: no type at all.
@@ -309,7 +319,7 @@ test("a video is refused with the server's message rendered against the file it 
   ])
 
   renderMedia()
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  // CK-88: the section is open on mount — no toggle to press.
   await screen.findByText('No photos yet.')
 
   const still = new File([new Uint8Array([1])], 'IMG_0569.HEIC', { type: '' })
@@ -360,7 +370,7 @@ test(`a quota refusal on the batch-level items field reads "Nothing was uploaded
   ])
 
   renderMedia()
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  // CK-88: the section is open on mount — no toggle to press.
   await screen.findByText('No photos yet.')
 
   const still = new File([new Uint8Array([1])], 'IMG_0569.HEIC', { type: '' })
@@ -397,7 +407,7 @@ test(`a memorial-ceiling refusal on the batch-level items field behaves the same
   ])
 
   renderMedia()
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  // CK-88: the section is open on mount — no toggle to press.
   await screen.findByText('No photos yet.')
 
   const still = new File([new Uint8Array([1])], 'IMG_0569.HEIC', { type: '' })
@@ -429,7 +439,7 @@ test('a 422 carrying both a batch-level and a per-file error names the photo —
   ])
 
   renderMedia()
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  // CK-88: the section is open on mount — no toggle to press.
   await screen.findByText('No photos yet.')
 
   const still = new File([new Uint8Array([1])], 'IMG_0569.HEIC', { type: '' })
@@ -445,7 +455,7 @@ test('a 422 carrying both a batch-level and a per-file error names the photo —
 })
 
 test("every rung renders its own line; the ready line is read from publication_state; a failed row offers its uploader's controls", async () => {
-  stubRoutes([
+  const mock = stubRoutes([
     {
       method: 'GET',
       match: endsWith('/gatherings/g-1/media'),
@@ -468,13 +478,26 @@ test("every rung renders its own line; the ready line is read from publication_s
         json(200, { media_id: 'm-live', layer: 'thumbnail', content_type: 'image/webp', size_bytes: 3, url: GET_URL, method: 'GET', expires_in: 900 }),
     },
     { method: 'GET', match: is(GET_URL), response: () => new Response(new Uint8Array([1, 2, 3]), { status: 200 }) },
+    // CK-88: the published photo opens in the viewer, which shows its web
+    // layer — stubbed so the no-presigned-URL pins below cover that fetch too.
+    {
+      method: 'GET',
+      match: endsWith('/media/m-live/url?layer=web'),
+      response: () =>
+        json(200, { media_id: 'm-live', layer: 'web', content_type: 'image/webp', size_bytes: 3, url: WEB_URL, method: 'GET', expires_in: 900 }),
+    },
+    { method: 'GET', match: is(WEB_URL), response: () => new Response(new Uint8Array([4, 5, 6]), { status: 200 }) },
   ])
 
-  renderMedia({ isHost: false })
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  // CK-88: the title names the grid's tiles ("Photo 1 of 1 in Test Potluck").
+  renderMedia({ isHost: false, gatheringTitle: 'Test Potluck' })
+  // CK-88: the section is open on mount — no toggle to press.
   const list = await screen.findByRole('list', { name: 'Photos' })
   const rows = within(list).getAllByRole('listitem')
-  expect(rows).toHaveLength(5)
+  // CK-88: was 5 rows. The ready + live photograph is a tile in the grid now,
+  // not a row; the other four rungs stay rows, in the list's order.
+  expect(rows).toHaveLength(4)
+  const tile = screen.getByRole('button', { name: 'Photo 1 of 1 in Test Potluck' })
 
   expect(rows[0].textContent).toContain('On its way — still being uploaded.')
   expect(rows[1].textContent).toContain('Uploaded — waiting to be prepared.')
@@ -490,29 +513,46 @@ test("every rung renders its own line; the ready line is read from publication_s
   // Try again.)
   const failedButtons = within(rows[3]).getAllByRole('button')
   expect(failedButtons.map((button) => button.textContent)).toEqual(['Try again', 'Dismiss'])
-  // The branch nothing reaches yet, rendered from the row, not from a
-  // constant: when the publication phase moves rows to live, this is the
-  // line they get, with no copy rewrite.
-  expect(rows[4].textContent).toContain('Everyone in this gathering can see it.')
-  // No in-flight row carries a thumbnail; the ready row does, over a blob:
+  // No in-flight row carries a thumbnail; the ready photo does, over a blob:
   // URL — the presigned GET is not in the DOM. (The thumbnail's alt is
   // empty — its button carries the name — so it is queried as an element,
   // not by role.)
   expect(rows[0].querySelector('img')).toBeNull()
+  // CK-88: the ready photo's thumbnail is its tile's, not a row's.
   await waitFor(() => {
-    expect(rows[4].querySelector('img')?.getAttribute('src')).toBe('blob:stub-1')
+    expect(tile.querySelector('img')?.getAttribute('src')).toBe('blob:stub-1')
   })
   expect(document.body.innerHTML).not.toContain('getsig456')
   expect(document.body.innerHTML).not.toContain('SERVEKEYID')
   // No "try again" on a photograph that worked, or on one still on its way
-  // (the regression the first run of this test found); the ready row's open
+  // (the regression the first run of this test found); the ready photo's open
   // control is there. Since CK-40 an own row also carries its edit control,
   // so the pin names the affordance it excludes rather than counting.
-  expect(within(rows[4]).queryByRole('button', { name: 'Try again' })).toBeNull()
-  expect(within(rows[4]).getByRole('button', { name: 'Open photo added by You' })).toBeTruthy()
+  // CK-88: the ready + live photo's open control is its tile — no row, so no
+  // row's "Open photo added by You" — and a tile holds no control at all.
+  expect(screen.queryByRole('button', { name: 'Open photo added by You' })).toBeNull()
+  expect(within(tile).queryAllByRole('button')).toHaveLength(0)
   for (const row of rows.slice(0, 3)) {
     expect(within(row).queryByRole('button', { name: 'Try again' })).toBeNull()
   }
+  // CK-88: the ready + live photo's line and acts moved from its row into the
+  // viewer its tile opens. The branch nothing reaches yet, rendered from the
+  // photo, not from a constant: when the publication phase moves rows to
+  // live, this is the line they get, with no copy rewrite.
+  fireEvent.click(tile)
+  const viewer = await screen.findByRole('dialog')
+  expect(within(viewer).getByText('Everyone in this gathering can see it.')).toBeTruthy()
+  // No "try again" on a photograph that worked — in the viewer either.
+  expect(within(viewer).queryByRole('button', { name: 'Try again' })).toBeNull()
+  // The viewer's web layer is a blob: URL too; no presigned GET is in the
+  // DOM with the viewer open.
+  await waitFor(() => {
+    expect(viewer.querySelector('img.vphoto')?.getAttribute('src')).toMatch(/^blob:/)
+  })
+  expect(document.body.innerHTML).not.toContain('X-Amz-Signature')
+  expect(document.body.innerHTML).not.toContain('SERVEKEYID')
+  // Never archival, with the viewer open as without it.
+  expect(calls(mock, 'GET', (url) => url.includes('archival'))).toHaveLength(0)
 })
 
 test('a ready pending photograph says who can see it — from the viewer\'s seat — and opening it fetches the web layer, never archival', async () => {
@@ -533,7 +573,7 @@ test('a ready pending photograph says who can see it — from the viewer\'s seat
   ])
 
   renderMedia({ isHost: false })
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  // CK-88: the section is open on mount — no toggle to press.
   // Since CK-44 the pending line also says what it waits on — the host,
   // who can act on it whatever the switch says (edited here for that).
   expect(
@@ -544,10 +584,23 @@ test('a ready pending photograph says who can see it — from the viewer\'s seat
   // Never "shared", never "waiting for approval".
   expect(screen.queryByText(/shared|approv|review/i)).toBeNull()
 
+  // CK-88: the row's own act, read before the viewer makes the page inert.
+  const rowSendToBin = within(screen.getByRole('list', { name: 'Photos' })).getByRole('button', {
+    name: 'Send to bin',
+  })
   fireEvent.click(await screen.findByRole('button', { name: /open photo added by you/i }))
   const viewer = await screen.findByRole('dialog')
   const web = await within(viewer).findByRole('img')
   expect(web.getAttribute('src')).toBe('blob:stub-2')
+  // CK-88: a pending photo is a row, and its thumbnail opens the viewer on
+  // that photo ALONE — no arrows, no strip (so no neighbour's web layer and
+  // no strip thumbnail join the layer requests below) — and with no act: the
+  // row keeps its own, Send to bin among them.
+  expect(within(viewer).queryByRole('button', { name: 'Previous photo' })).toBeNull()
+  expect(within(viewer).queryByRole('button', { name: 'Next photo' })).toBeNull()
+  expect(within(viewer).queryByRole('group', { name: 'Photos here' })).toBeNull()
+  expect(within(viewer).queryByRole('button', { name: 'Send to bin' })).toBeNull()
+  expect(rowSendToBin.isConnected).toBe(true)
   const layerRequests = calls(mock, 'GET', (url) => url.includes('/url?layer='))
   expect(layerRequests.map(([url]) => url.slice(url.indexOf('layer=')))).toEqual([
     'layer=thumbnail',
@@ -588,7 +641,7 @@ test('the host sees a pending photograph of theirs as visible to them alone, and
   ])
 
   renderMedia({ isHost: true })
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  // CK-88: the section is open on mount — no toggle to press.
   // The host is told it waits for them (CK-44: on every ready + pending row).
   expect(
     await screen.findByText('Only you can see this. Waiting for you to publish or decline it.'),
@@ -621,7 +674,7 @@ test('the list polls while a photograph is being prepared and stops the moment e
   ])
 
   renderMedia({ pollIntervalMs: 20 })
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  // CK-88: the section is open on mount — no toggle to press.
   await screen.findByText('Being prepared — usually within a minute, longer for a big batch.')
 
   // Without a manual refresh the row becomes ready.
@@ -660,7 +713,7 @@ test('a PUT that fails leaves an honest row: not "on its way", with the one try-
   ])
 
   renderMedia()
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  // CK-88: the section is open on mount — no toggle to press.
   await screen.findByRole('list', { name: 'Photos' })
 
   fireEvent.change(screen.getByLabelText(/add photos/i), {
@@ -728,7 +781,7 @@ function renderMediaInRouter(over: Partial<Parameters<typeof GatheringMedia>[0]>
 }
 
 async function uploadOne() {
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  // CK-88: the section is open on mount — no toggle to press.
   await screen.findByText('No photos yet.')
   const still = new File([new Uint8Array([1])], 'IMG_0569.HEIC', { type: '' })
   fireEvent.change(screen.getByLabelText(/add photos/i), { target: { files: [still] } })

@@ -104,7 +104,7 @@
   gap: 0.25rem;
 }
 
-:where(.auth-screen) :where(
+:where(.auth-screen, .vinfo) :where(
     input:not([type]),
     input[type='email'],
     input[type='text'],
@@ -164,7 +164,7 @@
 /* ---------- buttons: pills, at least 48px tall (small ones 40px) ---------- */
 
 /* Every button on a screen is the quiet pill unless it says otherwise. */
-:where(.auth-screen, .update-notice) button:where(:not(.link-button)),
+:where(.auth-screen, .update-notice, .vinfo) button:where(:not(.link-button)),
 .btn {
   display: inline-flex;
   align-items: center;
@@ -187,7 +187,7 @@
 
 /* The primary: the teal pill with its ink — a form's submit, and anything
    marked btn-primary. */
-:where(.auth-screen) button[type='submit']:where(:not(.link-button)),
+:where(.auth-screen, .vinfo) button[type='submit']:where(:not(.link-button)),
 :where(.update-notice) button:first-of-type,
 .newer-version button,
 .btn-primary {
@@ -196,21 +196,21 @@
   color: var(--pg-events-accent-ink);
 }
 
-:where(.auth-screen) button[type='submit']:where(:not(.link-button)):hover:not(:disabled),
+:where(.auth-screen, .vinfo) button[type='submit']:where(:not(.link-button)):hover:not(:disabled),
 :where(.update-notice) button:first-of-type:hover,
 .newer-version button:hover,
 .btn-primary:hover:not(:disabled) {
   background: var(--pg-events-accent-2);
 }
 
-:where(.auth-screen, .update-notice) button:disabled {
+:where(.auth-screen, .update-notice, .vinfo) button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
 /* Small: a control inside a row of controls. */
 .btn-small,
-:where(.update-notice, .newer-version, .member-actions, .media-review, .media-batch, .passkey-row, .companion-row)
+:where(.update-notice, .newer-version, .member-actions, .media-review, .media-batch, .passkey-row, .companion-row, .vacts)
   button:where(:not(.link-button)) {
   min-height: 40px;
   padding: 0 0.875rem;
@@ -559,28 +559,389 @@
   text-align: center;
 }
 
-.media-viewer {
+/* ---------- the photo grid and the photo viewer (CK-88; the mockup's .sect-head, .pgrid, .ph, .seeall, .viewer, .vbar, .vtitle, .vstage, .varrow, .vinfo, .vacts, .vstrip, .vfloat, .immersive, .zoomed) ---------- */
+
+/* The card's head: the heading, and the count of published photos beside it. */
+.photos-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+}
+
+.photos-head .meta {
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  color: var(--ck-muted);
+}
+
+/* The grid: three square tiles a row on a phone, 5px apart; four at 4:3
+   from 640px, 8px apart (below). A tile is a button holding its thumbnail
+   and nothing else, the empty ground showing while it loads. */
+.pgrid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.ph {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  aspect-ratio: 1;
+  background: var(--ck-empty);
+  cursor: pointer;
+}
+
+.lazy-thumb,
+.lazy-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.lazy-thumb img {
+  object-fit: cover;
+}
+
+/* See all N photos: the quiet small pill, centred. */
+.seeall {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 0;
+}
+
+/* The viewer: over the whole window — the frame, the menu column and the
+   bottom bar — and the page behind it still. */
+body.viewer-open {
+  overflow: hidden;
+}
+
+.viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
   display: flex;
   flex-direction: column;
+  background: var(--pg-bg);
+  color: var(--pg-text);
+  overscroll-behavior: contain;
+}
+
+.vbar {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: calc(env(safe-area-inset-top, 0px) + 6px) 8px 6px;
+  border-bottom: 1px solid var(--pg-hairline);
+  background: var(--pg-surface);
+}
+
+.vtitle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.vtitle b {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.125rem;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vtitle span {
+  font-size: 0.8125rem;
+  color: var(--ck-muted);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The stage: the photo contained in it, and the arrows the STAGE's own —
+   placed on it, never on the photo, so they stand in the same place for
+   every photo whatever its shape (Steven, 2026-10-14). */
+.vstage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 12px;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.vstage .vphoto {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: var(--ck-lift);
+  cursor: zoom-in;
+  transition: transform 0.25s ease;
+  transform-origin: center;
+  -webkit-user-drag: none;
+}
+
+.vstage .vphoto.dragging {
+  transition: none;
+}
+
+.vplaceholder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  width: min(100%, 24rem);
+  aspect-ratio: 4 / 3;
+  padding: 1rem;
+  border-radius: 6px;
+  background: var(--ck-empty);
+  color: var(--ck-muted);
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+.varrow {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-top: -24px;
+  padding: 0;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 999px;
+  background: var(--ck-frost);
+  color: var(--ck-frost-ink);
+  box-shadow: var(--ck-lift);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.varrow.prev {
+  left: 10px;
+}
+
+.varrow.next {
+  right: 10px;
+}
+
+.varrow:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+/* The words: "Added by", the tags, the state line and the acts. */
+.vinfo {
+  display: grid;
+  gap: 0.375rem;
+  align-content: start;
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 10px 16px 4px;
+  height: clamp(132px, 26dvh, 232px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.vinfo p {
+  margin: 0;
+}
+
+.vinfo .vline {
+  font-size: 0.875rem;
+  color: var(--ck-muted);
+}
+
+.vinfo .vstate {
+  font-size: 0.875rem;
+}
+
+.vinfo .media-editor label {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.vacts {
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
-  align-items: flex-start;
+  margin-top: 0.125rem;
 }
 
-/* The opened photo sits in the 7px mat, its corners at the photo radius. */
-.media-web {
-  display: block;
-  max-width: calc(100% - 2 * (var(--mat) + 1px));
-  height: auto;
-  margin: calc(var(--mat) + 1px);
-  border-radius: var(--r-photo);
-  box-shadow:
-    0 0 0 var(--mat) var(--pg-surface),
-    0 0 0 calc(var(--mat) + 1px) var(--pg-surface-edge);
+/* The strip: every photo in the set, the current one ringed in the accent. */
+.vstrip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 8px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  scrollbar-width: thin;
 }
 
-.media-web.media-placeholder {
-  width: calc(100% - 2 * (var(--mat) + 1px));
-  min-height: 6rem;
+.vstrip > button {
+  flex: none;
+  width: 58px;
+  height: 58px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  overflow: hidden;
+  opacity: 0.62;
+  cursor: pointer;
+  background: var(--ck-empty);
+}
+
+.vstrip > button:first-child {
+  margin-left: auto;
+}
+
+.vstrip > button:last-child {
+  margin-right: auto;
+}
+
+.vstrip > button[aria-current='true'] {
+  opacity: 1;
+  box-shadow: 0 0 0 3px var(--pg-events-accent);
+}
+
+/* Full screen: the photo alone on the stage colour, Zoom in / Zoom out and
+   Leave full screen floating at the top right. */
+.vfloat {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  right: 10px;
+  z-index: 3;
+  display: flex;
+  gap: 6px;
+}
+
+.vfloat button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ck-frost);
+  color: var(--ck-frost-ink);
+  cursor: pointer;
+}
+
+.viewer.immersive {
+  background: var(--ck-stage);
+}
+
+.viewer.immersive .vbar,
+.viewer.immersive .vinfo,
+.viewer.immersive .vstrip {
+  display: none;
+}
+
+.viewer.immersive .vstage {
+  padding: 0;
+}
+
+.viewer.immersive .vstage .vphoto {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.viewer.zoomed .vstage .vphoto {
+  cursor: grab;
+}
+
+.viewer.zoomed .varrow {
+  display: none;
+}
+
+@media (min-width: 640px) {
+  .pgrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .ph {
+    aspect-ratio: 4 / 3;
+  }
+
+  .vstrip > button {
+    width: 66px;
+    height: 66px;
+  }
+
+  .varrow.prev {
+    left: 18px;
+  }
+
+  .varrow.next {
+    right: 18px;
+  }
+}
+
+/* From 900px (the window): the words in a 360px column beside the photo on
+   the surface, the strip under the photo — so the photo's area is the same
+   for every photo. Full screen keeps the photo alone. */
+@media (min-width: 900px) {
+  .viewer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+
+  .vbar {
+    grid-column: 1 / -1;
+  }
+
+  .vstage {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .vstrip {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .vinfo {
+    grid-column: 2;
+    grid-row: 2 / span 2;
+    max-width: none;
+    height: auto;
+    margin: 0;
+    padding: 16px 18px;
+    gap: 0.625rem;
+    border-left: 1px solid var(--pg-hairline);
+    background: var(--pg-surface);
+  }
+
+  .viewer.immersive {
+    display: flex;
+  }
 }
 
 /* Tags are chips of text — never links. */

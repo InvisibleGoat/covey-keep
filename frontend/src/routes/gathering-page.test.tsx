@@ -371,7 +371,7 @@ test('Add photos for the invited tier — the host, a co-host, an invitee — an
   expect(screen.queryByRole('button', { name: /edit gathering/i })).toBeNull()
 })
 
-test('ONE PRESS: Add photos clicks the file input synchronously — the section closed beforehand — the chosen files wait in the form, focus moves to Upload, and Upload sends them through today’s calls', async () => {
+test('ONE PRESS: Add photos clicks the file input synchronously — the section open from the start — the chosen files wait in the form, focus moves to Upload, and Upload sends them through today’s calls', async () => {
   let listed: unknown[] = []
   const mock = stubServer({
     'GET /gatherings/g-1/media': () => json(200, { media: listed }),
@@ -407,9 +407,10 @@ test('ONE PRESS: Add photos clicks the file input synchronously — the section 
 
   const view = renderPage()
   await loaded()
-  // Closed: the toggle, and no file input anywhere.
-  expect(screen.getByRole('button', { name: /show photos and add yours/i })).toBeTruthy()
-  expect(view.container.querySelector('input[type="file"]')).toBeNull()
+  // CK-88: the section is open from the start — no toggle, and its one file
+  // input already rendered (until CK-88 the press opened a closed section).
+  expect(screen.queryByRole('button', { name: /^show photos/i })).toBeNull()
+  expect(view.container.querySelectorAll('input[type="file"]')).toHaveLength(1)
 
   fireEvent.click(screen.getByRole('button', { name: 'Add photos' }))
   // Synchronously — nothing awaited between the press and the click.
@@ -417,7 +418,6 @@ test('ONE PRESS: Add photos clicks the file input synchronously — the section 
   expect(clicks[0].connected).toBe(true)
   expect(clicks[0].input.type).toBe('file')
   expect(clicks[0].input.id).toBe('media-files')
-  expect(screen.queryByRole('button', { name: /show photos and add yours/i })).toBeNull()
 
   const file = new File([new Uint8Array([1, 2, 3])], 'cake.jpg', { type: 'image/jpeg' })
   fireEvent.change(screen.getByLabelText(/^add photos$/i), { target: { files: [file] } })
@@ -445,7 +445,7 @@ test('a choice made in the form itself moves nothing — focus stays where the p
   })
   renderPage()
   await loaded()
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  // CK-88: no toggle to press — the section is open from the start.
   const input = await screen.findByLabelText(/^add photos$/i)
   input.focus()
   fireEvent.change(input, { target: { files: [new File([new Uint8Array([1])], 'a.jpg', { type: 'image/jpeg' })] } })
@@ -687,7 +687,7 @@ test('the RSVP block opens beneath the row, its button expanded over it, and a s
 // The photos-only view, and the order of the page's cards.
 // ---------------------------------------------------------------------------
 
-test('the photos-only view never shows a date or an answer — even from a body that carried both — and makes one request', async () => {
+test('the photos-only view never shows a date or an answer — even from a body that carried both — and makes two requests: the detail and the photos', async () => {
   const mock = stubServer({
     'GET /gatherings/g-1': () =>
       json(200, memoryDetail({ occurrences: [occurrence({ caller_response: 'yes', location: 'The hall' })] })),
@@ -701,7 +701,14 @@ test('the photos-only view never shows a date or an answer — even from a body 
   expect(view.container.querySelector('.cover-date')).toBeNull()
   expect(view.container.textContent).not.toMatch(/2035|\b\d{1,2}:\d\d\b/)
   await new Promise((resolve) => setTimeout(resolve, 30))
-  expect(mock.mock.calls).toHaveLength(1)
+  // CK-88 (the kickoff's §1): the Photos section is open on load and reads
+  // its list at once — the list is not something the view withholds — so the
+  // view makes two requests, the detail and the media list, and nothing else
+  // (the group's seat waits for the viewer, Steven's answer of 2026-11-02).
+  expect(mock.mock.calls.map(([url]) => String(url).replace(/^https?:\/\/[^/]+/, ''))).toEqual([
+    '/gatherings/g-1',
+    '/gatherings/g-1/media',
+  ])
 })
 
 test('the order of the page by seat: the crumb, the cover, the actions, then When, Photos, Who it’s for and the co-host or invitations section', async () => {

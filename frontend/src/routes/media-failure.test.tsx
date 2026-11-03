@@ -14,6 +14,7 @@
 // from here is untouched — "This upload didn't finish." with Try again alone
 // and no Dismiss, because that row is not `failed` on the server.
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { GatheringMedia } from '../components/GatheringMedia'
 
@@ -144,22 +145,27 @@ function failureServer(initial: Row[], options: { refuse?: 'not_failed' | 'not_f
 }
 
 function renderMedia(over: Partial<Parameters<typeof GatheringMedia>[0]> = {}) {
+  // CK-88: GatheringMedia reads the router (the viewer's history entry), so
+  // a direct render sits in a MemoryRouter at the gathering's address.
   return render(
-    <GatheringMedia
-      gatheringId="g-1"
-      isHost={false}
-      requiresApproval={false}
-      occurrences={occurrences}
-      zone="America/Chicago"
-      pollIntervalMs={20}
-      searchDebounceMs={20}
-      {...over}
-    />,
+    <MemoryRouter initialEntries={['/gatherings/g-1']}>
+      <GatheringMedia
+        gatheringId="g-1"
+        isHost={false}
+        requiresApproval={false}
+        occurrences={occurrences}
+        zone="America/Chicago"
+        pollIntervalMs={20}
+        searchDebounceMs={20}
+        {...over}
+      />
+    </MemoryRouter>,
   )
 }
 
 async function openPhotos() {
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  // CK-88: the section is open on mount — no toggle to press; the failed
+  // rows are still rows, so the wait on the Photos list stands.
   return photoRows(await screen.findByRole('list', { name: 'Photos' }))
 }
 

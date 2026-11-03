@@ -696,8 +696,11 @@ test('a successful save re-renders from the server, not from local form state', 
   // The heading shows what the SERVER holds — proof of a fresh GET rather
   // than trust in the submitted form value (optimistic-free, CK-18).
   await screen.findByRole('heading', { name: 'Sunday Potluck (server-normalized)' })
+  // CK-88: the Photos section reads its list on load now, so the pin counts
+  // the gathering's own GETs — the first read and the fresh one after the save.
   const gets = mock.mock.calls.filter(
-    ([, init]) => ((init as RequestInit | undefined)?.method ?? 'GET') === 'GET',
+    ([url, init]) =>
+      ((init as RequestInit | undefined)?.method ?? 'GET') === 'GET' && String(url).endsWith('/gatherings/g-1'),
   )
   expect(gets).toHaveLength(2)
 })

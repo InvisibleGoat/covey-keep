@@ -188,8 +188,11 @@ function delegableOnPage() {
   }
 }
 
+// CK-88: the Photos section is open on load — no toggle to press any more — so
+// waiting for its empty state is the whole of opening it; every pin the matrix
+// makes on the section (the view switch, the Removed view, the queue) is
+// unchanged and still read after this.
 async function openPhotos() {
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
   await screen.findByText('No photos yet.')
 }
 

@@ -740,6 +740,14 @@ export function awaitingReview(item: Pick<MediaItem, 'status' | 'publication_sta
   return item.status === 'ready' && item.publication_state === 'pending'
 }
 
+// A published photograph: `ready` and `live` (CK-88). The grid of a
+// gathering's photos holds these and nothing else, and the Photos heading's
+// count counts them — every other row stays a row. A predicate over the
+// row's own state, like the one above.
+export function isPublishedPhoto(item: Pick<MediaItem, 'status' | 'publication_state'>): boolean {
+  return item.status === 'ready' && item.publication_state === 'live'
+}
+
 // The list-level half of the same predicate (CK-44; the-hosts-review §13):
 // whether anything the caller can see is waiting. The host's review renders
 // while review is ON or while this is true — `isHost && (requiresApproval

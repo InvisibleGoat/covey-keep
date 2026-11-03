@@ -28,7 +28,19 @@
 // ("Only you can see it" → "Only you and any co-hosts"; the remove step's
 // "Nobody in this gathering will see this photo, grandma included" → who
 // will still see it), each with its reason beside it.
+//
+// CK-88: a published (`ready` + `live`) photograph is no longer a row — it is
+// a tile in the grid, carrying no control — and the organiser's takedown on
+// someone else's published photo, Remove from gathering with its step and its
+// sentence by seat and gate, is in the photo viewer that photo's tile opens;
+// the caller's own published photo keeps its personal acts there too. So
+// "someone else's live ready row and no other" reads: in the viewer for
+// someone else's published photo, and on no row, on no tile and in no other
+// viewer. A Remove it that lands closes the viewer and puts focus on the view
+// switch's "Removed from this gathering". The Removed view, Put back and its
+// Delete permanently are rows, exactly as before.
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { GatheringMedia } from '../components/GatheringMedia'
 
@@ -310,17 +322,21 @@ function gatheringBinServer(
 // The element itself, so a test can re-render it with the gate flipped —
 // the way the detail page hands the section a new `requiresApproval`.
 function mediaElement(over: Partial<Parameters<typeof GatheringMedia>[0]> = {}) {
+  // CK-88: GatheringMedia reads the router (the viewer's history entry). The
+  // router keeps its history across a rerender, as the page's does.
   return (
-    <GatheringMedia
-      gatheringId="g-1"
-      isHost={true}
-      requiresApproval={false}
-      occurrences={occurrences}
-      zone="America/Chicago"
-      pollIntervalMs={20}
-      searchDebounceMs={20}
-      {...over}
-    />
+    <MemoryRouter initialEntries={['/gatherings/g-1']}>
+      <GatheringMedia
+        gatheringId="g-1"
+        isHost={true}
+        requiresApproval={false}
+        occurrences={occurrences}
+        zone="America/Chicago"
+        pollIntervalMs={20}
+        searchDebounceMs={20}
+        {...over}
+      />
+    </MemoryRouter>
   )
 }
 
@@ -328,16 +344,23 @@ function renderMedia(over: Partial<Parameters<typeof GatheringMedia>[0]> = {}) {
   return render(mediaElement(over))
 }
 
-async function openPhotos() {
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
-  return photoRows(await screen.findByRole('list', { name: 'Photos' }))
+// CK-88: the section is open on mount (no toggle to press), and the first
+// read splits the list in two — the published photos as tiles, every other
+// photo as a row — so opening it waits for exactly the rows and the tiles the
+// test expects, and answers both.
+async function openPhotos(expected: { rows: number; tiles: number }) {
+  await waitFor(() => {
+    expect(currentRows()).toHaveLength(expected.rows)
+    expect(gridTiles()).toHaveLength(expected.tiles)
+  })
+  return { rows: currentRows(), tiles: gridTiles() }
 }
 
 // Opening the section when every row is in the gathering's bin: the DEFAULT
 // list is empty by design (the bin is a view, never a mixture), so the way
 // in is the empty state, not the list.
 async function openEmptyPhotos() {
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+  // CK-88: open on mount — no toggle; the empty state is the first read's.
   await screen.findByText('No photos yet.')
 }
 
@@ -346,7 +369,44 @@ function photoRows(list: HTMLElement): HTMLElement[] {
   return Array.from(list.querySelectorAll(':scope > li')) as HTMLElement[]
 }
 
-const currentRows = () => photoRows(screen.getByRole('list', { name: 'Photos' }))
+// CK-88: with no rows there is no rows list at all (every photo published,
+// or nothing listed), so no list reads as no rows.
+const currentRows = () => {
+  const list = screen.queryByRole('list', { name: 'Photos' })
+  return list === null ? [] : photoRows(list)
+}
+
+// A row by the name it shows.
+const rowNamed = (name: string) => {
+  const row = currentRows().find((candidate) => candidate.querySelector('strong')?.textContent === name)
+  if (row === undefined) throw new Error(`no row named ${name}`)
+  return row
+}
+
+// CK-88: the grid — every published photo a tile, a button named for its
+// place in the grid and holding its thumbnail alone. (No gathering title is
+// passed, so each label ends "in " — and its accessible name, trimmed, "in".)
+const TILE = /^Photo \d+ of \d+ in$/
+const gridTiles = () => screen.queryAllByRole('button', { name: TILE })
+const tile = (position: number, count: number) =>
+  screen.getByRole('button', { name: new RegExp(`^Photo ${position} of ${count} in$`) })
+
+// CK-88: a tile opens the photo viewer — a modal dialog portalled into the
+// body, labelled by the photo's name — whose words carry the photo's acts.
+async function openViewer(position: number, count: number, name: string) {
+  fireEvent.click(tile(position, count))
+  return screen.findByRole('dialog', { name })
+}
+
+function closeViewer(viewer: HTMLElement) {
+  fireEvent.click(within(viewer).getByRole('button', { name: 'Close' }))
+  expect(screen.queryByRole('dialog')).toBeNull()
+}
+
+// CK-88: a tile carries no control — nothing pressable inside any tile.
+function expectBareTiles() {
+  for (const each of gridTiles()) expect(each.querySelector('button, input, a')).toBeNull()
+}
 
 const binControl = () => screen.getByRole('button', { name: 'Removed from this gathering' })
 
@@ -362,7 +422,12 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-test("Remove from gathering renders for the host on someone else's live ready row and on no other — not on pending (Decline instead), own, failed or in-flight rows — and never for a non-host, who gets no Removed view either", async () => {
+// CK-88: renamed — was "Remove from gathering renders for the host on someone
+// else's live ready row and on no other — not on pending (Decline instead),
+// own, failed or in-flight rows — and never for a non-host, who gets no
+// Removed view either": a live ready photo is a tile now, not a row, and the
+// takedown is in the viewer its tile opens.
+test("Remove from gathering renders for the host in the viewer of someone else's live ready photo and nowhere else — not on a pending row (Decline instead), not for the host's own photos, not on a failed or in-flight row, not on any tile or in any other viewer — and never for a non-host, who gets no Removed view either", async () => {
   const initial = () => [
     mediaRow({ id: 'm-theirs-live', filename: 'theirs-live.jpg' }),
     mediaRow({ id: 'm-theirs-pending', filename: 'theirs-pending.jpg', publication_state: 'pending' }),
@@ -382,27 +447,45 @@ test("Remove from gathering renders for the host on someone else's live ready ro
   const mock = stubRoutes(gatheringBinServer(initial(), { role: 'host' }).routes)
 
   renderMedia({ isHost: true })
-  let rows = await openPhotos()
-  expect(rows).toHaveLength(6)
+  // CK-88: the six photos were six rows; the two published ones (grandma's
+  // and the host's own) are tiles now — theirs-live first, mine-live second,
+  // in list order — and the other four stay rows.
+  await openPhotos({ rows: 4, tiles: 2 })
   const removeOn = (row: HTMLElement) =>
     within(row).queryByRole('button', { name: 'Remove from gathering' }) !== null
-  // Someone else's live, ready row: the takedown, and none of CK-64's acts.
-  expect(removeOn(rows[0])).toBe(true)
-  expect(within(rows[0]).queryByRole('button', { name: 'Send to bin' })).toBeNull()
-  expect(within(rows[0]).queryByRole('button', { name: 'Delete permanently' })).toBeNull()
-  expect(within(rows[0]).queryByRole('button', { name: /^publish|^decline/i })).toBeNull()
+  // Someone else's live, ready photo: the takedown, and none of CK-64's acts.
+  // CK-88: in the viewer that photo's tile opens, where its row's acts went.
+  let viewer = await openViewer(1, 2, 'theirs-live.jpg')
+  expect(removeOn(viewer)).toBe(true)
+  expect(within(viewer).queryByRole('button', { name: 'Send to bin' })).toBeNull()
+  expect(within(viewer).queryByRole('button', { name: 'Delete permanently' })).toBeNull()
+  expect(within(viewer).queryByRole('button', { name: /^publish|^decline/i })).toBeNull()
+  closeViewer(viewer)
+  // CK-88: and with the viewer closed, no Remove from gathering on any row or
+  // any tile — the takedown is the viewer's alone — and nothing in a tile.
+  expect(screen.queryAllByRole('button', { name: 'Remove from gathering' })).toHaveLength(0)
+  expectBareTiles()
   // Someone else's pending row keeps Decline — same result, one act per
   // state — and gains nothing.
-  expect(removeOn(rows[1])).toBe(false)
-  expect(within(rows[1]).getByRole('button', { name: 'Decline' })).toBeTruthy()
-  // The host's own rows keep CK-64's controls and gain nothing.
-  expect(removeOn(rows[2])).toBe(false)
-  expect(within(rows[2]).getByRole('button', { name: 'Send to bin' })).toBeTruthy()
-  expect(removeOn(rows[3])).toBe(false)
-  expect(within(rows[3]).getByRole('button', { name: 'Put back' })).toBeTruthy()
+  expect(removeOn(rowNamed('theirs-pending.jpg'))).toBe(false)
+  expect(within(rowNamed('theirs-pending.jpg')).getByRole('button', { name: 'Decline' })).toBeTruthy()
+  // CK-88: nor does the viewer its row's thumbnail opens — that photo alone,
+  // with no act at all (the row keeps its acts).
+  fireEvent.click(within(rowNamed('theirs-pending.jpg')).getByRole('button', { name: 'Open photo added by grandma' }))
+  viewer = await screen.findByRole('dialog', { name: 'theirs-pending.jpg' })
+  expect(removeOn(viewer)).toBe(false)
+  closeViewer(viewer)
+  // The host's own photos keep CK-64's controls and gain nothing.
+  // CK-88: the own published one in the viewer its tile opens.
+  viewer = await openViewer(2, 2, 'mine-live.jpg')
+  expect(removeOn(viewer)).toBe(false)
+  expect(within(viewer).getByRole('button', { name: 'Send to bin' })).toBeTruthy()
+  closeViewer(viewer)
+  expect(removeOn(rowNamed('mine-bin.jpg'))).toBe(false)
+  expect(within(rowNamed('mine-bin.jpg')).getByRole('button', { name: 'Put back' })).toBeTruthy()
   // Failed and in-flight rows: nothing stored (or settled) to take down.
-  expect(removeOn(rows[4])).toBe(false)
-  expect(removeOn(rows[5])).toBe(false)
+  expect(removeOn(rowNamed('theirs-fail.jpg'))).toBe(false)
+  expect(removeOn(rowNamed('theirs-proc.jpg'))).toBe(false)
   // The Removed view's control is on the page for the host.
   expect(binControl()).toBeTruthy()
   expect(actRequests(mock)).toHaveLength(0)
@@ -413,15 +496,26 @@ test("Remove from gathering renders for the host on someone else's live ready ro
   cleanup()
   const nonHost = stubRoutes(gatheringBinServer(initial(), { role: 'member' }).routes)
   renderMedia({ isHost: false })
-  rows = await openPhotos()
-  expect(rows).toHaveLength(6)
+  // CK-88: the same six as four rows and two tiles.
+  await openPhotos({ rows: 4, tiles: 2 })
   expect(screen.queryByRole('button', { name: 'Remove from gathering' })).toBeNull()
+  // CK-88: "anywhere" includes the viewer of each published photo.
+  viewer = await openViewer(1, 2, 'theirs-live.jpg')
+  expect(removeOn(viewer)).toBe(false)
+  closeViewer(viewer)
+  viewer = await openViewer(2, 2, 'mine-live.jpg')
+  expect(removeOn(viewer)).toBe(false)
+  closeViewer(viewer)
   expect(screen.queryByRole('button', { name: 'Removed from this gathering' })).toBeNull()
   expect(screen.queryByRole('group', { name: 'Show' })).toBeNull()
   expect(actRequests(nonHost)).toHaveLength(0)
 })
 
-test('the remove step: nothing posted on the first click, the exact sentence, Leave it posts nothing, Remove it posts once and the row moves to the Removed view; the step shares the screen with no other step', async () => {
+// CK-88: renamed — was "the remove step: nothing posted on the first click,
+// the exact sentence, Leave it posts nothing, Remove it posts once and the row
+// moves to the Removed view; the step shares the screen with no other step":
+// the photo was a tile, not a row, and the step is in its viewer.
+test('the remove step, in the viewer: nothing posted on the first click, the exact sentence, Leave it posts nothing, Remove it posts once, the viewer closes onto the Removed view\'s button and the photo moves to the Removed view; the step shares the screen with no other step', async () => {
   const server = gatheringBinServer([
     mediaRow({ id: 'm-theirs', filename: 'beach.jpg' }),
     mediaRow({ id: 'm-theirs-waiting', filename: 'waiting.jpg', publication_state: 'pending' }),
@@ -430,12 +524,16 @@ test('the remove step: nothing posted on the first click, the exact sentence, Le
   const mock = stubRoutes(server.routes)
 
   renderMedia({ isHost: true })
-  let rows = await openPhotos()
+  // CK-88: beach.jpg and mine.jpg are published — tiles 1 and 2 — and the
+  // waiting photo is the one row.
+  await openPhotos({ rows: 1, tiles: 2 })
   const reads = listRequests(mock).length
 
   // The first click asks, and nothing is sent.
-  fireEvent.click(within(rows[0]).getByRole('button', { name: 'Remove from gathering' }))
-  const step = within(rows[0]).getByRole('group', { name: 'Remove beach.jpg from this gathering' })
+  // CK-88: in the viewer beach.jpg's tile opens, where its row's takedown went.
+  let viewer = await openViewer(1, 2, 'beach.jpg')
+  fireEvent.click(within(viewer).getByRole('button', { name: 'Remove from gathering' }))
+  const step = within(viewer).getByRole('group', { name: 'Remove beach.jpg from this gathering' })
   expect(step.textContent).toContain(REMOVE_SENTENCE)
   expect(step.textContent).not.toMatch(BIN_BAN)
   expect(step.textContent).not.toMatch(/cancel|delet|destroy/i)
@@ -445,39 +543,65 @@ test('the remove step: nothing posted on the first click, the exact sentence, Le
 
   // The do-nothing: the step closes, nothing was sent, nothing moved.
   fireEvent.click(within(step).getByRole('button', { name: 'Leave it' }))
-  expect(within(rows[0]).queryByRole('group', { name: /^Remove / })).toBeNull()
+  expect(within(viewer).queryByRole('group', { name: /^Remove / })).toBeNull()
   expect(actRequests(mock)).toHaveLength(0)
   expect(server.rows.get('m-theirs')!.publication_state).toBe('live')
 
   // The step shares the screen with no other step. The editor open on the
-  // host's own row closes when the remove step opens, and vice versa.
-  fireEvent.click(within(rows[2]).getByRole('button', { name: 'Edit caption and tags' }))
-  expect(within(rows[2]).getByRole('form', { name: 'Edit mine.jpg' })).toBeTruthy()
-  fireEvent.click(within(rows[0]).getByRole('button', { name: 'Remove from gathering' }))
-  expect(within(rows[2]).queryByRole('form', { name: 'Edit mine.jpg' })).toBeNull()
-  fireEvent.click(within(rows[2]).getByRole('button', { name: 'Edit caption and tags' }))
-  expect(within(rows[0]).queryByRole('group', { name: /^Remove / })).toBeNull()
-  fireEvent.click(within(rows[2]).getByRole('button', { name: 'Cancel' }))
-  // The delete step on the host's own row closes it too, and vice versa.
-  fireEvent.click(within(rows[0]).getByRole('button', { name: 'Remove from gathering' }))
-  fireEvent.click(within(rows[2]).getByRole('button', { name: 'Delete permanently' }))
-  expect(within(rows[0]).queryByRole('group', { name: /^Remove / })).toBeNull()
-  expect(within(rows[2]).getByRole('group', { name: 'Delete mine.jpg' })).toBeTruthy()
-  fireEvent.click(within(rows[0]).getByRole('button', { name: 'Remove from gathering' }))
-  expect(within(rows[2]).queryByRole('group', { name: 'Delete mine.jpg' })).toBeNull()
+  // host's own photo closes when the remove step opens, and vice versa.
+  // CK-88: the editor and the delete step on the host's own published photo
+  // are in the viewer too, on mine.jpg — one photo on the screen at a time,
+  // and a step closes when the viewer moves off its photo — so each check
+  // below is made across the whole document, after moving to the other
+  // photo and opening the other step.
+  const next = () => fireEvent.click(within(viewer).getByRole('button', { name: 'Next photo' }))
+  const previous = () => fireEvent.click(within(viewer).getByRole('button', { name: 'Previous photo' }))
+  const openRemove = () => fireEvent.click(within(viewer).getByRole('button', { name: 'Remove from gathering' }))
+  next()
+  expect(screen.getByRole('dialog', { name: 'mine.jpg' })).toBe(viewer)
+  fireEvent.click(within(viewer).getByRole('button', { name: 'Edit caption and tags' }))
+  expect(within(viewer).getByRole('form', { name: 'Edit mine.jpg' })).toBeTruthy()
+  previous()
+  openRemove()
+  expect(screen.queryByRole('form', { name: 'Edit mine.jpg' })).toBeNull()
+  next()
+  fireEvent.click(within(viewer).getByRole('button', { name: 'Edit caption and tags' }))
+  expect(screen.queryByRole('group', { name: /^Remove / })).toBeNull()
+  fireEvent.click(within(viewer).getByRole('button', { name: 'Cancel' }))
+  // The delete step on the host's own photo closes it too, and vice versa.
+  previous()
+  openRemove()
+  next()
+  fireEvent.click(within(viewer).getByRole('button', { name: 'Delete permanently' }))
+  expect(screen.queryByRole('group', { name: /^Remove / })).toBeNull()
+  expect(within(viewer).getByRole('group', { name: 'Delete mine.jpg' })).toBeTruthy()
+  previous()
+  openRemove()
+  expect(screen.queryByRole('group', { name: 'Delete mine.jpg' })).toBeNull()
   // And the decline step on someone else's waiting row.
-  fireEvent.click(within(rows[1]).getByRole('button', { name: 'Decline' }))
-  expect(within(rows[0]).queryByRole('group', { name: /^Remove / })).toBeNull()
-  expect(within(rows[1]).getByRole('group', { name: /^Decline / })).toBeTruthy()
-  fireEvent.click(within(rows[0]).getByRole('button', { name: 'Remove from gathering' }))
-  expect(within(rows[1]).queryByRole('group', { name: /^Decline / })).toBeNull()
+  // CK-88: the waiting photo stays a row, behind the modal viewer, so the
+  // remove step is closed with the viewer before Decline can be pressed —
+  // and the decline step opens with no remove step anywhere.
+  closeViewer(viewer)
+  expect(screen.queryByRole('group', { name: /^Remove / })).toBeNull()
+  fireEvent.click(within(rowNamed('waiting.jpg')).getByRole('button', { name: 'Decline' }))
+  expect(screen.queryByRole('group', { name: /^Remove / })).toBeNull()
+  expect(within(rowNamed('waiting.jpg')).getByRole('group', { name: /^Decline / })).toBeTruthy()
+  // CK-88: the remove step opens in beach.jpg's viewer, and — as on the row
+  // it came from — opening it closes the decline step. SOFT, so the rest of
+  // the test still runs: the viewer's Remove from gathering leaves the decline
+  // step open (GatheringMedia.tsx's viewer opener never clears decliningId,
+  // where the row's did) — reported as a component defect, left failing.
+  viewer = await openViewer(1, 2, 'beach.jpg')
+  openRemove()
+  expect.soft(screen.queryByRole('group', { name: /^Decline / })).toBeNull()
   expect(actRequests(mock)).toHaveLength(0)
 
   // The second click, deliberately: one POST to `remove`, then the re-read
-  // — the row leaves the host's default list (it is in the gathering's bin,
-  // which the default list excludes) and the Removed view holds it.
+  // — the photo leaves the host's default list (it is in the gathering's
+  // bin, which the default list excludes) and the Removed view holds it.
   fireEvent.click(
-    within(within(rows[0]).getByRole('group', { name: /^Remove / })).getByRole('button', {
+    within(within(viewer).getByRole('group', { name: /^Remove / })).getByRole('button', {
       name: 'Remove it',
     }),
   )
@@ -486,11 +610,23 @@ test('the remove step: nothing posted on the first click, the exact sentence, Le
   await waitFor(() => {
     expect(listRequests(mock)).toHaveLength(reads + 1)
   })
+  // CK-88: the landing closes the viewer and puts focus on the Removed view's
+  // button; the photo leaves the grid — the waiting row and mine.jpg's tile
+  // remain, where three rows had become two.
   await waitFor(() => {
-    expect(currentRows()).toHaveLength(2)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+  await waitFor(() => {
+    expect(document.activeElement).toBe(binControl())
+  })
+  await waitFor(() => {
+    expect(currentRows()).toHaveLength(1)
+    expect(gridTiles()).toHaveLength(1)
   })
   expect(server.rows.get('m-theirs')!.publication_state).toBe('removed')
   expect(screen.queryByText('beach.jpg')).toBeNull()
+  // CK-88: a tile shows no name, so the one left is read through its viewer.
+  closeViewer(await openViewer(1, 1, 'mine.jpg'))
   // Nothing was destroyed, and nothing says it was.
   expect(screen.queryByText('Photo deleted.')).toBeNull()
   expect(server.rows.get('m-theirs')!.status).toBe('ready')
@@ -498,8 +634,10 @@ test('the remove step: nothing posted on the first click, the exact sentence, Le
   fireEvent.click(binControl())
   await waitFor(() => {
     expect(currentRows()).toHaveLength(1)
+    // CK-88: the All view holds one row too now, so the wait names the row.
+    expect(currentRows()[0].textContent).toContain('beach.jpg')
   })
-  rows = currentRows()
+  const rows = currentRows()
   expect(rows[0].textContent).toContain('beach.jpg')
   expect(rows[0].textContent).toContain(HOST_BIN_LINE_30)
   expect(actRequests(mock)).toHaveLength(1)
@@ -538,10 +676,15 @@ test('the Removed view: removed=true and never both flags, the host line with th
   const mock = stubRoutes(server.routes)
 
   renderMedia({ isHost: true })
-  let rows = await openPhotos()
   // The default list: the live row and the host's own personal-bin row —
   // never a gathering-bin row mixed in, never the NULL-remover row.
-  expect(rows).toHaveLength(2)
+  // CK-88: two rows were two; the live one is a tile now, so one row and
+  // one tile.
+  let { rows } = await openPhotos({ rows: 1, tiles: 1 })
+  expect(rows[0].textContent).toContain('mine-bin.jpg')
+  // CK-88: a tile shows no name, so the one tile is read through its viewer:
+  // the live photo, and neither removed one.
+  closeViewer(await openViewer(1, 1, 'live.jpg'))
   expect(screen.queryByText('binned.jpg')).toBeNull()
   expect(screen.queryByText('null-remover.jpg')).toBeNull()
 
@@ -589,13 +732,16 @@ test('the empty state: with nothing removed, the Removed view says so — never 
   stubRoutes(gatheringBinServer([mediaRow({ id: 'm-live', filename: 'live.jpg' })]).routes)
 
   renderMedia({ isHost: true })
-  await openPhotos()
+  // CK-88: the one live photo is a tile, so no row.
+  await openPhotos({ rows: 0, tiles: 1 })
   fireEvent.click(binControl())
   expect(await screen.findByText(EMPTY_BIN)).toBeTruthy()
   expect(screen.queryByText('No photos yet.')).toBeNull()
   expect(screen.queryByRole('list', { name: 'Photos' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Show all photos' }))
-  expect(await screen.findByRole('list', { name: 'Photos' })).toBeTruthy()
+  // CK-88: the way back shows the full list's photo again — as its tile now,
+  // where it was the Photos list's row.
+  expect(await screen.findByRole('button', { name: /^Photo 1 of 1 in$/ })).toBeTruthy()
   expect(screen.queryByText(EMPTY_BIN)).toBeNull()
 })
 
@@ -632,10 +778,14 @@ test('Put back is one click that posts restore — the hint beside it says every
   expect(server.rows.get('m-bin')!.published_at).toBe(STAMP)
   expect(document.body.innerHTML).not.toContain(STAMP)
   // Back in the full list it reads as any live photograph.
+  // CK-88: a live photograph is a tile now, and its line is in the viewer its
+  // tile opens — and the stamp is rendered nowhere there either.
   fireEvent.click(screen.getByRole('button', { name: 'Show all photos' }))
-  await waitFor(() => {
-    expect(currentRows()[0].textContent).toContain('Everyone in this gathering can see it.')
-  })
+  // The tile arrives with the re-read the way back asks for.
+  await screen.findByRole('button', { name: /^Photo 1 of 1 in$/ })
+  const viewer = await openViewer(1, 1, 'binned.jpg')
+  expect(viewer.textContent).toContain('Everyone in this gathering can see it.')
+  expect(document.body.innerHTML).not.toContain(STAMP)
 })
 
 test(`Delete permanently in the bin view is CK-64's step — the same sentence, Keep it inert, the second click posts destroy once — and "Photo deleted." explains the empty view`, async () => {
@@ -755,7 +905,12 @@ test("a refused act in the bin view renders on its row from its code — never t
 
 // ---- CK-69: co-hosts on the surface ----
 
-test("a co-host's side: Remove from gathering on someone else's live ready row with the co-host's sentence in both gate states, the Removed view's control, own rows keeping the personal acts — and no queue, Publish or Decline anywhere", async () => {
+// CK-88: renamed — was "a co-host's side: Remove from gathering on someone
+// else's live ready row with the co-host's sentence in both gate states, the
+// Removed view's control, own rows keeping the personal acts — and no queue,
+// Publish or Decline anywhere": the live ready photos are tiles now, and their
+// acts — the takedown and the co-host's own personal acts — are in the viewer.
+test("a co-host's side: Remove from gathering in the viewer of someone else's live ready photo with the co-host's sentence in both gate states, the Removed view's control, own photos keeping the personal acts — and no queue, Publish or Decline anywhere", async () => {
   // The rows a co-host's list can hold: someone else's live row, and their
   // own rows (live, and waiting — `pending` is the host's and the
   // uploader's, so their own waiting row is the only waiting row they see).
@@ -774,21 +929,32 @@ test("a co-host's side: Remove from gathering on someone else's live ready row w
   const mock = stubRoutes(server.routes)
 
   const view = render(mediaElement({ isHost: false, organises: true, requiresApproval: false }))
-  let rows = await openPhotos()
-  expect(rows).toHaveLength(3)
-  // Someone else's live row: the takedown, and none of the personal acts.
-  expect(within(rows[0]).getByRole('button', { name: 'Remove from gathering' })).toBeTruthy()
-  expect(within(rows[0]).queryByRole('button', { name: 'Send to bin' })).toBeNull()
-  expect(within(rows[0]).queryByRole('button', { name: 'Delete permanently' })).toBeNull()
-  // Their own rows keep CK-64's acts and gain nothing; their own waiting
+  // CK-88: three rows were three; the two published photos are tiles now —
+  // theirs-live first, mine-live second — and the waiting one is the row.
+  const { rows } = await openPhotos({ rows: 1, tiles: 2 })
+  // Someone else's live photo: the takedown, and none of the personal acts.
+  // CK-88: in the viewer its tile opens.
+  let viewer = await openViewer(1, 2, 'theirs-live.jpg')
+  expect(within(viewer).getByRole('button', { name: 'Remove from gathering' })).toBeTruthy()
+  expect(within(viewer).queryByRole('button', { name: 'Send to bin' })).toBeNull()
+  expect(within(viewer).queryByRole('button', { name: 'Delete permanently' })).toBeNull()
+  closeViewer(viewer)
+  // Their own photos keep CK-64's acts and gain nothing; their own waiting
   // row reads the uploader's line — the host is the one who decides — and
   // carries no review act.
-  expect(within(rows[1]).getByRole('button', { name: 'Send to bin' })).toBeTruthy()
-  expect(within(rows[1]).queryByRole('button', { name: 'Remove from gathering' })).toBeNull()
-  expect(rows[2].textContent).toContain(
+  // CK-88: the own published photo's acts in the viewer its tile opens.
+  viewer = await openViewer(2, 2, 'mine-live.jpg')
+  expect(within(viewer).getByRole('button', { name: 'Send to bin' })).toBeTruthy()
+  expect(within(viewer).queryByRole('button', { name: 'Remove from gathering' })).toBeNull()
+  closeViewer(viewer)
+  // CK-88: and the takedown on no row and no tile.
+  expect(screen.queryAllByRole('button', { name: 'Remove from gathering' })).toHaveLength(0)
+  expectBareTiles()
+  expect(rows[0].textContent).toContain('mine-waiting.jpg')
+  expect(rows[0].textContent).toContain(
     'Only you and the host can see this. Waiting for the host to publish or decline it.',
   )
-  expect(within(rows[2]).queryByRole('button', { name: /^publish|^decline/i })).toBeNull()
+  expect(within(rows[0]).queryByRole('button', { name: /^publish|^decline/i })).toBeNull()
   // The reserved review: nowhere. The delegable Removed view: on the page.
   expect(screen.queryByRole('button', { name: 'Awaiting your review' })).toBeNull()
   expect(screen.queryByRole('checkbox')).toBeNull()
@@ -798,40 +964,59 @@ test("a co-host's side: Remove from gathering on someone else's live ready row w
 
   // The step, open gathering: the co-host's sentence — never the host's
   // "you and any co-hosts", never "nobody", never the uploader's name.
-  fireEvent.click(within(rows[0]).getByRole('button', { name: 'Remove from gathering' }))
-  let step = within(rows[0]).getByRole('group', { name: 'Remove theirs-live.jpg from this gathering' })
+  // CK-88: in theirs-live.jpg's viewer.
+  viewer = await openViewer(1, 2, 'theirs-live.jpg')
+  fireEvent.click(within(viewer).getByRole('button', { name: 'Remove from gathering' }))
+  let step = within(viewer).getByRole('group', { name: 'Remove theirs-live.jpg from this gathering' })
   expect(step.textContent).toContain(CO_HOST_REMOVE_OPEN)
   expect(step.textContent).not.toMatch(/nobody|grandma|any co-hosts|included/i)
   expect(step.textContent).not.toMatch(BIN_BAN)
   expect(actRequests(mock)).toHaveLength(0)
   fireEvent.click(within(step).getByRole('button', { name: 'Leave it' }))
-  expect(within(rows[0]).queryByRole('group', { name: /^Remove / })).toBeNull()
+  expect(within(viewer).queryByRole('group', { name: /^Remove / })).toBeNull()
+  // CK-88: closed, as a person would, before the page changes beneath it.
+  closeViewer(viewer)
 
   // The step, gated: a co-host's Put back passes through the gate, and the
   // sentence says what putting it back does — the host looks at it again.
   view.rerender(mediaElement({ isHost: false, organises: true, requiresApproval: true }))
-  rows = currentRows()
-  fireEvent.click(within(rows[0]).getByRole('button', { name: 'Remove from gathering' }))
-  step = within(rows[0]).getByRole('group', { name: /^Remove / })
+  // CK-88: in the viewer, opened afresh on the re-rendered page.
+  viewer = await openViewer(1, 2, 'theirs-live.jpg')
+  fireEvent.click(within(viewer).getByRole('button', { name: 'Remove from gathering' }))
+  step = within(viewer).getByRole('group', { name: /^Remove / })
   expect(step.textContent).toContain(CO_HOST_REMOVE_GATED)
   expect(step.textContent).not.toMatch(BIN_BAN)
   expect(step.textContent).not.toMatch(/approv|shared|screen|nobody|included/i)
   expect(actRequests(mock)).toHaveLength(0)
 
-  // Remove it: one POST, the row leaves the co-host's default list — it is
+  // Remove it: one POST, the photo leaves the co-host's default list — it is
   // in the gathering's bin, with the co-host recorded as the remover.
   fireEvent.click(within(step).getByRole('button', { name: 'Remove it' }))
   expect(actRequests(mock)).toHaveLength(1)
   expect(actRequests(mock)[0][0].endsWith('/media/m-theirs-live/remove')).toBe(true)
+  // CK-88: the landing closes the viewer onto the Removed view's button; the
+  // photo leaves the grid — mine-live's tile and the waiting row remain,
+  // where three rows had become two.
   await waitFor(() => {
-    expect(currentRows()).toHaveLength(2)
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
+  await waitFor(() => {
+    expect(document.activeElement).toBe(binControl())
+  })
+  await waitFor(() => {
+    expect(currentRows()).toHaveLength(1)
+    expect(gridTiles()).toHaveLength(1)
+  })
+  // CK-88: a tile shows no name, so the one left is read through its viewer.
+  closeViewer(await openViewer(1, 1, 'mine-live.jpg'))
   expect(server.rows.get('m-theirs-live')!.publication_state).toBe('removed')
   expect(server.rows.get('m-theirs-live')!.status).toBe('ready')
   // In the Removed view it reads the co-host's line, the window just opened.
   fireEvent.click(binControl())
   await waitFor(() => {
     expect(currentRows()).toHaveLength(1)
+    // CK-88: the All view holds one row too now, so the wait names the row.
+    expect(currentRows()[0].textContent).toContain('theirs-live.jpg')
   })
   expect(currentRows()[0].textContent).toContain('theirs-live.jpg')
   expect(currentRows()[0].textContent).toContain(CO_HOST_BIN_LINE_30)
@@ -952,7 +1137,8 @@ test("the Removed view's own row for the host — a photograph of theirs a co-ho
   const mock = stubRoutes(server.routes)
 
   renderMedia({ isHost: true })
-  let rows = await openPhotos()
+  // CK-88: open on mount; no photo here is published, so no tile.
+  let { rows } = await openPhotos({ rows: 1, tiles: 0 })
   // The default list: the personal-bin row alone, with the personal line
   // and the personal acts — the row a co-host removed is not mixed in.
   expect(rows).toHaveLength(1)
@@ -1030,25 +1216,35 @@ test("a refusal names the bin the act was on: already_removed on the takedown an
   ])
 
   renderMedia({ isHost: true })
-  let rows = await openPhotos()
+  // CK-88: both photos in the default list are published — tiles, theirs.jpg
+  // first and mine.jpg second — so there is no row.
+  await openPhotos({ rows: 0, tiles: 2 })
   // The takedown: the gathering's bin.
-  fireEvent.click(within(rows[0]).getByRole('button', { name: 'Remove from gathering' }))
-  fireEvent.click(within(rows[0]).getByRole('button', { name: 'Remove it' }))
-  const takedown = await within(rows[0]).findByRole('alert')
+  // CK-88: in theirs.jpg's viewer, where the refusal lands beside the step's
+  // act, with Refresh the list, and nothing closes.
+  let viewer = await openViewer(1, 2, 'theirs.jpg')
+  fireEvent.click(within(viewer).getByRole('button', { name: 'Remove from gathering' }))
+  fireEvent.click(within(viewer).getByRole('button', { name: 'Remove it' }))
+  const takedown = await within(viewer).findByRole('alert')
   expect(takedown.textContent).toContain(
     'This photo has already been removed — refresh the list to see where it is.',
   )
   expect(takedown.textContent).not.toMatch(/your bin/i)
-  // A personal act on the host's own row: CK-64's line, unchanged.
-  fireEvent.click(within(rows[1]).getByRole('button', { name: 'Send to bin' }))
-  const personal = await within(rows[1]).findByRole('alert')
+  expect(within(viewer).getByRole('button', { name: 'Refresh the list' })).toBeTruthy()
+  closeViewer(viewer)
+  // A personal act on the host's own photo: CK-64's line, unchanged.
+  // CK-88: in mine.jpg's viewer.
+  viewer = await openViewer(2, 2, 'mine.jpg')
+  fireEvent.click(within(viewer).getByRole('button', { name: 'Send to bin' }))
+  const personal = await within(viewer).findByRole('alert')
   expect(personal.textContent).toContain('This photo is already in your bin.')
+  closeViewer(viewer)
   // The Removed view's Put back: the gathering's bin.
   fireEvent.click(binControl())
   await waitFor(() => {
     expect(currentRows()).toHaveLength(1)
   })
-  rows = currentRows()
+  const rows = currentRows()
   fireEvent.click(within(rows[0]).getByRole('button', { name: 'Put back' }))
   const putBack = await within(rows[0]).findByRole('alert')
   expect(putBack.textContent).toContain(

@@ -663,8 +663,9 @@ function OccurrenceRsvp({
 // variant), the title as the <h1>, the type beneath it and, for a memorial,
 // *In memory of {name}*, all over the scrim, with the date badge in the
 // full view while a date is still ahead; THE ACTIONS — Add photos (the
-// invited tier: one press opens the device's picker with the Photos section
-// open beneath, GatheringMedia's handle) and Edit gathering (the organisers:
+// invited tier: one press opens the device's picker, GatheringMedia's
+// handle — the Photos section beneath is open on load since CK-88) and Edit
+// gathering (the organisers:
 // today's form, beneath the actions); the prompt to share; WHEN, each date
 // with its time range, its place and map on one line, and its row — the
 // answer chip from the body's `caller_response`, *RSVP and who's coming*,
@@ -672,8 +673,9 @@ function OccurrenceRsvp({
 // step and the RSVP block beneath the row; PHOTOS; Who it's for; and the
 // Co-hosts or Invitations section. Every section's behaviour is as it was;
 // this phase arranged them. Not here, because none is built (the merge
-// record §4): *Hosted by*, Chat and the chat preview, the Photos heading's
-// count, the grid and *See all* (CK-88).
+// record §4): *Hosted by*, Chat and the chat preview. Since CK-88 the Photos
+// section carries its heading's count, the grid, *See all* and the photo
+// viewer (GatheringMedia, point 13).
 export function GatheringDetail() {
   const { id } = useParams()
   const { person } = useAuth()
@@ -1001,7 +1003,6 @@ export function GatheringDetail() {
         {head(undefined)}
         <p>{PHOTOS_ONLY_LINE}</p>
         <section className="auth-card" aria-labelledby="photos-heading">
-          <h2 id="photos-heading">Photos</h2>
           <GatheringMedia
             gatheringId={gathering.id}
             isHost={false}
@@ -1406,9 +1407,10 @@ export function GatheringDetail() {
       {head(badge)}
 
       {/* THE ACTIONS (CK-87; the mockup's `.gactions`): Add photos for
-          everyone who can upload — ONE press opens the device's picker, the
-          Photos section opening beneath it (GatheringMedia's handle, called
-          inside the click) — and Edit gathering for the organisers, over
+          everyone who can upload — ONE press opens the device's picker
+          (GatheringMedia's handle, called inside the click; the Photos
+          section is open on load since CK-88) — and Edit gathering for the
+          organisers, over
           today's form beneath this row. No Chat: the chat is not built. */}
       {(canUpload || organises) && (
         <div className="gathering-actions">
@@ -1872,8 +1874,10 @@ export function GatheringDetail() {
       {/* Photos (CK-38): renders for everyone in the read audience — the
           list is filtered server-side by the per-state audience rule, so a
           keeper or invitee who uploaded nothing sees an empty list, never a
-          photograph nobody has approved. Collapsed by default: no media
-          request until opened. isHost chooses the wording of who can see a
+          photograph nobody has approved. Open on load since CK-88, with its
+          heading, its count, the grid and the photo viewer — the section's
+          own (GatheringMedia renders the heading this section is labelled
+          by). isHost chooses the wording of who can see a
           pending photograph, and — with the gathering's effective
           requires_approval (CK-41), since CK-43.1, or with anything waiting
           in the list, since CK-44 — whether the host's review exists in the
@@ -1882,7 +1886,6 @@ export function GatheringDetail() {
           the server decides who sees anything and who may act. The switch
           that writes the setting is in the edit form above. */}
       <section className="auth-card" aria-labelledby="photos-heading">
-        <h2 id="photos-heading">Photos</h2>
         <GatheringMedia
           ref={mediaRef}
           gatheringId={gathering.id}

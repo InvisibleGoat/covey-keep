@@ -12,7 +12,14 @@
 // goes out as typed and the server's 422 renders inline; and the search box
 // sets `q` once typing settles, sends none for an empty box, and renders an
 // empty result as a state with the way back.
+//
+// CK-88: every fixture here is a waiting (`ready` + `pending`) photograph or
+// one still on its way, so each stays a ROW and every pin below holds on its
+// row exactly as written; what moved is the section opening on mount (no
+// toggle) and the Router GatheringMedia now needs. The same editor on a
+// published photo — in the viewer — is pinned in media-bin.test.tsx.
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { GatheringMedia } from '../components/GatheringMedia'
 
@@ -94,24 +101,23 @@ function body(call: [string, RequestInit | undefined]): Record<string, unknown> 
 }
 
 function renderMedia(over: Partial<Parameters<typeof GatheringMedia>[0]> = {}) {
+  // CK-88: GatheringMedia reads the router (the viewer's history entry).
   return render(
-    <GatheringMedia
-      gatheringId="g-1"
-      isHost={false}
-      // The gathering resolves open — every gathering these pins were written
-      // against (CK-43.1 added the prop; the review surface has its own pins).
-      requiresApproval={false}
-      occurrences={occurrences}
-      zone="America/Chicago"
-      pollIntervalMs={20}
-      searchDebounceMs={20}
-      {...over}
-    />,
+    <MemoryRouter initialEntries={['/gatherings/g-1']}>
+      <GatheringMedia
+        gatheringId="g-1"
+        isHost={false}
+        // The gathering resolves open — every gathering these pins were written
+        // against (CK-43.1 added the prop; the review surface has its own pins).
+        requiresApproval={false}
+        occurrences={occurrences}
+        zone="America/Chicago"
+        pollIntervalMs={20}
+        searchDebounceMs={20}
+        {...over}
+      />
+    </MemoryRouter>,
   )
-}
-
-async function openPhotos() {
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
 }
 
 // The rows of the Photos list, and not the tag chips nested inside them.
@@ -172,7 +178,6 @@ test("the intent carries the filename trimmed from the File and the size from Fi
   ])
 
   renderMedia()
-  await openPhotos()
   await screen.findByText('No photos yet.')
 
   // Seven bytes, and a name carrying whitespace no picker trims for us.
@@ -198,7 +203,6 @@ test("the intent carries the filename trimmed from the File and the size from Fi
   // still called by its name, because the list carries it.
   cleanup()
   renderMedia()
-  await openPhotos()
   expect(await screen.findByText('IMG_0570.jpg')).toBeTruthy()
   expect(screen.queryByText('Photo')).toBeNull()
 })
@@ -229,7 +233,6 @@ test("a row is called by its caption, then its filename, then Photo; a tag is te
   ])
 
   renderMedia()
-  await openPhotos()
   const rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
   expect(rows).toHaveLength(5)
 
@@ -295,7 +298,6 @@ test('adding a second tag to a photograph that already has one sends both and le
   ])
 
   renderMedia()
-  await openPhotos()
   const list = await screen.findByRole('list', { name: 'Photos' })
   const chips = () =>
     within(within(list).getByRole('list', { name: 'Tags on Photo' }))
@@ -357,7 +359,6 @@ test('blanking a saved caption sends null — never "" — and the row falls bac
   ])
 
   renderMedia()
-  await openPhotos()
   const list = await screen.findByRole('list', { name: 'Photos' })
   expect(nameOf(photoRows(list)[0])).toBe('Safety sign at the yard')
 
@@ -413,7 +414,6 @@ test("an already-empty caption is omitted from the patch, and a whitespace-only 
   ])
 
   renderMedia()
-  await openPhotos()
   await screen.findByRole('list', { name: 'Photos' })
 
   // A tag change with the caption left empty: no caption key at all — a
@@ -461,7 +461,6 @@ test('the search box sets q once typing settles — one request for several keys
   ])
 
   renderMedia()
-  await openPhotos()
   await screen.findByText('Safety sign at the yard')
   const listRequests = () => calls(mock, 'GET', (url) => url.includes('/gatherings/g-1/media'))
   const withQ = () => listRequests().filter(([url]) => url.includes('q='))

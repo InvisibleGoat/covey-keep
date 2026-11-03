@@ -3,7 +3,8 @@
 // §11; Steven's answers of 2026-10-27). The values under test:
 // - THE PHOTOS-ONLY VIEW, from a memory body whose `occurrences` is null:
 //   the header, the group line and one line; the Photos section with no
-//   upload, "Show photos", and no date on any photo; NO When, NO RSVP, NO
+//   upload and no date on any photo (open from the start since CK-88, a
+//   published photo a tile in the grid); NO When, NO RSVP, NO
 //   Edit, NO Invitations, NO places — and no request the view withholds
 //   (`/occurrences/…/rsvps`, `/places`, `/invitations`, `/co-hosts`). An
 //   unknown view is the same view (gates closed).
@@ -295,23 +296,31 @@ test('THE PHOTOS-ONLY VIEW from a memory body with occurrences null: the header,
   expect(requests(mock, 'GET', /\/places$/)).toHaveLength(0)
   expect(requests(mock, 'GET', /\/invitations$/)).toHaveLength(0)
   expect(requests(mock, 'GET', /\/co-hosts$/)).toHaveLength(0)
-  expect(mock.mock.calls).toHaveLength(1)
+  // CK-88: the Photos section is open on load and reads its list at once —
+  // the list is not something the view withholds — and the grid's one tile
+  // mints its thumbnail. Nothing else: no group read until the viewer opens.
+  expect(mock.mock.calls.map(([url]) => String(url).replace(/^https?:\/\/[^/]+/, ''))).toEqual([
+    '/gatherings/g-1',
+    '/gatherings/g-1/media',
+    '/media/m-photo-1/url?layer=thumbnail',
+  ])
 })
 
-test('in the photos-only view the Photos section reads "Show photos", offers no upload, and no photo carries a date', async () => {
+test('in the photos-only view the Photos section is open from the start, offers no upload, and no photo carries a date', async () => {
   const mock = stubServer({ detail: () => json(200, memoryDetail()) })
   const view = renderPage()
   await loaded()
-  expect(screen.queryByRole('button', { name: /show photos and add yours/i })).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Show photos' }))
-  const list = await screen.findByRole('list', { name: 'Photos' })
-  const row = within(list).getAllByRole('listitem')[0]
-  expect(row.querySelector('strong')?.textContent).toBe('party.jpg')
+  // CK-88: no toggle of either form, and the published photo is a tile; its
+  // name, who added it and its date are the viewer's words now.
+  expect(screen.queryByRole('button', { name: /^show photos/i })).toBeNull()
+  fireEvent.click(await screen.findByRole('button', { name: 'Photo 1 of 1 in The Party' }))
+  const viewer = await screen.findByRole('dialog')
+  expect(viewer.querySelector('.vtitle b')?.textContent).toBe('party.jpg')
   // The photo is labelled with a date in the full view; here, none — and not
   // the moment it was added either.
-  expect(row.textContent).toContain('added by Ada Test')
-  expect(row.textContent).not.toContain(' for ')
-  expect(row.textContent).not.toContain(formatInstant(PHOTO.created_at, ZONE))
+  expect(viewer.querySelector('.vline')?.textContent).toBe('Added by Ada Test')
+  expect(viewer.textContent).not.toContain(formatInstant(PHOTO.created_at, ZONE))
+  expect(viewer.textContent).not.toMatch(/20\d\d|\b\d{1,2}:\d\d\b/)
   expect(view.container.textContent).not.toMatch(/20\d\d|\b\d{1,2}:\d\d\b/)
   expect(screen.queryByLabelText('Add photos')).toBeNull()
   expect(view.container.querySelector('input[type="file"]')).toBeNull()
@@ -735,8 +744,9 @@ test('the ban: no rendered copy — the organiser’s page with the prompt, Who 
   stubServer({ detail: () => json(200, memoryDetail()) })
   renderPage()
   await loaded()
-  fireEvent.click(screen.getByRole('button', { name: 'Show photos' }))
-  await screen.findByRole('list', { name: 'Photos' })
+  // CK-88: no toggle; the photo is a tile, and the viewer's copy is read too.
+  fireEvent.click(await screen.findByRole('button', { name: 'Photo 1 of 1 in The Party' }))
+  await screen.findByRole('dialog')
   expect(document.body.textContent).not.toMatch(BANNED)
   expect(document.body.textContent).not.toMatch(NOTICE)
 })

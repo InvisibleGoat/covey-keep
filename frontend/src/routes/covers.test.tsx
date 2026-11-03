@@ -835,17 +835,28 @@ test('a refused Remove cover reads the house line, and nothing is re-read', asyn
 })
 
 // ---------------------------------------------------------------------------
-// The opened photo.
+// The opened photo — since CK-88 the photo viewer: a published photo is a
+// tile in the grid, opened in the viewer, which carries the cover buttons; a
+// row's thumbnail opens its photo alone, with no act.
 // ---------------------------------------------------------------------------
 
+// CK-88: no toggle — the section reads its list on load; wait for it.
 async function openPhotos() {
-  fireEvent.click(await screen.findByRole('button', { name: /^Show photos/ }))
-  await screen.findByRole('list', { name: 'Photos' })
+  await waitFor(() =>
+    expect(screen.queryAllByRole('button', { name: /^Photo \d+ of \d+ in |^Open photo added by / }).length).toBeGreaterThan(0),
+  )
 }
 
+// A row's photo, by who added it: the viewer on that photo alone.
 function openPhoto(name: RegExp | string) {
   const buttons = screen.getAllByRole('button', { name: typeof name === 'string' ? `Open photo added by ${name}` : name })
   fireEvent.click(buttons[0])
+  return screen.getByRole('dialog')
+}
+
+// A published photo, by its place in the grid: the viewer on the grid.
+async function openTile(position: number) {
+  fireEvent.click(await screen.findByRole('button', { name: new RegExp(`^Photo ${position} of \\d+ in The Party$`) }))
   return screen.getByRole('dialog')
 }
 
@@ -859,7 +870,8 @@ test('Use as cover: the organisers’ ONE click on a published photo — the PUT
   await screen.findByRole('heading', { level: 1, name: 'The Party' })
   expect(within(coverCard()).getByText('No cover photo yet')).toBeTruthy()
   await openPhotos()
-  const viewer = openPhoto('Bea Test')
+  // CK-88: the published photo is a tile; the viewer carries the button.
+  const viewer = await openTile(1)
   fireEvent.click(within(viewer).getByRole('button', { name: 'Use as cover' }))
   await waitFor(() => expect(requests(mock, 'PUT', '/gatherings/g-1/cover')).toHaveLength(1))
   expect(JSON.parse(String(requests(mock, 'PUT', '/gatherings/g-1/cover')[0][1]?.body))).toEqual({ media_id: 'm-1' })
@@ -880,9 +892,10 @@ test('Use as cover is hidden on the photo that already is the cover, and offered
   })
   const view = renderAt('/gatherings/g-1')
   await openPhotos()
-  expect(within(openPhoto('Bea Test')).queryByRole('button', { name: 'Use as cover' })).toBeNull()
+  // CK-88: each published photo by its tile.
+  expect(within(await openTile(1)).queryByRole('button', { name: 'Use as cover' })).toBeNull()
   fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }))
-  expect(within(openPhoto('Cal Test')).getByRole('button', { name: 'Use as cover' })).toBeTruthy()
+  expect(within(await openTile(2)).getByRole('button', { name: 'Use as cover' })).toBeTruthy()
   view.unmount()
 
   stubServer({
@@ -891,7 +904,7 @@ test('Use as cover is hidden on the photo that already is the cover, and offered
   })
   renderAt('/gatherings/g-1')
   await openPhotos()
-  expect(within(openPhoto('Bea Test')).queryByRole('button', { name: 'Use as cover' })).toBeNull()
+  expect(within(await openTile(1)).queryByRole('button', { name: 'Use as cover' })).toBeNull()
 })
 
 test('neither button on a photo that is not published — waiting, in a bin — and none on a failed one, which never opens', async () => {
@@ -905,12 +918,21 @@ test('neither button on a photo that is not published — waiting, in a bin — 
           photo({ id: 'm-p', publication_state: 'pending', uploader_display_name: 'Pat Test', published_at: null }),
           photo({ id: 'm-r', publication_state: 'removed', is_own: true, removed_at: new Date().toISOString() }),
           photo({ id: 'm-f', status: 'failed', publication_state: 'pending', is_own: true, failure_reason: 'unreadable', uploader_display_name: 'Ada Test' }),
+          // CK-88: a published photo too, whose viewer reads the group's seat
+          // and shows both buttons — so their absence below is the photos'
+          // state, never a seat not yet read.
+          photo({ id: 'm-l', uploader_display_name: 'Lou Test' }),
         ],
       }),
   })
   renderAt('/gatherings/g-1')
   await openPhotos()
+  const published = await openTile(1)
   await waitFor(() => expect(requests(mock, 'GET', '/groups/grp-1')).toHaveLength(1))
+  expect(within(published).getByRole('button', { name: 'Use as cover' })).toBeTruthy()
+  expect(await within(published).findByRole('button', { name: "Use as the group's cover" })).toBeTruthy()
+  fireEvent.click(within(published).getByRole('button', { name: 'Close' }))
+  // A waiting row's and a binned row's thumbnails open the photo alone.
   for (const who of ['Pat Test', 'You']) {
     const viewer = openPhoto(who)
     expect(within(viewer).queryByRole('button', { name: 'Use as cover' })).toBeNull()
@@ -921,7 +943,7 @@ test('neither button on a photo that is not published — waiting, in a bin — 
   expect(screen.getAllByRole('button', { name: /^Open photo added by/ })).toHaveLength(2)
 })
 
-test('Use as the group’s cover: the group read ONCE, when the photos open, on a group’s gathering; for its admin — the step naming the group and the gathering, its first click posting nothing, Not now inert, the confirm’s PUT, “{group}’s cover is set.” and the menu told', async () => {
+test('Use as the group’s cover: the group read ONCE, when the viewer first opens from the grid, on a group’s gathering; for its admin — the step naming the group and the gathering, its first click posting nothing, Not now inert, the confirm’s PUT, “{group}’s cover is set.” and the menu told', async () => {
   const mock = stubServer({
     'GET /gatherings/g-1': () => json(200, gathering({ caller_role: null, group: GROUP_REF })),
     'GET /groups/grp-1': () => json(200, group({ caller_role: 'admin' })),
@@ -933,7 +955,12 @@ test('Use as the group’s cover: the group read ONCE, when the photos open, on 
   await new Promise((resolve) => setTimeout(resolve, 20))
   expect(requests(mock, 'GET', '/groups/grp-1')).toHaveLength(0)
   await openPhotos()
-  const viewer = openPhoto('Bea Test')
+  // CK-88 (Steven's answer of 2026-11-02): the section is open on load, and
+  // the group's seat waits for the viewer — still unread with the photos
+  // listed, read the first time the grid's viewer opens.
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(requests(mock, 'GET', '/groups/grp-1')).toHaveLength(0)
+  const viewer = await openTile(1)
   // An invitee of the gathering: no Use as cover — the group's button alone.
   expect(within(viewer).queryByRole('button', { name: 'Use as cover' })).toBeNull()
   const ask = await within(viewer).findByRole('button', { name: "Use as the group's cover" })
@@ -965,7 +992,7 @@ test('Use as the group’s cover: the group read ONCE, when the photos open, on 
   expect(requests(mock, 'GET', '/gatherings/g-1')).toHaveLength(1)
   // Another photo opened: the group is not read again.
   fireEvent.click(within(viewer).getByRole('button', { name: 'Close' }))
-  openPhoto('Cal Test')
+  await openTile(2)
   expect(requests(mock, 'GET', '/groups/grp-1')).toHaveLength(1)
 })
 
@@ -985,9 +1012,10 @@ test('Use as the group’s cover is the group’s admin’s and co-admins’ alo
     })
     const view = renderAt('/gatherings/g-1')
     await openPhotos()
+    // CK-88: the group is read when the grid's viewer opens.
+    const viewer = await openTile(1)
     await waitFor(() => expect(requests(mock, 'GET', '/groups/grp-1')).toHaveLength(1))
     await new Promise((resolve) => setTimeout(resolve, 10))
-    const viewer = openPhoto('Bea Test')
     expect(within(viewer).queryByRole('button', { name: "Use as the group's cover" }) !== null).toBe(offered)
     view.unmount()
     vi.unstubAllGlobals()
@@ -1006,8 +1034,9 @@ test('a refused Use as cover, or Use as the group’s cover, reads the house lin
   })
   renderAt('/gatherings/g-1')
   await openPhotos()
+  // CK-88: the published photo by its tile; the group read as its viewer opens.
+  const viewer = await openTile(1)
   await waitFor(() => expect(requests(mock, 'GET', '/groups/grp-1')).toHaveLength(1))
-  const viewer = openPhoto('Bea Test')
   const listReads = requests(mock, 'GET', /^\/gatherings\/g-1\/media/).length
   fireEvent.click(within(viewer).getByRole('button', { name: 'Use as cover' }))
   expect(await within(viewer).findByRole('alert')).toHaveProperty('textContent', 'Something went wrong. Nothing changed — try again.')

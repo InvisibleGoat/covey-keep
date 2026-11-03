@@ -17,6 +17,7 @@
 // the row that caused it and nothing is published; and the publication
 // stamp is rendered nowhere.
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { GatheringMedia } from '../components/GatheringMedia'
 
@@ -195,18 +196,23 @@ function reviewServer(initial: Row[]) {
 // The element itself, so a test can re-render it with the switch flipped
 // — the way the detail page hands the section a new `requiresApproval`
 // after the host saves the edit form (CK-44).
+// CK-88: GatheringMedia reads the router (the viewer's history entry), so
+// the element sits in a MemoryRouter at the gathering's address; a rerender
+// with this element keeps the same router and the section's state.
 function mediaElement(over: Partial<Parameters<typeof GatheringMedia>[0]> = {}) {
   return (
-    <GatheringMedia
-      gatheringId="g-1"
-      isHost={true}
-      requiresApproval={true}
-      occurrences={occurrences}
-      zone="America/Chicago"
-      pollIntervalMs={20}
-      searchDebounceMs={20}
-      {...over}
-    />
+    <MemoryRouter initialEntries={['/gatherings/g-1']}>
+      <GatheringMedia
+        gatheringId="g-1"
+        isHost={true}
+        requiresApproval={true}
+        occurrences={occurrences}
+        zone="America/Chicago"
+        pollIntervalMs={20}
+        searchDebounceMs={20}
+        {...over}
+      />
+    </MemoryRouter>
   )
 }
 
@@ -214,9 +220,38 @@ function renderMedia(over: Partial<Parameters<typeof GatheringMedia>[0]> = {}) {
   return render(mediaElement(over))
 }
 
-async function openPhotos() {
-  fireEvent.click(screen.getByRole('button', { name: /show photos and add yours/i }))
+// CK-88: the section is open on mount — there is no toggle to press any
+// more, so `openPhotos()` (the toggle's click) is gone from every test.
+
+// CK-88: a published, ready photo is no longer a row — it is a tile in the
+// grid (a button holding its thumbnail and nothing else), and its line and
+// acts live in the photo viewer the tile opens.
+// (No gatheringTitle is passed, so a tile's label ends "in " and its
+// accessible name, trimmed, ends "in" — hence `in\b`, not `in `.)
+const tiles = () => screen.queryAllByRole('button', { name: /^Photo \d+ of \d+ in\b/ })
+
+// A tile carries no control: nothing to press inside it, and no words.
+function expectTilesBare() {
+  for (const tile of tiles()) {
+    expect(tile.querySelectorAll('button, input, a, select, textarea')).toHaveLength(0)
+    expect(tile.textContent).toBe('')
+  }
 }
+
+async function openViewerOn(position: number, of: number): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByRole('button', { name: new RegExp(`^Photo ${position} of ${of} in\\b`) }))
+  return screen.findByRole('dialog')
+}
+
+async function closeViewer(viewer: HTMLElement) {
+  fireEvent.click(within(viewer).getByRole('button', { name: 'Close' }))
+  await waitFor(() => {
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+}
+
+// The viewer's state line — the line the photo's row carried before CK-88.
+const stateLineOf = (viewer: HTMLElement) => viewer.querySelector('.vstate')?.textContent ?? ''
 
 // The rows of the Photos list, and not the chips or controls nested inside.
 function photoRows(list: HTMLElement): HTMLElement[] {
@@ -287,19 +322,29 @@ test('where review is off and nothing is waiting there is no queue and no review
 
   // The host, with review off: the seat with the most to be tempted by.
   renderMedia({ isHost: true, requiresApproval: false })
-  await openPhotos()
   let rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
-  expect(rows).toHaveLength(3)
+  // CK-88: the three photos are two rows (the bin's, the failed one) and one
+  // tile — the live photo moved to the grid.
+  expect(rows).toHaveLength(2)
+  expect(tiles()).toHaveLength(1)
+  expectTilesBare()
   expectNoReviewSurface()
   // What the host DOES keep (CK-67) is the view switch, for the Removed
   // view's sake — with no queue button on it while nothing waits.
   expect(screen.getByRole('button', { name: 'Removed from this gathering' })).toBeTruthy()
   // Every line exactly as CK-38 wrote it — the bin's as CK-64 rewrote it —
   // and nothing about waiting.
-  expect(rows[0].textContent).toContain('Everyone in this gathering can see it.')
-  expect(rows[1].textContent).toContain(BIN_LINE_28)
-  expect(rows[2].textContent).toContain("We couldn't process this photo.")
+  expect(rows[0].textContent).toContain(BIN_LINE_28)
+  expect(rows[1].textContent).toContain("We couldn't process this photo.")
   expect(document.body.textContent).not.toMatch(NOTHING_WAITING_BAN)
+  // CK-88: the live line moved with its photo, from rows[0] to the viewer's
+  // state line; the review surface is absent there too, and the ban holds
+  // over the page with the viewer (portalled into the body) open.
+  let viewer = await openViewerOn(1, 1)
+  expect(stateLineOf(viewer)).toBe('Everyone in this gathering can see it.')
+  expectNoReviewSurface()
+  expect(document.body.textContent).not.toMatch(NOTHING_WAITING_BAN)
+  await closeViewer(viewer)
   // No request ever asked for the queue.
   expect(listRequests(mock).every(([url]) => !url.includes('awaiting_review'))).toBe(true)
 
@@ -307,12 +352,21 @@ test('where review is off and nothing is waiting there is no queue and no review
   // Removed view is the host's (CK-67), and the review is nobody's here.
   cleanup()
   renderMedia({ isHost: false, requiresApproval: false })
-  await openPhotos()
   rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
-  expect(rows).toHaveLength(3)
+  // CK-88: two rows and the live photo's tile, as above.
+  expect(rows).toHaveLength(2)
+  expect(tiles()).toHaveLength(1)
+  expectTilesBare()
   expectNoReviewSurface()
   expect(screen.queryByRole('group', { name: 'Show' })).toBeNull()
   expect(document.body.textContent).not.toMatch(NOTHING_WAITING_BAN)
+  // CK-88: the same pins over the live photo's viewer.
+  viewer = await openViewerOn(1, 1)
+  expect(stateLineOf(viewer)).toBe('Everyone in this gathering can see it.')
+  expectNoReviewSurface()
+  expect(screen.queryByRole('group', { name: 'Show' })).toBeNull()
+  expect(document.body.textContent).not.toMatch(NOTHING_WAITING_BAN)
+  await closeViewer(viewer)
   expect(listRequests(mock).every(([url]) => !url.includes('awaiting_review'))).toBe(true)
 })
 
@@ -323,9 +377,11 @@ test('THE STRAND, fixed: with review off and rows waiting, the host still gets t
   // The exact state CK-43.1's deploy run observed as orphaned: review off,
   // two rows still ready + pending.
   renderMedia({ isHost: true, requiresApproval: false })
-  await openPhotos()
   let rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
-  expect(rows).toHaveLength(5)
+  // CK-88: the five photos are four rows — the two waiting rows first, then
+  // the bin's and the failed one — and the live photo's tile.
+  expect(rows).toHaveLength(4)
+  expect(tiles()).toHaveLength(1)
   // ONE PREDICATE at the render: the rows that say they are waiting are
   // exactly the rows that carry the acts, and the queue exists because
   // they do — none of it keyed on the switch.
@@ -345,6 +401,15 @@ test('THE STRAND, fixed: with review off and rows waiting, the host still gets t
     expect(row.textContent).not.toMatch(/waiting for/i)
     expect(within(row).queryByRole('button', { name: /^publish|^decline/i })).toBeNull()
   }
+  // CK-88: the live photo, a row in rows.slice(2) until CK-88, says nothing
+  // about waiting and carries no review act — in its viewer now, and its
+  // tile carries no control at all.
+  expectTilesBare()
+  let viewer = await openViewerOn(1, 1)
+  expect(stateLineOf(viewer)).toBe('Everyone in this gathering can see it.')
+  expect(viewer.textContent).not.toMatch(/waiting for/i)
+  expect(within(viewer).queryByRole('button', { name: /^publish|^decline/i })).toBeNull()
+  await closeViewer(viewer)
   expect(screen.getByRole('group', { name: 'Show' })).toBeTruthy()
 
   // The queue: the same list with the flag, holding the two waiting rows.
@@ -373,13 +438,27 @@ test('THE STRAND, fixed: with review off and rows waiting, the host still gets t
   // photograph waits on. Nothing was published by the switch: the two rows
   // moved by the host's own acts alone. (The view switch itself stays —
   // the host's Removed view rides it since CK-67.)
+  // CK-88: the four photos of the full list are two rows (the bin's, the
+  // failed one) and two tiles — the one the host just published and the one
+  // that was live already.
   await waitFor(() => {
-    expect(photoRows(screen.getByRole('list', { name: 'Photos' }))).toHaveLength(4)
+    expect(photoRows(screen.getByRole('list', { name: 'Photos' }))).toHaveLength(2)
   })
+  expect(tiles()).toHaveLength(2)
+  expectTilesBare()
   expectNoReviewSurface()
   expect(screen.queryByText('Nothing is waiting for your review.')).toBeNull()
   expect(screen.queryByText('No photos yet.')).toBeNull()
   expect(document.body.textContent).not.toMatch(NOTHING_WAITING_BAN)
+  // CK-88: the two published photos' lines, rows until CK-88, are their
+  // viewers' state lines now: no act, and no line naming a wait, in either.
+  for (const position of [1, 2]) {
+    viewer = await openViewerOn(position, 2)
+    expect(stateLineOf(viewer)).toBe('Everyone in this gathering can see it.')
+    expectNoReviewSurface()
+    expect(document.body.textContent).not.toMatch(NOTHING_WAITING_BAN)
+    await closeViewer(viewer)
+  }
   expect(listRequests(mock).at(-1)![0]).not.toContain('awaiting_review')
 })
 
@@ -387,7 +466,6 @@ test("a non-host uploader whose row waits on a gathering with review off reads t
   const mock = stubRoutes(reviewServer([mediaRow({ id: 'm-mine' })]).routes)
 
   renderMedia({ isHost: false, requiresApproval: false })
-  await openPhotos()
   const rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
   expect(rows).toHaveLength(1)
   // True, not a promise: the host's queue renders while this row waits.
@@ -404,7 +482,6 @@ test("a non-host uploader whose row waits on a gathering with review off reads t
 test("the switch, from the section's side: turning review on makes the queue appear with nothing waiting; turning it off with nothing waiting removes everything", async () => {
   stubRoutes(reviewServer(nothingWaitingRows()).routes)
   const view = renderMedia({ isHost: true, requiresApproval: false })
-  await openPhotos()
   await screen.findByRole('list', { name: 'Photos' })
   expectNoReviewSurface()
 
@@ -425,16 +502,22 @@ test("the switch, from the section's side: turning review on makes the queue app
     expect(screen.queryByRole('button', { name: 'Awaiting your review' })).toBeNull()
   })
   expect(screen.queryByText('Nothing is waiting for your review.')).toBeNull()
-  expect(photoRows(await screen.findByRole('list', { name: 'Photos' }))).toHaveLength(3)
+  // CK-88: the full list's three photos are two rows and the live photo's
+  // tile; the review surface and the ban are pinned over its viewer too.
+  expect(photoRows(await screen.findByRole('list', { name: 'Photos' }))).toHaveLength(2)
+  expect(tiles()).toHaveLength(1)
   expectNoReviewSurface()
   expect(document.body.textContent).not.toMatch(NOTHING_WAITING_BAN)
+  const viewer = await openViewerOn(1, 1)
+  expectNoReviewSurface()
+  expect(document.body.textContent).not.toMatch(NOTHING_WAITING_BAN)
+  await closeViewer(viewer)
 })
 
 test('a non-host member of a gated gathering gets the waiting line and no control — the queue is the host\'s alone', async () => {
   const mock = stubRoutes(reviewServer([mediaRow({ id: 'm-mine' })]).routes)
 
   renderMedia({ isHost: false, requiresApproval: true })
-  await openPhotos()
   const rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
   expect(rows).toHaveLength(1)
   // THE STRING, gated, from the uploader's seat: who can see it, and that
@@ -465,9 +548,11 @@ test('the host of a gated gathering gets the queue: the same list with the flag,
   const mock = stubRoutes(reviewServer(openGatheringRows()).routes)
 
   renderMedia({ isHost: true, requiresApproval: true })
-  await openPhotos()
   let rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
-  expect(rows).toHaveLength(5)
+  // CK-88: the five photos are four rows (the two waiting first, then the
+  // bin's and the failed one) and the live photo's tile.
+  expect(rows).toHaveLength(4)
+  expect(tiles()).toHaveLength(1)
   // THE STRING, gated, from the host's seat: their own photograph waits for
   // THEM (they are host and uploader — the family case), and so does
   // grandma's.
@@ -479,9 +564,8 @@ test('the host of a gated gathering gets the queue: the same list with the flag,
   )
   // The other states read exactly as CK-38 wrote them (the bin's as CK-64
   // rewrote it), gate or no gate.
-  expect(rows[2].textContent).toContain('Everyone in this gathering can see it.')
-  expect(rows[3].textContent).toContain(BIN_LINE_28)
-  expect(rows[4].textContent).toContain("We couldn't process this photo.")
+  expect(rows[2].textContent).toContain(BIN_LINE_28)
+  expect(rows[3].textContent).toContain("We couldn't process this photo.")
   // The acts sit on the two rows the server would accept them on, and on
   // no other: not the live row, not the removed one, not the failed one.
   for (const row of rows.slice(0, 2)) {
@@ -491,6 +575,15 @@ test('the host of a gated gathering gets the queue: the same list with the flag,
   for (const row of rows.slice(2)) {
     expect(within(row).queryByRole('button', { name: /^publish|^decline/i })).toBeNull()
   }
+  // CK-88: the live photo — rows[2] until CK-88 — reads its line and carries
+  // no review act in its viewer, and its tile carries no control; and the
+  // viewer carries no checkbox either.
+  expectTilesBare()
+  const viewer = await openViewerOn(1, 1)
+  expect(stateLineOf(viewer)).toBe('Everyone in this gathering can see it.')
+  expect(within(viewer).queryByRole('button', { name: /^publish|^decline/i })).toBeNull()
+  expect(within(viewer).queryByRole('checkbox')).toBeNull()
+  await closeViewer(viewer)
   // The full list carries no checkbox: the batch is built in the queue.
   expect(screen.queryByRole('checkbox')).toBeNull()
 
@@ -518,9 +611,11 @@ test('the host of a gated gathering gets the queue: the same list with the flag,
 
   // The way back: the full list, with no flag on the request.
   fireEvent.click(screen.getByRole('button', { name: 'Show all photos' }))
+  // CK-88: the five photos come back as four rows and the live photo's tile.
   await waitFor(() => {
-    expect(photoRows(screen.getByRole('list', { name: 'Photos' }))).toHaveLength(5)
+    expect(photoRows(screen.getByRole('list', { name: 'Photos' }))).toHaveLength(4)
   })
+  expect(tiles()).toHaveLength(1)
   expect(listRequests(mock).at(-1)![0]).not.toContain('awaiting_review')
 })
 
@@ -533,7 +628,6 @@ test('the queue\'s empty state is its own — "nothing is waiting", never "no ph
   )
 
   renderMedia()
-  await openPhotos()
   await screen.findByRole('list', { name: 'Photos' })
   fireEvent.click(screen.getByRole('button', { name: 'Awaiting your review' }))
   expect(await screen.findByText('Nothing is waiting for your review.')).toBeTruthy()
@@ -550,7 +644,6 @@ test('publishing from the queue removes the row from it and its line becomes the
   const mock = stubRoutes(server.routes)
 
   renderMedia()
-  await openPhotos()
   await screen.findByRole('list', { name: 'Photos' })
   fireEvent.click(screen.getByRole('button', { name: 'Awaiting your review' }))
   await screen.findByText('Showing 1 photo awaiting your review.')
@@ -564,13 +657,26 @@ test('publishing from the queue removes the row from it and its line becomes the
   expect(server.rows.get('m-mine')!.publication_state).toBe('live')
 
   // In the full list its line is the live line, and it carries no act.
+  // CK-88: published, it is no longer a row but the grid's one tile (so the
+  // full list has no rows at all, and no Photos list); its line is the
+  // viewer's state line, and the viewer offers no review act — nor does the
+  // tile hold any control.
   fireEvent.click(screen.getByRole('button', { name: 'Show all photos' }))
-  const rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
-  expect(rows[0].textContent).toContain('Everyone in this gathering can see it.')
-  expect(rows[0].textContent).not.toMatch(/waiting for/i)
-  expect(within(rows[0]).queryByRole('button', { name: /^publish|^decline/i })).toBeNull()
+  const viewer = await openViewerOn(1, 1)
+  expect(tiles()).toHaveLength(1)
+  expectTilesBare()
+  expect(screen.queryByRole('list', { name: 'Photos' })).toBeNull()
+  expect(stateLineOf(viewer)).toBe('Everyone in this gathering can see it.')
+  expect(viewer.textContent).not.toMatch(/waiting for/i)
+  expect(within(viewer).queryByRole('button', { name: /^publish|^decline/i })).toBeNull()
   // The publication stamp rides the body and is rendered nowhere (record
   // §7: consent evidence, never row furniture) — not raw, not formatted.
+  // CK-88: read with the viewer open (portalled into the body), so its words
+  // — "Added by You · {day}" among them — are inside the pin.
+  expect(document.body.innerHTML).not.toContain(STAMP)
+  expect(document.body.textContent).not.toMatch(/Sep 1[34], 2026/)
+  expect(document.body.textContent).not.toMatch(/published (at|on)/i)
+  await closeViewer(viewer)
   expect(document.body.innerHTML).not.toContain(STAMP)
   expect(document.body.textContent).not.toMatch(/Sep 1[34], 2026/)
   expect(document.body.textContent).not.toMatch(/published (at|on)/i)
@@ -584,7 +690,6 @@ test("declining takes a second click, says what it is — only the organisers wi
   const mock = stubRoutes(server.routes)
 
   renderMedia()
-  await openPhotos()
   await screen.findByRole('list', { name: 'Photos' })
   fireEvent.click(screen.getByRole('button', { name: 'Awaiting your review' }))
   await screen.findByText('Showing 2 photos awaiting your review.')
@@ -688,7 +793,6 @@ test("a refused act renders from its code and never the server's wording, stays 
   ])
 
   renderMedia()
-  await openPhotos()
   const rows = photoRows(await screen.findByRole('list', { name: 'Photos' }))
   const reads = listRequests(mock).length
 
@@ -749,7 +853,6 @@ test('a batch refusal lands on the row that caused it and publishes nothing; the
   const mock = stubRoutes(server.routes)
 
   renderMedia()
-  await openPhotos()
   await screen.findByRole('list', { name: 'Photos' })
   fireEvent.click(screen.getByRole('button', { name: 'Awaiting your review' }))
   await screen.findByText('Showing 2 photos awaiting your review.')
