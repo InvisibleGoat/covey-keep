@@ -1574,8 +1574,10 @@ async def list_group_media(
     their newest photograph, most recent first, ties by `gathering_id`.
     `published_count` counts the published photographs the caller can see,
     all of them — NEVER `gatherings.photo_count`, the keeper's charge, which
-    counts a binned photograph: a count that moved when someone binned a
-    photograph would tell every member that a removal happened.
+    counts every stored photograph, a waiting one and a binned one included:
+    read here, it would tell every member about photographs they cannot see.
+    So binning a published photograph lowers this count and leaves the charge
+    where it was.
 
     ONE STATEMENT after the group's read, however many sections (the CK-20
     discipline; pinned): the inner select numbers, counts and dates the
