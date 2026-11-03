@@ -218,6 +218,15 @@ move nothing; `publication_state` is moved by the worker at `ready` where
 the gathering resolves open (CK-41) and by the host's review where it
 resolves gated (CK-43, below).
 
+A GROUP'S PHOTOGRAPHS IN SECTIONS (CK-88.1a; the merge record §3 item 8).
+A third reader of the same rule: `GET /groups/{id}/media` answers, for each
+gathering of a group, how many published photographs the caller can see
+there and the newest GROUP_MEDIA_PREVIEW of them, in ONE statement —
+`_visible_media` ANDed with `ready`, `live` and the group in the same
+WHERE, never beside it, so it shows nobody a photograph, or a count of
+photographs, that the gathering's own list would not; the count is of
+those photographs, never the keeper's charge. No URL is in it.
+
 THE HOST'S REVIEW (CK-43; decisions/2026-09-13-the-hosts-review.md). The
 gated branch of the publication ladder given its surface: what a host does
 with a photograph nobody has published. Three things, and every one of
@@ -498,6 +507,7 @@ from app.api.gatherings import (
     administers_gathering,
     is_host,
 )
+from app.api.groups import _group_for_read
 from app.config import settings
 from app.models import (
     Account,
@@ -664,6 +674,10 @@ MAX_CAPTION_LENGTH = 500
 MAX_TAG_LENGTH = 50
 MAX_TAGS_PER_MEDIA = 20
 MAX_SEARCH_LENGTH = 200
+# How many of a gathering's published photographs a group's section carries
+# (CK-88.1a): the mockup's group page shows the first 6 on a phone and 8
+# from 640px, so the route answers the larger and the page draws what fits.
+GROUP_MEDIA_PREVIEW = 8
 
 _upload: Optional[UploadClient] = None
 _serve: Optional[ServeClient] = None
@@ -1523,6 +1537,91 @@ async def list_media(
         )
     ).all()
     return {"media": [_list_item(row, display_name, tags, ctx) for row, display_name, tags in rows]}
+
+
+@router.get("/groups/{group_id}/media")
+async def list_group_media(
+    group_id: UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """A GROUP'S PHOTOGRAPHS IN SECTIONS (CK-88.1a; the merge record §3 item
+    8, its second half): for each gathering of the group (`owning_group_id`)
+    holding a published photograph the caller can see, its id, how many
+    such photographs it holds, and the newest GROUP_MEDIA_PREVIEW of them —
+    what the group page draws, in one request, where reading every
+    gathering's list would fetch every row of every gathering. When a
+    photograph is opened, the page reads that gathering's own list.
+
+    WHO: the group's read audience first (`_group_for_read` — a member or
+    the admin; everyone else draws the group's 404, byte-identical to a
+    missing group). Then THE ONE RULE — `_visible_media`, ANDed with
+    `ready`, `live` and the group in the same WHERE, never a second
+    criterion beside it (the `q` and queue rule): a member left out of a
+    gathering, its keeper by keeping and anyone else outside its memory tier
+    learn nothing of it here — no section, no count — and a waiting
+    photograph, either bin, a failed or in-flight row and one in
+    destruction are in no section, whoever may see them in the gathering's
+    own list.
+
+    WHAT: `{"sections": [{"gathering_id", "published_count", "media"}]}`.
+    No gathering field but the id — the page joins to `GET
+    /groups/{id}/gatherings`, which decides what each caller may read about
+    a gathering — and no section for a gathering with nothing to show. Each
+    item is `_list_item` with `_tags_of_row()`, so it equals the item `GET
+    /gatherings/{id}/media` answers the same caller. The photographs run in
+    the list's order (`created_at` descending, then `id`); the sections by
+    their newest photograph, most recent first, ties by `gathering_id`.
+    `published_count` counts the published photographs the caller can see,
+    all of them — NEVER `gatherings.photo_count`, the keeper's charge, which
+    counts a binned photograph: a count that moved when someone binned a
+    photograph would tell every member that a removal happened.
+
+    ONE STATEMENT after the group's read, however many sections (the CK-20
+    discipline; pinned): the inner select numbers, counts and dates the
+    visible rows per gathering with window functions, and the outer select
+    takes the first GROUP_MEDIA_PREVIEW of each with the uploader's name
+    and the tags — so the tags are read for the photographs shown alone. No
+    URL: a thumbnail is minted per photograph through `GET /media/{id}/url`,
+    as on the gathering's page."""
+    group = await _group_for_read(db, ctx, group_id)
+    now = datetime.now(timezone.utc)
+    visible = (
+        select(
+            Media.id.label("media_id"),
+            Media.gathering_id.label("gathering_id"),
+            func.row_number()
+            .over(partition_by=Media.gathering_id, order_by=(Media.created_at.desc(), Media.id))
+            .label("position"),
+            func.count().over(partition_by=Media.gathering_id).label("published_count"),
+            func.max(Media.created_at).over(partition_by=Media.gathering_id).label("newest_at"),
+        )
+        .join(Gathering, Gathering.id == Media.gathering_id)
+        .where(
+            Gathering.owning_group_id == group.id,
+            Media.status == MediaStatus.READY,
+            Media.publication_state == PublicationState.LIVE,
+            _visible_media(ctx, now),
+        )
+        .subquery()
+    )
+    rows = (
+        await db.execute(
+            select(Media, Person.display_name, _tags_of_row(), visible.c.published_count)
+            .join(visible, visible.c.media_id == Media.id)
+            # Outer: a guest upload (a later phase) has no person row.
+            .outerjoin(Person, Person.id == Media.uploader_person_id)
+            .where(visible.c.position <= GROUP_MEDIA_PREVIEW)
+            .order_by(visible.c.newest_at.desc(), visible.c.gathering_id, visible.c.position)
+        )
+    ).all()
+    sections: list[dict] = []
+    for row, display_name, tags, published_count in rows:
+        gathering_id = str(row.gathering_id)
+        if not sections or sections[-1]["gathering_id"] != gathering_id:
+            sections.append({"gathering_id": gathering_id, "published_count": published_count, "media": []})
+        sections[-1]["media"].append(_list_item(row, display_name, tags, ctx))
+    return {"sections": sections}
 
 
 @router.get("/media/{media_id}/url")
