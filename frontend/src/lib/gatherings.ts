@@ -253,6 +253,17 @@ export function lineText(pieces: LinePiece[]): string {
 const kept = (text: string): LinePiece => ({ text, keep: true })
 const loose = (text: string): LinePiece => ({ text, keep: false })
 
+// A section's count line on a group's page (CK-88.1b): how many photos, and —
+// on a full-view gathering that is not coming up and has a date — the day with
+// its year, kept whole. A date in progress reads as past (the one rule); nothing
+// reads `next_occurrence` on a photos-only item. Against the same `now` as the
+// strip, so the two agree.
+export function sectionCountPieces(item: GatheringListItem, count: number, zone: string, now: number): LinePiece[] {
+  const photos = count === 1 ? '1 photo' : `${count} photos`
+  if (!viewOf(item.caller_view).full || item.next_occurrence === null || isComingUp(item, now)) return [loose(photos)]
+  return [loose(`${photos} · `), kept(formatDayWithYear(item.next_occurrence.starts_at, zone))]
+}
+
 // A card's second line, every date and time in `zone`: a coming-up item with
 // more than one date — *4 dates · next Thu, Oct 15* — or with one — *Thu,
 // Oct 15 · 6:30 PM*; a past item its day with the year — *Oct 3, 2026*; a

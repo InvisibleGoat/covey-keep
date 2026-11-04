@@ -4,6 +4,7 @@ import { badgeParts } from '../lib/datetime'
 import type { LinePiece } from '../lib/gatherings'
 import type { ServableLayer } from '../lib/media'
 import { EmptyCover, EmptyCoverCard } from './AuthArt'
+import { useNearViewport } from './useNearViewport'
 
 // THE COVER (CK-84; the mockup's `cover()`, `.nthumb`, `.photo`, `.gcover`,
 // and since CK-85 `.card.go.hero` and `.card.go.tile`): one component
@@ -33,9 +34,18 @@ import { EmptyCover, EmptyCoverCard } from './AuthArt'
 //   `badge` (hero, tile, and since CK-87 the wide card): the date badge over
 //   the picture's corner — `DateBadge`, below. On a wide card with no cover
 //   it leads the empty cover's row instead (CK-87.1), in the same corner.
+//   `variant="banner"` (CK-88.1b): the head of a section of a group's photos
+//   (`.pbanner`) — the picture 2:1 on a phone and 3.2:1 from 640px, its height
+//   a LEAST height, and `children` (the <h3> holding the section's link, the
+//   rule and the count) over the scrim. It is drawn only for a gathering with
+//   a cover and NEVER draws the empty cover: while the picture loads, if it
+//   fails, and on a 409 `no_cover` it is the ground alone, its words on the
+//   full scrim. The one variant that waits: it mints as it nears the viewport,
+//   because a group can hold many sections.
 // - THE LAYER FOLLOWS THE VARIANT AND NOTHING ELSE (`LAYER`, below): the
-//   thumbnail for a thumb or a tile, the web layer for a wide card or a hero
-//   — so no caller can ask for a print master (`archival` is never served).
+//   thumbnail for a thumb or a tile, the web layer for a wide card, a hero or
+//   a banner — so no caller can ask for a print master (`archival` is never
+//   served).
 // - No cover (`cover` null or absent — the many bodies and fixtures that
 //   carry none): the empty cover — the quail in the ring mat, or on a wide
 //   card, a hero or a tile the quail and *No cover photo yet*. A 409
@@ -49,13 +59,14 @@ import { EmptyCover, EmptyCoverCard } from './AuthArt'
 //   The cache owns every object URL: this component never revokes one.
 //   Nothing here ever holds a presigned URL — only the `blob:` reference.
 
-export type CoverVariant = 'thumb' | 'wide' | 'hero' | 'tile'
+export type CoverVariant = 'thumb' | 'wide' | 'hero' | 'tile' | 'banner'
 
 const LAYER: Record<CoverVariant, ServableLayer> = {
   thumb: 'thumbnail',
   tile: 'thumbnail',
   wide: 'web',
   hero: 'web',
+  banner: 'web',
 }
 
 // The date badge (the mockup's `dateBadge()`; CK-85, beside the cover since
@@ -119,9 +130,11 @@ export function Cover({
   const setAt = cover ? cover.set_at : null
   const key = setAt === null ? null : `${subject}:${id}:${layer}:${setAt}`
   const [shown, setShown] = useState<Shown | null>(null)
+  const [bannerBox, bannerNear] = useNearViewport<HTMLDivElement>()
+  const heldBack = variant === 'banner' && !bannerNear
 
   useEffect(() => {
-    if (setAt === null) return
+    if (setAt === null || heldBack) return
     const asked = `${subject}:${id}:${layer}:${setAt}`
     let cancelled = false
     void loadCoverPicture(subject, id, layer, setAt).then((outcome) => {
@@ -132,7 +145,7 @@ export function Cover({
     return () => {
       cancelled = true
     }
-  }, [subject, id, layer, setAt])
+  }, [subject, id, layer, setAt, heldBack])
 
   // Only an answer for the version on screen counts: a new `set_at` shows the
   // ground until its own picture arrives.
@@ -147,6 +160,15 @@ export function Cover({
     if (empty) return <EmptyCover className="nthumb" />
     if (objectUrl !== null) return <img className="nthumb" src={objectUrl} alt="" onError={failed} />
     return <span className="nthumb cover-ground" aria-hidden="true" />
+  }
+
+  if (variant === 'banner') {
+    return (
+      <div ref={bannerBox} className="pbanner">
+        {objectUrl !== null && <img src={objectUrl} alt="" onError={failed} />}
+        <div className="over">{children}</div>
+      </div>
+    )
   }
 
   // A wide card's, a hero's or a tile's picture: the empty cover, the picture, or

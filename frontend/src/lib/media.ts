@@ -748,6 +748,27 @@ export function isPublishedPhoto(item: Pick<MediaItem, 'status' | 'publication_s
   return item.status === 'ready' && item.publication_state === 'live'
 }
 
+// Who a photograph's "Added by" names (CK-88; one copy since CK-88.1b): the
+// reader's own in the second person, anyone else by name.
+export function whoFor(item: Pick<MediaItem, 'is_own' | 'uploader_display_name'>): string {
+  if (item.is_own) return 'You'
+  return item.uploader_display_name ?? 'Someone'
+}
+
+// A gathering's whole list, its published photos alone and in the list's order:
+// what the viewer's set becomes on a group's page (CK-88.1b), where a section
+// holds only the newest eight. Any refusal is `{ ok: false }`.
+export async function readPublishedPhotos(gatheringId: string): Promise<{ ok: true; photos: MediaItem[] } | { ok: false }> {
+  try {
+    const response = await authFetch(mediaListPath(gatheringId, ''))
+    if (!response.ok) return { ok: false }
+    const body = (await response.json()) as MediaList
+    return { ok: true, photos: body.media.filter(isPublishedPhoto) }
+  } catch {
+    return { ok: false }
+  }
+}
+
 // The list-level half of the same predicate (CK-44; the-hosts-review §13):
 // whether anything the caller can see is waiting. The host's review renders
 // while review is ON or while this is true — `isHost && (requiresApproval

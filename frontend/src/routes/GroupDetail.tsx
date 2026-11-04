@@ -39,16 +39,23 @@
 //   date is on screen. The strip shows at every width: the mockup hides it
 //   from 900px because its menu's details panel lists the group's gatherings
 //   there, and this app's menu has no details panel (Steven, 2026-10-31).
+// - THE PHOTOS IN SECTIONS (CK-88.1b; components/GroupPhotos.tsx): after the
+//   strip, each gathering's preview, opened in the photo viewer for viewing
+//   only. It reads `GET /groups/{id}/media` itself and joins it to the strip's
+//   list, handed down with its moment and its failure.
 //
 // Not here, because none is built (the merge record §4): the chat preview,
-// *Kept by*, the pin, member faces, *Active … ago*, Add photos and the
-// photos in sections (CK-88 builds the grid for this page and a gathering's).
+// *Kept by*, the pin, member faces, *Active … ago*, Add photos and *Posted to
+// the group*.
 //
-// THE READS: the group body and its gatherings — never the member list, which
-// is the People page's. A 404 on the group is the one not-found screen,
-// byte-identical for a missing id, a group the caller is not in and a path
-// 422; a failed read offers Try again. Both screens are the page's own from
-// before CK-86, word for word.
+// THE READS: the group body, its gatherings and its photos — never the member
+// list, which is the People page's. A 404 on the group is the one not-found
+// screen, byte-identical for a missing id, a group the caller is not in and a
+// path 422; a failed read offers Try again. Both screens are the page's own
+// from before CK-86, word for word. EACH LOAD BELONGS TO A GROUP'S ID
+// (CK-88.1b): this route is one component across groups, so an answer for
+// another id counts as loading, and moving between two groups never joins one
+// group's gatherings to another's photos and calls the page empty.
 //
 // WHO THE CALLER IS COMES FROM THE BODY: `groupRoleFlags(caller_role)` —
 // `organises` (the admin or a co-admin) is Change cover's flag, and nothing
@@ -57,30 +64,23 @@ import { useEffect, useId, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { CardLine, Cover, DateBadge } from '../components/Cover'
+import { GroupPhotos } from '../components/GroupPhotos'
 import { Icon } from '../components/Icons'
 import { PageCover } from '../components/PageCover'
 import { COVER_HINT_GROUP, REMOVE_PHOTO_SENTENCE_GROUP } from '../lib/covers'
 import { effectiveZone } from '../lib/datetime'
-import { cardDatePieces, gatheringSections, viewOf, type GatheringListItem } from '../lib/gatherings'
+import { cardDatePieces, gatheringSections, viewOf } from '../lib/gatherings'
 import {
   groupRoleFlags,
   memberCountLabel,
   readGroup,
   readGroupGatherings,
   type Group,
+  type GroupGatheringsLoad,
   type GroupRead,
 } from '../lib/groups'
 
 type Load<T> = { status: 'loading' } | GroupRead<T>
-
-// The strip's own read: it fails in its own place, with its own Try again,
-// and never takes the page with it. `readAt` is the moment the list arrived:
-// the one `now` the order and every card's line are read against, so a card's
-// line always agrees with where it sits (CK-85's practice).
-type StripLoad =
-  | { status: 'loading' }
-  | { status: 'loaded'; items: GatheringListItem[]; readAt: number }
-  | { status: 'failed' }
 
 export function GroupDetail() {
   const { id } = useParams()
@@ -91,18 +91,22 @@ export function GroupDetail() {
   const zone = effectiveZone(person?.timezone)
   const stripLabel = useId()
 
-  const [groupLoad, setGroupLoad] = useState<Load<Group>>({ status: 'loading' })
   // Each read re-runs when its key moves; a loaded value stays on screen
-  // until the new answer replaces it.
+  // until the new answer replaces it. Each answer carries the id it was asked
+  // for, and one for another group reads as loading. The strip's read fails in
+  // its own place, with its own Try again, and never takes the page with it.
+  const [groupRead, setGroupRead] = useState<{ groupId: string; load: Load<Group> } | null>(null)
   const [groupKey, setGroupKey] = useState(0)
-  const [stripLoad, setStripLoad] = useState<StripLoad>({ status: 'loading' })
+  const [stripRead, setStripRead] = useState<{ groupId: string; load: GroupGatheringsLoad } | null>(null)
   const [stripKey, setStripKey] = useState(0)
+  const groupLoad: Load<Group> = groupRead?.groupId === groupId ? groupRead.load : { status: 'loading' }
+  const stripLoad: GroupGatheringsLoad = stripRead?.groupId === groupId ? stripRead.load : { status: 'loading' }
 
   useEffect(() => {
     let cancelled = false
     async function load() {
       const result = await readGroup(groupId)
-      if (!cancelled) setGroupLoad(result)
+      if (!cancelled) setGroupRead({ groupId, load: result })
     }
     void load()
     return () => {
@@ -117,9 +121,10 @@ export function GroupDetail() {
     async function load() {
       const outcome = await readGroupGatherings(groupId)
       if (cancelled) return
-      setStripLoad(
-        outcome.ok ? { status: 'loaded', items: outcome.gatherings, readAt: Date.now() } : { status: 'failed' },
-      )
+      setStripRead({
+        groupId,
+        load: outcome.ok ? { status: 'loaded', items: outcome.gatherings, readAt: Date.now() } : { status: 'failed' },
+      })
     }
     void load()
     return () => {
@@ -128,8 +133,13 @@ export function GroupDetail() {
   }, [groupId, stripKey])
 
   function tryAgain() {
-    setGroupLoad({ status: 'loading' })
+    setGroupRead({ groupId, load: { status: 'loading' } })
     setGroupKey((key) => key + 1)
+  }
+
+  function retryStrip() {
+    setStripRead({ groupId, load: { status: 'loading' } })
+    setStripKey((key) => key + 1)
   }
 
   if (groupLoad.status === 'notFound') {
@@ -231,13 +241,7 @@ export function GroupDetail() {
               <span aria-hidden="true">⚠ </span>
               The group's gatherings couldn't be loaded just now.
             </p>
-            <button
-              type="button"
-              onClick={() => {
-                setStripLoad({ status: 'loading' })
-                setStripKey((key) => key + 1)
-              }}
-            >
+            <button type="button" onClick={retryStrip}>
               Try again
             </button>
           </div>
@@ -277,6 +281,8 @@ export function GroupDetail() {
           </ul>
         )}
       </section>
+
+      <GroupPhotos groupId={groupId} gatherings={stripLoad} onRetryGatherings={retryStrip} zone={zone} />
     </main>
   )
 }

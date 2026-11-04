@@ -21,7 +21,8 @@
 // - The photos-only view reading no date and no answer; the order of the
 //   page's cards by seat; the page column; the new styles naming no colour.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { useEffect } from 'react'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { AuthContext, type AuthState, type Person } from '../auth/context'
 import appCss from '../App.css?raw'
@@ -807,4 +808,239 @@ test('the gathering page’s styles name no colour and add no token, and hold th
   expect(appCss).toMatch(/\.rsvp-block \{[^}]*border-radius: 14px;[^}]*background: var\(--pg-bg\);/)
   expect(appCss).toMatch(/\.group-actions,\n\.gathering-actions \{/)
   expect(appCss).toMatch(/\.nowrap \{\n {2}white-space: nowrap;\n\}/)
+})
+
+// ---------------------------------------------------------------------------
+// CK-88.1b — the arrival from a group page's See all: `#photos` lands with
+// every photo showing and no second See all (Steven's answer 6), read once, at
+// mount: opening the viewer pushes an entry with no hash and closing it pops
+// back to the hash, and that must not jump the page.
+// ---------------------------------------------------------------------------
+
+function photoRow(n: number) {
+  return {
+    id: `m-${n}`,
+    gathering_id: 'g-1',
+    occurrence_id: null,
+    status: 'ready',
+    publication_state: 'live',
+    upload_content_type: 'image/jpeg',
+    upload_size_bytes: 1000,
+    uploaded_at: '2026-07-04T13:00:00+00:00',
+    created_at: '2026-07-04T13:00:00+00:00',
+    uploader_display_name: 'Nate Okafor',
+    is_own: false,
+    removed_at: null,
+    filename: `IMG_${n}.jpg`,
+    caption: null,
+    tags: [],
+    published_at: '2026-07-04T13:00:00+00:00',
+    failure_reason: null,
+  }
+}
+
+function arrivalRoutes(body: unknown): Record<string, Responder> {
+  const routes: Record<string, Responder> = {
+    'GET /gatherings/g-1': () => json(200, body),
+    'GET /gatherings/g-1/media': () => json(200, { media: Array.from({ length: 20 }, (_, i) => photoRow(i + 1)) }),
+  }
+  for (let n = 1; n <= 20; n += 1) {
+    for (const layer of ['thumbnail', 'web']) {
+      routes[`GET /media/m-${n}/url?layer=${layer}`] = () =>
+        json(200, { url: `https://r2.invalid/media/m-${n}/${layer}?X-Amz-Signature=sig`, method: 'GET' })
+    }
+  }
+  return routes
+}
+
+const arrivalHashes: string[] = []
+function HashProbe() {
+  const location = useLocation()
+  useEffect(() => {
+    arrivalHashes.push(location.hash)
+  }, [location.key, location.hash])
+  return null
+}
+
+function renderPageAt(address: string) {
+  arrivalHashes.length = 0
+  return render(
+    <MemoryRouter initialEntries={[address]}>
+      <AuthContext.Provider value={auth}>
+        <Routes>
+          <Route path="/gatherings/:id" element={<GatheringDetail />} />
+        </Routes>
+        <HashProbe />
+      </AuthContext.Provider>
+    </MemoryRouter>,
+  )
+}
+
+// The page's own scrolls: the viewer's strip brings its marked thumbnail into
+// view on its own account, and that is not the page moving.
+function stubScroll() {
+  const scrolled: Element[] = []
+  Element.prototype.scrollIntoView = function scrollIntoView(this: Element) {
+    scrolled.push(this)
+  }
+  return () => scrolled.filter((element) => element.closest('.viewer') === null)
+}
+
+afterEach(() => {
+  delete (Element.prototype as Partial<Element>).scrollIntoView
+})
+
+function stubNearness() {
+  const live = new Map<Element, (entries: { isIntersecting: boolean; target: Element }[]) => void>()
+  class FakeObserver {
+    callback: (entries: { isIntersecting: boolean; target: Element }[]) => void
+    observed: Element[] = []
+    constructor(callback: (entries: { isIntersecting: boolean; target: Element }[]) => void) {
+      this.callback = callback
+    }
+    observe(element: Element) {
+      this.observed.push(element)
+      live.set(element, this.callback)
+    }
+    disconnect() {
+      for (const element of this.observed) live.delete(element)
+      this.observed = []
+    }
+    unobserve() {}
+    takeRecords() {
+      return []
+    }
+  }
+  vi.stubGlobal('IntersectionObserver', FakeObserver)
+  return async (element: Element) => {
+    await act(async () => live.get(element)?.([{ isIntersecting: true, target: element }]))
+  }
+}
+
+const gridTiles = () => screen.queryAllByRole('button', { name: /^Photo \d+ of \d+ in / })
+const thumbnailMints = (mock: ReturnType<typeof vi.fn>) => requests(mock, 'GET', /^\/media\/m-\d+\/url\?layer=thumbnail$/)
+
+for (const [view, body] of [
+  ['the full view', detail()],
+  ['the photos-only view', memoryDetail()],
+] as const) {
+  test(`arriving at #photos in ${view}: twenty tiles and no See all, each minting only as it nears, one scroll, focus on the heading`, async () => {
+    const near = stubNearness()
+    const pageScrolls = stubScroll()
+    const mock = stubServer(arrivalRoutes(body))
+    renderPageAt('/gatherings/g-1#photos')
+    await loaded()
+    await waitFor(() => expect(gridTiles()).toHaveLength(20))
+    expect(screen.queryByRole('button', { name: /^See all/ })).toBeNull()
+    // Every tile on the page, and not one minted before it nears the viewport.
+    expect(thumbnailMints(mock)).toHaveLength(0)
+    await near(gridTiles()[0].querySelector('.lazy-thumb') as Element)
+    await waitFor(() => expect(thumbnailMints(mock)).toHaveLength(1))
+    const heading = screen.getByRole('heading', { level: 2, name: 'Photos' })
+    await waitFor(() => expect(document.activeElement).toBe(heading))
+    expect(pageScrolls()).toHaveLength(1)
+    expect(pageScrolls()[0].tagName).toBe('SECTION')
+    expect(pageScrolls()[0].contains(heading)).toBe(true)
+  })
+
+  test(`no hash in ${view}: the preview of 6 and See all, no scroll, and focus unmoved`, async () => {
+    const pageScrolls = stubScroll()
+    stubServer(arrivalRoutes(body))
+    renderPageAt('/gatherings/g-1')
+    await loaded()
+    await waitFor(() => expect(gridTiles()).toHaveLength(6))
+    expect(screen.getByRole('button', { name: 'See all 20 photos' })).toBeTruthy()
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)))
+    expect(pageScrolls()).toHaveLength(0)
+    expect(document.activeElement).toBe(document.body)
+  })
+}
+
+// Found in the browser (the report's arrival probe): a scroll made as the section
+// mounted met a page too short to reach it — the list not read, so no tiles — and
+// stopped 200px and more short, or did not move at all. jsdom has no layout, so
+// the rule is pinned as what the scroll can see: every tile already in the document.
+test('the arrival waits for the section\'s first read: nothing moves while the list is on its way, and the one scroll sees every tile', async () => {
+  const tilesAtScroll: number[] = []
+  Element.prototype.scrollIntoView = function scrollIntoView(this: Element) {
+    if (this.closest('.viewer') === null) tilesAtScroll.push(gridTiles().length)
+  }
+  let release: (response: Response) => void = () => {}
+  const held = new Promise<Response>((resolve) => {
+    release = resolve
+  })
+  const routes = arrivalRoutes(detail())
+  const answer = routes['GET /gatherings/g-1/media'](undefined, '/gatherings/g-1/media')
+  const real = stubServer(routes).getMockImplementation() as (url: string, init?: RequestInit) => Promise<Response>
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string, init?: RequestInit) => (String(url).endsWith('/gatherings/g-1/media') ? held : real(url, init))),
+  )
+  renderPageAt('/gatherings/g-1#photos')
+  await loaded()
+  const heading = await screen.findByRole('heading', { level: 2, name: 'Photos' })
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)))
+  expect(tilesAtScroll).toEqual([])
+  expect(document.activeElement).toBe(document.body)
+  await act(async () => release(answer))
+  await waitFor(() => expect(gridTiles()).toHaveLength(20))
+  await waitFor(() => expect(document.activeElement).toBe(heading))
+  expect(tilesAtScroll).toEqual([20])
+})
+
+test('a first read that fails still arrives: one scroll, focus on the heading, and the read landing after Try again does not move the page', async () => {
+  const pageScrolls = stubScroll()
+  let failing = true
+  const routes = arrivalRoutes(detail())
+  const good = routes['GET /gatherings/g-1/media']
+  routes['GET /gatherings/g-1/media'] = (init, path) => (failing ? json(500, {}) : good(init, path))
+  stubServer(routes)
+  renderPageAt('/gatherings/g-1#photos')
+  await loaded()
+  const heading = await screen.findByRole('heading', { level: 2, name: 'Photos' })
+  await waitFor(() => expect(document.activeElement).toBe(heading))
+  expect(pageScrolls()).toHaveLength(1)
+  failing = false
+  fireEvent.click(await screen.findByRole('button', { name: /try again/i }))
+  await waitFor(() => expect(gridTiles()).toHaveLength(20))
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)))
+  expect(pageScrolls()).toHaveLength(1)
+})
+
+test('another fragment is not the arrival: nothing reads it, and the page is the preview', async () => {
+  const pageScrolls = stubScroll()
+  stubServer(arrivalRoutes(detail()))
+  renderPageAt('/gatherings/g-1#elsewhere')
+  await loaded()
+  await waitFor(() => expect(gridTiles()).toHaveLength(6))
+  expect(pageScrolls()).toHaveLength(0)
+  expect(document.activeElement).toBe(document.body)
+})
+
+test('opening and closing the viewer after arriving: the entry has no hash, closing pops back to it, and the page does not scroll again', async () => {
+  const pageScrolls = stubScroll()
+  stubServer(arrivalRoutes(detail()))
+  renderPageAt('/gatherings/g-1#photos')
+  await loaded()
+  await waitFor(() => expect(gridTiles()).toHaveLength(20))
+  await waitFor(() => expect(pageScrolls()).toHaveLength(1))
+  const tile = gridTiles()[0]
+  fireEvent.click(tile)
+  const viewer = screen.getByRole('dialog')
+  await waitFor(() => expect(arrivalHashes[arrivalHashes.length - 1]).toBe(''))
+  fireEvent.click(within(viewer).getByRole('button', { name: 'Close' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  await waitFor(() => expect(arrivalHashes[arrivalHashes.length - 1]).toBe('#photos'))
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)))
+  expect(pageScrolls()).toHaveLength(1)
+  // Focus went back to the tile, not to the heading, and the grid stayed out.
+  await waitFor(() => expect(document.activeElement).toBe(tile))
+  expect(gridTiles()).toHaveLength(20)
+  // And a second round, for an effect that would run on every other change.
+  fireEvent.click(tile)
+  await waitFor(() => expect(arrivalHashes[arrivalHashes.length - 1]).toBe(''))
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }))
+  await waitFor(() => expect(arrivalHashes[arrivalHashes.length - 1]).toBe('#photos'))
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)))
+  expect(pageScrolls()).toHaveLength(1)
 })

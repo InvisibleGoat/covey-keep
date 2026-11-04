@@ -209,11 +209,14 @@ function renderAt(path: string) {
 // its members, the link and — for organisers — the requests and the
 // invitations; those moved with their sections to the People page, so the
 // fake answers them only there (`peoplePageRoutes`) and refuses them loudly
-// on the group's page.
+// on the group's page. MOVED AT CK-88.1b, with its reason: the page reads its
+// photos too, answered with none; a refusal here would be caught as the
+// section's failed read, and every test below would pass on a failed page.
 function groupPageRoutes(body: () => unknown, over: Record<string, Responder> = {}): Record<string, Responder> {
   return {
     'GET /groups/grp-1': () => json(200, body()),
     'GET /groups/grp-1/gatherings': () => json(200, { gatherings: [] }),
+    'GET /groups/grp-1/media': () => json(200, { sections: [] }),
     ...over,
   }
 }

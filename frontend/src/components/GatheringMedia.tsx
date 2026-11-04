@@ -9,7 +9,7 @@ import {
   type ReactNode,
   type Ref,
 } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { authFetch } from '../lib/api'
 import {
   announceCoverChange,
@@ -67,6 +67,7 @@ import {
   reviewRefusalMessage,
   SEARCH_DEBOUNCE_MS,
   takedownSentence,
+  whoFor,
   wordsErrorFields,
   type BinAct,
   type IntentResponse,
@@ -77,6 +78,8 @@ import {
 } from '../lib/media'
 import { FieldError, FormLevelErrors } from './FieldError'
 import { LazyThumbnail, PhotoViewer, TagList } from './PhotoViewer'
+import { PREVIEW_PHONE, PREVIEW_WIDE_COUNT, usePreviewWide } from './usePreviewWide'
+import { useViewerEntry } from './useViewerEntry'
 
 // The photographs section of /gatherings/:id (CK-38; the words on a
 // photograph since CK-40) — the first surface on which a person hands the
@@ -341,6 +344,14 @@ import { LazyThumbnail, PhotoViewer, TagList } from './PhotoViewer'
 //    same path and search, its state `{ photoViewer: true }` and nothing
 //    else; Back closes it, and Close and Escape close it and pop that entry,
 //    so the history ends where it began.
+// 14. THE ARRIVAL (CK-88.1b; Steven's answer 6): a group page's See all lands
+//    here at `#photos`, and the page says so once, as this section mounts:
+//    every published photo showing, with no second See all and each tile still
+//    minting as it nears the viewport. Once the section's first read has settled
+//    its tiles have their height and the page can reach it (a scroll made at
+//    mount stopped short), so then the section scrolls into view and focus moves
+//    to the heading. It runs once, because opening the viewer pushes an entry
+//    with no hash and closing it pops back to the hash.
 
 // What the page holds on this section (CK-87, point 12).
 export interface GatheringMediaHandle {
@@ -395,6 +406,9 @@ interface Props {
   searchDebounceMs?: number
   // The page's handle for Add photos (CK-87, point 12).
   ref?: Ref<GatheringMediaHandle>
+  // The page's address is the gathering's Photos (CK-88.1b, point 14): read
+  // once, as this section mounts.
+  arrivedAtPhotos?: boolean
 }
 
 // What this device knows about a row that the server cannot: whether the
@@ -622,38 +636,6 @@ function MediaWordsEditor({
   )
 }
 
-// The grid's preview (CK-88; Steven's answer 2 of 2026-11-02): the mockup's
-// first row or two — 6 tiles on a phone, 8 from 640px — read from the WINDOW
-// (the frame's practice; jsdom has no matchMedia and reads as a phone).
-const PREVIEW_WIDE = '(min-width: 640px)'
-const PREVIEW_PHONE = 6
-const PREVIEW_WIDE_COUNT = 8
-
-function matchesPreviewWide(): boolean {
-  return typeof window.matchMedia === 'function' && window.matchMedia(PREVIEW_WIDE).matches
-}
-
-function usePreviewWide(): boolean {
-  const [wide, setWide] = useState(matchesPreviewWide)
-  useEffect(() => {
-    if (typeof window.matchMedia !== 'function') return
-    const query = window.matchMedia(PREVIEW_WIDE)
-    const onChange = () => setWide(query.matches)
-    onChange()
-    query.addEventListener('change', onChange)
-    return () => query.removeEventListener('change', onChange)
-  }, [])
-  return wide
-}
-
-// The history entry the viewer adds (CK-88; Steven's answer 4): its state is
-// this and nothing else — no id, no photo, nothing about who is looking.
-const PHOTO_VIEWER_STATE = { photoViewer: true } as const
-
-function isViewerState(state: unknown): boolean {
-  return typeof state === 'object' && state !== null && (state as { photoViewer?: unknown }).photoViewer === true
-}
-
 // Where focus goes once the viewer has closed: back to what opened it, to the
 // Photos heading, to the Removed view's button, or to a row's Put back once
 // the re-read that brings the row has landed.
@@ -685,6 +667,7 @@ export function GatheringMedia({
   pollIntervalMs = POLL_INTERVAL_MS,
   searchDebounceMs = SEARCH_DEBOUNCE_MS,
   ref,
+  arrivedAtPhotos = false,
 }: Props) {
   // The delegable flag (point 9): a host organises by definition.
   const organises = organisesProp ?? isHost
@@ -700,22 +683,14 @@ export function GatheringMedia({
   const [publishedCount, setPublishedCount] = useState<number | null>(null)
   // See all (point 13): the grid's rest shown in place, for as long as the
   // page is open (Steven's answer of 2026-11-02); and the tile focus is owed
-  // to once it has rendered.
-  const [expanded, setExpanded] = useState(false)
+  // to once it has rendered. The arrival (point 14) starts it out.
+  const [expanded, setExpanded] = useState(arrivedAtPhotos)
   const [focusTile, setFocusTile] = useState<string | null>(null)
   const previewWide = usePreviewWide()
   // The photo viewer (point 13): what is open, and where focus goes once it
   // has closed.
   const [viewer, setViewer] = useState<ViewerState | null>(null)
   const [pendingFocus, setPendingFocus] = useState<PendingFocus | null>(null)
-  const navigate = useNavigate()
-  const location = useLocation()
-  // The one history entry an open viewer adds: pending until the navigation
-  // lands, then pushed under its own key — and a close asked for before it
-  // landed pops it on arrival.
-  const historyEntry = useRef<{ phase: 'pending' | 'pushed'; from: string; key: string | null; cancelled: boolean } | null>(
-    null,
-  )
   const headingRef = useRef<HTMLHeadingElement>(null)
   const binViewButton = useRef<HTMLButtonElement>(null)
   const tileRefs = useRef(new Map<string, HTMLButtonElement>())
@@ -1257,11 +1232,6 @@ export function GatheringMedia({
   }
   const datesWithheld = occurrences === null
 
-  function whoFor(item: MediaItem): string {
-    if (item.is_own) return 'You'
-    return item.uploader_display_name ?? 'Someone'
-  }
-
   // THE VIEWER (point 13). Opening it adds ONE history entry for the same
   // path and search, its state the marker alone; Back closes it (the effect
   // below), and every other close pops that entry, so the history ends where
@@ -1273,8 +1243,7 @@ export function GatheringMedia({
     setPendingFocus(null)
     setViewer({ mode, mediaId, opener })
     if (mode === 'grid') setGroupWanted(true)
-    historyEntry.current = { phase: 'pending', from: location.key, key: null, cancelled: false }
-    navigate({ pathname: location.pathname, search: location.search }, { state: PHOTO_VIEWER_STATE })
+    viewerEntry.push()
   }
 
   // The steps the viewer opened on a photograph close with it, or when it
@@ -1288,15 +1257,7 @@ export function GatheringMedia({
 
   function closeViewer(focus: PendingFocus | null = null, popHistory = true) {
     if (viewer === null) return
-    const entry = historyEntry.current
-    if (popHistory && entry !== null) {
-      if (entry.phase === 'pushed') {
-        historyEntry.current = null
-        navigate(-1)
-      } else {
-        entry.cancelled = true
-      }
-    }
+    if (popHistory) viewerEntry.pop()
     closeStepsFor(viewer.mediaId)
     setViewer(null)
     setPendingFocus(focus ?? { kind: 'opener', element: viewer.opener })
@@ -1384,29 +1345,23 @@ export function GatheringMedia({
     if (viewerLost) latestCloseViewer.current({ kind: 'heading' })
   }, [viewerLost])
 
-  // Back (Steven's answer 4): the entry the viewer pushed is left, so the
-  // viewer closes without popping anything. The entry is recognised by its
-  // key, so an older entry that also carries the marker (a reload) is never
-  // mistaken for it, and a reload on the marker opens nothing.
+  // The arrival (point 14): the section into view and focus on its heading,
+  // once, when the first read has settled and the page is tall enough to get
+  // there. The ref holds what the page said at mount; a later change of the hash
+  // reads nothing.
+  const arrivalOwed = useRef(arrivedAtPhotos)
+  const firstReadSettled = items !== null || loadFailed
   useEffect(() => {
-    const entry = historyEntry.current
-    if (entry === null) return
-    if (entry.phase === 'pending') {
-      if (location.key === entry.from || !isViewerState(location.state)) return
-      if (entry.cancelled) {
-        historyEntry.current = null
-        navigate(-1)
-        return
-      }
-      entry.phase = 'pushed'
-      entry.key = location.key
-      return
-    }
-    if (location.key !== entry.key) {
-      historyEntry.current = null
-      latestCloseViewer.current(null, false)
-    }
-  }, [location.key, location.state, navigate])
+    if (!arrivalOwed.current || !firstReadSettled) return
+    arrivalOwed.current = false
+    const section = blockRef.current?.closest('section') ?? blockRef.current
+    section?.scrollIntoView?.({ block: 'start' })
+    headingRef.current?.focus({ preventScroll: true })
+  }, [firstReadSettled])
+
+  // Back (Steven's answer 4): the entry the viewer pushed is left, so the
+  // viewer closes without popping anything (components/useViewerEntry.ts).
+  const viewerEntry = useViewerEntry(() => latestCloseViewer.current(null, false))
 
   // Focus, once the viewer has closed and the page is no longer inert.
   useEffect(() => {

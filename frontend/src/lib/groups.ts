@@ -31,6 +31,7 @@ import { authFetch } from './api'
 import type { CoverBody } from './covers'
 import { errorsFromResponse, networkErrors, type FormErrors } from './formErrors'
 import type { GatheringListItem } from './gatherings'
+import type { MediaItem } from './media'
 
 export type GroupRole = 'admin' | 'co_admin' | 'member'
 
@@ -175,6 +176,40 @@ export async function readGroupGatherings(
     if (!response.ok) return { ok: false }
     const body = (await response.json()) as { gatherings?: GatheringListItem[] }
     return { ok: true, gatherings: body.gatherings ?? [] }
+  } catch {
+    return { ok: false }
+  }
+}
+
+// The group's gatherings as a page holds them (CK-86; a type here since
+// CK-88.1b, when the strip's read began to serve the photos' sections too).
+// `readAt` is the moment the list arrived: the one `now` the order and every
+// line are read against, so a card's line always agrees with where it sits
+// (CK-85's practice).
+export type GroupGatheringsLoad =
+  | { status: 'loading' }
+  | { status: 'loaded'; items: GatheringListItem[]; readAt: number }
+  | { status: 'failed' }
+
+// One section of a group's photos (CK-88.1a's route): a gathering holding a
+// published photo the caller can see, how many there are, and the newest eight
+// as the items its own list answers. `published_count` is never the keeper's
+// charge, which counts what the caller cannot see.
+export interface GroupMediaSection {
+  gathering_id: string
+  published_count: number
+  media: MediaItem[]
+}
+
+// `GET /groups/{id}/media` (CK-88.1b): a section's own read, as the strip's is.
+export async function readGroupMedia(
+  groupId: string,
+): Promise<{ ok: true; sections: GroupMediaSection[] } | { ok: false }> {
+  try {
+    const response = await authFetch(`/groups/${groupId}/media`)
+    if (!response.ok) return { ok: false }
+    const body = (await response.json()) as { sections?: GroupMediaSection[] }
+    return { ok: true, sections: body.sections ?? [] }
   } catch {
     return { ok: false }
   }

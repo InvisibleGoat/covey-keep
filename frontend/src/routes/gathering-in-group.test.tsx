@@ -299,6 +299,10 @@ test('THE PHOTOS-ONLY VIEW from a memory body with occurrences null: the header,
   // CK-88: the Photos section is open on load and reads its list at once —
   // the list is not something the view withholds — and the grid's one tile
   // mints its thumbnail. Nothing else: no group read until the viewer opens.
+  // CK-88.1b: the tile's mint is awaited rather than assumed inside the fixed
+  // wait above, which under the full suite's load it can outlast. The list it
+  // pins is unchanged.
+  await waitFor(() => expect(requests(mock, 'GET', /^\/media\/m-photo-1\/url\?layer=thumbnail$/)).toHaveLength(1))
   expect(mock.mock.calls.map(([url]) => String(url).replace(/^https?:\/\/[^/]+/, ''))).toEqual([
     '/gatherings/g-1',
     '/gatherings/g-1/media',

@@ -133,6 +133,9 @@ type Responder = (init: RequestInit | undefined, path: string) => Response
 // The group's page reads two things — the group and its gatherings — and the
 // fake refuses anything else loudly, so a read of the member list, the link
 // or anything of the People page's fails the test that made it.
+// MOVED AT CK-88.1b, with its reason: the page reads its photos too
+// (components/GroupPhotos.tsx, pinned in routes/group-photos.test.tsx), and this
+// fake refuses what it does not know; answered here with none.
 function stubServer(over: { group?: Responder; gatherings?: Responder } = {}) {
   const mock = vi.fn((url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
@@ -146,6 +149,9 @@ function stubServer(over: { group?: Responder; gatherings?: Responder } = {}) {
     }
     if (method === 'GET' && path === '/groups/g-1/gatherings') {
       return Promise.resolve((over.gatherings ?? (() => json(200, { gatherings: [] })))(init, path))
+    }
+    if (method === 'GET' && path === '/groups/g-1/media') {
+      return Promise.resolve(json(200, { sections: [] }))
     }
     if (method === 'GET' && path.includes('/cover/url?layer=')) {
       return Promise.resolve(
@@ -463,7 +469,12 @@ test('a failed read fails in the strip’s place: the line and Try again, which 
 // What is not here.
 // ---------------------------------------------------------------------------
 
-test('none of what moved to the People page — no Members, no requests, no link, no rename, no leave, no role line — and nothing unbuilt: no Add photos, chat, Kept by, pin, faces, Active or Photos', async () => {
+// MOVED AT CK-88.1b, with its reason: the photos in sections are built, so
+// *Photos*, *No photos yet* and *newest first* left the list of what is unbuilt,
+// and the page's level-2 headings are the strip's label and then the photos'.
+// Everything else it held still holds, and *Posted to the group*, which the
+// mockup draws and this arc does not build, joined it.
+test('none of what moved to the People page — no Members, no requests, no link, no rename, no leave, no role line — and nothing unbuilt: no Add photos, chat, Kept by, pin, faces, Active or Posted to the group', async () => {
   for (const role of ['admin', 'co_admin', 'member']) {
     stubServer({ group: () => json(200, group({ caller_role: role })), gatherings: () => json(200, { gatherings: STRIP }) })
     const view = renderPage()
@@ -484,27 +495,30 @@ test('none of what moved to the People page — no Members, no requests, no link
       expect(text, `${role}: ${moved}`).not.toContain(moved)
     }
     expect(screen.queryByLabelText('Group name')).toBeNull()
-    expect(text).not.toMatch(/Add photos|Open chat|\bChat\b|Message |Kept by|Offer to keep|Active .* ago|\bPin\b|Unpin|No photos yet|newest first/)
-    expect(screen.queryByRole('heading', { name: 'Photos' })).toBeNull()
+    expect(text).not.toMatch(/Add photos|Open chat|\bChat\b|Message |Kept by|Offer to keep|Active .* ago|\bPin\b|Unpin|Posted to the group/)
     expect(document.querySelector('.faces, .avatar, .member-initials')).toBeNull()
-    // The page's headings: the name, then the strip's label.
+    // The page's headings: the name, then the strip's label, then the photos'.
     expect(screen.getAllByRole('heading').map((h) => h.textContent)).toEqual(
-      expect.arrayContaining(['The Lees', 'Gatherings']),
+      expect.arrayContaining(['The Lees', 'Gatherings', 'Photos']),
     )
-    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Gatherings'])
+    await screen.findByText('No photos yet. Photos added to its gatherings show up here.')
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Gatherings', 'Photos'])
     expect(text).not.toMatch(FORBIDDEN)
     view.unmount()
     vi.unstubAllGlobals()
   }
 })
 
-test('no member read: the page reads the group and its gatherings and nothing else — never the member list, the link or the requests', async () => {
+// MOVED AT CK-88.1b, with its reason: the photos' one read joined the two; the
+// rule it holds — never the member list, the link or the requests — is the same.
+test('no member read: the page reads the group, its gatherings and its photos and nothing else — never the member list, the link or the requests', async () => {
   for (const role of ['admin', 'member']) {
     const mock = stubServer({ group: () => json(200, group({ caller_role: role })), gatherings: () => json(200, { gatherings: STRIP }) })
     const view = renderPage()
     await loaded()
     await strip()
-    expect(paths(mock).sort()).toEqual(['/groups/g-1', '/groups/g-1/gatherings'])
+    await screen.findByText('No photos yet. Photos added to its gatherings show up here.')
+    expect(paths(mock).sort()).toEqual(['/groups/g-1', '/groups/g-1/gatherings', '/groups/g-1/media'])
     view.unmount()
     vi.unstubAllGlobals()
   }

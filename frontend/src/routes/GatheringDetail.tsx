@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useLocation, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { DateBadge } from '../components/Cover'
 import { FieldError, FormLevelErrors } from '../components/FieldError'
@@ -678,6 +678,9 @@ function OccurrenceRsvp({
 // viewer (GatheringMedia, point 13).
 export function GatheringDetail() {
   const { id } = useParams()
+  // A group page's See all lands at `#photos` (CK-88.1b): a fixed string,
+  // compared and never navigated to. The Photos section reads it once.
+  const arrivedAtPhotos = useLocation().hash === '#photos'
   const { person } = useAuth()
   const zone = effectiveZone(person?.timezone)
   const [state, setState] = useState<DetailState>({ status: 'loading' })
@@ -1015,6 +1018,7 @@ export function GatheringDetail() {
             gatheringTitle={gathering.title}
             onCoverSet={coverSet}
             zone={zone}
+            arrivedAtPhotos={arrivedAtPhotos}
           />
         </section>
       </main>
@@ -1899,6 +1903,7 @@ export function GatheringDetail() {
           gatheringTitle={gathering.title}
           onCoverSet={coverSet}
           zone={zone}
+          arrivedAtPhotos={arrivedAtPhotos}
         />
       </section>
 

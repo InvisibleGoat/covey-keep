@@ -9,11 +9,11 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
-  type RefObject,
 } from 'react'
 import { createPortal } from 'react-dom'
 import { fetchLayerObjectUrl, mediaName, type MediaItem } from '../lib/media'
 import { Icon } from './Icons'
+import { useNearViewport } from './useNearViewport'
 
 // The photo viewer (CK-88; the merge record §1.4 and §3 item 8, the mockup's
 // screens 11 and 12, the design chat's decisions of 2026-10-14). An overlay
@@ -53,31 +53,6 @@ import { Icon } from './Icons'
 //   fetchLayerObjectUrl, the CK-38 rule: no presigned URL past its fetch),
 //   revoked the moment it is let go and all of them on close. The strip's
 //   thumbnails mint as they near the viewport.
-
-// A box that mints its picture only once it nears the viewport (CK-88): the
-// grid's tiles below the fold and the strip's thumbnails. Where the browser
-// has no IntersectionObserver (jsdom) it counts as near at once.
-function useNearViewport<T extends Element>(): [RefObject<T | null>, boolean] {
-  const ref = useRef<T>(null)
-  const [near, setNear] = useState(() => typeof IntersectionObserver !== 'function')
-  useEffect(() => {
-    if (near) return
-    const element = ref.current
-    if (element === null) return
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          setNear(true)
-          observer.disconnect()
-        }
-      },
-      { rootMargin: '200px' },
-    )
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [near])
-  return [ref, near]
-}
 
 // One photograph's thumbnail layer, minted when its box nears the viewport,
 // held as a `blob:` URL and revoked on unmount. While it loads, or if it
@@ -180,6 +155,10 @@ interface Props {
   single: boolean
   // The set's name for the bar: the gathering's title.
   setLabel: string
+  // The total the bar and the strip name while the set is only part of it (a
+  // group's page, CK-88.1b, until the gathering's list lands). Absent on a
+  // gathering's page, where the set is whole. Moving and the arrows read the set.
+  total?: number
   // "Added by …" (with its date where the dates are not withheld) and the
   // state line, each from the caller, which knows the seat and the zone.
   addedLine: (item: MediaItem) => string
@@ -189,11 +168,12 @@ interface Props {
   onClose: () => void
 }
 
-export function PhotoViewer({ photos, current, onMove, single, setLabel, addedLine, stateLine, acts, onClose }: Props) {
+export function PhotoViewer({ photos, current, onMove, single, setLabel, total, addedLine, stateLine, acts, onClose }: Props) {
   const found = photos.findIndex((photo) => photo.id === current)
   const index = found === -1 ? 0 : found
   const item = photos[index]
   const count = photos.length
+  const named = total ?? count
   const nameId = useId()
 
   const [immersive, setImmersiveState] = useState(false)
@@ -683,7 +663,7 @@ export function PhotoViewer({ photos, current, onMove, single, setLabel, addedLi
         <div className="vtitle">
           <b id={nameId}>{name}</b>
           <span>
-            {setLabel} · {index + 1} of {count}
+            {setLabel} · {index + 1} of {named}
           </span>
         </div>
         <button ref={fullRef} type="button" className="iconbtn" aria-label="Full screen" onClick={() => setImmersive(true)}>
@@ -766,7 +746,7 @@ export function PhotoViewer({ photos, current, onMove, single, setLabel, addedLi
             <button
               key={photo.id}
               type="button"
-              aria-label={`${position + 1} of ${count}: ${mediaName(photo)}`}
+              aria-label={`${position + 1} of ${named}: ${mediaName(photo)}`}
               aria-current={position === index ? 'true' : undefined}
               onClick={() => go(position)}
             >
