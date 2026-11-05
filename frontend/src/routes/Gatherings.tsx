@@ -13,7 +13,8 @@
 //   variant (the web layer), and the rest are `tile`s under *Coming up*.
 // - **Past**: the full-view items whose date has passed — a date in progress
 //   included, by the same rule — most recent first: four, then **Show all
-//   {N} past gatherings**, which shows the rest in place and goes away.
+//   {N} past gatherings**, which shows the rest in place and goes away, and
+//   stays away on a return to this page; a new visit starts folded (CK-88.2).
 // - **Photos you can see** (Steven, 2026-11-01): every photos-only item, in
 //   the server's order, after Past. Each says *You can see its photos* and
 //   carries no date and no badge: the server withholds them, and nothing
@@ -27,6 +28,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { CardLine, Cover, DateBadge } from '../components/Cover'
 import { Icon } from '../components/Icons'
+import { usePagePlace } from '../components/pagePlace'
 import { authFetch } from '../lib/api'
 import { effectiveZone } from '../lib/datetime'
 import {
@@ -56,7 +58,9 @@ export function Gatherings() {
   // Bumped by Try again: the ordinary read over again, through the loading
   // state (the CK-74.1 idiom).
   const [reloadKey, setReloadKey] = useState(0)
-  const [allPast, setAllPast] = useState(false)
+  // Show all stays open on a return and folds on a new visit (CK-88.2; Steven).
+  const { shownAll, rememberShownAll } = usePagePlace()
+  const [allPast, setAllPast] = useState(shownAll)
   // Show all moves focus to the first card it reveals, so a keyboard is not
   // left on a button that has gone.
   const revealed = useRef<HTMLUListElement>(null)
@@ -263,6 +267,7 @@ export function Gatherings() {
                 onClick={() => {
                   setAllPast(true)
                   setJustRevealed(true)
+                  rememberShownAll()
                 }}
               >
                 Show all {past.length} past gatherings

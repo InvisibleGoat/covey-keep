@@ -13,7 +13,7 @@
 //   and co-admins get Change cover at the card's top right, with its panel:
 //   Upload a picture, and Remove cover behind its second step — the card's
 //   own step now, the only one on this page. A cover from a photograph is
-//   chosen in a group gathering's opened photo (Use as the group's cover),
+//   chosen in a gathering's photo viewer (Use as the group's cover),
 //   and nothing here ever names that photograph or its gathering — no group
 //   body does.
 // - THE ACTIONS (`.gactions`), for every member: **New gathering**, the

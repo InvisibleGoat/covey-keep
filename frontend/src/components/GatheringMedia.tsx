@@ -77,6 +77,7 @@ import {
   type ServableLayer,
 } from '../lib/media'
 import { FieldError, FormLevelErrors } from './FieldError'
+import { usePagePlace } from './pagePlace'
 import { LazyThumbnail, PhotoViewer, TagList } from './PhotoViewer'
 import { PREVIEW_PHONE, PREVIEW_WIDE_COUNT, usePreviewWide } from './usePreviewWide'
 import { useViewerEntry } from './useViewerEntry'
@@ -351,7 +352,9 @@ import { useViewerEntry } from './useViewerEntry'
 //    its tiles have their height and the page can reach it (a scroll made at
 //    mount stopped short), so then the section scrolls into view and focus moves
 //    to the heading. It runs once, because opening the viewer pushes an entry
-//    with no hash and closing it pops back to the hash.
+//    with no hash and closing it pops back to the hash. A return owes no arrival
+//    (CK-88.2): Back to a `#photos` entry lands where the person was, its grid
+//    still out, and the frame's place re-applied as this section's tiles land.
 
 // What the page holds on this section (CK-87, point 12).
 export interface GatheringMediaHandle {
@@ -683,8 +686,11 @@ export function GatheringMedia({
   const [publishedCount, setPublishedCount] = useState<number | null>(null)
   // See all (point 13): the grid's rest shown in place, for as long as the
   // page is open (Steven's answer of 2026-11-02); and the tile focus is owed
-  // to once it has rendered. The arrival (point 14) starts it out.
-  const [expanded, setExpanded] = useState(arrivedAtPhotos)
+  // to once it has rendered. The arrival (point 14) starts it out, and so does
+  // a return to a page left with it out (CK-88.2): a grid that folded on Back
+  // would clamp the place being restored.
+  const { isReturn, shownAll, rememberShownAll } = usePagePlace()
+  const [expanded, setExpanded] = useState(arrivedAtPhotos || shownAll)
   const [focusTile, setFocusTile] = useState<string | null>(null)
   const previewWide = usePreviewWide()
   // The photo viewer (point 13): what is open, and where focus goes once it
@@ -1345,11 +1351,17 @@ export function GatheringMedia({
     if (viewerLost) latestCloseViewer.current({ kind: 'heading' })
   }, [viewerLost])
 
+  // Out, however it came to be out, is what a return to this page must find.
+  useEffect(() => {
+    if (expanded) rememberShownAll()
+  }, [expanded, rememberShownAll])
+
   // The arrival (point 14): the section into view and focus on its heading,
   // once, when the first read has settled and the page is tall enough to get
   // there. The ref holds what the page said at mount; a later change of the hash
-  // reads nothing.
-  const arrivalOwed = useRef(arrivedAtPhotos)
+  // reads nothing. Back to a `#photos` entry lands where the person was, so a
+  // return owes no arrival (CK-88.2), though its grid still starts out.
+  const arrivalOwed = useRef(arrivedAtPhotos && !isReturn)
   const firstReadSettled = items !== null || loadFailed
   useEffect(() => {
     if (!arrivalOwed.current || !firstReadSettled) return

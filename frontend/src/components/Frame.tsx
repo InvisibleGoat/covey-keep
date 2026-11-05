@@ -5,6 +5,8 @@ import { SECTIONS, sectionOf } from '../lib/frame'
 import { QuailHead } from './AuthArt'
 import { Icon } from './Icons'
 import { Menu } from './Menu'
+import { PagePlaceContext } from './pagePlace'
+import { useKeepPlace } from './useKeepPlace'
 
 // The frame around every signed-in page (CK-82; the design handoff §3, the
 // mockup's screens 01, 02, 05 and 13). App.tsx renders it once, as the
@@ -32,6 +34,10 @@ import { Menu } from './Menu'
 // and focus returns to the menu button; the page behind does not scroll.
 // Closed, it is inert and hidden from assistive technology, waiting off the
 // screen's edge so it can slide in (.26s, stilled under reduced motion).
+//
+// A page keeps its place (CK-88.2): useKeepPlace owns every navigation's scroll,
+// on whichever of the two scrollers is active, and its context adds no element,
+// so the page stays the column's own child (.frame-col > .auth-screen).
 
 const WIDE = '(min-width: 900px)'
 const MENU_ID = 'frame-menu'
@@ -74,6 +80,7 @@ export function Frame() {
   const side = useRef<HTMLDivElement>(null)
   const column = useRef<HTMLDivElement>(null)
   const wasOpen = useRef(false)
+  const place = useKeepPlace(column, wide)
 
   // Focus into the drawer on opening; back to the menu button on closing.
   useEffect(() => {
@@ -101,12 +108,6 @@ export function Frame() {
       document.body.classList.remove('menu-open')
     }
   }, [drawerOpen])
-
-  // On a wide screen the page column is its own scroller: a new page starts
-  // at its top, as a new page in the window does.
-  useEffect(() => {
-    if (column.current) column.current.scrollTop = 0
-  }, [location.pathname])
 
   // Tab and Shift+Tab wrap inside the open drawer.
   function keepFocusIn(event: ReactKeyboardEvent) {
@@ -162,7 +163,9 @@ export function Frame() {
             </Link>
           </header>
         )}
-        <Outlet />
+        <PagePlaceContext.Provider value={place}>
+          <Outlet />
+        </PagePlaceContext.Provider>
         {!wide && (
           <nav className="tabbar" aria-label="Sections">
             {SECTIONS.map((section) => (

@@ -8,7 +8,7 @@
 //   date has started or in the photos-only view; no group line, no *Back to
 //   your gatherings*, no *Hosted by*, no Chat.
 // - THE ACTIONS: Add photos for the invited tier — one press clicks the file
-//   input SYNCHRONOUSLY, the section closed beforehand; the chosen files in
+//   input SYNCHRONOUSLY, the section open on load since CK-88; the chosen files in
 //   the form; focus to Upload; Upload through today's calls — and Edit
 //   gathering for the organisers over today's form; no row in the
 //   photos-only view.
