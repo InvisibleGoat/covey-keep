@@ -897,6 +897,88 @@ test('a row’s thumbnail opens its photo alone: the words and the state line, n
   expect(within(row).getByRole('button', { name: 'Publish' })).toBeTruthy()
 })
 
+// A waiting photo stays a row, so its thumbnail can fail in the row. `failures`
+// is how many thumbnail mints fail before one lands; the web layer always mints.
+function stubFailingThumbnail(status: number, failures = Number.POSITIVE_INFINITY) {
+  let minted = 0
+  const thumbnailMints = () => minted
+  const mock = stubServer([photo(2, { publication_state: 'pending', uploader_display_name: 'June Marlowe', filename: 'waiting.jpg' })], {
+    'GET /media/m-2/url': (_init, path) => {
+      if (path.endsWith('layer=web')) return json(200, { url: 'https://r2.invalid/media/m-2/web?X-Amz-Signature=sig', method: 'GET' })
+      minted += 1
+      if (minted <= failures) return json(status, { detail: 'no' })
+      return json(200, { url: `https://r2.invalid/media/m-2/thumbnail?X-Amz-Signature=sig-${minted}`, method: 'GET' })
+    },
+  })
+  return { mock, thumbnailMints }
+}
+
+async function failedRow() {
+  const row = (await screen.findByText('waiting.jpg')).closest('li') as HTMLElement
+  const retry = await within(row).findByRole('button', { name: 'Retry' })
+  const opener = within(row).getByRole('button', { name: 'Open photo added by June Marlowe' })
+  return { row, retry, opener }
+}
+
+for (const [status, line] of [
+  [409, 'Not ready to show yet.'],
+  [500, "Couldn't show this photo just now."],
+] as const) {
+  test(`a row’s thumbnail that can’t be shown (${status}): the ground alone in the button that opens it, its line and Retry beside it, no button inside a button`, async () => {
+    const consoleError = vi.spyOn(console, 'error')
+    stubFailingThumbnail(status)
+    renderSection({ isHost: true, requiresApproval: true })
+    const { row, retry, opener } = await failedRow()
+    expect(opener.contains(retry)).toBe(false)
+    expect(document.querySelector('button button')).toBeNull()
+    expect(opener.contains(within(row).getByText(line))).toBe(false)
+    expect(opener.textContent).toBe('')
+    expect(opener.querySelector('img')).toBeNull()
+    expect(opener.querySelector('.media-thumb')).not.toBeNull()
+    expect(consoleError.mock.calls.flat().join(' ')).not.toMatch(/descendant of <button>|nested <button>/)
+    consoleError.mockRestore()
+  })
+}
+
+test('Retry asks again and opens nothing: the photo lands in the same button, the line and Retry gone, and focus on that button, which stayed', async () => {
+  const { thumbnailMints } = stubFailingThumbnail(500, 1)
+  renderSection({ isHost: true, requiresApproval: true })
+  const { row, retry, opener } = await failedRow()
+  expect(thumbnailMints()).toBe(1)
+  retry.focus()
+  fireEvent.click(retry)
+  expect(screen.queryByRole('dialog')).toBeNull()
+  // Retry goes as it is pressed, so a keyboard is left on the button and not the page.
+  expect(document.activeElement).toBe(opener)
+  expect(opener.textContent).toBe('Loading…')
+  expect(within(row).queryByRole('button', { name: 'Retry' })).toBeNull()
+  await waitFor(() => expect(opener.querySelector('img')).not.toBeNull())
+  expect(thumbnailMints()).toBe(2)
+  expect(within(row).getByRole('button', { name: 'Open photo added by June Marlowe' })).toBe(opener)
+  expect(within(row).queryByRole('button', { name: 'Retry' })).toBeNull()
+  expect(within(row).queryByText("Couldn't show this photo just now.")).toBeNull()
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
+
+test('a Retry that fails again brings the line and Retry back, and the thumbnail’s button still opens its photo, focus back on it after', async () => {
+  const { thumbnailMints } = stubFailingThumbnail(500)
+  renderSection({ isHost: true, requiresApproval: true })
+  const { row, retry, opener } = await failedRow()
+  fireEvent.click(retry)
+  const again = await within(row).findByRole('button', { name: 'Retry' })
+  expect(thumbnailMints()).toBe(2)
+  expect(within(row).getByText("Couldn't show this photo just now.")).toBeTruthy()
+  expect(within(row).getByRole('button', { name: 'Open photo added by June Marlowe' })).toBe(opener)
+  expect(opener.contains(again)).toBe(false)
+  fireEvent.click(opener)
+  const viewer = screen.getByRole('dialog')
+  expect(viewer.querySelector('.vtitle span')?.textContent).toBe(`${TITLE} · 1 of 1`)
+  fireEvent.click(within(viewer).getByRole('button', { name: 'Close' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  expect(document.activeElement).toBe(opener)
+  expect(thumbnailMints()).toBe(2)
+})
+
 test('no presigned URL in the markup, and none sent twice: every bucket URL fetched once, the page holding blob: URLs alone', async () => {
   const mock = stubServer(photos(5))
   renderSection()

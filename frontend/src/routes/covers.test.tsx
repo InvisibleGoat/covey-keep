@@ -1018,8 +1018,12 @@ test('Use as the group’s cover is the group’s admin’s and co-admins’ alo
     // CK-88: the group is read when the grid's viewer opens.
     const viewer = await openTile(1)
     await waitFor(() => expect(requests(mock, 'GET', '/groups/grp-1')).toHaveLength(1))
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    expect(within(viewer).queryByRole('button', { name: "Use as the group's cover" }) !== null).toBe(offered)
+    if (offered) {
+      await within(viewer).findByRole('button', { name: "Use as the group's cover" })
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(within(viewer).queryByRole('button', { name: "Use as the group's cover" })).toBeNull()
+    }
     view.unmount()
     vi.unstubAllGlobals()
   }

@@ -74,7 +74,6 @@ import {
   type MediaItem,
   type MediaList,
   type ReviewAct,
-  type ServableLayer,
 } from '../lib/media'
 import { FieldError, FormLevelErrors } from './FieldError'
 import { usePagePlace } from './pagePlace'
@@ -426,28 +425,31 @@ type LayerState =
   | { status: 'shown'; objectUrl: string }
   | { status: 'failed'; reason: 'not_ready' | 'unavailable' }
 
-// One layer of one ready photograph, as an <img> over a blob: URL. Owns the
-// object URL for its lifetime and revokes it on unmount or re-fetch — the
-// bytes stay in this browser, the credential that fetched them is gone.
-function LayerImage({
+// A row's thumbnail, as an <img> over a blob: URL, in the button that opens the
+// photo. Owns the object URL for its lifetime and revokes it on unmount or
+// re-fetch — the bytes stay in this browser, the credential that fetched them
+// is gone. One that can't be shown keeps the button, on the ground alone as a
+// tile does, with its line and Retry beside it: a button can't hold a button,
+// and Retry asks again without opening anything. Retry goes as it is pressed,
+// so focus moves to the button, which stays.
+function RowThumbnail({
   mediaId,
-  layer,
-  alt,
-  className,
+  label,
+  onOpen,
 }: {
   mediaId: string
-  layer: ServableLayer
-  alt: string
-  className: string
+  label: string
+  onOpen: (opener: HTMLButtonElement) => void
 }) {
   const [state, setState] = useState<LayerState>({ status: 'loading' })
   const [retryKey, setRetryKey] = useState(0)
+  const opener = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     let cancelled = false
     let held: string | null = null
     setState({ status: 'loading' })
-    void fetchLayerObjectUrl(mediaId, layer).then((outcome) => {
+    void fetchLayerObjectUrl(mediaId, 'thumbnail').then((outcome) => {
       if (cancelled) {
         if (outcome.ok) URL.revokeObjectURL(outcome.objectUrl)
         return
@@ -463,22 +465,42 @@ function LayerImage({
       cancelled = true
       if (held !== null) URL.revokeObjectURL(held)
     }
-  }, [mediaId, layer, retryKey])
+  }, [mediaId, retryKey])
 
-  if (state.status === 'loading') {
-    return <span className={`${className} media-placeholder`}>Loading…</span>
-  }
-  if (state.status === 'failed') {
-    return (
-      <span className={`${className} media-placeholder`}>
-        {state.reason === 'not_ready' ? "Not ready to show yet." : "Couldn't show this photo just now."}{' '}
-        <button type="button" className="link-button" onClick={() => setRetryKey((key) => key + 1)}>
-          Retry
-        </button>
-      </span>
-    )
-  }
-  return <img className={className} src={state.objectUrl} alt={alt} />
+  return (
+    <>
+      <button
+        ref={opener}
+        type="button"
+        className="media-thumb-button"
+        onClick={(event) => onOpen(event.currentTarget)}
+        aria-label={label}
+      >
+        {state.status === 'shown' ? (
+          <img className="media-thumb" src={state.objectUrl} alt="" />
+        ) : (
+          <span className="media-thumb media-placeholder">{state.status === 'loading' ? 'Loading…' : null}</span>
+        )}
+      </button>
+      {state.status === 'failed' && (
+        <>
+          <p className="field-hint">
+            {state.reason === 'not_ready' ? 'Not ready to show yet.' : "Couldn't show this photo just now."}
+          </p>
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => {
+              opener.current?.focus()
+              setRetryKey((key) => key + 1)
+            }}
+          >
+            Retry
+          </button>
+        </>
+      )}
+    </>
+  )
 }
 
 // The caption and tags editor for ONE of the caller's own photographs
@@ -1784,14 +1806,11 @@ export function GatheringMedia({
                 />
               )}
               {item.status === 'ready' && (
-                <button
-                  type="button"
-                  className="media-thumb-button"
-                  onClick={(event) => openViewer('row', item.id, event.currentTarget)}
-                  aria-label={`Open photo added by ${who}`}
-                >
-                  <LayerImage mediaId={item.id} layer="thumbnail" alt="" className="media-thumb" />
-                </button>
+                <RowThumbnail
+                  mediaId={item.id}
+                  label={`Open photo added by ${who}`}
+                  onOpen={(opener) => openViewer('row', item.id, opener)}
+                />
               )}
               <p>
                 <strong>{name}</strong> — added by {who}

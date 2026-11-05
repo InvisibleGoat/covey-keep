@@ -20,6 +20,13 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    // A limit for a test that hangs, not for one that is slow. Under the suite's
+    // own load the slowest tests read 4.7 s against the default of 5, and a test
+    // past its limit is abandoned, not stopped: it goes on running beside the next
+    // tests in its file, on the same document and the same React, and an `act` it
+    // left open can fail every one of them.
+    testTimeout: 30_000,
+    setupFiles: ['./src/test-support/testingLibrary.ts'],
     // Vitest blanks every CSS import unless told otherwise — a `?raw` read
     // included, which made a stylesheet pin read an empty string and pass.
     // The raw reads alone get the file's text (styles/look.test.tsx, CK-81);

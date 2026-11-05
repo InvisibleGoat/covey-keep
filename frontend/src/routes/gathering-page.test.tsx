@@ -913,6 +913,9 @@ function stubNearness() {
   }
   vi.stubGlobal('IntersectionObserver', FakeObserver)
   return async (element: Element) => {
+    // A tile subscribes in an effect, which can still be pending when its box is
+    // on the page. The browser only calls back after observe(), so wait for that.
+    await waitFor(() => expect(live.has(element)).toBe(true))
     await act(async () => live.get(element)?.([{ isIntersecting: true, target: element }]))
   }
 }

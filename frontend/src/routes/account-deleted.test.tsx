@@ -226,6 +226,9 @@ test('deleting the account through Settings lands on /account-deleted with the h
   // The session ends on the confirmation screen, not before it.
   await waitFor(() => expect(authStatus()).toBe('signedOut'))
   expect(getToken()).toBeNull()
+  // The signal is spent after the clear. That replace is a transition, so it
+  // lands in its own time, and under load later than any fixed wait.
+  await waitFor(() => expect(visits.at(-1)).toEqual({ pathname: '/account-deleted', state: null }))
   // And it stays there: no guard bounces a signed-out person off this route.
   await new Promise((resolve) => setTimeout(resolve, 50))
   expect(locationText()).toBe('/account-deleted')
