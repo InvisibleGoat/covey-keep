@@ -636,6 +636,151 @@ for (const layout of LAYOUTS) {
 }
 
 // ---------------------------------------------------------------------------
+// After a return: the person moves on, and the breakpoint. A scrollTop written
+// during a hold is no person's act, so the page rightly ignores it: each journey
+// here closes the hold first, as a real wheel or the window does.
+// ---------------------------------------------------------------------------
+
+const CLOSINGS = [
+  {
+    name: 'the person’s wheel',
+    before: () => {},
+    close: async () => {
+      fireEvent.wheel(document.body)
+    },
+  },
+  {
+    name: 'the window',
+    before: () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    },
+    close: async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WINDOW_MS)
+      })
+      vi.useRealTimers()
+    },
+  },
+]
+
+for (const layout of LAYOUTS) {
+  const other = layout.wide ? PHONE : WIDE
+
+  for (const closing of CLOSINGS) {
+    test(`moving on after a return on ${layout.name}, the hold closed by ${closing.name}: a leaving saves where the person moved, and a later page keeps its own place`, async () => {
+      stubWidth(layout.wide)
+      stubServer()
+      renderApp('/gatherings/g-lake')
+      await gatheringLoaded('The Lake')
+      layout.scrollTo(1800)
+      pressWithMouse(inMenu('/you'))
+      await heading1('You')
+
+      closing.before()
+      await act(async () => nav.current?.(-1))
+      expect(layout.scroller().top).toBe(1800)
+      await closing.close()
+      await gatheringLoaded('The Lake')
+
+      // The person moves on from the place they were returned to.
+      layout.scrollTo(2600)
+      pressWithMouse(inMenu('/groups'))
+      await groupsPage()
+      expect(layout.scroller().top).toBe(0)
+      layout.scrollTo(900)
+
+      await back()
+      await gatheringLoaded('The Lake')
+      expect(layout.scroller().top).toBe(2600)
+      await forward()
+      await groupsPage()
+      expect(layout.scroller().top).toBe(900)
+      await back()
+      await gatheringLoaded('The Lake')
+      expect(layout.scroller().top).toBe(2600)
+    })
+  }
+
+  test(`moving on after a return by a link on ${layout.name}: back and forth between two pages, each keeps where the person last moved it`, async () => {
+    stubWidth(layout.wide)
+    stubServer()
+    renderApp('/groups/g-1')
+    await groupPageLoaded()
+    layout.scrollTo(2400)
+    pressWithMouse(await linkInMain('/gatherings/g-lake'))
+    await gatheringLoaded('The Lake')
+    layout.scrollTo(700)
+
+    pressWithMouse(crumb())
+    await groupPageLoaded()
+    expect(layout.scroller().top).toBe(2400)
+    fireEvent.wheel(document.body)
+    layout.scrollTo(3100)
+
+    pressWithMouse(await linkInMain('/gatherings/g-lake'))
+    await gatheringLoaded('The Lake')
+    expect(layout.scroller().top).toBe(700)
+    fireEvent.wheel(document.body)
+    layout.scrollTo(900)
+
+    pressWithMouse(crumb())
+    await groupPageLoaded()
+    expect(layout.scroller().top).toBe(3100)
+    pressWithMouse(await linkInMain('/gatherings/g-lake'))
+    await gatheringLoaded('The Lake')
+    expect(layout.scroller().top).toBe(900)
+  })
+
+  test(`crossing the breakpoint from ${layout.name}: the place from then on is the new scroller’s, before any scroll of it`, async () => {
+    const width = stubWidth(layout.wide)
+    stubServer()
+    renderApp('/groups/g-1')
+    await groupPageLoaded()
+    layout.scrollTo(2400)
+    // Where the browser has the new scroller as the layouts change: no event says so.
+    other.scroller().top = 640
+    await width.set(other.wide)
+    pressWithMouse(inMenu('/you'))
+    await heading1('You')
+    await back()
+    await groupPageLoaded()
+    expect(other.scroller().top).toBe(640)
+    expect(other.scroller().writes).not.toContain(2400)
+  })
+
+  test(`crossing the breakpoint during a return from ${layout.name}: the hold ends, so nothing more is written to the old scroller and the new one’s scroll counts`, async () => {
+    const width = stubWidth(layout.wide)
+    const server = stubServer()
+    renderApp('/gatherings/g-lake')
+    await gatheringLoaded('The Lake')
+    layout.scrollTo(1800)
+    pressWithMouse(inMenu('/you'))
+    await heading1('You')
+    const old = layout.scroller()
+    server.hold('/gatherings/g-lake', '/gatherings/g-lake/media')
+    old.max = 300
+    await back()
+    expect(old.top).toBe(300)
+
+    await width.set(other.wide)
+    const before = old.writes.length
+    old.max = 5000
+    await server.release('/gatherings/g-lake', '/gatherings/g-lake/media')
+    await gatheringLoaded('The Lake')
+    await settle()
+    expect(old.writes.slice(before)).toEqual([])
+    expect(other.scroller().writes).toEqual([])
+
+    other.scrollTo(500)
+    pressWithMouse(inMenu('/you'))
+    await heading1('You')
+    await back()
+    await gatheringLoaded('The Lake')
+    expect(other.scroller().top).toBe(500)
+  })
+}
+
+// ---------------------------------------------------------------------------
 // A return by a link.
 // ---------------------------------------------------------------------------
 
@@ -732,6 +877,39 @@ test('a change of search alone does nothing, as today: the same pathname writes 
   await settle()
   expect(windowScroller().writes.slice(before)).toEqual([])
   expect(windowScroller().top).toBe(50)
+})
+
+for (const [from, to, returns] of [
+  ['/you?from=a', '/you', false],
+  ['/you', '/you?from=a', false],
+  ['/you?from=a', '/you?from=b', false],
+  ['/you?from=a', '/you?from=a', true],
+] as const) {
+  test(`a link to ${to} straight after leaving ${from}: ${returns ? 'a return, at the place' : 'a new page, at the top'}, because a path is its pathname and its search`, async () => {
+    stubWidth(false)
+    stubServer()
+    renderApp(from)
+    await heading1('You')
+    PHONE.scrollTo(300)
+    pressWithMouse(inTabs('/groups'))
+    await groupsPage()
+    await act(async () => nav.current?.(to))
+    await heading1('You')
+    expect(windowScroller().top).toBe(returns ? 300 : 0)
+  })
+}
+
+test('Checkout’s return left during its wait, then Your plan’s row on You: the plain page, at the top, because the one search the app carries is part of the path', async () => {
+  stubWidth(false)
+  stubServer()
+  renderApp('/plan?checkout=complete')
+  await heading1('Your plan')
+  PHONE.scrollTo(300)
+  pressWithMouse(inTabs('/you'))
+  await heading1('You')
+  pressWithMouse(await linkInMain('/plan'))
+  await heading1('Your plan')
+  expect(windowScroller().top).toBe(0)
 })
 
 test('the decision is held for the whole visit: a page that mounts its list late, after the frame has re-rendered, still reads a return', async () => {
