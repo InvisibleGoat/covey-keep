@@ -509,7 +509,10 @@ test('Home\'s panel leaves an empty heading out, either one', async () => {
   expect(within(panel()).queryByText('Not in a group')).toBeNull()
 })
 
-test('a group\'s panel: the back row, the cover, the facts, three rows with chevrons, this group\'s gatherings in order with their lines', async () => {
+// MOVED AT CK-89.1, with its reason: the facts line beneath the cover is gone
+// (Steven, 2026-11-07, as recommended): its *3 people* was the People row's
+// line word for word, 176px below it. The count is the People row's alone.
+test('a group\'s panel: the back row, the cover, no facts line, three rows with chevrons, this group\'s gatherings in order with their lines', async () => {
   stubWidth(true)
   renderAt('/groups/g-1/people')
   await settle()
@@ -517,7 +520,9 @@ test('a group\'s panel: the back row, the cover, the facts, three rows with chev
   expect(back.getAttribute('href')).toBe('/groups')
   expect(back.textContent).toBe('Home')
   expect(panel().querySelector('.dcover h2')?.textContent).toBe('The Lees')
-  expect(panel().querySelector('.facts')?.textContent).toBe('3 people')
+  expect(panel().querySelector('.facts')).toBeNull()
+  expect((panel().querySelector('.dcover') as HTMLElement).nextElementSibling?.matches('ul.nrows.d')).toBe(true)
+  expect(within(panel()).getAllByText('3 people')).toHaveLength(1)
   const rows = Array.from(panel().querySelectorAll('.nrows.d a'))
   expect(rows.map((a) => [a.querySelector('b')?.textContent, a.querySelector('.t span')?.textContent, a.getAttribute('href')])).toEqual([
     ['Group page', 'Cover, gatherings and photos', '/groups/g-1'],

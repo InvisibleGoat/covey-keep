@@ -3220,10 +3220,10 @@ body.menu-open {
   text-wrap: balance;
 }
 
+/* Only *No gatherings yet.* carries .facts since CK-89.1 dropped the facts
+   line beneath the panel's cover: the flex column that stacked the line's
+   facts went with it. */
 .facts {
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
   margin: 0.75rem 18px 0;
   font-size: 0.875rem;
   color: var(--ck-muted);

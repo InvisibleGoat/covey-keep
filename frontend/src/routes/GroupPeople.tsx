@@ -87,6 +87,7 @@ import { FieldError, FormLevelErrors } from '../components/FieldError'
 import { Icon } from '../components/Icons'
 import { effectiveZone, formatDay } from '../lib/datetime'
 import { describedBy, noErrors, type FormErrors } from '../lib/formErrors'
+import { announceMenuChange } from '../lib/frame'
 import {
   approveRequest,
   approveSentence,
@@ -427,6 +428,8 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
       setGroupLoad({ status: 'loaded', value: outcome.group })
       setNameDraft(null)
       setGroupKey((key) => key + 1)
+      // The menu draws the name (CK-89.1).
+      announceMenuChange()
       return
     }
     setRenameErrors(outcome.errors)
@@ -477,6 +480,8 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
         setGroupKey((key) => key + 1)
       }
       setMembersKey((key) => key + 1)
+      // The menu draws the count, and no role (CK-89.1).
+      if (act === 'remove_member') announceMenuChange()
       return
     }
     setRowRefusal({
@@ -523,6 +528,8 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
       if (decision === 'approve') {
         setMembersKey((key) => key + 1)
         setGroupKey((key) => key + 1)
+        // The menu draws the count (CK-89.1).
+        announceMenuChange()
       }
       return
     }

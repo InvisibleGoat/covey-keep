@@ -8,6 +8,7 @@ import { effectiveZone } from '../lib/datetime'
 import {
   groupPanelGatherings,
   homePanelSections,
+  onMenuChange,
   panelGatheringLine,
   panelOf,
   readMenuLists,
@@ -37,7 +38,8 @@ import { Icon } from './Icons'
 // RAIL AND PANEL (CK-89): a rail of group covers down the side (`.rail`) and
 // beside it a panel (`.panel`) that shows Home's — the brand, the sections,
 // *Coming up*, *Not in a group* — or the chosen group's: a back row, its cover,
-// its facts, three rows and its gatherings. WHAT THE PANEL SHOWS IS READ FROM
+// three rows and its gatherings; the count is the People row's line alone
+// (CK-89.1 dropped the facts line that repeated it). WHAT THE PANEL SHOWS IS READ FROM
 // THE ADDRESS AND THE HELD LISTS (lib/frame.ts::panelOf), never from a second
 // state, so Back and Forward always agree with it. A gathering's row opens its
 // page directly in both layouts: there is no gathering's panel.
@@ -48,7 +50,9 @@ import { Icon } from './Icons'
 // tab leaves nothing stale — and never in navigation state.
 //
 // The two lists are the caller's own, from the same two reads the list pages
-// make (`GET /groups`, `GET /gatherings`), re-read whenever the page changes;
+// make (`GET /groups`, `GET /gatherings`), re-read whenever the page changes,
+// after a cover act (lib/covers.ts) and after an act that changed what they
+// draw with no page change (lib/frame.ts's announceMenuChange, CK-89.1);
 // every read is cancelled on unmount. The menu reads neither
 // `/groups/{id}/gatherings` nor `/members`. An empty list leaves its heading
 // out; a failed read is one quiet line with Try again.
@@ -230,6 +234,10 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
   // A cover act landed on a page (CK-84): the two lists again at once, so a
   // thumbnail does not wait for the next navigation to show the new cover.
   useEffect(() => onCoverChange(() => setReloadKey((key) => key + 1)), [])
+  // An act that changed a name, a count, a title or a date landed with no page
+  // change (CK-89.1): the two lists again at once, the held ones kept on screen
+  // until the new ones land.
+  useEffect(() => onMenuChange(() => setReloadKey((key) => key + 1)), [])
 
   function tryAgain() {
     setLists(null)
@@ -361,9 +369,6 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
             <Cover subject="group" id={panel.group.id} cover={panel.group.cover} variant="panel">
               <h2>{panel.group.name}</h2>
             </Cover>
-            <div className="facts">
-              <span>{memberCountLabel(panel.group.member_count)}</span>
-            </div>
             <ul className="nrows d">
               <li>
                 <Link

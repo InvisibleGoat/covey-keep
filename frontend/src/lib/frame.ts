@@ -62,6 +62,30 @@ export async function readMenuLists(): Promise<MenuLists> {
   return { ok: true, groups: groups.groups, gatherings: gatherings.gatherings }
 }
 
+// THE MENU'S SIGNAL (CK-89.1): a page that lands an act changing something the
+// menu draws, with no page change to re-read it, announces it, and the menu
+// reads its two lists again at once — the same two reads, once per act, and
+// nothing new. The acts: on a People page a rename, an approval and a removal
+// (a group's name or its people count); on a gathering's page Edit gathering's
+// save and a date added, edited or removed (a title or a next date). It
+// carries nothing: the lists' own bodies say what changed. A failed or refused
+// act announces nothing, and an act that navigates needs none, because the
+// page change re-reads. It stands beside lib/covers.ts's cover signal, which a
+// cover act still announces, rather than widening it: that one is a cover
+// act's and is pinned as one.
+const menuListeners = new Set<() => void>()
+
+export function announceMenuChange(): void {
+  for (const listener of menuListeners) listener()
+}
+
+export function onMenuChange(listener: () => void): () => void {
+  menuListeners.add(listener)
+  return () => {
+    menuListeners.delete(listener)
+  }
+}
+
 async function listGatherings(): Promise<{ ok: true; gatherings: GatheringListItem[] } | { ok: false }> {
   try {
     const response = await authFetch('/gatherings')

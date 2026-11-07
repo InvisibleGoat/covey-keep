@@ -25,6 +25,7 @@ import {
   type CoHostList,
 } from '../lib/coHosts'
 import { COVER_HINT_GATHERING, removePhotoSentence, type CoverBody } from '../lib/covers'
+import { announceMenuChange } from '../lib/frame'
 import { type InvitationLists } from '../lib/invitations'
 import {
   describedBy,
@@ -1134,6 +1135,8 @@ export function GatheringDetail() {
       if (response.ok) {
         setEditingGathering(false)
         setReloadKey((key) => key + 1)
+        // The menu draws the title (CK-89.1).
+        announceMenuChange()
       } else {
         setGatheringErrors(await errorsFromResponse(response, GATHERING_FIELDS))
       }
@@ -1158,6 +1161,8 @@ export function GatheringDetail() {
       if (response.ok) {
         setEditingOccurrenceId(null)
         setReloadKey((key) => key + 1)
+        // The menu draws the next date (CK-89.1).
+        announceMenuChange()
       } else {
         setOccurrenceErrors(await errorsFromResponse(response, OCCURRENCE_FIELDS))
       }
@@ -1188,6 +1193,8 @@ export function GatheringDetail() {
         setAddingOccurrence(false)
         setAddForm(EMPTY_OCCURRENCE_FORM)
         setReloadKey((key) => key + 1)
+        // The menu draws the next date (CK-89.1).
+        announceMenuChange()
       } else {
         setAddErrors(await errorsFromResponse(response, OCCURRENCE_FIELDS))
       }
@@ -1383,6 +1390,8 @@ export function GatheringDetail() {
       if (!alive.current) return
       if (response.status === 204) {
         setReloadKey((key) => key + 1)
+        // The menu draws the next date (CK-89.1).
+        announceMenuChange()
         return
       }
       if (response.status === 409) {
