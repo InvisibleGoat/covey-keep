@@ -127,7 +127,10 @@ function renderMenu(who: Person | null = person, at = '/groups') {
 test('the brand, the three sections with the current one marked, and no Calendar', async () => {
   stubServer()
   renderMenu(person, '/groups/g-1')
-  const menu = screen.getByRole('navigation', { name: 'Menu' })
+  // MOVED AT CK-89, with its reason, here and at this file's three other reads of
+  // the name: the dialog is *Menu*, and a nav called *Menu* inside it was read out
+  // twice (CK-82's review), so the nav is *Main* in both layouts.
+  const menu = screen.getByRole('navigation', { name: 'Main' })
   const brand = within(menu).getByRole('link', { name: 'CoveyKeep' })
   expect(brand.getAttribute('href')).toBe('/groups')
   expect(brand.querySelector('img')?.getAttribute('alt')).toBe('')
@@ -206,7 +209,13 @@ test('no chevron, no pin and no activity line on any row', async () => {
   // count's word (Steven, 2026-11-01), so the ban keeps the activity line's
   // other words and the pin, and the count is pinned in the test above.
   expect(container.textContent).not.toMatch(/\bActive\b|\bago\b|Pinned/)
-  expect(menuSource).not.toMatch(/name="chevron"/)
+  // MOVED AT CK-89, with its reason: a group's panel in Rail and panel carries the
+  // mockup's chevron on its three fixed rows (they lead on to something), so the
+  // source pin covers One list's branch alone — the part before the Rail and panel
+  // branch — and the panel's chevrons are pinned in routes/rail-and-panel.test.tsx.
+  const oneList = menuSource.slice(menuSource.indexOf("if (layout === 'list')"), menuSource.indexOf('// Rail and panel. A plain press'))
+  expect(oneList.length).toBeGreaterThan(500)
+  expect(oneList).not.toMatch(/name="chevron"/)
 })
 
 test('an empty list leaves its heading out', async () => {
@@ -229,7 +238,7 @@ test('a failed read: one quiet line inside the menu, and Try again re-reads once
   const mock = stubServer({ groups: () => (fail ? json(500, {}) : json(200, { groups: GROUPS })) })
   renderMenu()
   const line = await screen.findByText("Your groups and gatherings couldn't be loaded just now.")
-  expect(line.closest('nav')?.getAttribute('aria-label')).toBe('Menu')
+  expect(line.closest('nav')?.getAttribute('aria-label')).toBe('Main')
   expect(screen.queryByRole('heading')).toBeNull()
   expect(reads(mock)).toEqual(['/groups', '/gatherings'])
 
@@ -260,7 +269,7 @@ test('freshness: both lists are re-read when the page changes', async () => {
 test("the footer: the initials, the name, the way to Settings and the maker's line", async () => {
   stubServer()
   renderMenu()
-  const menu = screen.getByRole('navigation', { name: 'Menu' })
+  const menu = screen.getByRole('navigation', { name: 'Main' })
   const avatar = menu.querySelector('.avatar')
   expect(avatar?.textContent).toBe('AL')
   expect(avatar?.getAttribute('aria-hidden')).toBe('true')
@@ -274,7 +283,7 @@ test("the footer: the initials, the name, the way to Settings and the maker's li
 test('with no profile, the footer shows no name, and the way to Settings still works', async () => {
   stubServer()
   renderMenu(null)
-  const menu = screen.getByRole('navigation', { name: 'Menu' })
+  const menu = screen.getByRole('navigation', { name: 'Main' })
   expect(menu.querySelector('.avatar')).toBeNull()
   expect(menu.querySelector('.me-name')).toBeNull()
   expect(within(menu).getByRole('link', { name: 'Settings' }).getAttribute('href')).toBe('/settings')

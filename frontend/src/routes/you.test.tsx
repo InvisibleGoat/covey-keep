@@ -6,11 +6,15 @@
 // checked, an unknown stored value reading as light; Dark writes `dark` to
 // covey-keep:theme and sets the attribute at once, Light writes `light`;
 // Sign out signs out as Home's button did; the rows link where they say;
-// and no Favorites and no Menu layout, each a later phase.
+// and no Favorites (a later phase). Since CK-89 Display's first choice is Menu
+// layout, then Appearance: One list and Rail and panel with their lines as
+// literals, One list checked with nothing stored or anything unknown, and a
+// choice written to covey-keep:menu-layout at once.
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { AuthContext, type AuthState, type Person } from '../auth/context'
+import { chooseMenuLayout } from '../lib/menuLayout'
 import { You } from './You'
 import youSource from './You.tsx?raw'
 
@@ -73,6 +77,7 @@ function renderYou(auth: AuthState = authWith()) {
 
 function resetTheme() {
   document.documentElement.setAttribute('data-theme', 'light')
+  chooseMenuLayout('list')
   localStorage.clear()
 }
 
@@ -106,13 +111,69 @@ test("You's words, as literals", async () => {
   await screen.findByText('10,000 photos · Free')
 })
 
-test('no Favorites and no Menu layout — each a later phase', async () => {
+test('no Favorites — a later phase; and since CK-89 the Menu layout is the first of two choices', async () => {
+  // MOVED AT CK-89, with its reason: the Menu layout choice is built, so the
+  // pin that said there were two radios and one group is now four radios in
+  // two groups, Menu layout before Appearance.
   stubBilling()
   renderYou()
   await screen.findByText('10,000 photos · Free')
-  expect(document.body.textContent).not.toMatch(/favou?rites?|menu layout|one list|rail and panel/i)
-  expect(screen.getAllByRole('radio')).toHaveLength(2)
-  expect(screen.queryAllByRole('group')).toHaveLength(1)
+  expect(document.body.textContent).not.toMatch(/favou?rites?/i)
+  expect(screen.getAllByRole('radio')).toHaveLength(4)
+  expect(screen.getAllByRole('group').map((group) => group.querySelector('legend')?.textContent)).toEqual([
+    'Menu layout',
+    'Appearance',
+  ])
+})
+
+test('Menu layout comes first under Display: the two choices and their lines, as literals', async () => {
+  stubBilling()
+  renderYou()
+  const display = screen.getByRole('heading', { level: 2, name: 'Display' }).closest('section') as HTMLElement
+  const groups = within(display).getAllByRole('group')
+  expect(groups.map((group) => group.querySelector('legend')?.textContent)).toEqual(['Menu layout', 'Appearance'])
+  const layout = groups[0]
+  const radios = within(layout).getAllByRole('radio') as HTMLInputElement[]
+  expect(radios.map((radio) => radio.name)).toEqual(['menu-layout', 'menu-layout'])
+  expect(within(layout).getByRole('radio', { name: 'One list' }).getAttribute('aria-describedby')).toBeTruthy()
+  expect(within(layout).getByText('Your groups and gatherings together, with a picture beside each name.')).toBeTruthy()
+  expect(within(layout).getByRole('radio', { name: 'Rail and panel' }).getAttribute('aria-describedby')).toBeTruthy()
+  expect(within(layout).getByText('Group pictures down the side, and the group you pick beside them.')).toBeTruthy()
+  await screen.findByText('10,000 photos · Free')
+})
+
+test('One list is checked with nothing stored or anything unknown; a stored `rail` checks Rail and panel', async () => {
+  stubBilling()
+  const checked = () => [
+    (screen.getByRole('radio', { name: 'One list' }) as HTMLInputElement).checked,
+    (screen.getByRole('radio', { name: 'Rail and panel' }) as HTMLInputElement).checked,
+  ]
+  for (const [stored, expected] of [
+    [null, [true, false]],
+    ['list', [true, false]],
+    ['sepia', [true, false]],
+    ['rail', [false, true]],
+  ] as const) {
+    if (stored !== null) localStorage.setItem('covey-keep:menu-layout', stored)
+    renderYou()
+    expect(checked(), String(stored)).toEqual(expected)
+    await screen.findByText('10,000 photos · Free')
+    cleanup()
+    localStorage.clear()
+  }
+})
+
+test('a choice is written to covey-keep:menu-layout and checked at once; the theme is left alone', async () => {
+  stubBilling()
+  renderYou()
+  fireEvent.click(screen.getByRole('radio', { name: 'Rail and panel' }))
+  expect(localStorage.getItem('covey-keep:menu-layout')).toBe('rail')
+  expect((screen.getByRole('radio', { name: 'Rail and panel' }) as HTMLInputElement).checked).toBe(true)
+  fireEvent.click(screen.getByRole('radio', { name: 'One list' }))
+  expect(localStorage.getItem('covey-keep:menu-layout')).toBe('list')
+  expect((screen.getByRole('radio', { name: 'One list' }) as HTMLInputElement).checked).toBe(true)
+  expect(localStorage.getItem('covey-keep:theme')).toBeNull()
+  await screen.findByText('10,000 photos · Free')
 })
 
 test('the rows link where they say: Settings to /settings, Your plan to /plan with its line from GET /billing', async () => {

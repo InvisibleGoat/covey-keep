@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 import { PRODUCT_NAME } from '../brand'
 import { SECTIONS, sectionOf } from '../lib/frame'
 import { QuailHead } from './AuthArt'
 import { Icon } from './Icons'
-import { Menu } from './Menu'
+import { useMenuLayout } from '../lib/menuLayout'
+import { Menu, type MenuPress } from './Menu'
 import { PagePlaceContext } from './pagePlace'
 import { useKeepPlace } from './useKeepPlace'
 
@@ -31,9 +32,17 @@ import { useKeepPlace } from './useKeepPlace'
 // The drawer is a dialog: role="dialog", aria-modal and a label while open;
 // focus moves into it on opening and stays in it (Tab wraps, and the page
 // behind is inert); Escape, a tap on the scrim and any navigation close it,
-// and focus returns to the menu button; the page behind does not scroll.
-// Closed, it is inert and hidden from assistive technology, waiting off the
-// screen's edge so it can slide in (.26s, stilled under reduced motion).
+// and focus returns to the menu button, unless the page has taken it; the page
+// behind does not scroll. Closed, it is inert and hidden from assistive
+// technology, waiting off the screen's edge so it can slide in (.26s, stilled
+// under reduced motion).
+//
+// THE ONE EXCEPTION (CK-89, Rail and panel): the Home tile, a group's tile and
+// the back row keep the drawer open, with the page moving behind it. Menu says
+// so through a ref, for a plain press only, so a press that opens a tab leaves
+// nothing stale. It is read during render and cleared in a layout effect, never
+// during render, and it is never in navigation state: the viewer's entry must
+// be exactly { photoViewer: true }, and a signal in state outlives its press.
 //
 // A page keeps its place (CK-88.2): useKeepPlace owns every navigation's scroll,
 // on whichever of the two scrollers is active, and its context adds no element,
@@ -68,19 +77,50 @@ export function Frame() {
   // Any navigation closes the drawer — tracked during render, React's way of
   // adjusting state to a changed input, so no frame paints it open on the
   // new page. A wide screen has no drawer, so it closes there too.
+  //
+  // ONE NAMED EXCEPTION (CK-89, Rail and panel): the Home tile, a group's tile
+  // and the back row keep it open on a phone. Menu records that in `pressed`,
+  // for a plain press only; this block READS it during render and never
+  // clears it — main.tsx is in StrictMode, which renders twice, so a ref
+  // cleared by the first render would read false in the second and close the
+  // drawer. A layout effect on the key clears it, below. Never in navigation
+  // state: the viewer's entry is exactly { photoViewer: true }.
+  const pressed = useRef<MenuPress | null>(null)
+  const onPress = useCallback((press: MenuPress) => {
+    pressed.current = press
+  }, [])
   const [seenKey, setSeenKey] = useState(location.key)
   if (seenKey !== location.key) {
     setSeenKey(location.key)
-    if (open) setOpen(false)
+    if (open && !pressed.current?.keepOpen) setOpen(false)
   }
   if (wide && open) setOpen(false)
   const drawerOpen = open && !wide
+  const drawerOpenRef = useRef(drawerOpen)
+  drawerOpenRef.current = drawerOpen
 
   const menuButton = useRef<HTMLButtonElement>(null)
   const side = useRef<HTMLDivElement>(null)
   const column = useRef<HTMLDivElement>(null)
   const wasOpen = useRef(false)
   const place = useKeepPlace(column, wide)
+  const layout = useMenuLayout()
+
+  // What a press owes, spent once the new page's panel is drawn and then
+  // cleared (never during render). Focus goes to the panel's back row after a
+  // group's tile, to the Home tile after the back row (which goes), always
+  // without scrolling — and only where the menu is on screen: a press that
+  // closed the drawer returns focus to the menu button instead.
+  useLayoutEffect(() => {
+    const owed = pressed.current?.owed ?? null
+    pressed.current = null
+    if (owed === null || !side.current || (!wide && !drawerOpenRef.current)) return
+    const target =
+      owed === 'back-row'
+        ? side.current.querySelector<HTMLElement>('.panel .backrow a')
+        : side.current.querySelector<HTMLElement>('.rail-home')
+    target?.focus({ preventScroll: true })
+  }, [location.key, wide])
 
   // Focus into the drawer on opening; back to the menu button on closing.
   useEffect(() => {
@@ -91,7 +131,9 @@ export function Frame() {
     }
     if (wasOpen.current) {
       wasOpen.current = false
-      menuButton.current?.focus()
+      // Not when a press already put focus inside the page — a same-page
+      // *Photos* from the drawer has moved it to the group's heading.
+      if (!column.current?.contains(document.activeElement)) menuButton.current?.focus()
     }
   }, [drawerOpen])
 
@@ -132,7 +174,7 @@ export function Frame() {
       <div
         ref={side}
         id={MENU_ID}
-        className={drawerOpen ? 'frame-side is-open' : 'frame-side'}
+        className={`frame-side${layout === 'rail' ? ' frame-side-rail' : ''}${drawerOpen ? ' is-open' : ''}`}
         role={drawerOpen ? 'dialog' : undefined}
         aria-modal={drawerOpen ? true : undefined}
         aria-label={drawerOpen ? 'Menu' : undefined}
@@ -140,7 +182,7 @@ export function Frame() {
         inert={drawerClosed}
         onKeyDown={drawerOpen ? keepFocusIn : undefined}
       >
-        <Menu />
+        <Menu onPress={onPress} />
       </div>
       {drawerOpen && <div className="frame-scrim" aria-hidden="true" onClick={() => setOpen(false)} />}
       <div ref={column} className="frame-col" inert={drawerOpen}>

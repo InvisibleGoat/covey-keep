@@ -2,7 +2,8 @@
 // a page belongs to, and which gatherings the menu lists as coming up.
 import type { IconName } from '../components/Icons'
 import { authFetch } from './api'
-import { gatheringSections, type GatheringListItem } from './gatherings'
+import { formatDayWithYear, formatWeekdayDay } from './datetime'
+import { gatheringSections, isComingUp, PHOTOS_ONLY_ITEM, viewOf, type GatheringListItem } from './gatherings'
 import { listGroups, type Group } from './groups'
 
 export type SectionId = 'groups' | 'gatherings' | 'you'
@@ -70,4 +71,72 @@ async function listGatherings(): Promise<{ ok: true; gatherings: GatheringListIt
   } catch {
     return { ok: false }
   }
+}
+
+// WHAT THE PANEL SHOWS (CK-89, Rail and panel): read from the address and the
+// two held lists, never from a second state, so Back and Forward always agree
+// with it. A group's page, its People page and its gathering form show that
+// group's panel; a gathering's page shows it, with that gathering current,
+// when the gathering belongs to a group the person holds; everything else
+// shows Home's — the lists, You, Settings, Your plan, a standalone gathering,
+// a gathering of a group the person has left or the list does not hold, and
+// an id nobody holds (`/groups/new` included, because `new` is never an id).
+export type Panel = { kind: 'home' } | { kind: 'group'; group: Group; gatheringId: string | null }
+
+const GROUP_ADDRESS = /^\/groups\/([^/]+)(?:\/people|\/gatherings\/new)?\/?$/
+const GATHERING_ADDRESS = /^\/gatherings\/([^/]+)\/?$/
+
+export function panelOf(
+  pathname: string,
+  lists: { groups: Group[]; gatherings: GatheringListItem[] } | null,
+): Panel {
+  if (lists === null) return { kind: 'home' }
+  const groupMatch = GROUP_ADDRESS.exec(pathname)
+  if (groupMatch) {
+    const group = lists.groups.find((candidate) => candidate.id === groupMatch[1])
+    if (group) return { kind: 'group', group, gatheringId: null }
+    return { kind: 'home' }
+  }
+  const gatheringMatch = GATHERING_ADDRESS.exec(pathname)
+  if (gatheringMatch) {
+    const item = lists.gatherings.find((candidate) => candidate.id === gatheringMatch[1])
+    const group = item?.group ? lists.groups.find((candidate) => candidate.id === item.group?.id) : undefined
+    if (item && group) return { kind: 'group', group, gatheringId: item.id }
+  }
+  return { kind: 'home' }
+}
+
+// Home's panel: *Coming up* (the coming-up gatherings that have a group, the
+// first four) and *Not in a group* (the standalone ones, no limit), both from
+// the one rule — never a past or a photos-only item.
+export const PANEL_COMING_UP_LIMIT = 4
+
+export function homePanelSections(items: GatheringListItem[], now: number) {
+  const comingUp = gatheringSections(items, now).comingUp
+  return {
+    withGroup: comingUp.filter((item) => item.group).slice(0, PANEL_COMING_UP_LIMIT),
+    standalone: comingUp.filter((item) => !item.group),
+  }
+}
+
+// A group's panel *Gatherings*: this group's items, in `gatheringSections`
+// order (coming up, past, photos-only).
+export function groupPanelGatherings(items: GatheringListItem[], groupId: string, now: number): GatheringListItem[] {
+  const sections = gatheringSections(
+    items.filter((item) => item.group?.id === groupId),
+    now,
+  )
+  return [...sections.comingUp, ...sections.past, ...sections.photosOnly]
+}
+
+// A gathering row's second line in a group's panel: its day when coming up
+// (*Thu, Oct 15*), its day with the year when past (*Oct 3, 2026*), *You can
+// see its photos* when photos-only — nothing read from `next_occurrence`
+// there (the CK-80 Gotcha) — and nothing for a full-view item with no date.
+export function panelGatheringLine(item: GatheringListItem, zone: string, now: number): string | null {
+  if (viewOf(item.caller_view).photosOnly) return PHOTOS_ONLY_ITEM
+  if (item.next_occurrence === null) return null
+  return isComingUp(item, now)
+    ? formatWeekdayDay(item.next_occurrence.starts_at, zone)
+    : formatDayWithYear(item.next_occurrence.starts_at, zone)
 }

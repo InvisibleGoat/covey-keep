@@ -889,15 +889,26 @@ test('the column’s scroll is unmoved by the viewer’s entry: the same pathnam
   stubServer(TWO)
   renderGroupPage()
   const lake = await sectionOf('The Lake')
-  const column = document.querySelector('.frame-col') as HTMLElement
-  const writes: number[] = []
-  Object.defineProperty(column, 'scrollTop', { configurable: true, get: () => 480, set: (value: number) => writes.push(value) })
-  fireEvent.click(within(lake).getByRole('button', { name: 'Photo 1 of 11 in The Lake' }))
-  await sleep(20)
-  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }))
-  await sleep(20)
-  expect(screen.queryByRole('dialog')).toBeNull()
-  expect(writes).toEqual([])
+  // CK-89's rider: this pin watched the column alone, and jsdom with no matchMedia
+  // is a phone, whose scroller is the window, so it stayed green with the rule
+  // broken (CK-88.2's finding). It watches both scrollers now.
+  const root = document.scrollingElement ?? document.documentElement
+  const writes: [string, number][] = []
+  const scrollers: [string, Element][] = [['column', document.querySelector('.frame-col') as HTMLElement], ['window', root]]
+  for (const [name, scroller] of scrollers) {
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true, get: () => 480, set: (value: number) => writes.push([name, value]) })
+  }
+  try {
+    fireEvent.click(within(lake).getByRole('button', { name: 'Photo 1 of 11 in The Lake' }))
+    await sleep(20)
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }))
+    await sleep(20)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(writes).toEqual([])
+  } finally {
+    // The document outlives the test.
+    delete (root as unknown as { scrollTop?: number }).scrollTop
+  }
 })
 
 // ---------------------------------------------------------------------------

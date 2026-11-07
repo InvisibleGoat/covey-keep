@@ -5,6 +5,7 @@ import { MAKER_LINE } from '../brand'
 import { Icon } from '../components/Icons'
 import { planLine, readBilling, type Billing } from '../lib/billing'
 import { initials } from '../lib/groups'
+import { chooseMenuLayout, useMenuLayout, type MenuLayout } from '../lib/menuLayout'
 import { chooseTheme, readTheme, type Theme } from '../lib/theme'
 
 // /you — You (CK-82; decisions/2026-10-31-the-design-and-how-it-is-merged.md
@@ -14,9 +15,15 @@ import { chooseTheme, readTheme, type Theme } from '../lib/theme'
 // (lib/theme.ts); then Settings, Your plan with its line from
 // `GET /billing`, and Sign out, which moved here from Home.
 //
-// Not here, each a later phase: Favorites (favourites are unbuilt, the
-// record §4) and the Menu layout choice (shown when there is a second
-// layout to choose, CK-89).
+// Display holds two choices since CK-89: Menu layout first (One list or Rail
+// and panel, lib/menuLayout.ts, the menu following at once), then Appearance.
+//
+// Not here, a later phase: Favorites (favourites are unbuilt, the record §4).
+
+const MENU_LAYOUTS: { layout: MenuLayout; label: string; hint: string }[] = [
+  { layout: 'list', label: 'One list', hint: 'Your groups and gatherings together, with a picture beside each name.' },
+  { layout: 'rail', label: 'Rail and panel', hint: 'Group pictures down the side, and the group you pick beside them.' },
+]
 
 const APPEARANCE: { theme: Theme; label: string; hint: string }[] = [
   { theme: 'light', label: 'Light', hint: 'Paper by day.' },
@@ -26,6 +33,7 @@ const APPEARANCE: { theme: Theme; label: string; hint: string }[] = [
 export function You() {
   const { person, signOut } = useAuth()
   const [theme, setTheme] = useState<Theme>(readTheme)
+  const menuLayout = useMenuLayout()
   // Your plan's line, read from GET /billing — the screen keeps no numbers
   // of its own. A failed read shows the row without the line.
   const [billing, setBilling] = useState<Billing | null>(null)
@@ -69,6 +77,28 @@ export function You() {
 
       <section className="auth-card you-display" aria-labelledby={`${ids}-display`}>
         <h2 id={`${ids}-display`}>Display</h2>
+        <fieldset className="you-choice">
+          <legend>Menu layout</legend>
+          <div className="opts">
+            {MENU_LAYOUTS.map((option) => (
+              <label key={option.layout} className="opt">
+                <input
+                  type="radio"
+                  name="menu-layout"
+                  value={option.layout}
+                  checked={menuLayout === option.layout}
+                  onChange={() => chooseMenuLayout(option.layout)}
+                  aria-labelledby={`${ids}-ml-${option.layout}`}
+                  aria-describedby={`${ids}-ml-${option.layout}-hint`}
+                />
+                <span>
+                  <b id={`${ids}-ml-${option.layout}`}>{option.label}</b>
+                  <span id={`${ids}-ml-${option.layout}-hint`}>{option.hint}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
         <fieldset className="you-choice">
           <legend>Appearance</legend>
           <div className="opts">

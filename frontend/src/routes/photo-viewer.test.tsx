@@ -691,19 +691,30 @@ test('the frame’s scroll is unmoved by the viewer’s history entry: the same 
     </MemoryRouter>,
   )
   await screen.findByRole('button', { name: tileName(1, 3) })
-  const column = document.querySelector('.frame-col') as HTMLElement
-  const writes: number[] = []
-  Object.defineProperty(column, 'scrollTop', {
-    configurable: true,
-    get: () => 480,
-    set: (value: number) => writes.push(value),
-  })
-  const { viewer } = await openTile(1, 3)
-  await sleep(20)
-  fireEvent.click(within(viewer).getByRole('button', { name: 'Close' }))
-  await sleep(20)
-  expect(screen.queryByRole('dialog')).toBeNull()
-  expect(writes).toEqual([])
+  // CK-89's rider: this pin watched the column alone, and jsdom with no matchMedia
+  // is a phone, whose scroller is the window, so it stayed green with the rule
+  // broken (CK-88.2's finding). It watches both scrollers now.
+  const root = document.scrollingElement ?? document.documentElement
+  const writes: [string, number][] = []
+  const scrollers: [string, Element][] = [['column', document.querySelector('.frame-col') as HTMLElement], ['window', root]]
+  for (const [name, scroller] of scrollers) {
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => 480,
+      set: (value: number) => writes.push([name, value]),
+    })
+  }
+  try {
+    const { viewer } = await openTile(1, 3)
+    await sleep(20)
+    fireEvent.click(within(viewer).getByRole('button', { name: 'Close' }))
+    await sleep(20)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(writes).toEqual([])
+  } finally {
+    // The document outlives the test.
+    delete (root as unknown as { scrollTop?: number }).scrollTop
+  }
 })
 
 test('the layers: never more than three web layers held as the viewer moves, every one revoked on close', async () => {

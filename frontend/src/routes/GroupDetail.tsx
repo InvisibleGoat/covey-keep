@@ -16,13 +16,13 @@
 //   chosen in a gathering's photo viewer (Use as the group's cover),
 //   and nothing here ever names that photograph or its gathering — no group
 //   body does.
-// - THE ACTIONS (`.gactions`), for every member: **New gathering**, the
+// - THE ACTIONS (`.group-actions`; the mockup's `.gactions`), for every member: **New gathering**, the
 //   primary pill with the plus, to `/groups/<id>/gatherings/new` (any member
 //   of a household group may start one, CK-76), and **People**, the quiet
 //   pill with the groups icon, to `/groups/<id>/people`. Both are links.
 //   Add photos is left out: posting to a group is not in this arc (Steven,
 //   answer 3), so New gathering is the primary.
-// - THE GATHERINGS STRIP (`.gstrip`, labelled *Gatherings*): `GET
+// - THE GATHERINGS STRIP (`.group-strip`; the mockup's `.gstrip`, labelled *Gatherings*): `GET
 //   /groups/{id}/gatherings` on its own key, failing in its own place with
 //   Try again. The order is Your gatherings' sections, through the ONE rule
 //   (`gatheringSections`, `isComingUp`): coming up soonest first, then past
@@ -36,9 +36,11 @@
 //   and carries no date and no badge, and nothing here reads its
 //   `next_occurrence` (the CK-80 Gotcha). A gathering the caller is kept a
 //   surprise from is not in the answer at all. *Times in {zone}.* while a
-//   date is on screen. The strip shows at every width: the mockup hides it
-//   from 900px because its menu's details panel lists the group's gatherings
-//   there, and this app's menu has no details panel (Steven, 2026-10-31).
+//   date is on screen. The strip shows at every width, in either menu
+//   layout: a page does not depend on a menu setting. The mockup hides it from
+//   900px because its panel lists the gatherings; since CK-89 this app's Rail
+//   and panel has one for a group too, and Steven's answer of 2026-11-06 keeps
+//   the strip all the same.
 // - THE PHOTOS IN SECTIONS (CK-88.1b; components/GroupPhotos.tsx): after the
 //   strip, each gathering's preview, opened in the photo viewer for viewing
 //   only. It reads `GET /groups/{id}/media` itself and joins it to the strip's

@@ -25,6 +25,8 @@ export type IconName =
   | 'shrink'
   | 'zoomIn'
   | 'zoomOut'
+  | 'home'
+  | 'photos'
 
 const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
   groups: {
@@ -119,6 +121,24 @@ const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
       </>
     ),
     width: 2,
+  },
+  // A group's panel rows (CK-89; the mockup's `home` and `photos`).
+  home: {
+    paths: (
+      <>
+        <path d="M4 11l8-6.5L20 11" />
+        <path d="M6 9.5V19a1 1 0 0 0 1 1h3.5v-5h3v5H17a1 1 0 0 0 1-1V9.5" />
+      </>
+    ),
+  },
+  photos: {
+    paths: (
+      <>
+        <rect x="3" y="4.5" width="18" height="15" rx="3" />
+        <circle cx="9" cy="10" r="1.8" />
+        <path d="M4 17l5-4.5 3.5 3 3-2.5 4.5 4" />
+      </>
+    ),
   },
 }
 

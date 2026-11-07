@@ -152,7 +152,10 @@ test('every signed-in route carries the frame: one <main>, the bars, the menu, a
     await screen.findByRole('navigation', { name: 'Sections' })
     expect(document.querySelector('.frame'), address).toBeTruthy()
     expect(screen.getByRole('banner'), address).toBeTruthy()
-    expect(document.getElementById('frame-menu')?.querySelector('nav[aria-label="Menu"]'), address).toBeTruthy()
+    // MOVED AT CK-89, with its reason, here and at this file's three other reads
+    // of the name: the dialog is *Menu*, and a nav called *Menu* inside it was read
+    // out twice (CK-82's review), so the nav is *Main* in both layouts.
+    expect(document.getElementById('frame-menu')?.querySelector('nav[aria-label="Main"]'), address).toBeTruthy()
     expect(document.querySelectorAll('main'), address).toHaveLength(1)
     for (const nav of document.querySelectorAll('nav')) expect(nav.getAttribute('aria-label'), address).toBeTruthy()
     await settle()
@@ -248,7 +251,7 @@ test('closed, the drawer is inert and hidden, and no dialog is open', async () =
   expect(side?.getAttribute('aria-hidden')).toBe('true')
   expect(side?.getAttribute('role')).toBeNull()
   expect(screen.queryByRole('dialog')).toBeNull()
-  expect(screen.queryByRole('navigation', { name: 'Menu' })).toBeNull()
+  expect(screen.queryByRole('navigation', { name: 'Main' })).toBeNull()
   expect(document.querySelector('.frame-scrim')).toBeNull()
 })
 
@@ -262,7 +265,7 @@ test('the menu button opens the drawer as a modal dialog that takes focus and st
   expect(dialog.getAttribute('aria-modal')).toBe('true')
   expect(dialog.id).toBe('frame-menu')
   expect(dialog.hasAttribute('inert')).toBe(false)
-  expect(within(dialog).getByRole('navigation', { name: 'Menu' })).toBeTruthy()
+  expect(within(dialog).getByRole('navigation', { name: 'Main' })).toBeTruthy()
   expect(dialog.contains(document.activeElement)).toBe(true)
   expect(button.getAttribute('aria-expanded')).toBe('true')
   expect(document.body.classList.contains('menu-open')).toBe(true)
@@ -342,7 +345,7 @@ test('from 900px: the menu as a column beside the page — no top bar, no bottom
       </AuthContext.Provider>
     </MemoryRouter>,
   )
-  const menu = screen.getByRole('navigation', { name: 'Menu' })
+  const menu = screen.getByRole('navigation', { name: 'Main' })
   expect(within(menu).getByRole('link', { name: 'Groups' }).getAttribute('aria-current')).toBe('page')
   expect(screen.queryByRole('banner')).toBeNull()
   expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
@@ -372,7 +375,7 @@ test('the window crossing 900px: an open drawer closes into the column, and the 
 
   width.resize(true)
   expect(screen.queryByRole('dialog')).toBeNull()
-  expect(screen.getByRole('navigation', { name: 'Menu' })).toBeTruthy()
+  expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
   expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
   expect(document.body.classList.contains('menu-open')).toBe(false)
 

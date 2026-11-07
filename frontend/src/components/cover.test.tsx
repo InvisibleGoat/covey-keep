@@ -254,12 +254,14 @@ test('the component asks only for the two served layers and keeps no presigned U
   // gathering's page, its last user, takes the `wide` card — so its row
   // left the table. The rule is the same; the pin also holds that no `card`
   // variant is left to draw.
+  // MOVED AT CK-89, with its reason: `panel` joined — a group's panel in Rail and panel,
+  // at the web layer through the one cache, never `archival`.
   // MOVED AT CK-88.1b, with its reason: the `banner` joined — the head of a
   // section of a group's photos — and it reads the web layer, as a page's card
   // does. The rule is the same.
   expect(code).toMatch(/const LAYER: Record<CoverVariant, ServableLayer> = \{/)
-  expect(code).toMatch(/thumb: 'thumbnail',\s*tile: 'thumbnail',\s*wide: 'web',\s*hero: 'web',\s*banner: 'web',\s*\}/)
-  expect(code).toMatch(/export type CoverVariant = 'thumb' \| 'wide' \| 'hero' \| 'tile' \| 'banner'$/m)
+  expect(code).toMatch(/thumb: 'thumbnail',\s*tile: 'thumbnail',\s*wide: 'web',\s*hero: 'web',\s*banner: 'web',\s*panel: 'web',\s*\}/)
+  expect(code).toMatch(/export type CoverVariant = 'thumb' \| 'wide' \| 'hero' \| 'tile' \| 'banner' \| 'panel'$/m)
   expect(code).not.toMatch(/'card'/)
   expect(code).toMatch(/const layer = LAYER\[variant\]/)
 })

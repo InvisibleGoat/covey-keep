@@ -1,10 +1,11 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { formatDayWithYear } from '../lib/datetime'
 import { sectionCountPieces, viewOf, type GatheringListItem } from '../lib/gatherings'
 import { readGroupMedia, type GroupGatheringsLoad, type GroupMediaSection } from '../lib/groups'
 import { mediaStateMessage, readPublishedPhotos, whoFor, type MediaItem } from '../lib/media'
 import { Quail } from './AuthArt'
+import { usePagePlace } from './pagePlace'
 import { CardLine, Cover } from './Cover'
 import { LazyThumbnail, PhotoViewer } from './PhotoViewer'
 import { PREVIEW_PHONE, PREVIEW_WIDE_COUNT, usePreviewWide } from './usePreviewWide'
@@ -147,6 +148,17 @@ export function GroupPhotos({
 }) {
   const headingId = useId()
   const headingRef = useRef<HTMLHeadingElement>(null)
+  const headRef = useRef<HTMLDivElement>(null)
+  const location = useLocation()
+  const { isReturn } = usePagePlace()
+  // The keys whose arrival at #photos has been handled (CK-89's *Photos* row,
+  // which from the group's own page changes no pathname, so CK-88.2's hook —
+  // acting only on a pathname change — never sees it). Seeded with the key at
+  // mount when this visit is a return, so Back to such an entry lands at its
+  // place; a viewer closing pops back to a handled key and Forward revisits
+  // one, so neither arrives again; a new press is a new key and arrives.
+  const handledKeys = useRef<Set<string> | null>(null)
+  if (handledKeys.current === null) handledKeys.current = new Set(isReturn ? [location.key] : [])
   const previewWide = usePreviewWide()
   const [mediaLoad, setMediaLoad] = useState<MediaLoad>({ status: 'loading' })
   // The read re-runs when its key moves; a loaded value stays on screen until
@@ -244,6 +256,19 @@ export function GroupPhotos({
   const failed = mediaLoad.status === 'failed' || gatherings.status === 'failed'
   const loaded = mediaLoad.status === 'loaded' && gatherings.status === 'loaded'
 
+  // The arrival: the head into view and focus on the heading, once per key,
+  // when the first read has settled (loaded or failed) and the page is tall
+  // enough to get there (the CK-88.1b lesson).
+  const settled = failed || loaded
+  useEffect(() => {
+    if (location.hash !== '#photos' || !settled) return
+    const handled = handledKeys.current
+    if (handled === null || handled.has(location.key)) return
+    handled.add(location.key)
+    headRef.current?.scrollIntoView?.({ block: 'start' })
+    headingRef.current?.focus({ preventScroll: true })
+  }, [location.key, location.hash, settled])
+
   // The join: a section whose gathering is not in the list is left out.
   const drawn = (() => {
     if (mediaLoad.status !== 'loaded' || gatherings.status !== 'loaded') return []
@@ -258,7 +283,7 @@ export function GroupPhotos({
 
   return (
     <section className="group-photos" aria-labelledby={headingId}>
-      <div className="photos-head">
+      <div className="photos-head" ref={headRef}>
         <h2 id={headingId} ref={headingRef} tabIndex={-1}>
           Photos
         </h2>

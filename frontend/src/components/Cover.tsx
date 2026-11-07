@@ -42,6 +42,11 @@ import { useNearViewport } from './useNearViewport'
 //   fails, and on a 409 `no_cover` it is the ground alone, its words on the
 //   full scrim. The one variant that waits: it mints as it nears the viewport,
 //   because a group can hold many sections.
+//   `variant="panel"` (CK-89): a group's panel in Rail and panel (`.dcover`) —
+//   the web layer through the one cache, so the page's wide card and this
+//   share one fetch; 16:9 and never collapsing, its height a LEAST height, and
+//   `children` (the <h2>) over the scrim. With no cover, the quail alone, no
+//   line, and the words on their own scrim (CK-87.2's rule for an empty cover).
 // - THE LAYER FOLLOWS THE VARIANT AND NOTHING ELSE (`LAYER`, below): the
 //   thumbnail for a thumb or a tile, the web layer for a wide card, a hero or
 //   a banner — so no caller can ask for a print master (`archival` is never
@@ -59,7 +64,7 @@ import { useNearViewport } from './useNearViewport'
 //   The cache owns every object URL: this component never revokes one.
 //   Nothing here ever holds a presigned URL — only the `blob:` reference.
 
-export type CoverVariant = 'thumb' | 'wide' | 'hero' | 'tile' | 'banner'
+export type CoverVariant = 'thumb' | 'wide' | 'hero' | 'tile' | 'banner' | 'panel'
 
 const LAYER: Record<CoverVariant, ServableLayer> = {
   thumb: 'thumbnail',
@@ -67,6 +72,7 @@ const LAYER: Record<CoverVariant, ServableLayer> = {
   wide: 'web',
   hero: 'web',
   banner: 'web',
+  panel: 'web',
 }
 
 // The date badge (the mockup's `dateBadge()`; CK-85, beside the cover since
@@ -160,6 +166,15 @@ export function Cover({
     if (empty) return <EmptyCover className="nthumb" />
     if (objectUrl !== null) return <img className="nthumb" src={objectUrl} alt="" onError={failed} />
     return <span className="nthumb cover-ground" aria-hidden="true" />
+  }
+
+  if (variant === 'panel') {
+    return (
+      <div className="dcover">
+        {empty ? <EmptyCover className="dcover-quail" /> : objectUrl !== null && <img src={objectUrl} alt="" onError={failed} />}
+        <div className="over">{children}</div>
+      </div>
+    )
   }
 
   if (variant === 'banner') {

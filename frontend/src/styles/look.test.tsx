@@ -128,6 +128,20 @@ test('the theme is the attribute: index.html paints light statically, no stylesh
   }
 })
 
+test('the menu layout (CK-89): only lib/menuLayout.ts names its key, and no stylesheet, no pre-paint script and no other source touches it', () => {
+  const touchesLayout = /menu-layout|MENU_LAYOUT_KEY/
+  const touching = Object.entries(sources)
+    .filter(([, text]) => touchesLayout.test(stripTs(text)))
+    .map(([path]) => path)
+    // The one reader of the key's NAME is the module; You and the menu call its functions.
+    .filter((path) => !/lib\/menuLayout\.ts$/.test(path))
+  // You names the radio group `menu-layout` (an input name, not the key).
+  expect(touching).toEqual(['../routes/You.tsx'])
+  expect(stripTs(sources['../routes/You.tsx'])).not.toContain('covey-keep:menu-layout')
+  expect(indexHtml).not.toMatch(/menu-layout/)
+  for (const [path, text] of Object.entries(stylesheets)) expect(text, path).not.toMatch(/menu-layout/)
+})
+
 test('the font: Source Serif 4 self-hosted from a file in the repo, its OFL licence beside it', () => {
   const face = /@font-face\s*\{([^}]*)\}/.exec(baseCss)?.[1] ?? ''
   expect(face).toContain('font-family: "Source Serif 4"')
