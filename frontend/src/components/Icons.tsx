@@ -27,6 +27,8 @@ export type IconName =
   | 'zoomOut'
   | 'home'
   | 'photos'
+  | 'calendar'
+  | 'cards'
 
 const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
   groups: {
@@ -137,6 +139,30 @@ const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
         <rect x="3" y="4.5" width="18" height="15" rx="3" />
         <circle cx="9" cy="10" r="1.8" />
         <path d="M4 17l5-4.5 3.5 3 3-2.5 4.5 4" />
+      </>
+    ),
+  },
+  // The calendar (CK-91; the mockup's `cal`): the Calendar tab and row, the
+  // group's Calendar button and row, and the switch's Calendar.
+  calendar: {
+    paths: (
+      <>
+        <rect x="3.5" y="5" width="17" height="15" rx="3" />
+        <path d="M3.5 10h17M8 3v4M16 3v4" />
+        <circle cx="8.5" cy="14.5" r=".6" />
+        <circle cx="12" cy="14.5" r=".6" />
+        <circle cx="15.5" cy="14.5" r=".6" />
+      </>
+    ),
+  },
+  // The switch's Cards (CK-91; the mockup's `cards`).
+  cards: {
+    paths: (
+      <>
+        <rect x="3.5" y="4" width="7.5" height="7.5" rx="2" />
+        <rect x="13" y="4" width="7.5" height="7.5" rx="2" />
+        <rect x="3.5" y="13.5" width="7.5" height="7.5" rx="2" />
+        <rect x="13" y="13.5" width="7.5" height="7.5" rx="2" />
       </>
     ),
   },

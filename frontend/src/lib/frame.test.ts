@@ -1,7 +1,8 @@
 // CK-82 — the frame's rules. The value under test: the sections are Groups,
-// Gatherings and You, in that order, and no Calendar until the calendar is
-// built (CK-91); a page's section is Groups for /groups…, Gatherings for
-// /gatherings…, You for /you, /settings and /plan, and none elsewhere; and
+// Gatherings, Calendar and You, in that order — Calendar since the calendar
+// was built (CK-91); a page's section is Groups for /groups…, Gatherings for
+// /gatherings…, Calendar for /calendar, You for /you, /settings and /plan,
+// and none elsewhere; and
 // the menu's gatherings coming up are the full-view items whose next date
 // is still ahead, soonest first, at most five — never a photos-only item,
 // whose view `viewOf` decides.
@@ -20,13 +21,16 @@ import {
 import type { GatheringListItem } from './gatherings'
 import type { Group } from './groups'
 
-test('the sections: Groups, Gatherings and You, and no Calendar', () => {
-  expect(SECTIONS.map((section) => [section.label, section.to])).toEqual([
-    ['Groups', '/groups'],
-    ['Gatherings', '/gatherings'],
-    ['You', '/you'],
+// MOVED AT CK-91: the pin was "Groups, Gatherings and You, and no Calendar"
+// until the calendar was built; it joins third, the merge record's §1.3 order,
+// and goes to /calendar with no day, so it always opens at today.
+test('the sections: Groups, Gatherings, Calendar and You', () => {
+  expect(SECTIONS.map((section) => [section.label, section.to, section.icon])).toEqual([
+    ['Groups', '/groups', 'groups'],
+    ['Gatherings', '/gatherings', 'gatherings'],
+    ['Calendar', '/calendar', 'calendar'],
+    ['You', '/you', 'you'],
   ])
-  expect(JSON.stringify(SECTIONS)).not.toMatch(/calendar/i)
 })
 
 test("a page's section", () => {
@@ -41,6 +45,10 @@ test("a page's section", () => {
     ['/you', 'you'],
     ['/settings', 'you'],
     ['/plan', 'you'],
+    // CK-91: the calendar, a group's included — its group is in the query.
+    ['/calendar', 'calendar'],
+    ['/calendar/', 'calendar'],
+    ['/calendarx', null],
     ['/', null],
     ['/home', null],
     ['/groupsx', null],
@@ -173,6 +181,22 @@ test("everything else shows Home's — and so does an address nobody holds, /gro
     expect(panelOf(address, HELD), address).toEqual({ kind: 'home' })
   }
   expect(panelOf('/groups/g-1', null)).toEqual({ kind: 'home' })
+})
+
+test("a group's calendar shows that group's panel, read from the address's query; the tab's calendar and a group nobody holds show Home's (CK-91)", () => {
+  expect(panelOf('/calendar', HELD, '?group=g-1')).toEqual({ kind: 'group', group: HELD.groups[0], gatheringId: null })
+  expect(panelOf('/calendar', HELD, '?day=2026-11-14&group=g-2')).toEqual({
+    kind: 'group',
+    group: HELD.groups[1],
+    gatheringId: null,
+  })
+  for (const search of ['', '?day=2026-11-14', '?group=not-held', '?group=', '?groups=g-1']) {
+    expect(panelOf('/calendar', HELD, search), search).toEqual({ kind: 'home' })
+  }
+  // The query is read on the calendar alone: elsewhere it moves nothing.
+  expect(panelOf('/you', HELD, '?group=g-1')).toEqual({ kind: 'home' })
+  expect(panelOf('/gatherings', HELD, '?group=g-1')).toEqual({ kind: 'home' })
+  expect(panelOf('/calendar', null, '?group=g-1')).toEqual({ kind: 'home' })
 })
 
 test("Home's panel: the first four coming-up gatherings with a group, every coming-up standalone one, never a past or photos-only item", () => {

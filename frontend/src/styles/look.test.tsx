@@ -142,6 +142,55 @@ test('the menu layout (CK-89): only lib/menuLayout.ts names its key, and no styl
   for (const [path, text] of Object.entries(stylesheets)) expect(text, path).not.toMatch(/menu-layout/)
 })
 
+test('the gatherings view (CK-91): only lib/gatheringsView.ts names its key, and no stylesheet, no pre-paint script and no other source touches it', () => {
+  // The third stored choice, on the theme's and the menu layout's shape: the
+  // Cards / Calendar switch on Your gatherings. A second reader or writer of the
+  // key would be a second truth about which view a person chose.
+  const touchesView = /gatherings-view|GATHERINGS_VIEW_KEY/
+  const touching = Object.entries(sources)
+    .filter(([, text]) => touchesView.test(stripTs(text)))
+    .map(([path]) => path)
+  expect(touching).toEqual(['../lib/gatheringsView.ts'])
+  expect(indexHtml).not.toMatch(/gatherings-view/)
+  for (const [path, text] of Object.entries(stylesheets)) expect(text, path).not.toMatch(/gatherings-view/)
+})
+
+test('the calendar (CK-91): its styles name no colour and add no token', () => {
+  // Every colour the calendar draws is one the token file already names.
+  const start = appCss.indexOf('/* ---------- the calendar (CK-91')
+  expect(start).toBeGreaterThan(-1)
+  const block = stripCss(appCss.slice(start))
+  expect(block).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i)
+  expect(block).not.toMatch(/--[\w-]+\s*:/)
+})
+
+test("the calendar (CK-91): its column may shrink below its content at every width, so a long title in the day's list ends in an ellipsis instead of widening the page", () => {
+  // Found in the browser, at the width sweep: with no column template below
+  // 1180px the calendar's one implicit column took the day's list's widest
+  // row — a long title kept on one line — and the page scrolled sideways
+  // from 320 to 628px (the mockup's rule has the same gap; its titles were
+  // never that long). jsdom has no layout, so the rule is pinned as written.
+  const start = appCss.indexOf('/* ---------- the calendar (CK-91')
+  const block = stripCss(appCss.slice(start))
+  const base = /\.cal\s*\{([^}]*)\}/.exec(block)
+  expect(base, 'the .cal rule').not.toBeNull()
+  expect(base![1]).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)\s*;/)
+})
+
+test("the calendar (CK-91): a phone's day keeps its covers and its count inside it, wrapping where the day is too narrow for both", () => {
+  // Found in the browser, at the width sweep once the page no longer widened:
+  // from 320 to 423px a day holding more than two gatherings drew its two
+  // covers and *+N* past its own edge, into the next day (the mockup's rule
+  // overflows the same way on a 375 phone). jsdom has no layout, so the rule
+  // is pinned as written.
+  const start = appCss.indexOf('/* ---------- the calendar (CK-91')
+  const block = stripCss(appCss.slice(start))
+  const marks = /\.marks\s*\{([^}]*)\}/.exec(block)
+  expect(marks, 'the .marks rule').not.toBeNull()
+  expect(marks![1]).toMatch(/flex-wrap:\s*wrap\s*;/)
+  expect(marks![1]).toMatch(/justify-content:\s*center\s*;/)
+})
+
 test('the font: Source Serif 4 self-hosted from a file in the repo, its OFL licence beside it', () => {
   const face = /@font-face\s*\{([^}]*)\}/.exec(baseCss)?.[1] ?? ''
   expect(face).toContain('font-family: "Source Serif 4"')

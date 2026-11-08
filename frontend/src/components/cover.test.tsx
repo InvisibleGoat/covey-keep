@@ -176,6 +176,31 @@ test('while a set cover loads, and when it fails, the ground shows alone — no 
   expect(card.getByRole('heading', { level: 1, name: 'The Party' })).toBeTruthy()
 })
 
+test('THE MARK (CK-91), a calendar day\'s cover: the empty cover where none is set, else the thumbnail layer from a blob: URL with alt="", the ground while it loads', async () => {
+  const gate: { release?: () => void } = {}
+  const mock = stubServer({
+    mint: async (_path, n) => {
+      await new Promise<void>((resolve) => (gate.release = resolve))
+      return json(200, { layer: 'thumbnail', content_type: 'image/webp', size_bytes: 3, url: signed('thumbnail', n), method: 'GET', expires_in: 300 })
+    },
+  })
+  const empty = render(<Cover subject="gathering" id="g-1" cover={null} variant="mark" />)
+  const quail = empty.container.querySelector('.noimg.mk')
+  expect(quail?.getAttribute('aria-hidden')).toBe('true')
+  expect(quail?.querySelector('img')?.getAttribute('alt')).toBe('')
+  empty.unmount()
+  const set = render(<Cover subject="gathering" id="g-2" cover={COVER} variant="mark" />)
+  expect(set.container.querySelector('.cover-ground.mk')?.getAttribute('aria-hidden')).toBe('true')
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    gate.release?.()
+  })
+  await waitFor(() => expect(set.container.querySelector('img.mk')).toBeTruthy())
+  expect(set.container.querySelector('img.mk')?.getAttribute('src')).toMatch(/^blob:cover-/)
+  expect(set.container.querySelector('img.mk')?.getAttribute('alt')).toBe('')
+  expect(paths(mock).filter((p) => p.includes('/cover/url'))).toEqual(['/gatherings/g-2/cover/url?layer=thumbnail'])
+})
+
 test('a picture the browser cannot draw falls back to the ground', async () => {
   stubServer()
   const thumb = render(<Cover subject="group" id="grp-1" cover={COVER} variant="thumb" />)
@@ -259,9 +284,14 @@ test('the component asks only for the two served layers and keeps no presigned U
   // MOVED AT CK-88.1b, with its reason: the `banner` joined — the head of a
   // section of a group's photos — and it reads the web layer, as a page's card
   // does. The rule is the same.
+  // MOVED AT CK-91, with its reason: `mark` joined — a calendar day's cover,
+  // sized by its container (17px on a phone, 20px in a chip from 640px) — and
+  // it reads the thumbnail layer, as a thumb or a tile does. The rule is the same.
   expect(code).toMatch(/const LAYER: Record<CoverVariant, ServableLayer> = \{/)
-  expect(code).toMatch(/thumb: 'thumbnail',\s*tile: 'thumbnail',\s*wide: 'web',\s*hero: 'web',\s*banner: 'web',\s*panel: 'web',\s*\}/)
-  expect(code).toMatch(/export type CoverVariant = 'thumb' \| 'wide' \| 'hero' \| 'tile' \| 'banner' \| 'panel'$/m)
+  expect(code).toMatch(
+    /thumb: 'thumbnail',\s*tile: 'thumbnail',\s*mark: 'thumbnail',\s*wide: 'web',\s*hero: 'web',\s*banner: 'web',\s*panel: 'web',\s*\}/,
+  )
+  expect(code).toMatch(/export type CoverVariant = 'thumb' \| 'wide' \| 'hero' \| 'tile' \| 'banner' \| 'panel' \| 'mark'$/m)
   expect(code).not.toMatch(/'card'/)
   expect(code).toMatch(/const layer = LAYER\[variant\]/)
 })

@@ -6,14 +6,16 @@ import { formatDayWithYear, formatWeekdayDay } from './datetime'
 import { gatheringSections, isComingUp, PHOTOS_ONLY_ITEM, viewOf, type GatheringListItem } from './gatherings'
 import { listGroups, type Group } from './groups'
 
-export type SectionId = 'groups' | 'gatherings' | 'you'
+export type SectionId = 'groups' | 'gatherings' | 'calendar' | 'you'
 
 // The bottom bar's tabs and the menu's sections, in order: Groups,
-// Gatherings and You. Calendar joins both when the calendar is built
-// (CK-91), and not before — no tab or row leads nowhere.
+// Gatherings, Calendar and You (the merge record's §1.3; Calendar joined both
+// at CK-91, with the calendar it opens). Calendar goes to `/calendar` with no
+// day, so it always opens at today.
 export const SECTIONS: { id: SectionId; label: string; to: string; icon: IconName }[] = [
   { id: 'groups', label: 'Groups', to: '/groups', icon: 'groups' },
   { id: 'gatherings', label: 'Gatherings', to: '/gatherings', icon: 'gatherings' },
+  { id: 'calendar', label: 'Calendar', to: '/calendar', icon: 'calendar' },
   { id: 'you', label: 'You', to: '/you', icon: 'you' },
 ]
 
@@ -23,12 +25,14 @@ function within(pathname: string, root: string): boolean {
 
 // The section a page belongs to — the menu's highlighted section and the
 // bottom bar's current tab: Groups for `/groups…` (a group's page and its
-// gathering form included), Gatherings for `/gatherings…`, You for `/you`,
-// `/settings` and `/plan`, which are reached from it. Anything else — a page
-// the frame does not carry — belongs to none.
+// gathering form included), Gatherings for `/gatherings…`, Calendar for
+// `/calendar…` (a group's calendar included: it is the calendar, filtered),
+// You for `/you`, `/settings` and `/plan`, which are reached from it.
+// Anything else — a page the frame does not carry — belongs to none.
 export function sectionOf(pathname: string): SectionId | null {
   if (within(pathname, '/groups')) return 'groups'
   if (within(pathname, '/gatherings')) return 'gatherings'
+  if (within(pathname, '/calendar')) return 'calendar'
   if (within(pathname, '/you') || within(pathname, '/settings') || within(pathname, '/plan')) return 'you'
   return null
 }
@@ -105,16 +109,26 @@ async function listGatherings(): Promise<{ ok: true; gatherings: GatheringListIt
 // shows Home's — the lists, You, Settings, Your plan, a standalone gathering,
 // a gathering of a group the person has left or the list does not hold, and
 // an id nobody holds (`/groups/new` included, because `new` is never an id).
+// Since CK-91 a group's calendar — `/calendar?group=<id>` — shows that group's
+// panel too, read from the address's query (`search`), when the person holds
+// the group; the tab's calendar and a group nobody holds show Home's.
 export type Panel = { kind: 'home' } | { kind: 'group'; group: Group; gatheringId: string | null }
 
 const GROUP_ADDRESS = /^\/groups\/([^/]+)(?:\/people|\/gatherings\/new)?\/?$/
 const GATHERING_ADDRESS = /^\/gatherings\/([^/]+)\/?$/
+const CALENDAR_ADDRESS = /^\/calendar\/?$/
 
 export function panelOf(
   pathname: string,
   lists: { groups: Group[]; gatherings: GatheringListItem[] } | null,
+  search = '',
 ): Panel {
   if (lists === null) return { kind: 'home' }
+  if (CALENDAR_ADDRESS.test(pathname)) {
+    const groupId = new URLSearchParams(search).get('group')
+    const group = groupId ? lists.groups.find((candidate) => candidate.id === groupId) : undefined
+    return group ? { kind: 'group', group, gatheringId: null } : { kind: 'home' }
+  }
   const groupMatch = GROUP_ADDRESS.exec(pathname)
   if (groupMatch) {
     const group = lists.groups.find((candidate) => candidate.id === groupMatch[1])

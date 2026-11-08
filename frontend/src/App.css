@@ -3327,3 +3327,328 @@ body.menu-open {
   min-height: 56px;
   font-weight: 600;
 }
+
+/* ---------- the calendar (CK-91; the mockup's .toolbar, .switch, .cal, .cal-card, .cal-head, .cal-title, .cal-nav, .filter, .wk, .days, .day, .num, .blank, .marks, .mk, .more, .chips, .ev and .agenda) ---------- */
+
+/* Your gatherings' switch, beneath the page head: Cards or Calendar. */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: -0.25rem 0 1.25rem;
+}
+
+.switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 999px;
+  background: var(--pg-surface);
+  box-shadow: var(--ck-lift);
+}
+
+.switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 42px;
+  padding: 0 1rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ck-muted);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.switch button .ico {
+  width: 20px;
+  height: 20px;
+}
+
+.switch button[aria-pressed='true'] {
+  background: var(--pg-events-accent);
+  color: var(--pg-events-accent-ink);
+}
+
+/* The month card, then the day's list: beneath it on a phone, a 320px column
+   beside it from 1180px. The column may shrink below its content, so a long
+   title in the day's list ends in an ellipsis instead of widening the page. */
+.cal {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.cal-card,
+.agenda {
+  max-width: none;
+  gap: 0;
+}
+
+.cal-card {
+  padding: 12px 10px 14px;
+}
+
+.cal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 2px 4px 8px;
+}
+
+.cal-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.cal-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* A group's calendar: Showing {name} only, and Show all groups. */
+.filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0 4px 10px;
+  font-size: 0.875rem;
+  color: var(--ck-muted);
+}
+
+.filter b {
+  color: var(--pg-text);
+}
+
+.wk {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  padding-bottom: 6px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-transform: uppercase;
+  color: var(--ck-muted);
+}
+
+.days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+}
+
+/* A day: its number, and its covers. The screen's quiet pill is undone here. */
+.day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  min-width: 0;
+  min-height: 62px;
+  padding: 5px 1px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--pg-text);
+  font-size: 1rem;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.day:hover {
+  background: var(--ck-tint);
+}
+
+.day[aria-pressed='true'] {
+  background: var(--ck-tint);
+  box-shadow: inset 0 0 0 2px var(--pg-events-accent);
+}
+
+.day .num {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.day.today .num {
+  background: var(--pg-events-accent);
+  color: var(--pg-events-accent-ink);
+  font-weight: 700;
+}
+
+.blank {
+  min-height: 62px;
+}
+
+/* A phone's day is as narrow as 36px at 320: the covers and *+N* wrap inside
+   it, centred, rather than running into the next day. */
+.marks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  max-width: 100%;
+}
+
+/* A day's cover: 17px among a phone's marks, 20px in a chip. */
+.mk {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  border-radius: 999px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1.5px var(--pg-surface);
+}
+
+.more {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ck-muted);
+}
+
+/* The day's list. */
+.agenda {
+  padding: 16px;
+}
+
+.agenda h3 {
+  margin: 0 0 0.25rem;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.agenda .sub {
+  margin: 0 0 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--ck-muted);
+}
+
+.agenda .empty-day {
+  margin: 0.5rem 0 0;
+  color: var(--ck-muted);
+}
+
+.agenda .nrows {
+  margin: 0 -6px;
+  padding: 0;
+}
+
+.agenda .nrow {
+  align-items: flex-start;
+}
+
+.agenda .nrow .nthumb {
+  width: 48px;
+  height: 48px;
+}
+
+.agenda .right {
+  flex: none;
+  align-self: center;
+}
+
+.agenda .right .count {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ck-muted);
+}
+
+.agenda .list-state {
+  margin-top: 0.5rem;
+}
+
+@media (min-width: 640px) {
+  .cal-card {
+    padding: 16px 16px 18px;
+  }
+
+  .days {
+    gap: 6px;
+  }
+
+  .day,
+  .blank {
+    min-height: 112px;
+  }
+
+  .day {
+    align-items: stretch;
+    padding: 6px;
+    border: 1px solid var(--pg-hairline);
+  }
+
+  .day .num {
+    align-self: flex-start;
+    width: 28px;
+    height: 28px;
+    font-size: 0.875rem;
+  }
+
+  .chips {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .ev {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    padding: 2px 7px 2px 2px;
+    border: 1px solid var(--pg-surface-edge);
+    border-radius: 999px;
+    background: var(--pg-bg);
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.25;
+    text-align: left;
+  }
+
+  .ev .mk {
+    width: 20px;
+    height: 20px;
+    box-shadow: none;
+  }
+
+  .ev > span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chips .more {
+    padding-left: 6px;
+  }
+}
+
+@media (min-width: 1180px) {
+  .cal {
+    grid-template-columns: minmax(0, 1fr) 320px;
+  }
+}

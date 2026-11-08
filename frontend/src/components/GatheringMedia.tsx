@@ -54,6 +54,7 @@ import {
   mediaName,
   mediaStateMessage,
   mediaWordsPatch,
+  photoCountLabel,
   PICKER_ACCEPT,
   POLL_INTERVAL_MS,
   publishBatchErrorFields,
@@ -1321,8 +1322,7 @@ export function GatheringMedia({
   }
 
   const filtered = term !== ''
-  const matchCount =
-    items === null ? '' : items.length === 1 ? '1 photo' : `${items.length} photos`
+  const matchCount = items === null ? '' : photoCountLabel(items.length)
   const listed = items ?? []
   const allSelected = listed.length > 0 && listed.every((item) => selected.includes(item.id))
   const batchRefused = Object.keys(batchErrors.fields).length > 0
@@ -1345,12 +1345,7 @@ export function GatheringMedia({
   const showEveryTile = filtered || expanded
   const shownTiles = showEveryTile ? gridItems : gridItems.slice(0, previewLimit)
   const offerSeeAll = !showEveryTile && gridItems.length > previewLimit
-  const countLine =
-    publishedCount === null || publishedCount === 0
-      ? ''
-      : publishedCount === 1
-        ? '1 photo'
-        : `${publishedCount} photos`
+  const countLine = publishedCount === null || publishedCount === 0 ? '' : photoCountLabel(publishedCount)
 
   // The viewer's set: the grid's photos, or a row's photo alone. If a re-read
   // takes the open photograph out of it, the viewer closes.

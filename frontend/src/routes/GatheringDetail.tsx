@@ -62,6 +62,7 @@ import {
   type PlaceList,
 } from '../lib/places'
 import {
+  NOT_ANSWERED,
   RSVP_LIST_VISIBILITIES,
   RSVP_RESPONSES,
   formatArrivalTime,
@@ -224,9 +225,6 @@ const GATHERING_FIELDS = [
 const REVIEW_OFF_STATEMENT =
   "Turning this off means photos are published as soon as they're ready — everyone in this gathering can see them, and nobody looks at them first. Photos already waiting still need your decision, and “Awaiting your review” stays until they get it."
 const OCCURRENCE_FIELDS = ['starts_at', 'ends_at', 'location', 'map_url']
-// The answer chip's word for a date the caller has not answered (CK-87; the
-// mockup's `.answer.none`, adopted by the merge record's §1.4 rule).
-const NOT_ANSWERED = 'Not answered'
 // The crumb's word for a gathering that belongs to no group (CK-87; the
 // mockup's crumb back to the Gatherings list).
 const CRUMB_GATHERINGS = 'Gatherings'

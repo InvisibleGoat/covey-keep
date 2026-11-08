@@ -266,7 +266,9 @@ for (const [seat, role] of [
   ['a member', 'member'],
   ['an unknown role', 'owner'],
 ] as const) {
-  test(`${seat}: New gathering, the primary pill, and People, the quiet one, beneath the card — both links`, async () => {
+  // EXTENDED AT CK-91: the group's Calendar joins the actions, the quiet pill
+  // with the calendar icon after People, to the group's calendar.
+  test(`${seat}: New gathering, the primary pill, then People and Calendar, the quiet ones, beneath the card — all links`, async () => {
     stubServer({ group: () => json(200, group({ caller_role: role })) })
     renderPage()
     await loaded()
@@ -278,13 +280,19 @@ for (const [seat, role] of [
     expect(newGathering.classList.contains('btn-primary')).toBe(true)
     expect(people.classList.contains('btn')).toBe(true)
     expect(people.classList.contains('btn-primary')).toBe(false)
+    const calendar = screen.getByRole('link', { name: 'Calendar' })
+    expect(calendar.getAttribute('href')).toBe('/calendar?group=g-1')
+    expect(calendar.classList.contains('btn')).toBe(true)
+    expect(calendar.classList.contains('btn-primary')).toBe(false)
     // Each with its icon, decorative.
-    for (const link of [newGathering, people]) {
+    for (const link of [newGathering, people, calendar]) {
       expect(link.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
     }
     // Side by side, after the card and before the strip.
     expect(newGathering.parentElement).toBe(people.parentElement)
+    expect(calendar.parentElement).toBe(people.parentElement)
     expect(newGathering.compareDocumentPosition(people) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(people.compareDocumentPosition(calendar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(coverCard().compareDocumentPosition(newGathering) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(newGathering.compareDocumentPosition(stripRegion()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
@@ -530,13 +538,15 @@ test('the page’s source asks for no member list and none of the People page’
   expect(groupDetailSource).not.toMatch(/covey ?keep/i)
 })
 
-test('nothing identifying in the markup: the group’s id only in the two actions’ hrefs, and no person or account id anywhere', async () => {
+// MOVED AT CK-91: the group's id was in the two actions' hrefs alone; the
+// Calendar button carries it too, as the group's calendar's query.
+test('nothing identifying in the markup: the group’s id only in the three actions’ hrefs, and no person or account id anywhere', async () => {
   stubServer({ gatherings: () => json(200, { gatherings: STRIP }) })
   const view = renderPage()
   await loaded()
   await strip()
   let markup = view.container.innerHTML
-  for (const href of ['href="/groups/g-1/gatherings/new"', 'href="/groups/g-1/people"']) {
+  for (const href of ['href="/groups/g-1/gatherings/new"', 'href="/groups/g-1/people"', 'href="/calendar?group=g-1"']) {
     expect(markup.split(href)).toHaveLength(2)
     markup = markup.replace(href, '')
   }

@@ -6,6 +6,7 @@ import { PwaUpdatePrompt } from './components/PwaUpdatePrompt'
 import { RequireAuth } from './components/RequireAuth'
 import { AccountDeleted } from './routes/AccountDeleted'
 import { AuthCallback } from './routes/AuthCallback'
+import { Calendar } from './routes/Calendar'
 import { EmailChangeResult } from './routes/EmailChangeResult'
 import { GatheringDetail } from './routes/GatheringDetail'
 import { GatheringNew } from './routes/GatheringNew'
@@ -69,6 +70,9 @@ function App() {
               returns to /plan?checkout=complete|cancelled, the portal to /plan. */}
           <Route path="/plan" element={<Plan />} />
           <Route path="/you" element={<You />} />
+          {/* The calendar (CK-91): the Calendar tab, and a group's calendar
+              at /calendar?group=<id> — one route, the group in the query. */}
+          <Route path="/calendar" element={<Calendar />} />
         </Route>
         {/* The routes OUTSIDE the frame stay outside: the landings are
             reached signed out, and the mockup draws them without a frame. */}

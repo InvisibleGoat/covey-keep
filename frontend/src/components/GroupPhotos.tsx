@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { formatDayWithYear } from '../lib/datetime'
 import { sectionCountPieces, viewOf, type GatheringListItem } from '../lib/gatherings'
 import { readGroupMedia, type GroupGatheringsLoad, type GroupMediaSection } from '../lib/groups'
-import { mediaStateMessage, readPublishedPhotos, whoFor, type MediaItem } from '../lib/media'
+import { mediaStateMessage, photoCountLabel, readPublishedPhotos, whoFor, type MediaItem } from '../lib/media'
 import { Quail } from './AuthArt'
 import { usePagePlace } from './pagePlace'
 import { CardLine, Cover } from './Cover'
@@ -279,7 +279,7 @@ export function GroupPhotos({
     })
   })()
   const total = drawn.reduce((sum, { section }) => sum + section.published_count, 0)
-  const line = failed || total === 0 ? '' : total === 1 ? '1 photo · newest first' : `${total} photos · newest first`
+  const line = failed || total === 0 ? '' : `${photoCountLabel(total)} · newest first`
 
   return (
     <section className="group-photos" aria-labelledby={headingId}>

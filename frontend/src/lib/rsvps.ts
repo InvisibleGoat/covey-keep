@@ -58,6 +58,11 @@ export function rsvpResponseLabel(value: string): string {
   return RSVP_RESPONSES.find((r) => r.value === value)?.label ?? value
 }
 
+// The answer chip's word for a date the caller has not answered (CK-87; the
+// mockup's `.answer.none`, adopted by the merge record's §1.4 rule). Here
+// since CK-91, which draws the chip on the calendar's day list too.
+export const NOT_ANSWERED = 'Not answered'
+
 // The RSVP-list visibility choices (gatherings.rsvp_list_visibility) — the
 // gathering's setting, written by an organiser (the host or, since CK-68, a
 // co-host) — in the order the selector offers them, the default first. The

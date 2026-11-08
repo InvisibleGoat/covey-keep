@@ -1,5 +1,5 @@
 // CK-82 — the menu, One list. The value under test: the brand and the
-// three sections; Your groups in the server's order, each a link to its page
+// four sections (Calendar since CK-91); Your groups in the server's order, each a link to its page
 // with its cover and its count in people (CK-85); Gatherings coming up — at
 // most five, soonest first, none past and none from a photos-only item,
 // each a link with its date in the profile's zone as the mockup draws it;
@@ -124,7 +124,9 @@ function renderMenu(who: Person | null = person, at = '/groups') {
   )
 }
 
-test('the brand, the three sections with the current one marked, and no Calendar', async () => {
+// MOVED AT CK-91: three sections and "no Calendar" until the calendar was
+// built; Calendar is the third of four, to /calendar with no day.
+test('the brand, the four sections in order with the current one marked', async () => {
   stubServer()
   renderMenu(person, '/groups/g-1')
   // MOVED AT CK-89, with its reason, here and at this file's three other reads of
@@ -137,13 +139,17 @@ test('the brand, the three sections with the current one marked, and no Calendar
   for (const [name, href, current] of [
     ['Groups', '/groups', 'page'],
     ['Gatherings', '/gatherings', null],
+    ['Calendar', '/calendar', null],
     ['You', '/you', null],
   ] as const) {
     const link = within(menu).getByRole('link', { name })
     expect(link.getAttribute('href')).toBe(href)
     expect(link.getAttribute('aria-current')).toBe(current)
   }
-  expect(menu.textContent).not.toMatch(/calendar/i)
+  const sections = ['Groups', 'Gatherings', 'Calendar', 'You'].map((name) => within(menu).getByRole('link', { name }))
+  for (let index = 1; index < sections.length; index += 1) {
+    expect(sections[index - 1].compareDocumentPosition(sections[index]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  }
   await screen.findByRole('heading', { name: 'Your groups' })
 })
 

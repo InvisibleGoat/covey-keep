@@ -20,16 +20,29 @@
 //   carries no date and no badge: the server withholds them, and nothing
 //   here reads `next_occurrence` for such an item (the CK-80 Gotcha).
 // An empty section leaves its heading out. Every card is one link to its
-// gathering's page; a coming-up card carries the date badge. No Cards /
-// Calendar switch (the calendar is CK-91), and nothing the list body does
-// not carry — no photo count, no span of days, no answer.
-import { useEffect, useId, useRef, useState } from 'react'
+// gathering's page; a coming-up card carries the date badge. Nothing the list
+// body does not carry — no photo count, no span of days, no answer.
+//
+// THE SWITCH (CK-91; the mockup's `.toolbar` and `.switch`): beneath the page
+// head, a group named *Show gatherings as* — **Cards** and **Calendar**, each a
+// button with `aria-pressed` — stored on the device by lib/gatheringsView.ts
+// alone, Cards by default. **Cards** is the page above, unchanged: its read,
+// its states and its words (the switch stands beneath the head of its failed,
+// empty and loaded states). **Calendar** is the calendar
+// (components/CalendarView.tsx) in place of the cards, under *Your gatherings*
+// and *Times in {zone}.*, reading the calendar route alone — never `GET
+// /gatherings` — its day in `?day=`, which the Cards view never reads.
+// Switching keeps focus on the button pressed, put back on it once the other
+// view's switch has mounted.
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { CalendarView } from '../components/CalendarView'
 import { CardLine, Cover, DateBadge } from '../components/Cover'
 import { Icon } from '../components/Icons'
 import { usePagePlace } from '../components/pagePlace'
 import { authFetch } from '../lib/api'
+import { CALENDAR, CARDS, useCalendarDay, VIEW_SWITCH_LABEL } from '../lib/calendar'
 import { effectiveZone } from '../lib/datetime'
 import {
   cardDatePieces,
@@ -39,6 +52,7 @@ import {
   viewOf,
   type GatheringListItem,
 } from '../lib/gatherings'
+import { chooseGatheringsView, useGatheringsView, type GatheringsView } from '../lib/gatheringsView'
 
 type LoadStatus = 'loading' | 'loaded' | 'failed'
 
@@ -50,6 +64,85 @@ const PAST_SHOWN = 4
 export function Gatherings() {
   const { person } = useAuth()
   const zone = effectiveZone(person?.timezone)
+  const view = useGatheringsView()
+  // The button just pressed, owed focus once the other view's switch mounts:
+  // the press unmounts the view it was pressed in, so its button goes with it.
+  const owed = useRef<GatheringsView | null>(null)
+  const toolbar = (
+    <ViewSwitch
+      view={view}
+      owed={owed}
+      onChoose={(next) => {
+        if (next === view) return
+        owed.current = next
+        chooseGatheringsView(next)
+      }}
+    />
+  )
+  return view === 'calendar' ? <CalendarGatherings zone={zone} toolbar={toolbar} /> : <CardsView zone={zone} toolbar={toolbar} />
+}
+
+function ViewSwitch({
+  view,
+  owed,
+  onChoose,
+}: {
+  view: GatheringsView
+  owed: RefObject<GatheringsView | null>
+  onChoose: (view: GatheringsView) => void
+}) {
+  const cards = useRef<HTMLButtonElement>(null)
+  const calendar = useRef<HTMLButtonElement>(null)
+  useLayoutEffect(() => {
+    const target = owed.current
+    if (target === null) return
+    owed.current = null
+    // Only where focus went with the pressed button: never taken from
+    // anywhere the person has since put it.
+    const active = document.activeElement
+    if (active === null || active === document.body) (target === 'cards' ? cards : calendar).current?.focus()
+  }, [owed])
+  return (
+    <div className="toolbar">
+      <div className="switch" role="group" aria-label={VIEW_SWITCH_LABEL}>
+        <button type="button" ref={cards} aria-pressed={view === 'cards'} onClick={() => onChoose('cards')}>
+          <Icon name="cards" />
+          {CARDS}
+        </button>
+        <button type="button" ref={calendar} aria-pressed={view === 'calendar'} onClick={() => onChoose('calendar')}>
+          <Icon name="calendar" />
+          {CALENDAR}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// The Calendar view: the page head with the zone always named (a calendar
+// always shows dates), the switch, then the calendar of every gathering the
+// person is invited to — the calendar route's reads alone.
+function CalendarGatherings({ zone, toolbar }: { zone: string; toolbar: ReactNode }) {
+  const [day, onDay] = useCalendarDay()
+  return (
+    <main className="auth-screen page-column">
+      <div className="page-head">
+        <div>
+          <h1>Your gatherings</h1>
+          <p className="lede">Times in {zone}.</p>
+        </div>
+        <Link className="btn btn-primary" to="/gatherings/new">
+          <Icon name="plus" />
+          New gathering
+        </Link>
+      </div>
+      {toolbar}
+      <CalendarView zone={zone} groupId={null} day={day} fallbackDay={null} onDay={onDay} />
+    </main>
+  )
+}
+
+// The Cards view: the page as it was before CK-91, the switch beneath its head.
+function CardsView({ zone, toolbar }: { zone: string; toolbar: ReactNode }) {
   const [status, setStatus] = useState<LoadStatus>('loading')
   const [gatherings, setGatherings] = useState<GatheringListItem[]>([])
   // The moment the list arrived: the one `now` the sections and every card's
@@ -121,6 +214,7 @@ export function Gatherings() {
             <h1>Your gatherings</h1>
           </div>
         </div>
+        {toolbar}
         <div className="list-state">
           <p className="form-error" role="alert">
             Something went wrong loading your gatherings.
@@ -155,6 +249,7 @@ export function Gatherings() {
             Create your first gathering
           </Link>
         </div>
+        {toolbar}
       </main>
     )
   }
@@ -213,6 +308,7 @@ export function Gatherings() {
           New gathering
         </Link>
       </div>
+      {toolbar}
 
       {featured && (
         <Cover

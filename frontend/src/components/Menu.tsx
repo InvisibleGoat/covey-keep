@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import type { Person } from '../auth/context'
 import { useAuth } from '../auth/useAuth'
 import { MAKER_LINE, PRODUCT_NAME } from '../brand'
+import { GROUP_DATES_LINE } from '../lib/calendar'
 import { onCoverChange } from '../lib/covers'
 import { effectiveZone } from '../lib/datetime'
 import {
@@ -206,7 +207,7 @@ function Rail({
 
 export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {}) {
   const { person } = useAuth()
-  const { pathname } = useLocation()
+  const { pathname, search } = useLocation()
   const layout = useMenuLayout()
   const current = sectionOf(pathname)
   const zone = effectiveZone(person?.timezone)
@@ -249,7 +250,7 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
   const upcoming = lists?.ok ? upcomingGatherings(lists.gatherings, now) : []
 
   // The panel, from the address and the held lists alone.
-  const panel = panelOf(pathname, lists?.ok ? lists : null)
+  const panel = panelOf(pathname, lists?.ok ? lists : null, search)
   const panelKey = panel.kind === 'group' ? `group:${panel.group.id}` : 'home'
   // A panel that changes to another group's or to Home's starts at its top; a
   // row pressed inside the same group's panel moves nothing.
@@ -390,6 +391,22 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
                   <span className="t">
                     <b>Photos</b>
                     <span>By gathering</span>
+                  </span>
+                  <Icon name="chevron" className="chev" />
+                </Link>
+              </li>
+              {/* The group's calendar (CK-91; the mockup's `calfor` row):
+                  current on that group's calendar, read from the address. */}
+              <li>
+                <Link
+                  className="nrow"
+                  to={`/calendar?group=${panel.group.id}`}
+                  aria-current={pathname === '/calendar' ? 'page' : undefined}
+                >
+                  <Icon name="calendar" />
+                  <span className="t">
+                    <b>Calendar</b>
+                    <span>{GROUP_DATES_LINE}</span>
                   </span>
                   <Icon name="chevron" className="chev" />
                 </Link>

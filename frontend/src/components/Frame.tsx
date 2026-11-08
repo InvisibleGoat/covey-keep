@@ -17,8 +17,8 @@ import { useKeepPlace } from './useKeepPlace'
 //
 // - Phones, the window narrower than 900px: a sticky top bar (the menu
 //   button, the quail's head and the product name), the bottom bar's tabs
-//   (Groups, Gatherings, You — Calendar joins at CK-91), and the menu as a
-//   drawer from the left over a scrim.
+//   (Groups, Gatherings, Calendar and You — Calendar since CK-91), and the
+//   menu as a drawer from the left over a scrim.
 // - From 900px: the menu as a column beside the page, no top or bottom bar,
 //   and the frame pinned to the window's height so the menu and the page
 //   scroll separately.

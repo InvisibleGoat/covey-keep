@@ -512,7 +512,10 @@ test('Home\'s panel leaves an empty heading out, either one', async () => {
 // MOVED AT CK-89.1, with its reason: the facts line beneath the cover is gone
 // (Steven, 2026-11-07, as recommended): its *3 people* was the People row's
 // line word for word, 176px below it. The count is the People row's alone.
-test('a group\'s panel: the back row, the cover, no facts line, three rows with chevrons, this group\'s gatherings in order with their lines', async () => {
+// MOVED AT CK-91: three rows and "no Calendar" until the calendar was built;
+// the group's Calendar row stands between Photos and People, its line *This
+// group's dates*, to the group's calendar.
+test('a group\'s panel: the back row, the cover, no facts line, four rows with chevrons, this group\'s gatherings in order with their lines', async () => {
   stubWidth(true)
   renderAt('/groups/g-1/people')
   await settle()
@@ -527,10 +530,11 @@ test('a group\'s panel: the back row, the cover, no facts line, three rows with 
   expect(rows.map((a) => [a.querySelector('b')?.textContent, a.querySelector('.t span')?.textContent, a.getAttribute('href')])).toEqual([
     ['Group page', 'Cover, gatherings and photos', '/groups/g-1'],
     ['Photos', 'By gathering', '/groups/g-1#photos'],
+    ['Calendar', "This group's dates", '/calendar?group=g-1'],
     ['People', '3 people', '/groups/g-1/people'],
   ])
   expect(rows.every((a) => a.querySelector('.chev'))).toBe(true)
-  expect(rows.map((a) => a.getAttribute('aria-current'))).toEqual([null, null, 'page'])
+  expect(rows.map((a) => a.getAttribute('aria-current'))).toEqual([null, null, null, 'page'])
   const list = within(panel()).getByRole('list', { name: 'Gatherings' })
   const lines = within(list).getAllByRole('link').map((a) => [a.querySelector('b')?.textContent, a.querySelector('.t span')?.textContent ?? null])
   expect(lines.map(([title]) => title)).toEqual(['Lees Picnic', 'Lees Dinner', 'Lees Reunion', 'Lees Surprise'])
@@ -538,7 +542,7 @@ test('a group\'s panel: the back row, the cover, no facts line, three rows with 
   expect(lines[2][1]).toMatch(/^[A-Z][a-z]{2} \d{1,2}, \d{4}$/)
   expect(lines[3][1]).toBe('You can see its photos')
   expect(list.querySelector('.chev')).toBeNull()
-  expect(panel().textContent).not.toMatch(/Cousins Brunch|Book Club|Chat|Calendar|Kept by|Active|Cover, chat and photos/)
+  expect(panel().textContent).not.toMatch(/Cousins Brunch|Book Club|Chat|Kept by|Active|Cover, chat and photos/)
   expect(side().querySelector('.rail-pin, .pinmark, .pin')).toBeNull()
 })
 

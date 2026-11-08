@@ -1,11 +1,12 @@
 # CoveyKeep — Repo Operational Guide
 
-**Version:** 1.114.0
-**Last Updated:** 2026-11-07
+**Version:** 1.115.0
+**Last Updated:** 2026-11-08
 **Source:** the one-line list of every phase from CK-2 to CK-80 that stood here moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); each phase is named in its own changelog entry, here or there.
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.115.0** (2026-11-08): Phase CK-91 — **The calendar on the surface: its tab, the Cards/Calendar view on Your gatherings, and a group's calendar** — the design merge's eleventh and last phase, so the merge is whole (`decisions/2026-10-31-the-design-and-how-it-is-merged.md` 1.19.0 — a BUILT banner on §3 item 11, and §1.3's line on the bottom bar brought current; `decisions/2026-10-04-calendars-and-alerts-by-scope.md` 1.3.0 — a BUILT banner under §2's, the screens built; `reference/frontend/components.md` 1.50.0 — a new convention, The calendar, with The frame, Rail and panel, The two lists, the group page, Covers on the surface, the routing map and the inventory brought current; the mockup's screens 06 and 07; **frontend only: new `components/CalendarView.tsx`, `routes/Calendar.tsx`, `lib/calendar.ts` and `lib/gatheringsView.ts`, with `routes/calendar.test.tsx`, `lib/calendar.test.ts` and `lib/gatheringsView.test.ts`; `App.tsx` (the route), `lib/frame.ts` (the fourth section, `sectionOf`, `panelOf`'s query), `components/Menu.tsx` (the group's panel's Calendar row), `components/Frame.tsx` (a comment), `components/Icons.tsx` (`calendar`, `cards`), `components/Cover.tsx` (the `mark` variant), `routes/Gatherings.tsx` (the switch and the Calendar view), `routes/GroupDetail.tsx` (the Calendar button), `lib/media.ts` (`photoCountLabel`, now the one copy of *1 photo* / *{N} photos*, which `components/GatheringMedia.tsx`, `components/GroupPhotos.tsx` and `lib/gatherings.ts` read), `lib/rsvps.ts` (`NOT_ANSWERED`, moved from `routes/GatheringDetail.tsx`), `App.css`, and tests — nothing under `backend/`, no migration (head stays 0036), the verifier at 438, neither lock, `render.yaml`, `netlify.toml`, `vite.config.ts`, `index.html` and `styles/tokens.css` untouched; no token, dependency, environment variable or logger added; no existing word changed**; **1024 frontend tests in 63 files, 76 new** (`routes/calendar.test.tsx` 37, `lib/calendar.test.ts` 28, `lib/gatheringsView.test.ts` 5, `styles/look.test.tsx` 4, `components/cover.test.tsx` 1, `lib/frame.test.ts` 1), the moved pins below; red first: the three new test files and `components/cover.test.tsx`, run against inert modules, 69 of their 90 tests failing; build and lint clean (`index-CZDAZ0kR.js`, `index-CA0Q3MkS.css`, 922.82 KiB precache, 11 entries; the harness's bundle, built with `VITE_API_URL` pointing at the stand-in, is `index-B9Iul5Gu.js` with the same stylesheet); **24 mutations, each caught by a named test**; one commit per root). **ONE COMPONENT, THREE PLACES** (`components/CalendarView.tsx`): the Calendar tab at `/calendar`, a group's calendar at `/calendar?group=<id>` and the Calendar view on Your gatherings, each in the profile's zone (`effectiveZone`), never the runner's; **the read is CK-90's route, one request per shown month** — `GET /calendar`, or `GET /groups/{id}/calendar` — from the month's first day at 00:00 in the zone to the next month's, as `Z` instants; never `GET /gatherings`, `/members` or a gathering's detail, an answer for a month no longer shown ignored, no month kept; **who sees a date is the route's**, and every date it answers is drawn. **THE DAYS A DATE COVERS** (`lib/calendar.ts::daysCovered`, the mockup's `eachDay` with the route's half-open rule): its start's day to the day of the instant just before its end, so a date ending at midnight stays on its day and one with no end covers its start's day alone. **THE MONTH CARD**: the month (an `<h2>`), Previous month, Today and Next month; a button per day named *{Weekday, Month D}*, *: {titles}* where it holds dates, *, today*, `aria-pressed` on the selected day; on a phone at most two covers then *+N*, from 640px at most three chips then *N more*, each cover the thumbnail layer through the one cache (`Cover`'s new `mark`); **one tab stop**, the arrows a day or a week within the month. **THE SELECTION IS THE ADDRESS** (`?day=YYYY-MM-DD`, `useCalendarDay`): a press, an arrow, Today and a month holding today select that day and **replace** the entry, so moving adds no history entry and Back from a gathering lands on the same day; a month without today selects nothing until its answer lands, then its first day with a date, else its 1st; with no day the calendar opens at today, or a group's at its next date (else its most recent past one, else today), and writes nothing. **THE DAY'S LIST** (`.agenda`, beside the grid from 1180px): the day in full, *Today* and the count of its gatherings, then a row per date — a link with its cover, title, time line (*Oct 3 – 5 · starts 4:00 PM*, *· date 2 of 6*) and where it is, and at the right **the caller's own answer as CK-87's chip while the date is not over, or once it is the published photos the caller can see** (`published_count`, nothing for none); ***Nothing on this day.* only once the month's answer has landed**; a failed read *This month's dates couldn't be loaded just now.* with Try again. **A GROUP'S CALENDAR** reads the group for its name, then — only with no day in the address — its gatherings once for the opening day, then its calendar; *Showing {name} only* with **Show all groups**, a link to the tab at the same day; a 404 on the group or its calendar, or an id that cannot name a group (nothing asked), is the group page's not-found screen, byte for byte. Reached from the group page's **Calendar** (the quiet pill, after People) and, in Rail and panel, **the group's panel's Calendar row** between Photos and People (*This group's dates*); `panelOf` reads `?group=` on `/calendar` alone, so the panel stays read from the address. **THE FRAME**: Calendar is the third of four sections in the bottom bar and the menu's sections, in both layouts (`lib/frame.ts::SECTIONS`, `sectionOf`). **THE SWITCH** on Your gatherings: *Show gatherings as* — **Cards** and **Calendar**, `aria-pressed` — beneath the page head, **stored on the device by `lib/gatheringsView.ts` alone** under `covey-keep:gatherings-view` (exactly `calendar` is the Calendar view; anything else, a missing key or a throwing storage Cards; a refused write held for the page load), the theme's and the menu layout's shape; the Cards view unchanged, the switch beneath its head in its failed, empty and loaded states; focus kept on the button pressed. **The moved pins, each with its reason in the test**: `lib/frame.test.ts` (the sections, `sectionOf`'s table, and a new `panelOf` test with the query), `components/frame.test.tsx` (four tabs, the calendar's two addresses), `components/menu.test.tsx` (four sections in order), `routes/rail-and-panel.test.tsx` (a group's panel's four rows), `routes/group-detail.test.tsx` (the actions and the id's three hrefs), `routes/lists.test.tsx` (the switch beneath the head, Cards pressed; the page column's sixth route), `components/cover.test.tsx` (`mark` in `LAYER` and `CoverVariant`). **Found by the mutation run and pinned**: a date's row could show the answer on a past date or the count on a coming one with every test green; *THE ROW'S END* now fails by name on each. **Found in the browser, at the width sweep, and fixed before commit**: (1) **a long title in the day's list widened the page** — the tab and the Calendar view scrolled sideways from 320 to 628px (to 644 and 954–996 in Rail and panel), because `.cal`'s implicit grid column took the row's no-wrap width (the mockup's rule has the same gap); `.cal` now has `grid-template-columns: minmax(0, 1fr)`; (2) **a phone's day drew its two covers and *+N* past its own edge** from 320 to 423px (a day is 36px wide at 320); `.marks` wraps and centres inside the day; each pinned red first in `styles/look.test.tsx`, each plant caught. **Measured** in headless Chrome against the stand-in (`D:\projects\temp\CK-91-screenshots`, the harness `D:\projects\temp\CK-91-harness`): every width from 320 to 1440 one pixel at a time on the tab, a group's calendar and the Calendar view in both layouts, 6,726 page-widths, no sideways scroll, broken word or chip outside its day, the day's list beside the grid from 1180; every other page's boxes before and after at 320, 375 and 1440 over 18 scenes, the page identical but Your gatherings (the switch, 66px) and the group page's actions (the third button, 58px at 375 where they wrap), the menu's rows below the new Calendar row moving straight down 54px, the bottom bar's four tabs; the mockup's 06 and 07 at 375 and 1440 in both themes; the four tabs at 320, 360 and 375; a month with a daylight-saving change in America/Chicago and the same in Asia/Kolkata; a keyboard journey; Back to the same day; no `X-Amz` in any page and every cover a `blob:` URL. **Decided, recorded**: the day's line counts gatherings, not dates; a day shows each gathering once; the opening day is never written to the address; `?group=` empty is the tab; the Calendar view's lede *Times in {zone}.* always, a calendar always showing dates; no month cache. Not pushed. Checks `(nv)`–`(nz)` under the HARNESS RULE's dev-deploy form; Netlify alone deploys, both Render services stay on `4ee3a2b`, no verifier run is owed. Report: `D:\projects\temp\CK-91-report.md`.
 - **1.114.0** (2026-11-07): Phase CK-90 — **The calendar, the backend: every date of every gathering the person is invited to, in a range, and one group's** — the design merge's tenth phase (`decisions/2026-10-31-the-design-and-how-it-is-merged.md` 1.18.0 — a BUILT banner on §3 item 10; `decisions/2026-10-04-calendars-and-alerts-by-scope.md` 1.2.0 — a BUILT banner under §2, the data built and the screens CK-91's; `reference/backend/api-reference.md` 1.46.0 — the Calendar router and a row for each route in both classification tables; Steven's approval of 2026-11-07, with their answer that each gathering carries its published photo count, counting only what the caller can see; **backend only: new `app/api/calendar.py` and `tests/test_calendar.py`, and `app/main.py` (the fifteenth router) — nothing under `frontend/`, no migration (head stays 0036, `alembic check` clean), the verifier at 438, no model change, neither lock touched, `render.yaml` untouched, no environment variable and no logger added; `_list_statement`, `get_gathering`, `_occurrence_body` and `_caller_responses` unchanged**; **800 backend tests, 16 new** (`tests/test_calendar.py`), the 784 existing green and unedited, no pin moved; the frontend at 948 in 60 files, not run (nothing under it changed); **16 mutations, each caught by a named test**; one commit per root). **THE ROUTES** (`app/api/calendar.py`): `GET /calendar?from=&to=` and `GET /groups/{id}/calendar?from=&to=`, the second asking `_group_for_read` first — everyone else, a member who has left included, the group's 404 byte-identical to a missing group's, before the range is checked. **THE AUDIENCE IS THE INVITED TIER EXACTLY**: the host column, `co_hosts_gathering`, a person-targeted `gathering_invitations` row — never `shared_with`, never `left_out`, never the keeper by keeping (pinned with the group's keeper left out of a surprise in their own group), never a pending emailed invitation's addressee; no membership is read, so a member who has left keeps the group's dates on `GET /calendar`. **THE RANGE**: `[from, to)` in instants with offsets, read through `Query(alias="from")`; a date with no end in when `from <= starts_at < to`, one with an end when `starts_at < to` and `ends_at > from`, every edge pinned; a naive instant a field-level 422 at its field, `to` not after `from` and a span over `CALENDAR_MAX_SPAN` (62 days) at `to`; the server computes no day. **THE ANSWER**: `{"dates", "gatherings"}` — each date `_occurrence_body` plus the caller's own `caller_response` (by person; a guest's row never matches) plus `position` among ALL its gathering's dates, equal to the detail's date for the same caller; ordered `starts_at`, `gathering_id`, `id`; each gathering once, in the order of its first date, its `title`, `gathering_type`, `cover` and `group` equal to the list item's, plus `date_count` and `published_count` — `ready` + `live` ANDed with `_visible_media` in the same WHERE, never `gatherings.photo_count` (pinned where the two differ, and a binning lowering the count while the charge stands). No email, no person id, no URL. **ONE STATEMENT** after the auth read (and the group's): an inner select numbers and counts every date with window functions before the range applies; the outer applies it, joins the answer and the group, and counts the photographs in a correlated scalar subquery — pinned by the statement counter at one gathering and at five holding thirty dates. **Red first**: the sixteen run against the unregistered router, every one failing on its 404. **The mutation table**, `calendar.py` restored byte for byte after each (sha256 checked): the invitation, host and co-host terms each dropped; a `shared_with` term and a keeper term each added; the answer matched by date alone; a no-end date at `to` let in; `ends_at` ignored; position and date count over the range alone; the count from `photo_count`; `_visible_media` and the `live` filter each dropped from it; the group term dropped; `_group_for_read` dropped; the span cap removed; a statement per gathering. **Two tests plant a co-host with no invitation row**, a shape no writer leaves, because a real co-host holds one: without it the co-host term and the count's `_visible_media` would be redundant and their plants survive. **Found by the first mutation run and fixed before commit**: the order test failed one run in three on the unchanged code (its loop makes a fourth gathering when the first three come out in id order, and a fixed four-item slice then compared four ids against five); the slice now follows the count, twelve runs green, the table re-run whole. **Decided, recorded**: the gathering's type is `gathering_type`, the list item's key, where the kickoff's shape wrote `type` (the kickoff also says each fact equals the list item's and that no field the list item does not carry is added) — the planning session's to confirm, a one-line rename either way. This machine's Docker Desktop would not start until its stale `run` directory was moved aside. Not pushed. Checks `(nr)`–`(nu)` under the HARNESS RULE's dev-deploy form; both Render services deploy this push (it touches `backend/`), no verifier run is owed (no migration). Report: `D:\projects\temp\CK-90-report.md`.
 - **1.113.0** (2026-11-07): Phase CK-89.1 — **The menu kept fresh after an act with no page change, and the facts line gone** — the fix-up for two of CK-89's findings, made before its push at Steven's answers of 2026-11-07, each as recommended, relayed by the planning session (drop the facts line; fix the menu after a rename or an approval before the push; leave the 15px strip beside the drawer's scrim, which stays reported). `reference/frontend/components.md` 1.49.0 has the Frame convention's Freshness amended, Rail and panel's group panel and findings, the inventory and a new rule; `decisions/2026-10-31-the-design-and-how-it-is-merged.md` 1.17.0 has an AMENDED banner under §3 item 9's BUILT banner, which named the facts line. **The 1.112.0 entry below is the planning session's, written uncommitted before this phase and committed whole with it.** **Frontend only:**
   - **changed:** `lib/frame.ts` (`announceMenuChange`, `onMenuChange`), `components/Menu.tsx`, `routes/GroupPeople.tsx`, `routes/GatheringDetail.tsx` and `App.css`;
@@ -464,6 +465,23 @@ npm run test       # vitest (jsdom) — brand pins (CK-14) + gathering surface (
                    #   the re-read the menu's two reads once, never /members nor
                    #   a group's gatherings; a refused act re-reading nothing; no
                    #   facts line on a group's panel, the count the People row's)
+                   # + the calendar (CK-91: the tab, a group's calendar and the
+                   #   Calendar view through the real route table, in a zone
+                   #   forced to differ from the runner's — the month read once
+                   #   from its first day to the next month's, a date on every day
+                   #   it covers and not past an end at midnight, the covers and
+                   #   chips, the day's label; one tab stop and the arrows; a press,
+                   #   an arrow, Today and Previous and Next replacing the address,
+                   #   Back landing on the same day; the day's list, its line, each
+                   #   row's time line, the answer chip while ahead and the photo
+                   #   count once over, Nothing on this day. only after the answer,
+                   #   a late answer ignored, a failed read's Try again; a group's
+                   #   calendar opening at its next date, Showing and Show all
+                   #   groups keeping the day, the not-found screen asking nothing
+                   #   for a bad id; the fourth section and tab, the group's panel's
+                   #   Calendar row and the group page's button; the switch stored
+                   #   by one module, the Calendar view reading no list; never
+                   #   /gatherings or /members from the calendar)
 ```
 
 ### Dev database (repo root)
@@ -1743,16 +1761,16 @@ is Steven's call, not a session's: `.env` is his file.
   `/account-deleted` and the catch-all. **Below 900px** — the window,
   through `matchMedia`, so the bars are absent on a wide screen rather than
   hidden — a sticky top bar (the 48px menu button, the quail's head and the
-  product name from `brand.ts`), the bottom bar's tabs **Groups, Gatherings
-  and You** (58px, the current one tinted with `aria-current="page"`;
-  Calendar joins at CK-91), and **the menu as a drawer that is a modal
+  product name from `brand.ts`), the bottom bar's tabs **Groups, Gatherings,
+  Calendar and You** (58px, the current one tinted with `aria-current="page"`;
+  Calendar since CK-91, the calendar bullet below), and **the menu as a drawer that is a modal
   dialog** — `role="dialog"`, `aria-modal`, the label *Menu*; focus moves
   in and Tab wraps inside it, the page behind is inert and does not scroll;
   Escape, the scrim and any navigation close it and focus returns to the
   menu button; closed, it is inert and hidden. **From 900px** the menu is a
   304px column, no bars, the frame pinned to the window so the menu and the
   page column scroll separately. **The menu** (`components/Menu.tsx`, One
-  list): the brand, the three sections, *Your groups* (the server's order,
+  list): the brand, the sections (four since CK-91), *Your groups* (the server's order,
   its cover — the empty cover where none is set, since CK-84 — *{n} people*,
   *members* until CK-85) and *Gatherings coming up* (the full-view
   items still ahead, soonest first, at most five, the day in the profile's
@@ -1780,7 +1798,8 @@ is Steven's call, not a session's: `.env` is his file.
   `components/FieldError.tsx`), the email form keeping *That doesn't look
   like an email address.* for a 422 on `new_email`; `EmailChangeResult`'s
   effect cancels on unmount; both *Back to your gatherings* links point at
-  `/gatherings`. Not built: Calendar (CK-90, CK-91), a gathering's panel, pins,
+  `/gatherings`. Not built (the calendar is CK-90's and CK-91's, their bullets
+  below): a gathering's panel, pins,
   activity times,
   Favorites; covers on the surface are CK-84's (the covers bullets below). Detail:
   `reference/frontend/components.md` 1.35.0, the Frame, You and Theme
@@ -1946,8 +1965,9 @@ is Steven's call, not a session's: `.env` is his file.
   by Steven's answer, reported. **A count says *people*
   everywhere** — the cards, the menu and a group page's header — while
   *Members* keeps its word. Not built: pins, *Pinned*, *Active … ago* and
-  last-active ordering, the Cards / Calendar switch (CK-91), a past card's
-  photo count and a span of days (no list body carries either). Detail:
+  last-active ordering, a past card's
+  photo count and a span of days (no list body carries either); the Cards /
+  Calendar switch is CK-91's (the calendar bullet below). Detail:
   `reference/frontend/components.md` 1.38.0, the two lists convention.
 - A group's page and its People page (CK-86; frontend only): **the group's
   page in the mockup's shape — its cover, New gathering and People, and the
@@ -2187,7 +2207,8 @@ is Steven's call, not a session's: `.env` is his file.
   in that group show that group's panel, everything else Home's. **Home's panel**:
   the brand and the sections, *Coming up* in a group, at most four, and *Not in a
   group*. **A group's panel**:
-  the back row, the cover, *Group page*, *Photos* and *People* — the menu's People
+  the back row, the cover, *Group page*, *Photos*, *Calendar* (since CK-91) and
+  *People* — the menu's People
   row, whose line is the group's count — and *Gatherings*, whose rows open their
   pages directly; since CK-89.1 there is no facts line beneath the cover, because
   its *{N} people* was the People row's line word for word (Steven, 2026-11-07).
@@ -2208,8 +2229,8 @@ is Steven's call, not a session's: `.env` is his file.
   width in either layout.** **The drawer's 10px is gone**: `:root:has(.tabbar)
   { scrollbar-gutter: stable; }`, so a page does not widen under the open drawer;
   with classic scrollbars below 900 its scrim stops at the gutter, reported. Not
-  built: a gathering's panel, a panel in One list, *Chat* and *Calendar* rows
-  (CK-91 adds Calendar), pins, *Kept by* and *Active…*, a photo count on a past
+  built: a gathering's panel, a panel in One list, a *Chat* row (a group's
+  panel has its *Calendar* row since CK-91), pins, *Kept by* and *Active…*, a photo count on a past
   row, Favorites, a toast, and another tab following a choice before its next load
   or another person's act before the next page change. Detail:
   `reference/frontend/components.md` 1.49.0, the Rail and panel convention.
@@ -2242,6 +2263,35 @@ is Steven's call, not a session's: `.env` is his file.
   statement counter. No logger, no URL, nothing stored, no route of another
   router changed. The screens are CK-91's. Detail:
   `reference/backend/api-reference.md` 1.46.0, the Calendar router.
+- The calendar on the surface (CK-91; frontend only): **its tab, the
+  Cards/Calendar view on Your gatherings, and a group's calendar**, the design
+  merge's eleventh and last phase, which makes the merge whole
+  (`decisions/2026-10-31-the-design-and-how-it-is-merged.md` §3 item 11;
+  `decisions/2026-10-04-calendars-and-alerts-by-scope.md` §2; the mockup's
+  screens 06 and 07). **One component, `components/CalendarView.tsx`**, drawn in
+  three places: the **Calendar** tab at `/calendar` — the bottom bar's third of
+  four and a section of the menu in both layouts — a **group's calendar** at
+  `/calendar?group=<id>`, reached from the group page's **Calendar** button and
+  the group's panel's **Calendar** row (*This group's dates*), and the
+  **Calendar** view on Your gatherings, chosen with *Show gatherings as* —
+  **Cards** or **Calendar** — and stored on the device by `lib/gatheringsView.ts`
+  alone (`covey-keep:gatherings-view`, a display choice never sent). **Every day is
+  the profile's zone's.** **It reads CK-90's route alone, one request per shown
+  month**, and draws every date the route answers: **who sees a date is the
+  route's**, the invited tier. A date covers each day from its start to the
+  instant before its end; the month card holds a button per day — covers on a
+  phone, chips from 640px, each cover the thumbnail layer — and the day's list
+  each date's time line, where it is, and **the caller's own answer while the
+  date is ahead or the photos they can see once it is over**. **The selected day
+  is the address** (`?day=`, written by replace), so moving adds no history
+  entry and Back from a gathering lands on the same day; a group's calendar opens
+  at its next date. *Nothing on this day.* waits for the month's answer. A group
+  the caller cannot read is the group page's not-found screen. Not built: the
+  feed, alerts and their defaults (the calendars record §3–§5), a group picker
+  beyond *Showing {name} only* and Show all groups, a week or a day view, a
+  gathering's panel, and another person's answer followed before the calendar
+  next mounts. Detail: `reference/frontend/components.md` 1.50.0, The calendar
+  convention.
 - Browser session (CK-6, lifetime CK-9): `/auth/verify` 302s to
   `${APP_BASE_URL}/auth/callback#token=<jwt>` — the JWT rides the URL
   **fragment**, never the query string; the frontend stores it in
@@ -2345,13 +2395,13 @@ covey-keep/            # the code root (this repo)
 │   │       └── thanksgiving-print.webp        # a sign-in print (stock, no people), sized to its largest frame at 2×
 │   └── src/               # the application; each test sits beside its subject (*.test.ts, *.test.tsx)
 │       ├── main.tsx       # the entry: StrictMode, BrowserRouter, AuthProvider, App
-│       ├── App.tsx        # the route table inside AppUpdateProvider, with PwaUpdatePrompt; ONE layout route (RequireAuth around Frame) for every signed-in page; `*` renders PageNotAvailable, never a redirect
-│       ├── App.css        # the class vocabulary every screen reuses, in the look, and the frame's, You's, the covers' (an empty cover's scrim on the words' own box), the two lists', a group's page and its People page's, a gathering's page's, the photo grid's and the photo viewer's, a group's photos in sections', and Rail and panel's, with the tabbar pages' stable gutter; names no colour (the Gotcha)
+│       ├── App.tsx        # the route table inside AppUpdateProvider, with PwaUpdatePrompt; ONE layout route (RequireAuth around Frame) for every signed-in page, `/calendar` among them; `*` renders PageNotAvailable, never a redirect
+│       ├── App.css        # the class vocabulary every screen reuses, in the look, and the frame's, You's, the covers' (an empty cover's scrim on the words' own box), the two lists', a group's page and its People page's, a gathering's page's, the photo grid's and the photo viewer's, a group's photos in sections', Rail and panel's, and the calendar's (its column free to shrink, a phone's marks wrapping inside their day), with the tabbar pages' stable gutter; names no colour (the Gotcha)
 │       ├── index.css      # the stylesheet entry: styles/tokens.css, then styles/base.css
 │       ├── styles/        # the look (CK-81)
 │       │   ├── tokens.css     # THE ONLY PLACE A COLOUR IS NAMED: the mockup's tokens, a light and a dark block with the same names
 │       │   ├── base.css       # the font face, the page, the grain and the glow, focus, the type, motion
-│       │   └── look.test.tsx  # the tokens, one home for colour, honey's one use, the theme attribute and its one module and one script, the menu layout's one module, the font, focus and motion, the lockup, the precache
+│       │   └── look.test.tsx  # the tokens, one home for colour, honey's one use, the theme attribute and its one module and one script, the menu layout's and the gatherings view's one module each, the calendar's column and marks, the font, focus and motion, the lockup, the precache
 │       ├── vite-env.d.ts  # type references for Vite and vite-plugin-pwa
 │       ├── brand.ts       # PRODUCT_NAME, TAGLINE and MAKER_LINE — the only frontend home for user-visible brand strings
 │       ├── brand.test.tsx # pins the heading, tagline and title to brand.ts
@@ -2362,14 +2412,14 @@ covey-keep/            # the code root (this repo)
 │       ├── components/    # shared components and the app-update provider
 │       │   ├── AppUpdateProvider.tsx # THE one owner of the service worker: useRegisterSW exactly once; hourly and on-visible checks
 │       │   ├── AuthArt.tsx           # the pictures before the app — the sign-in prints, the quail, the small brand mark — the frame's quail head, and the empty cover (EmptyCover, and EmptyCoverCard on a page's card); every image alt=""
-│       │   ├── Cover.tsx             # THE cover component: a 42px thumbnail, a page's cover card at the mockup's measure (wide — a group's page and a gathering's, with a badge on a gathering's; with no cover its empty cover a row in the flow, .cover-lead, beside Change cover), a list's featured card (hero) or grid card (tile), a section's head on a group's page (banner: never the empty cover, minted as it nears the viewport), or a group's panel in Rail and panel (panel: the web layer, the words on their own scrim); the layer from the variant's one table, the empty cover or the ground; a blob: URL from the cache, never a presigned one; DateBadge; CardLine (a card's date and time kept whole)
+│       │   ├── Cover.tsx             # THE cover component: a 42px thumbnail, a page's cover card at the mockup's measure (wide — a group's page and a gathering's, with a badge on a gathering's; with no cover its empty cover a row in the flow, .cover-lead, beside Change cover), a list's featured card (hero) or grid card (tile), a section's head on a group's page (banner: never the empty cover, minted as it nears the viewport), or a group's panel in Rail and panel (panel: the web layer, the words on their own scrim), or a calendar day's cover (mark: the thumbnail layer, sized by its container); the layer from the variant's one table, the empty cover or the ground; a blob: URL from the cache, never a presigned one; DateBadge; CardLine (a card's date and time kept whole)
 │       │   ├── cover.test.tsx        # the component's states and layers, no presigned URL anywhere, the covers' styles adding no token, the menu through the cache; the wide card's empty cover a row in the flow
 │       │   ├── PageCover.tsx         # a page's cover card (the wide card, and a gathering page's badge) with the <h1> inside; for organisers Change cover over its panel: Upload a picture (followed to ready), Remove cover's step — the card's own — the hint
 │       │   ├── Frame.tsx             # the frame around every signed-in page: the top bar, the bottom bar, the menu as a drawer (a modal dialog) or a column from 900px (304, or 358 in Rail and panel); the drawer's one exception, a press held in a ref and spent in a layout effect, never in navigation state; calls useKeepPlace once and provides pagePlace, adding no element
 │       │   ├── frame.test.tsx        # the frame through the real route table: which routes carry it, the bars, the drawer as a dialog, the column, Home retired
-│       │   ├── Menu.tsx              # the menu in either layout. One list: the sections, Your groups, Gatherings coming up — each row's cover — the footer, no chevron, pin or panel. Rail and panel: the rail (the Home tile, a tile per group, +) and the panel, read from the address through lib/frame.ts's panelOf — Home's, or a group's with its back row, cover, three chevron rows and gatherings. One GatheringRow; re-reads on a page change, a cover change and the menu's signal (lib/frame.ts); reads nothing else
+│       │   ├── Menu.tsx              # the menu in either layout. One list: the sections, Your groups, Gatherings coming up — each row's cover — the footer, no chevron, pin or panel. Rail and panel: the rail (the Home tile, a tile per group, +) and the panel, read from the address through lib/frame.ts's panelOf — Home's, or a group's with its back row, cover, four chevron rows (Calendar since CK-91) and gatherings. One GatheringRow; re-reads on a page change, a cover change and the menu's signal (lib/frame.ts); reads nothing else
 │       │   ├── menu.test.tsx         # the two lists, at most five coming up, never photos-only, Try again, the re-read on navigation, the footer
-│       │   ├── Icons.tsx             # the mockup's hand-drawn icons (the plus on the New buttons, the crumbs' back, a gathering page's addpic and the photo viewer's prev, next, expand, shrink, zoomIn and zoomOut, and the panel's home and photos among them), 24px, currentColor, aria-hidden; no icon set
+│       │   ├── Icons.tsx             # the mockup's hand-drawn icons (the plus on the New buttons, the crumbs' back, a gathering page's addpic and the photo viewer's prev, next, expand, shrink, zoomIn and zoomOut, and the panel's home and photos, the calendar's calendar and the switch's cards among them), 24px, currentColor, aria-hidden; no icon set
 │       │   ├── appUpdate.ts          # the update-state context and its type
 │       │   ├── useAppUpdate.ts       # useAppUpdate(), every reader's hook
 │       │   ├── PwaUpdatePrompt.tsx   # the update notice (Reload, Not now), a reader of the provider
@@ -2384,6 +2434,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── useNearViewport.ts    # a ref and whether its element is near the viewport (a 200px margin; at once under jsdom); read by LazyThumbnail and the banner
 │       │   ├── useKeepPlace.ts       # THE ONE OWNER OF A NAVIGATION'S SCROLL, called once from Frame: acts only on a pathname change; a return by history or by a link to the page just left, or a new page at the top; the record in a ref alone; a return held until the window (5 s), the person's act, a pathname change or the frame going; focus back to a link pressed from the keyboard
 │       │   ├── pagePlace.ts          # the context a page reads about its own visit: isReturn, shownAll, rememberShownAll; outside the frame every page is a new visit
+│       │   ├── CalendarView.tsx      # the calendar, one component for the tab, a group's calendar and Your gatherings' Calendar view: one read per shown month of CK-90's route alone, in the profile's zone; the month card (a button per day, one tab stop, the arrows), covers on a phone and chips from 640px, the day's list with each row's answer chip or photo count; every move replaces ?day=, never a history entry; Nothing on this day. only once the answer lands
 │       │   └── PhotoViewer.tsx       # the photo viewer: a modal dialog portalled into the body, the rest inert; the bar, the web layer with the arrows fixed on the stage, the words and acts, the strip; full screen, zoom, gestures, keys; at most three web layers held; acts and total optional (a group's page passes no acts, and a total until the list lands); TagList and LazyThumbnail (minted as it nears the viewport)
 │       ├── lib/           # API types, calls, copy and helpers, one module per subject
 │       │   ├── api.ts                # API_URL, apiFetch, authFetch (a 401 clears the session); TOS_VERSION = 3, never renumbered
@@ -2403,7 +2454,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── places.test.ts        # the three words; everyone Invited sends neither list
 │       │   ├── coHosts.ts            # co-host types, the add and remove calls, and their copy
 │       │   ├── coHosts.test.ts       # each call answers the code, never the wording; the copy
-│       │   ├── rsvps.ts              # RSVP types, labels, companions and totalGoing; arrival time is a bare clock time, never zone-converted
+│       │   ├── rsvps.ts              # RSVP types, labels, NOT_ANSWERED, companions and totalGoing; arrival time is a bare clock time, never zone-converted
 │       │   ├── rsvps.test.ts         # arrival time under a zone forced to differ from the runner's
 │       │   ├── groups.ts             # group types, calls and copy; groupRoleFlags (isAdmin, organises), the one read of the role; the count in people; readGroupMedia, a group's photos in sections
 │       │   ├── covers.ts             # covers: the type, the one-fetch read into a blob: URL, the cache (revoked on a newer version and on any session change), the change signal, set, clear, upload, every approved line
@@ -2413,13 +2464,17 @@ covey-keep/            # the code root (this repo)
 │       │   ├── groupJoining.test.ts  # no property holds the URL; the device is called inside the click
 │       │   ├── returnPath.ts         # the sign-in return: a same-origin relative path, never a fragment, fresh for 30 minutes
 │       │   ├── returnPath.test.ts    # every hostile path refused at park and at take
-│       │   ├── frame.ts              # the sections, a page's section, the menu's gatherings coming up (the list's Coming up, its first five) and its two reads; panelOf, the panel from the address and those reads, never a second state; Home's panel's sections and a group's panel's gatherings; announceMenuChange, the menu's signal after an act that changes what it draws with no page change
+│       │   ├── frame.ts              # the four sections (Calendar since CK-91), a page's section, the menu's gatherings coming up (the list's Coming up, its first five) and its two reads; panelOf, the panel from the address and those reads, never a second state; Home's panel's sections and a group's panel's gatherings; a group's calendar's panel from ?group= on /calendar alone; announceMenuChange, the menu's signal after an act that changes what it draws with no page change
 │       │   ├── frame.test.ts         # the sections, sectionOf, at most five coming up and never photos-only; panelOf's table of addresses, the panels' limits and order
 │       │   ├── theme.ts              # THE ONE MODULE that reads or writes the stored theme (covey-keep:theme) or the attribute; light by default
 │       │   ├── theme.test.ts         # exactly dark is dark; storage failures; index.html's pre-paint script, executed
 │       │   ├── menuLayout.ts         # THE ONE MODULE that names the menu layout's key (covey-keep:menu-layout): exactly rail is Rail and panel; a refused choice held for the load; a subscription, so the menu follows You at once
+│       │   ├── calendar.ts           # the calendar's days (strings in the profile's zone, dayOf and dayStart the only bridges), the month's read range, the days a date covers, the selection, every line and word, the read, useCalendarDay (?day= by replace)
+│       │   ├── calendar.test.ts      # the days in a zone forced to differ, across a daylight-saving change and east of UTC; the days a date covers; the selection; every line as literals
+│       │   ├── gatheringsView.ts     # THE ONE MODULE that names Your gatherings' view key (covey-keep:gatherings-view): exactly calendar is the Calendar view; a refused choice held for the load; a subscription
+│       │   ├── gatheringsView.test.ts # exactly calendar is the Calendar view; a throwing read, a write alone throwing; the subscription
 │       │   ├── menuLayout.test.ts    # exactly rail is Rail and panel; a throwing read, a write alone throwing; the subscription
-│       │   ├── media.ts              # media types, the upload and read helpers (a presigned URL never leaves its call), every photo state's copy; isPublishedPhoto, what the grid holds; whoFor, and readPublishedPhotos, the viewer's set on a group's page
+│       │   ├── media.ts              # media types, the upload and read helpers (a presigned URL never leaves its call), every photo state's copy; photoCountLabel, the one copy of a photo count; isPublishedPhoto, what the grid holds; whoFor, and readPublishedPhotos, the viewer's set on a group's page
 │       │   ├── media.test.ts         # the HEIC fallback, the state lines, the upload helpers
 │       │   ├── media-words.test.ts   # size from the File, the trimmed filename, the caption and tags patches
 │       │   ├── media-review.test.ts  # the waiting line from each seat, the review calls and refusal lines
@@ -2431,12 +2486,12 @@ covey-keep/            # the code root (this repo)
 │       ├── routes/        # one screen per route in App.tsx's table, tests beside them
 │       │   ├── SignIn.tsx                   # `/`: the prints, the lockup, the magic-link form with the private-test consent checkbox, and Use a passkey
 │       │   ├── AuthCallback.tsx             # `/auth/callback`: the session from the fragment, then the sign-in return, a parked invitation or /groups
-│       │   ├── Gatherings.tsx               # `/gatherings`: the featured card, Coming up, Past with Show all (still open on a return), Photos you can see; its empty state, Try again
+│       │   ├── Gatherings.tsx               # `/gatherings`: the featured card, Coming up, Past with Show all (still open on a return), Photos you can see; its empty state, Try again; since CK-91 the switch, Cards or Calendar (stored through lib/gatheringsView.ts), the Calendar view reading the calendar route alone
 │       │   ├── GatheringNew.tsx             # `/gatherings/new`: the gathering form; with inGroup, a group's form with Who it's for
 │       │   ├── GatheringDetail.tsx          # `/gatherings/:id`, the mockup's layout: the crumb, the wide cover card and its badge, Add photos and Edit gathering, When with each date's answer chip, RSVP, Photos (open on load, the grid and the viewer; the whole grid out on arriving at #photos), places, invitations, co-hosts; the photos-only view
 │       │   ├── Groups.tsx                   # `/groups`: the featured card and More groups, each card's count in people and the role kept whole
 │       │   ├── GroupNew.tsx                 # `/groups/new`: headed New group; one Name field and no type control
-│       │   ├── GroupDetail.tsx              # `/groups/:id`: the mockup's shape — the wide cover card with the count, New gathering and People, the strip of its gatherings, the photos in sections (GroupPhotos); each load tagged with the group's id; never reads the members
+│       │   ├── GroupDetail.tsx              # `/groups/:id`: the mockup's shape — the wide cover card with the count, New gathering, People and Calendar, the strip of its gatherings, the photos in sections (GroupPhotos); each load tagged with the group's id; never reads the members
 │       │   ├── GroupPeople.tsx              # `/groups/:id/people`: the crumb, People, Members and their acts, requests to join, invite people, rename, leave — moved from the group's page unchanged
 │       │   ├── GroupGatheringNew.tsx        # `/groups/:id/gatherings/new`: reads the group and its members, then GatheringNew with inGroup
 │       │   ├── GroupJoin.tsx                # `/groups/join`, signed in or out: the link's landing; asking to join is a press, never an opening
@@ -2448,8 +2503,10 @@ covey-keep/            # the code root (this repo)
 │       │   ├── EmailChangeResult.tsx        # `/email-change`: an email-change confirmation's outcome
 │       │   ├── AccountDeleted.tsx           # `/account-deleted`: ends the session once rendered, on the deletion's one-shot signal alone
 │       │   ├── PageNotAvailable.tsx         # `*`: keeps the address, reads nothing from it, offers Reload when a newer version waits
+│       │   ├── Calendar.tsx                 # `/calendar`: the Calendar tab, and a group's calendar at ?group=<id> (its name read first, its opening day from its gatherings only with no day; Showing … only and Show all groups; the group page's not-found screen for a group the caller cannot read)
 │       │   ├── You.tsx                      # `/you`: the person, Display → Menu layout (One list or Rail and panel, stored through lib/menuLayout.ts) and Appearance (Light or Dark, stored through lib/theme.ts), Settings, Your plan, Sign out
 │       │   ├── account-deleted.test.tsx     # the deletion through the real route table lands on /account-deleted, then signs out
+│       │   ├── calendar.test.tsx            # the calendar through the real route table: the tab, a group's calendar and the Calendar view; the read, the days, the moves and the address, the day's list, the states, the frame's fourth section, the panel's row, the switch
 │       │   ├── co-hosts.test.tsx            # the role from caller_role; co-host management from both seats
 │       │   ├── covers.test.tsx              # covers through the pages: the lists, the cards, Change cover by seat, the upload, Remove cover, the viewer's two buttons
 │       │   ├── gathering-in-group.test.tsx  # a group's gathering: the photos-only view, Who it's for, the prompt to share
@@ -2463,7 +2520,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── group-photos.test.tsx        # a group's photos in sections through the real route table: the head, the order, the join, the two heads, the count line, the preview, lazy mints, See all, the viewer's set and its refusals, viewing only, the history, the states, two groups, the reads
 │       │   ├── groups.test.tsx              # the Groups tab before Gatherings, the featured card and More groups, starting a group
 │       │   ├── invitations.test.tsx         # a gathering invitation's landing and the host's invite form
-│       │   ├── lists.test.tsx               # Your gatherings' sections, Show all, the menu agreeing with the page, the page column's routes, the lists' styles
+│       │   ├── lists.test.tsx               # Your gatherings' sections, Show all, the switch beneath the head with Cards pressed, the menu agreeing with the page, the page column's routes, the lists' styles
 │       │   ├── media-bin.test.tsx           # your own photographs: Send to bin, Put back, Delete permanently
 │       │   ├── media-failure.test.tsx       # a failed row's line and controls by reason
 │       │   ├── media-gathering-bin.test.tsx # Remove from gathering and the Removed view, host and co-host

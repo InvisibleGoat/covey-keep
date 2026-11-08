@@ -1,9 +1,9 @@
 // CK-82 — the frame, through the app's real route table. The value under
 // test: every signed-in route carries the frame and no frameless route does;
 // each page keeps its one <main> and every navigation landmark is labelled;
-// on a phone the top bar and the bottom bar's three tabs — Groups, Gatherings
-// and You, the current one marked for each section's routes, and no
-// Calendar — and the menu as a drawer that is a modal dialog: it takes focus,
+// on a phone the top bar and the bottom bar's four tabs — Groups, Gatherings,
+// Calendar (since CK-91) and You, the current one marked for each section's
+// routes — and the menu as a drawer that is a modal dialog: it takes focus,
 // keeps it, closes on Escape, the scrim and any navigation, gives focus back
 // to the menu button, and stills the page behind; from 900px the menu as a
 // column and no bars; and Home retired — /home and a signed-in `/` both land
@@ -125,7 +125,7 @@ function stubWidth(initiallyWide: boolean) {
   }
 }
 
-const SIGNED_IN_ROUTES: [string, 'groups' | 'gatherings' | 'you'][] = [
+const SIGNED_IN_ROUTES: [string, 'groups' | 'gatherings' | 'calendar' | 'you'][] = [
   ['/groups', 'groups'],
   ['/groups/new', 'groups'],
   ['/groups/g-1', 'groups'],
@@ -135,12 +135,16 @@ const SIGNED_IN_ROUTES: [string, 'groups' | 'gatherings' | 'you'][] = [
   ['/gatherings', 'gatherings'],
   ['/gatherings/new', 'gatherings'],
   ['/gatherings/x-1', 'gatherings'],
+  // The calendar (CK-91): the tab, and a group's calendar — the Calendar tab
+  // current on both.
+  ['/calendar', 'calendar'],
+  ['/calendar?group=g-1', 'calendar'],
   ['/settings', 'you'],
   ['/plan', 'you'],
   ['/you', 'you'],
 ]
 
-const TAB = { groups: 'Groups', gatherings: 'Gatherings', you: 'You' }
+const TAB = { groups: 'Groups', gatherings: 'Gatherings', calendar: 'Calendar', you: 'You' }
 
 // ---------------------------------------------------------------------------
 // The frame on the right routes.
@@ -213,7 +217,10 @@ test('the top bar: the menu button and the brand, which goes to Groups', async (
   await settle()
 })
 
-test("the bottom bar: three tabs — Groups, Gatherings and You — the current one marked for each section's routes, and no Calendar", async () => {
+// MOVED AT CK-91: three tabs and "no Calendar" anywhere until the calendar
+// was built; Calendar is the third of four (the merge record's §1.3), current
+// on the tab's calendar and a group's.
+test("the bottom bar: four tabs — Groups, Gatherings, Calendar and You — the current one marked for each section's routes", async () => {
   for (const [address, section] of SIGNED_IN_ROUTES) {
     renderAppAt(address)
     const bar = await screen.findByRole('navigation', { name: 'Sections' })
@@ -221,12 +228,12 @@ test("the bottom bar: three tabs — Groups, Gatherings and You — the current 
     expect(tabs.map((tab) => [tab.textContent, tab.getAttribute('href')]), address).toEqual([
       ['Groups', '/groups'],
       ['Gatherings', '/gatherings'],
+      ['Calendar', '/calendar'],
       ['You', '/you'],
     ])
     const current = tabs.filter((tab) => tab.getAttribute('aria-current') === 'page')
     expect(current.map((tab) => tab.textContent), address).toEqual([TAB[section]])
     for (const tab of tabs) expect(tab.querySelector('.pill svg')?.getAttribute('aria-hidden')).toBe('true')
-    expect(document.body.textContent, address).not.toMatch(/calendar/i)
     await settle()
     cleanup()
     vi.unstubAllGlobals()

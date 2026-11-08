@@ -47,10 +47,15 @@ import { useNearViewport } from './useNearViewport'
 //   share one fetch; 16:9 and never collapsing, its height a LEAST height, and
 //   `children` (the <h2>) over the scrim. With no cover, the quail alone, no
 //   line, and the words on their own scrim (CK-87.2's rule for an empty cover).
+//   `variant="mark"` (CK-91): a calendar day's cover (`.mk`; the mockup's
+//   `cover(…, 'mk')`) — the thumbnail layer through the one cache, so a
+//   gathering on many days and in the day's list is one fetch; sized by its
+//   container — 17px among a phone's marks, 20px in a chip from 640px — and
+//   the empty cover where none is set.
 // - THE LAYER FOLLOWS THE VARIANT AND NOTHING ELSE (`LAYER`, below): the
-//   thumbnail for a thumb or a tile, the web layer for a wide card, a hero or
-//   a banner — so no caller can ask for a print master (`archival` is never
-//   served).
+//   thumbnail for a thumb, a tile or a mark, the web layer for a wide card, a
+//   hero, a banner or a panel — so no caller can ask for a print master
+//   (`archival` is never served).
 // - No cover (`cover` null or absent — the many bodies and fixtures that
 //   carry none): the empty cover — the quail in the ring mat, or on a wide
 //   card, a hero or a tile the quail and *No cover photo yet*. A 409
@@ -64,11 +69,12 @@ import { useNearViewport } from './useNearViewport'
 //   The cache owns every object URL: this component never revokes one.
 //   Nothing here ever holds a presigned URL — only the `blob:` reference.
 
-export type CoverVariant = 'thumb' | 'wide' | 'hero' | 'tile' | 'banner' | 'panel'
+export type CoverVariant = 'thumb' | 'wide' | 'hero' | 'tile' | 'banner' | 'panel' | 'mark'
 
 const LAYER: Record<CoverVariant, ServableLayer> = {
   thumb: 'thumbnail',
   tile: 'thumbnail',
+  mark: 'thumbnail',
   wide: 'web',
   hero: 'web',
   banner: 'web',
@@ -166,6 +172,12 @@ export function Cover({
     if (empty) return <EmptyCover className="nthumb" />
     if (objectUrl !== null) return <img className="nthumb" src={objectUrl} alt="" onError={failed} />
     return <span className="nthumb cover-ground" aria-hidden="true" />
+  }
+
+  if (variant === 'mark') {
+    if (empty) return <EmptyCover className="mk" />
+    if (objectUrl !== null) return <img className="mk" src={objectUrl} alt="" onError={failed} />
+    return <span className="mk cover-ground" aria-hidden="true" />
   }
 
   if (variant === 'panel') {

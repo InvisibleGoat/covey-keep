@@ -748,6 +748,14 @@ export function isPublishedPhoto(item: Pick<MediaItem, 'status' | 'publication_s
   return item.status === 'ready' && item.publication_state === 'live'
 }
 
+// A count of photos: *1 photo*, *{N} photos* (*0 photos* too, where a caller
+// shows none). One copy since CK-91, for the five places that spell it — a
+// gathering's Photos heading and its search's count, a group's photos head and
+// its sections' count lines, and the calendar's day list.
+export function photoCountLabel(count: number): string {
+  return count === 1 ? '1 photo' : `${count} photos`
+}
+
 // Who a photograph's "Added by" names (CK-88; one copy since CK-88.1b): the
 // reader's own in the second person, anyone else by name.
 export function whoFor(item: Pick<MediaItem, 'is_own' | 'uploader_display_name'>): string {

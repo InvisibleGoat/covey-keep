@@ -19,7 +19,9 @@
 // - THE ACTIONS (`.group-actions`; the mockup's `.gactions`), for every member: **New gathering**, the
 //   primary pill with the plus, to `/groups/<id>/gatherings/new` (any member
 //   of a household group may start one, CK-76), and **People**, the quiet
-//   pill with the groups icon, to `/groups/<id>/people`. Both are links.
+//   pill with the groups icon, to `/groups/<id>/people`, and since CK-91
+//   **Calendar**, the quiet pill with the calendar icon, to the group's
+//   calendar, `/calendar?group=<id>`. All three are links.
 //   Add photos is left out: posting to a group is not in this arc (Steven,
 //   answer 3), so New gathering is the primary.
 // - THE GATHERINGS STRIP (`.group-strip`; the mockup's `.gstrip`, labelled *Gatherings*): `GET
@@ -228,6 +230,10 @@ export function GroupDetail() {
         <Link className="btn" to={`/groups/${group.id}/people`}>
           <Icon name="groups" />
           People
+        </Link>
+        <Link className="btn" to={`/calendar?group=${group.id}`}>
+          <Icon name="calendar" />
+          Calendar
         </Link>
       </div>
 

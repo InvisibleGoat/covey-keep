@@ -3,6 +3,7 @@
 // reference/backend/api-reference.md, Gatherings router.
 import type { CoverBody } from './covers'
 import { formatDayWithYear, formatTime, formatWeekdayDay } from './datetime'
+import { photoCountLabel } from './media'
 
 export interface Occurrence {
   id: string
@@ -259,7 +260,7 @@ const loose = (text: string): LinePiece => ({ text, keep: false })
 // reads `next_occurrence` on a photos-only item. Against the same `now` as the
 // strip, so the two agree.
 export function sectionCountPieces(item: GatheringListItem, count: number, zone: string, now: number): LinePiece[] {
-  const photos = count === 1 ? '1 photo' : `${count} photos`
+  const photos = photoCountLabel(count)
   if (!viewOf(item.caller_view).full || item.next_occurrence === null || isComingUp(item, now)) return [loose(photos)]
   return [loose(`${photos} · `), kept(formatDayWithYear(item.next_occurrence.starts_at, zone))]
 }

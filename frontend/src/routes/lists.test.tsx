@@ -8,7 +8,8 @@
 // shows the rest in place and goes away; *Photos you can see* holds every
 // photos-only item after Past, with *You can see its photos* and no badge
 // or date; each card's lines are the mockup's words; an empty section leaves
-// its heading out; there is no Cards / Calendar switch; the menu's
+// its heading out; the Cards / Calendar switch stands beneath the page head
+// with Cards pressed (since CK-91), and the cards are drawn; the menu's
 // *Gatherings coming up* is the page's *Coming up*, the first five, through
 // the one rule; the empty state and the failed read keep their words; and
 // the lists' styles name no colour, add no token, and reach only the two
@@ -142,7 +143,10 @@ const titles = (list: HTMLElement) => within(list).getAllByRole('link').map((lin
 const linesOf = (card: Element) => [...card.querySelectorAll('p')].map((line) => line.textContent)
 const cardOf = (title: string) => screen.getByRole('link', { name: title }).closest('article') as HTMLElement
 
-test('the page head: Your gatherings, Times in {zone}. while a date is on screen, and New gathering — no Cards / Calendar switch', async () => {
+// MOVED AT CK-91: "no Cards / Calendar switch" until the calendar was built;
+// the switch now stands beneath the page head, Cards pressed by default, and
+// the head itself is unchanged.
+test('the page head: Your gatherings, Times in {zone}. while a date is on screen, and New gathering — then the switch, Cards pressed', async () => {
   const mock = stubList(LIST)
   renderPage()
   const heading = await loaded()
@@ -152,10 +156,14 @@ test('the page head: Your gatherings, Times in {zone}. while a date is on screen
   const newGathering = within(head).getByRole('link', { name: 'New gathering' })
   expect(newGathering.getAttribute('href')).toBe('/gatherings/new')
   expect(newGathering.classList.contains('btn-primary')).toBe(true)
-  // The calendar is CK-91's: no switch, no view to choose.
-  expect(screen.queryByRole('group', { name: /show gatherings as/i })).toBeNull()
-  expect(screen.queryByRole('button', { name: /cards|calendar/i })).toBeNull()
-  expect(document.body.textContent).not.toMatch(/calendar/i)
+  // The switch, beneath the head and outside it, Cards pressed: the cards are
+  // drawn and no calendar.
+  const toggle = screen.getByRole('group', { name: 'Show gatherings as' })
+  expect(head.contains(toggle)).toBe(false)
+  expect(head.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(within(toggle).getByRole('button', { name: 'Cards' }).getAttribute('aria-pressed')).toBe('true')
+  expect(within(toggle).getByRole('button', { name: 'Calendar' }).getAttribute('aria-pressed')).toBe('false')
+  expect(document.querySelector('.cal')).toBeNull()
   // Nothing the list body does not carry: no photo count, no answer.
   expect(document.body.textContent).not.toMatch(/\d+ photos|Not answered|Going|Maybe/)
 })
@@ -433,13 +441,16 @@ const routeSources = import.meta.glob(['./*.tsx', '!./*.test.tsx'], {
 // column, and `.list-screen` is gone from every route.
 // MOVED AT CK-87, with its reason: a gathering's page takes the page column
 // too, its phase having built its layout — five routes now. The rest holds.
-test('the page column class is on the two list pages, a group’s page and its People page, a gathering’s page, and no other route: every other page keeps its column', () => {
+// MOVED AT CK-91: the calendar's page takes the page column too, the sixth
+// route.
+test('the page column class is on the two list pages, a group’s page and its People page, a gathering’s page, the calendar, and no other route: every other page keeps its column', () => {
   expect(Object.keys(routeSources).length).toBeGreaterThan(15)
   const using = Object.entries(routeSources)
     .filter(([, source]) => /\bpage-column\b/.test(source))
     .map(([path]) => path)
     .sort()
   expect(using).toEqual([
+    './Calendar.tsx',
     './GatheringDetail.tsx',
     './Gatherings.tsx',
     './GroupDetail.tsx',
