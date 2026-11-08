@@ -1,11 +1,12 @@
 # CoveyKeep — Repo Operational Guide
 
-**Version:** 1.113.0
+**Version:** 1.114.0
 **Last Updated:** 2026-11-07
 **Source:** the one-line list of every phase from CK-2 to CK-80 that stood here moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); each phase is named in its own changelog entry, here or there.
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.114.0** (2026-11-07): Phase CK-90 — **The calendar, the backend: every date of every gathering the person is invited to, in a range, and one group's** — the design merge's tenth phase (`decisions/2026-10-31-the-design-and-how-it-is-merged.md` 1.18.0 — a BUILT banner on §3 item 10; `decisions/2026-10-04-calendars-and-alerts-by-scope.md` 1.2.0 — a BUILT banner under §2, the data built and the screens CK-91's; `reference/backend/api-reference.md` 1.46.0 — the Calendar router and a row for each route in both classification tables; Steven's approval of 2026-11-07, with his answer that each gathering carries its published photo count, counting only what the caller can see; **backend only: new `app/api/calendar.py` and `tests/test_calendar.py`, and `app/main.py` (the fifteenth router) — nothing under `frontend/`, no migration (head stays 0036, `alembic check` clean), the verifier at 438, no model change, neither lock touched, `render.yaml` untouched, no environment variable and no logger added; `_list_statement`, `get_gathering`, `_occurrence_body` and `_caller_responses` unchanged**; **800 backend tests, 16 new** (`tests/test_calendar.py`), the 784 existing green and unedited, no pin moved; the frontend at 948 in 60 files, not run (nothing under it changed); **16 mutations, each caught by a named test**; one commit per root). **THE ROUTES** (`app/api/calendar.py`): `GET /calendar?from=&to=` and `GET /groups/{id}/calendar?from=&to=`, the second asking `_group_for_read` first — everyone else, a member who has left included, the group's 404 byte-identical to a missing group's, before the range is checked. **THE AUDIENCE IS THE INVITED TIER EXACTLY**: the host column, `co_hosts_gathering`, a person-targeted `gathering_invitations` row — never `shared_with`, never `left_out`, never the keeper by keeping (pinned with the group's keeper left out of a surprise in their own group), never a pending emailed invitation's addressee; no membership is read, so a member who has left keeps the group's dates on `GET /calendar`. **THE RANGE**: `[from, to)` in instants with offsets, read through `Query(alias="from")`; a date with no end in when `from <= starts_at < to`, one with an end when `starts_at < to` and `ends_at > from`, every edge pinned; a naive instant a field-level 422 at its field, `to` not after `from` and a span over `CALENDAR_MAX_SPAN` (62 days) at `to`; the server computes no day. **THE ANSWER**: `{"dates", "gatherings"}` — each date `_occurrence_body` plus the caller's own `caller_response` (by person; a guest's row never matches) plus `position` among ALL its gathering's dates, equal to the detail's date for the same caller; ordered `starts_at`, `gathering_id`, `id`; each gathering once, in the order of its first date, its `title`, `gathering_type`, `cover` and `group` equal to the list item's, plus `date_count` and `published_count` — `ready` + `live` ANDed with `_visible_media` in the same WHERE, never `gatherings.photo_count` (pinned where the two differ, and a binning lowering the count while the charge stands). No email, no person id, no URL. **ONE STATEMENT** after the auth read (and the group's): an inner select numbers and counts every date with window functions before the range applies; the outer applies it, joins the answer and the group, and counts the photographs in a correlated scalar subquery — pinned by the statement counter at one gathering and at five holding thirty dates. **Red first**: the sixteen run against the unregistered router, every one failing on its 404. **The mutation table**, `calendar.py` restored byte for byte after each (sha256 checked): the invitation, host and co-host terms each dropped; a `shared_with` term and a keeper term each added; the answer matched by date alone; a no-end date at `to` let in; `ends_at` ignored; position and date count over the range alone; the count from `photo_count`; `_visible_media` and the `live` filter each dropped from it; the group term dropped; `_group_for_read` dropped; the span cap removed; a statement per gathering. **Two tests plant a co-host with no invitation row**, a shape no writer leaves, because a real co-host holds one: without it the co-host term and the count's `_visible_media` would be redundant and their plants survive. **Found by the first mutation run and fixed before commit**: the order test failed one run in three on the unchanged code (its loop makes a fourth gathering when the first three come out in id order, and a fixed four-item slice then compared four ids against five); the slice now follows the count, twelve runs green, the table re-run whole. **Decided, recorded**: the gathering's type is `gathering_type`, the list item's key, where the kickoff's shape wrote `type` (the kickoff also says each fact equals the list item's and that no field the list item does not carry is added) — the planning session's to confirm, a one-line rename either way. This machine's Docker Desktop would not start until its stale `run` directory was moved aside. Not pushed. Checks `(nr)`–`(nu)` under the HARNESS RULE's dev-deploy form; both Render services deploy this push (it touches `backend/`), no verifier run is owed (no migration). Report: `D:\projects\temp\CK-90-report.md`.
 - **1.113.0** (2026-11-07): Phase CK-89.1 — **The menu kept fresh after an act with no page change, and the facts line gone** — the fix-up for two of CK-89's findings, made before its push at Steven's answers of 2026-11-07, each as recommended, relayed by the planning session (drop the facts line; fix the menu after a rename or an approval before the push; leave the 15px strip beside the drawer's scrim, which stays reported). `reference/frontend/components.md` 1.49.0 has the Frame convention's Freshness amended, Rail and panel's group panel and findings, the inventory and a new rule; `decisions/2026-10-31-the-design-and-how-it-is-merged.md` 1.17.0 has an AMENDED banner under §3 item 9's BUILT banner, which named the facts line. **The 1.112.0 entry below is the planning session's, written uncommitted before this phase and committed whole with it.** **Frontend only:**
   - **changed:** `lib/frame.ts` (`announceMenuChange`, `onMenuChange`), `components/Menu.tsx`, `routes/GroupPeople.tsx`, `routes/GatheringDetail.tsx` and `App.css`;
   - **tests:** a new `routes/menu-freshness.test.tsx`, and one pin moved in `routes/rail-and-panel.test.tsx`;
@@ -2212,6 +2213,35 @@ is Steven's call, not a session's: `.env` is his file.
   row, Favorites, a toast, and another tab following a choice before its next load
   or another person's act before the next page change. Detail:
   `reference/frontend/components.md` 1.49.0, the Rail and panel convention.
+- The calendar (CK-90; backend only, no migration): **every date of every
+  gathering the person is invited to, in a range of instants, and one
+  group's** — the design merge's tenth phase
+  (`decisions/2026-10-31-the-design-and-how-it-is-merged.md` §3 item 10;
+  `decisions/2026-10-04-calendars-and-alerts-by-scope.md` §2; Steven's
+  approval of 2026-11-07). **The Calendar router, the fifteenth**
+  (`app/api/calendar.py`): `GET /calendar?from=&to=` (*My calendar*) and
+  `GET /groups/{id}/calendar?from=&to=` (*the group's calendar*, after
+  `_group_for_read` — everyone else, a member who has left included, the
+  group's 404 byte-identical to a missing group's). **The audience is the
+  invited tier exactly** — the host column, `co_hosts_gathering`, a
+  person-targeted invitation row — and **never** a member only shared with,
+  one left out, the keeper by keeping (CK-77) or a pending emailed
+  invitation; no membership is read, so a member who has left a group keeps
+  its dates on `GET /calendar`. **The range is half-open in instants**,
+  `[from, to)`, each with an offset (a naive one a field-level 422), at most
+  `CALENDAR_MAX_SPAN` (62 days); **the server never computes a day or reads
+  a zone** — CK-91 places each date in the profile's zone. **`{"dates",
+  "gatherings"}`**: each date the detail's date (`_occurrence_body` and the
+  caller's own `caller_response`) plus `position`, its place among ALL its
+  gathering's dates; each gathering once, in the order of its first date,
+  with the list item's `id`, `title`, `gathering_type`, `cover` and `group`
+  plus `date_count` and **`published_count` — `ready` + `live` ANDed with
+  `_visible_media`, never `gatherings.photo_count`**, the keeper's charge.
+  **One statement after the auth read** (and the group's), the window
+  functions numbering every date before the range applies — pinned by the
+  statement counter. No logger, no URL, nothing stored, no route of another
+  router changed. The screens are CK-91's. Detail:
+  `reference/backend/api-reference.md` 1.46.0, the Calendar router.
 - Browser session (CK-6, lifetime CK-9): `/auth/verify` 302s to
   `${APP_BASE_URL}/auth/callback#token=<jwt>` — the JWT rides the URL
   **fragment**, never the query string; the frontend stores it in
@@ -2467,7 +2497,7 @@ covey-keep/            # the code root (this repo)
 │   ├── requirements-dev.txt # GENERATED: the dev lock; never edited — compile it from requirements-dev.in
 │   ├── app/                 # the FastAPI application and the ingest worker
 │   │   ├── __init__.py      # __version__, carried in the outbound email User-Agent
-│   │   ├── main.py          # the FastAPI app: CORS, GET /health, the 14 routers, configure_logging() at import
+│   │   ├── main.py          # the FastAPI app: CORS, GET /health, the 15 routers, configure_logging() at import
 │   │   ├── logging_setup.py # the API's logging: the covey-keep namespace at INFO to stdout; never the root, propagate kept True (the Gotcha)
 │   │   ├── worker.py        # the worker (python -m app.worker [--once]): WorkerSettings only; claims, processes, destroys, sweeps when on; uploaded covers too, one job of each ladder per pass
 │   │   ├── brand.py         # PRODUCT_NAME and FROM_DISPLAY_NAME — the only backend home for user-visible brand strings
@@ -2489,6 +2519,7 @@ covey-keep/            # the code root (this repo)
 │   │   │   ├── groups.py            # groups: create, read, rename, members, co-admins, leave, remove, hand over; all on the person spine
 │   │   │   ├── group_links.py       # the group's link (derived, never stored), joining through it, approving and declining requests
 │   │   │   ├── group_invitations.py # emailed group invitations; acceptance admits directly
+│   │   │   ├── calendar.py          # the calendar: every date in a range of every gathering the caller hosts, co-hosts or is invited to, and one group's; the invited tier exactly; one statement; published_count through _visible_media, never photo_count; no logger
 │   │   │   └── billing.py           # GET /billing, checkout, portal, the Stripe webhook; never imports stripe itself
 │   │   ├── services/        # logic the routers and the worker share
 │   │   │   ├── __init__.py    # empty package marker
@@ -2582,6 +2613,7 @@ covey-keep/            # the code root (this repo)
 │       ├── test_auth.py                  # magic-link sign-in, ToS versions, rate limits
 │       ├── test_billing.py               # paid plans, offline: allowance, config shapes, checkout, portal, webhook, deletion's Stripe leg
 │       ├── test_brand.py                 # brand strings built from app/brand.py
+│       ├── test_calendar.py              # the calendar: the invited tier by seat, the group route's 404 first, the half-open range and its refusals, the caller's own answer, position and date_count, the photo count against the charge, the body against the detail and the list, one statement
 │       ├── test_caller_response.py       # the caller's own answer on each date of a gathering body, in one statement
 │       ├── test_co_hosts.py              # every delegable and reserved check by seat; the co-host endpoints
 │       ├── test_cover_images.py          # uploaded covers: routes by seat, the latest act wins, the worker's ladder, the races both orders, the verifier's lines
