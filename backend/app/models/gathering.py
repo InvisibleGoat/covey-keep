@@ -88,6 +88,21 @@ class Gathering(Base):
             "owning_group_id IS NOT NULL OR NOT invitees_chosen",
             name="invitees_chosen_needs_group",
         ),
+        # INVITING PEOPLE OUTSIDE THE GROUP IS ONE FACT (0037, CK-92; the
+        # 2026-10-04 record §5, §6): on exactly when the stamp is set, and
+        # the stamp and the person who turned it on are written and cleared
+        # together (api/gatherings.py's setting route) — both or neither.
+        CheckConstraint(
+            "num_nonnulls(outside_invitations_since, outside_invitations_by_person_id) IN (0, 2)",
+            name="outside_invitations_both_or_neither",
+        ),
+        # Only a group's gathering has a group to be outside of: a standalone
+        # gathering invites anyone by email already, and the setting route
+        # refuses it with `not_in_a_group` before writing.
+        CheckConstraint(
+            "owning_group_id IS NOT NULL OR outside_invitations_since IS NULL",
+            name="outside_invitations_need_group",
+        ),
         # A COVER IS ONE FACT (0035, CK-83a; WIDENED at 0036, CK-83b): its
         # source — a photograph (`cover_media_id`) or an uploaded cover
         # (`cover_image_id`), AT MOST ONE — when it was set and who set it,
@@ -328,6 +343,29 @@ class Gathering(Base):
     cover_set_by_person_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("people.id"), nullable=True
     )
+    # 0037 (CK-92) — INVITING PEOPLE OUTSIDE THE GROUP, on a group's
+    # gathering alone (the CHECKs above). On exactly when this is set; it is
+    # also the outside alert's VERSION — turning it on again writes a new
+    # stamp, so a dismissed alert comes back
+    # (`gathering_outside_alert_dismissals`). Never stamps `updated_at`: who
+    # can see a gathering is not an edit of it (the cover's precedent).
+    # DEFERRED, AND A READ OFF A LOADED ROW RAISES (`deferred_raiseload`):
+    # the setting is read fresh — under the gathering's row lock where a
+    # write depends on it (the setting route, an invitation's create and its
+    # accept on a group's gathering), or in the detail body's one select —
+    # never off a row some loader fetched before the lock, which a turn-off
+    # committed in between would have made stale. Deferring it also keeps it
+    # out of every statement that loads a whole gathering (the list, the
+    # calendar, the media and cover routes), which neither read nor need it.
+    outside_invitations_since: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, deferred=True, deferred_raiseload=True
+    )
+    # WHO turned it on — the alert names them and is not shown to them. No
+    # delete rule: a deleted account keeps its anonymized person row, and
+    # the body then names nobody. Deferred with the stamp, for its reason.
+    outside_invitations_by_person_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("people.id"), nullable=True, deferred=True, deferred_raiseload=True
+    )
     # 0010 (CK-16) — stamped on every successful PATCH, the people.updated_at
     # precedent: the column arrives with the phase that makes the row mutable.
     updated_at: Mapped[Optional[datetime]] = mapped_column(
@@ -410,6 +448,17 @@ class GatheringInvitation(Base):
     person_id: Mapped[Optional[UUID]] = mapped_column(ForeignKey("people.id"), nullable=True)
     invited_by_person_id: Mapped[Optional[UUID]] = mapped_column(
         ForeignKey("people.id"), nullable=True
+    )
+    # 0037 (CK-92) — TRUE ON EXACTLY THE ROWS AN OUTSIDER HOLDS: written true
+    # when a person who is not a member of the owning group accepts an
+    # emailed invitation to a group's gathering (api/invitations.py), set
+    # false when they join the group by either path (services/groups.py),
+    # false everywhere else. A FACT ON THE ROW, never worked out from
+    # membership at read time — so a member who LEAVES the group is never
+    # an outsider, and turning the setting off (which deletes these rows)
+    # never removes them.
+    from_outside: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
     )
     created_at: Mapped[datetime] = created_at_col()
 
@@ -592,3 +641,27 @@ class GatheringMemberPlace(Base):
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class GatheringOutsideAlertDismissal(Base):
+    """A member's dismissal of the alert that a group's gathering now
+    invites people outside the group (CK-92, migration 0037;
+    decisions/2026-10-04-a-groups-gathering-stays-in-the-group.md §7). ONE
+    ROW PER (gathering, person), replaced on each dismissal (an upsert on
+    the key). The alert shows while the setting is on, to a member of the
+    group who did not turn it on and holds no dismissal AT OR AFTER the
+    setting's stamp — so turning it off and on again, a new stamp, brings a
+    dismissed alert back without deleting anything here.
+
+    A CONTENT TABLE, never in services/retention.py's EPHEMERAL_TABLES: a
+    row is a person's own act, read by the gathering's detail body, and the
+    reaper never removes it. Two FKs with no delete rule — nothing cascades
+    from a person or a gathering (decision 15)."""
+
+    __tablename__ = "gathering_outside_alert_dismissals"
+
+    gathering_id: Mapped[UUID] = mapped_column(
+        ForeignKey("gatherings.id"), primary_key=True
+    )
+    person_id: Mapped[UUID] = mapped_column(ForeignKey("people.id"), primary_key=True)
+    dismissed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

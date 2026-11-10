@@ -54,10 +54,19 @@ A GATHERING THAT BELONGS TO A GROUP IS MEMBERS ONLY (CK-76 — MEMBERS_ONLY
 below): its members are invited by person-targeted rows that
 services/groups.py writes at create and at join, never through this router,
 and an emailed invitation to it is refused with a 409 before anything is
-written or sent. The other routes here still apply to it: the organisers
-read its accepted list (every member's row, the handle api/co_hosts.py
-takes — so a member CAN be made a co-host of a group gathering), and the
-pending list is simply empty.
+written or sent — UNLESS ITS OUTSIDE INVITATIONS ARE ON (CK-92;
+decisions/2026-10-04-a-groups-gathering-stays-in-the-group.md §5, §6):
+then the create behaves as on a standalone gathering, and an acceptance
+writes the row with `from_outside` true for a person who is not a member of
+the group (false for a member, whose place row the same transaction
+replaces). Both take the gathering's row lock first and read the setting
+under it (api/gatherings.py::_lock_setting), so a turn-off and an
+invitation or an acceptance on one gathering take turns. The destination is
+still never looked up: whether the acceptor is an outsider is read from
+THEIR membership row once they hold the token, never from the address. The
+other routes here apply to it as to any gathering: the organisers read its
+accepted list — every row's `from_outside` beside it since CK-92 — and the
+pending list holds the live outside invitations.
 
 DATA-HANDLING: `destination` is an address supplied by one person ABOUT
 another — the invitee did not type it. The row is ephemeral (expires,
@@ -73,20 +82,27 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, field_validator
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import RATE_WINDOW
 from app.api.deps import AuthContext, get_auth_context, get_db, normalize_email
-from app.api.gatherings import _field_422, _gathering_for_organiser, may_administer
+from app.api.gatherings import (
+    _field_422,
+    _gathering_for_organiser,
+    _lock_setting,
+    may_administer,
+)
+from app.api.groups import member_of
 from app.brand import PRODUCT_NAME
 from app.config import settings
 from app.models import (
     Gathering,
     GatheringInvitation,
     GatheringInvitationPending,
+    GatheringMemberPlace,
     InvitationChannel,
     Person,
 )
@@ -125,7 +141,9 @@ SMS_UNAVAILABLE_MESSAGE = (
 # anything is written or sent — and NEVER by matching the destination
 # against the members, which would say who holds an account (the CK-25
 # non-enumeration rule): the refusal reads the gathering's one column and
-# looks nothing up.
+# looks nothing up. Since CK-92 the refusal stands while the gathering's
+# OUTSIDE INVITATIONS are off, read under its row lock, and names the
+# setting; with them on the create behaves as on a standalone gathering.
 MEMBERS_ONLY = "members_only"
 
 # The stable code on the one 409 three create routes share since CK-77.2
@@ -206,13 +224,19 @@ async def _resolve_token(
     ).scalar_one_or_none()
     if row is None or not secrets.compare_digest(supplied_hash, row.token_hash):
         return "invalid", None
+    return _token_status(row, now), row
+
+
+def _token_status(row: GatheringInvitationPending, now: datetime) -> str:
+    """A found row's status, in `_resolve_token`'s precedence: revoked, then
+    used, then expired, else valid."""
     if row.revoked_at is not None:
-        return "revoked", row
+        return "revoked"
     if row.consumed_at is not None:
-        return "used", row
+        return "used"
     if row.expires_at <= now:
-        return "expired", row
-    return "valid", row
+        return "expired"
+    return "valid"
 
 
 @router.post("/gatherings/{gathering_id}/invitations", status_code=201)
@@ -226,22 +250,29 @@ async def create_invitation(
     now = datetime.now(timezone.utc)
 
     if gathering.owning_group_id is not None:
-        # MEMBERS ONLY (CK-76): a group's gathering reaches the group's
-        # members by rows, and nobody outside the group until sharing
-        # outside it ships. Refused first — before the channel check, the
-        # reap, the tallies, the supersession and the send — with a 409
-        # carrying the stable code, so nothing is written or sent and the
-        # destination is never looked up (the constant's comment).
-        raise HTTPException(
-            409,
-            detail={
-                "code": MEMBERS_ONLY,
-                "message": (
-                    "this gathering belongs to a group and reaches the group's "
-                    "members only — invite someone by adding them to the group"
-                ),
-            },
-        )
+        # MEMBERS ONLY (CK-76) WHILE ITS OUTSIDE INVITATIONS ARE OFF (CK-92):
+        # a group's gathering reaches the group's members by rows. The
+        # gathering's row lock is taken first and the setting read under it
+        # — never off the row the loader fetched, which a turn-off committed
+        # since would have made stale — and held to the commit below, so a
+        # turn-off waits for this invitation and then revokes it. Off is
+        # refused first — before the channel check, the reap, the tallies,
+        # the supersession and the send — with a 409 carrying the stable
+        # code, so nothing is written or sent and the destination is never
+        # looked up (the constant's comment). On, the rest is a standalone
+        # gathering's create, unchanged.
+        if await _lock_setting(db, gathering.id) is None:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": MEMBERS_ONLY,
+                    "message": (
+                        "this gathering belongs to a group and reaches the group's "
+                        "members only — invite someone by adding them to the group, "
+                        "or turn on inviting people outside the group"
+                    ),
+                },
+            )
 
     if body.channel is InvitationChannel.SMS:
         # Accepted by the schema, refused by the endpoint — a clear field-level
@@ -415,6 +446,9 @@ async def list_invitations(
                 "id": str(invitation.id),
                 "display_name": display_name,
                 "accepted_at": invitation.created_at.isoformat(),
+                # Whether they came from outside the group (CK-92): true on
+                # exactly the rows turning outside invitations off removes.
+                "from_outside": invitation.from_outside,
             }
             for invitation, display_name in accepted
         ],
@@ -516,6 +550,20 @@ async def accept_invitation(
     pending_id, gathering_id, person_id = row.id, row.gathering_id, ctx.person.id
     invited_by_person_id = row.invited_by_person_id
 
+    group_id = await db.scalar(
+        select(Gathering.owning_group_id).where(Gathering.id == gathering_id)
+    )
+    if group_id is not None:
+        return await _accept_into_group_gathering(
+            db,
+            pending_id=pending_id,
+            gathering_id=gathering_id,
+            group_id=group_id,
+            person_id=person_id,
+            invited_by_person_id=invited_by_person_id,
+            now=now,
+        )
+
     row.consumed_at = now
     existing = await db.scalar(
         select(GatheringInvitation.id).where(
@@ -549,3 +597,97 @@ async def accept_invitation(
         "status": "already_accepted" if existing is not None else "accepted",
         "gathering_id": str(gathering_id),
     }
+
+
+async def _accept_into_group_gathering(
+    db: AsyncSession,
+    *,
+    pending_id: UUID,
+    gathering_id: UUID,
+    group_id: UUID,
+    person_id: UUID,
+    invited_by_person_id: Optional[UUID],
+    now: datetime,
+) -> dict:
+    """An emailed invitation to a GROUP'S gathering, accepted (CK-92) — every
+    statement on plain values captured before any write (CK-77.1).
+
+    THE GATHERING'S ROW LOCK FIRST, the setting read under it: OFF answers
+    `revoked` and writes nothing — a turn-off revokes every live invitation,
+    and one this acceptance waited for has just done so. ON: the token is
+    consumed by a guarded UPDATE (CK-77.2's shape — a revoke or a second
+    acceptance that won is a rowcount of 0, re-read and answered by its own
+    status); then the caller's membership ROW decides what the row says —
+    never the address, which is never looked up:
+      * not a member — an invitation row with `from_outside` TRUE, which a
+        turn-off removes and joining the group clears;
+      * a member already invited — `already_accepted`, no second row;
+      * a member shared with or left out — the place row DELETED and an
+        invitation row written with `from_outside` false, in this one
+        transaction, so a person holds one place (moving a member TO
+        invited is never refused — the places route's own rule).
+    A place row is deleted whoever holds it, so a former member holding one
+    from before they left ends invited, from outside. The insert is ON
+    CONFLICT DO NOTHING on the (gathering, person) partial unique: a row a
+    concurrent join wrote first is a member's row, and stands."""
+    if await _lock_setting(db, gathering_id) is None:
+        return {"status": "revoked", "gathering_id": None}
+    consumed = await db.execute(
+        update(GatheringInvitationPending)
+        .where(
+            GatheringInvitationPending.id == pending_id,
+            GatheringInvitationPending.consumed_at.is_(None),
+            GatheringInvitationPending.revoked_at.is_(None),
+            GatheringInvitationPending.expires_at > now,
+        )
+        .values(consumed_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    if consumed.rowcount == 0:
+        fresh = (
+            await db.execute(
+                select(GatheringInvitationPending)
+                .where(GatheringInvitationPending.id == pending_id)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        status = _token_status(fresh, now)
+        if status == "used" and await _holds_invitation_row(db, gathering_id, person_id):
+            return {"status": "already_accepted", "gathering_id": str(gathering_id)}
+        return {"status": status, "gathering_id": None}
+    if await _holds_invitation_row(db, gathering_id, person_id):
+        await db.commit()
+        return {"status": "already_accepted", "gathering_id": str(gathering_id)}
+    member = await db.scalar(select(member_of(person_id, group_id)))
+    await db.execute(
+        delete(GatheringMemberPlace).where(
+            GatheringMemberPlace.gathering_id == gathering_id,
+            GatheringMemberPlace.person_id == person_id,
+        )
+    )
+    await db.execute(
+        pg_insert(GatheringInvitation)
+        .values(
+            gathering_id=gathering_id,
+            person_id=person_id,
+            invited_by_person_id=invited_by_person_id,
+            from_outside=not member,
+        )
+        .on_conflict_do_nothing(
+            index_elements=["gathering_id", "person_id"],
+            index_where=GatheringInvitation.person_id.is_not(None),
+        )
+    )
+    await db.commit()
+    return {"status": "accepted", "gathering_id": str(gathering_id)}
+
+
+async def _holds_invitation_row(db: AsyncSession, gathering_id: UUID, person_id: UUID) -> bool:
+    return (
+        await db.scalar(
+            select(GatheringInvitation.id).where(
+                GatheringInvitation.gathering_id == gathering_id,
+                GatheringInvitation.person_id == person_id,
+            )
+        )
+    ) is not None

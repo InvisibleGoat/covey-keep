@@ -552,8 +552,12 @@ async def test_admin_list_shows_pending_and_accepted_without_addresses(
     assert set(body["pending"][0]) == {"id", "channel", "destination", "created_at", "expires_at"}
     assert [a["display_name"] for a in body["accepted"]] == [display_name]
     # An account email is a credential: the accepted entry carries the display
-    # name and nothing else identifying (the no-auto-exposure rule).
-    assert set(body["accepted"][0]) == {"id", "display_name", "accepted_at"}
+    # name and nothing else identifying (the no-auto-exposure rule). MOVED at
+    # CK-92: it gains `from_outside`, a boolean about the row that names nobody
+    # (whether the person accepted while not a member of the gathering's group),
+    # false on a standalone gathering, which has no group to be outside of.
+    assert set(body["accepted"][0]) == {"id", "display_name", "accepted_at", "from_outside"}
+    assert body["accepted"][0]["from_outside"] is False
 
 
 async def test_revoke_is_idempotent_and_a_consumed_invite_is_not_pending(

@@ -35,7 +35,11 @@ ANONYMIZED invitee is refused, because deletion ends co-hosting
 
 Refusals on the add are field-level 422s on `invitation_id` carrying a
 STABLE CODE (the CK-30 marker precedent): `not_invited`, `is_host`,
-`already_co_host`, `account_deleted`. Every other refusal is a 404 — the
+`already_co_host`, `account_deleted`, and since CK-92 `not_a_member` — on a
+group's gathering a co-host is a member of the group, so a person invited
+from outside it (the gathering's outside invitations) is refused, read from
+their membership row at the add and never again: a co-host who later leaves
+the group stays a co-host, as every place is a row. Every other refusal is a 404 — the
 GATHERING's for anyone who is not an organiser (byte-identical to a missing
 gathering: the gatherings posture) and, on the reserved add, for a co-host
 too (the route hides; a person who can read the gathering and may not act
@@ -69,6 +73,7 @@ from app.api.gatherings import (
     is_co_host,
     is_host,
 )
+from app.api.groups import member_of
 from app.models import Gathering, GatheringCoHost, GatheringInvitation, Person
 
 router = APIRouter(prefix="", tags=["co-hosts"])
@@ -79,6 +84,8 @@ NOT_INVITED = "not_invited"
 IS_HOST = "is_host"
 ALREADY_CO_HOST = "already_co_host"
 ACCOUNT_DELETED = "account_deleted"
+# CK-92: on a group's gathering, a co-host is a member of the group.
+NOT_A_MEMBER = "not_a_member"
 
 
 def _not_found() -> HTTPException:
@@ -171,6 +178,16 @@ async def add_co_host(
         # nothing. The host already reads this person as "a former member"
         # in the accepted list, so the code discloses nothing new.
         raise _refusal(ACCOUNT_DELETED, "that account has been deleted, so it can't co-host")
+    if gathering.owning_group_id is not None and not await db.scalar(
+        select(member_of(person.id, gathering.owning_group_id))
+    ):
+        # A GROUP'S GATHERING IS RUN BY ITS GROUP (CK-92; the record §5): a
+        # person invited from outside the group sees the gathering and runs
+        # none of it. Read from their membership row now, and only now — a
+        # co-host who later leaves the group stays a co-host.
+        raise _refusal(
+            NOT_A_MEMBER, "they aren't a member of this gathering's group, so they can't co-host it"
+        )
     if person.account_id == gathering.host_account_id:
         # Host and co-host are exclusive — the verifier asserts no co-host
         # row names its gathering's host, and this is where it is kept

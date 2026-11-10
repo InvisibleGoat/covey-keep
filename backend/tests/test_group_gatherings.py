@@ -116,8 +116,8 @@ INDEX = "ix_gatherings_owning_group_id"
 # three data lines) less the one retired (CK-75's backup-NULL line, replaced
 # by the 0009 block's is-gone line); 385 since CK-83a's twenty-four (the six
 # cover columns' shapes on gatherings and groups, their FKs, CHECKs and
-# partial indexes, and four data lines); 438 since CK-83b's fifty-three — cover_images' shape (the table, its eighteen columns' nullability, the PK, three FKs with their delete rules, the two enum types, two CHECKs, two partial indexes), each subject's cover_image_id (nullability, FK and delete rule, partial index, the widened CHECK's definition), and eleven data lines.
-VERIFIER_TOTAL = 438
+# partial indexes, and four data lines); 438 since CK-83b's fifty-three — cover_images' shape (the table, its eighteen columns' nullability, the PK, three FKs with their delete rules, the two enum types, two CHECKs, two partial indexes), each subject's cover_image_id (nullability, FK and delete rule, partial index, the widened CHECK's definition), and eleven data lines; 458 since CK-92's twenty — the outside-invitation setting's two columns, its FK and delete rule, its two CHECKs, `from_outside`'s NOT NULL, type and default, the dismissals table, its three NOT NULLs, its key, its two FKs' targets and delete rules, and two data lines — the members-only line narrowed in place.
+VERIFIER_TOTAL = 458
 
 
 def _now() -> datetime:
@@ -955,7 +955,13 @@ async def test_the_verifier_asserts_the_index_and_the_two_group_gathering_invari
     UNTIL SOMETHING INDEPENDENT OF THE ASSERTION CONFIRMS IT (CK-56's
     lesson), so each is confirmed by its own SELECT first."""
     index_line = f"index {INDEX} exists on gatherings.owning_group_id"
-    pending_line = "no pending (destination) invitation sits on a gathering that belongs to a group"
+    # Narrowed at 0037 (CK-92): a group's gathering takes emailed invitations
+    # while its outside invitations are on, so the line reads LIVE pending rows
+    # on a gathering that is off — which the plant below still is.
+    pending_line = (
+        "no LIVE pending invitation (neither consumed nor revoked) sits on a group's gathering "
+        "whose outside invitations are off"
+    )
     household_line = "every gathering that belongs to a group belongs to a HOUSEHOLD group"
     cast = await _cast(client, capsys, db_session_factory)
     created = await _create_in_group(client, cast.member, cast.group_id)

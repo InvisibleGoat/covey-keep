@@ -117,8 +117,10 @@ BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # groups, their FKs, CHECKs and partial indexes, and four data lines), so 385;
 # and CK-83b adds fifty-three (cover_images' shape, each subject's
 # cover_image_id and the widened CHECK's definition, and eleven data lines),
-# so 438.
-VERIFIER_TOTAL = 438
+# so 438; and CK-92 adds twenty (the outside-invitation setting's shape,
+# `from_outside`'s, the dismissals table's, and two data lines; the
+# members-only line narrowed in place), so 458.
+VERIFIER_TOTAL = 458
 
 LOGISTICS_FIELDS = ("occurrences", "rsvp_list_visibility")
 SUMMARY_FIELDS = ("next_occurrence", "occurrence_count")
@@ -523,6 +525,12 @@ async def test_invited_shared_with_and_left_out_from_every_surface(client, capsy
     for field in LOGISTICS_FIELDS + ("caller_view", "caller_role"):
         host_body.pop(field)
         memory_body.pop(field)
+    # MOVED at CK-92: `outside_invitations.may_change` is caller-relative, as
+    # caller_role is — the host may change the setting, a member only shared with
+    # (no organiser of the gathering or the group) may not; the rest of the object
+    # is the gathering's and stays in the comparison.
+    assert host_body["outside_invitations"].pop("may_change") is True
+    assert memory_body["outside_invitations"].pop("may_change") is False
     assert memory_body == host_body  # everything else as the full body
     for listed in (await _gathering_list(client, e_headers), (await _group_list(client, e_headers, cast.group_id)).json()["gatherings"]):
         (item,) = [g for g in listed if g["id"] == gathering_id]

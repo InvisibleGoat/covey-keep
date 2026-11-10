@@ -92,7 +92,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import delete, select
+from sqlalchemy import delete, exists, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -100,6 +100,8 @@ from app.api.deps import AuthContext, get_auth_context, get_db
 from app.api.gatherings import _gathering_for_invited, _not_found, may_administer
 from app.models import (
     Gathering,
+    GatheringCoHost,
+    GatheringInvitation,
     Occurrence,
     Person,
     RSVP,
@@ -333,6 +335,41 @@ async def put_rsvp(
 
 
 
+def _answerer_in_invited_tier(gathering: Gathering):
+    """THE LIST SHOWS AND COUNTS THE INVITED TIER ALONE (CK-92; the record
+    §6): an answer is listed while its person is the host (by the account
+    column), a co-host (the co-host row, on the account), or holds an
+    invitation row on the gathering — the three facts the RSVP routes'
+    loader admits. So when outside invitations are turned off, an outsider's
+    answers leave the list and its totals at once, and come back with them
+    if they are invited again: NO ANSWER IS DELETED. One criterion in the
+    list's own statement, correlated on the answer's person.
+
+    On every gathering before CK-92 every answer's person was in the tier
+    (an answer is written only through that loader, and nothing removed a
+    place from someone who had answered — the places route refuses
+    `has_answered`), with one exception this criterion now hides: a host who
+    deleted their account answered as the host and holds no invitation row,
+    and the deletion NULLs the host column — the report's divergence."""
+    terms = [
+        exists(
+            select(GatheringInvitation.id).where(
+                GatheringInvitation.gathering_id == gathering.id,
+                GatheringInvitation.person_id == RSVP.person_id,
+            )
+        ),
+        exists(
+            select(GatheringCoHost.gathering_id).where(
+                GatheringCoHost.gathering_id == gathering.id,
+                GatheringCoHost.account_id == Person.account_id,
+            )
+        ),
+    ]
+    if gathering.host_account_id is not None:
+        terms.append(Person.account_id == gathering.host_account_id)
+    return or_(*terms)
+
+
 @router.get("/occurrences/{occurrence_id}/rsvps")
 async def list_rsvps(
     occurrence_id: UUID,
@@ -353,7 +390,7 @@ async def list_rsvps(
             # rows (person_id NULL — a later phase) would fall out here rather
             # than leak with no name.
             .join(Person, Person.id == RSVP.person_id)
-            .where(RSVP.occurrence_id == occurrence.id)
+            .where(RSVP.occurrence_id == occurrence.id, _answerer_in_invited_tier(gathering))
             .order_by(RSVP.created_at, RSVP.id)
         )
     ).all()

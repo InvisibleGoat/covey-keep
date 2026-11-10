@@ -1763,7 +1763,13 @@ async def test_0030_round_trip_adds_cancel_at_and_the_downgrade_is_genuine(
     three FKs twice, its two enum types, its two CHECKs and two partial
     indexes, five lines on each subject's `cover_image_id`, and the guarded
     uploaded-cover integrity block's one FAIL: 116 failed of 376 (the pin
-    moved at CK-83b with this reason); up — the column back, nullable,
+    moved at CK-83b with this reason) — AND, since CK-92, on seventeen of
+    0037's lines: the setting's two columns, its FK twice, its two CHECKs,
+    `from_outside`'s three lines, the dismissals table's line and its
+    collapsed columns block, its PK and its two FKs twice, and the guarded
+    outside-invitation integrity block's one FAIL, while the narrowed
+    members-only line takes its old form below 0037 and passes: 133 failed
+    of 393 (the pin moved at CK-92 with this reason, measured); up — the column back, nullable,
     timestamptz, no default, and a value planted at head LOST and not
     resurrected (a migration cannot ask Stripe; the next event writes it).
     Down and up once more: idempotent."""
@@ -1786,9 +1792,9 @@ async def test_0030_round_trip_adds_cancel_at_and_the_downgrade_is_genuine(
         assert await db.scalar(text("SELECT count(*) FROM subscriptions")) == 1
         assert (await db.execute(text("SELECT version_num FROM alembic_version"))).scalar_one() == "0029"
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (260, 116, 1), out
+    assert (passed, failed, code) == (260, 133, 1), out
     for line in (
-        "alembic_version is at 0036",  # the head moves with every migration; 0036 since CK-83b
+        "alembic_version is at 0037",  # the head moves with every migration; 0037 since CK-92
         "index ix_gatherings_owning_group_id exists on gatherings.owning_group_id",  # 0033's, gone below it
         "subscriptions.cancel_at is nullable",
         "subscriptions.cancel_at is timestamp with time zone",
@@ -1803,7 +1809,7 @@ async def test_0030_round_trip_adds_cancel_at_and_the_downgrade_is_genuine(
     rows = await _subscription_rows(db_session_factory)
     assert len(rows) == 1 and rows[0].cancel_at is None  # lost with the column, not resurrected
     assert rows[0].cancel_at_period_end is False and rows[0].status == "active"
-    assert _verifier()[:3] == (438, 0, 0)
+    assert _verifier()[:3] == (458, 0, 0)
 
     await _migrate("downgrade", "0029", capsys)
     await _migrate("upgrade", "head", capsys)
@@ -1834,7 +1840,7 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
     line and five membership invariants, with CK-45's
     at-least-one-membership line replaced; and 339 since CK-76's three — the index on
     `gatherings.owning_group_id`, no pending invitation on a group gathering,
-    every group gathering under a HOUSEHOLD group; and 361 since CK-77's twenty-three — the places table's shape, the `member_place` labels, `invitees_chosen` and its CHECK, three data lines — less the one it retired, CK-75's backup-NULL line, replaced by the 0009 block's is-gone line; and 385 since CK-83a's twenty-four — the six cover columns' shapes on gatherings and groups — nullability, the two FKs each with no delete rule, cover_set_at's type, the CHECKs and the partial indexes — and four data lines; and 438 since CK-83b's fifty-three — cover_images' shape (the table, its eighteen columns' nullability, the PK, three FKs with their delete rules, the two enum types, two CHECKs, two partial indexes), each subject's cover_image_id (nullability, FK and delete rule, partial index, the widened CHECK's definition), and eleven data lines). A PLANT IS NOT EVIDENCE UNTIL SOMETHING
+    every group gathering under a HOUSEHOLD group; and 361 since CK-77's twenty-three — the places table's shape, the `member_place` labels, `invitees_chosen` and its CHECK, three data lines — less the one it retired, CK-75's backup-NULL line, replaced by the 0009 block's is-gone line; and 385 since CK-83a's twenty-four — the six cover columns' shapes on gatherings and groups — nullability, the two FKs each with no delete rule, cover_set_at's type, the CHECKs and the partial indexes — and four data lines; and 438 since CK-83b's fifty-three — cover_images' shape (the table, its eighteen columns' nullability, the PK, three FKs with their delete rules, the two enum types, two CHECKs, two partial indexes), each subject's cover_image_id (nullability, FK and delete rule, partial index, the widened CHECK's definition), and eleven data lines; and 458 since CK-92's twenty — the outside-invitation setting's shape, `from_outside`'s, the dismissals table's, and two data lines, the members-only line narrowed in place). A PLANT IS NOT EVIDENCE UNTIL SOMETHING
     INDEPENDENT OF THE ASSERTION CONFIRMS THE ROW EXISTS (CK-56's lesson),
     so each is counted by its own SELECT before the verifier reads it."""
     orphan = "every subscription's account has a billing_customers row of the same provider"
@@ -1853,7 +1859,7 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
     await _plant_subscription(db_session_factory, account.id, subscription_id="sub_verified")
 
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (438, 0, 0), out
+    assert (passed, failed, code) == (458, 0, 0), out
     for line in (
         "table billing_customers exists",
         "table subscriptions exists",
@@ -1899,10 +1905,10 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
         "(SELECT 1 FROM billing_customers c WHERE c.account_id = s.account_id)",
     )
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (437, 1, 1), out
+    assert (passed, failed, code) == (457, 1, 1), out
     assert f"FAIL  {orphan}" in out and "1 subscription row(s) with no customer row" in out
     await _plant_customer(db_session_factory, account.id, "cus_verified")
-    assert _verifier()[:3] == (438, 0, 0)
+    assert _verifier()[:3] == (458, 0, 0)
 
     # (2) Billing rows on an anonymized account: both lines, and only those.
     await run(
@@ -1911,14 +1917,14 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
         "SELECT count(*) FROM people WHERE id = :p AND anonymized_at IS NOT NULL",
     )
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (436, 2, 1), out
+    assert (passed, failed, code) == (456, 2, 1), out
     assert f"FAIL  {on_deleted_c}" in out and f"FAIL  {on_deleted_s}" in out
     await run(
         "UPDATE people SET anonymized_at = NULL WHERE id = :p",
         {"p": person_id},
         "SELECT count(*) FROM people WHERE id = :p AND anonymized_at IS NULL",
     )
-    assert _verifier()[:3] == (438, 0, 0)
+    assert _verifier()[:3] == (458, 0, 0)
 
     # (3) Two paid subscriptions on one account — impossible while the
     # partial unique stands (the plant is refused), so the index is dropped
@@ -1943,7 +1949,7 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
         "SELECT count(*) FROM subscriptions WHERE account_id = :a AND provider_subscription_id = 'sub_second_paid'",
     )
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (435, 3, 1), out
+    assert (passed, failed, code) == (455, 3, 1), out
     assert f"FAIL  {double}" in out and f"FAIL  {shape_exists}" in out and f"FAIL  {shape_def}" in out
     async with db_session_factory() as db:
         await db.execute(text("DELETE FROM subscriptions WHERE provider_subscription_id = 'sub_second_paid'"))
@@ -1954,7 +1960,7 @@ async def test_the_verifier_asserts_the_billing_shape_and_its_three_invariants(
             )
         )
         await db.commit()
-    assert _verifier()[:3] == (438, 0, 0)
+    assert _verifier()[:3] == (458, 0, 0)
 
 
 # --- the scheduled change: a downgrade waiting for renewal (CK-73.2; migration 0031) --
@@ -2451,7 +2457,7 @@ SCHEDULED_SHAPE = {
 # the two nullable lines ("column missing"), the four `.first()` lines, the
 # CHECK, and the pair invariant's guard.
 LINES_0031 = (
-    "alembic_version is at 0036",  # the head moves with every migration; 0036 since CK-83b
+    "alembic_version is at 0037",  # the head moves with every migration; 0037 since CK-92
     "subscriptions.scheduled_plan is nullable",
     "subscriptions.scheduled_plan_at is nullable",
     "subscriptions.scheduled_plan is of type billing_plan",
@@ -2480,7 +2486,9 @@ async def test_0031_round_trip_adds_the_two_columns_and_the_check_and_the_downgr
     trip's docstring says (eighty-seven failed of 350; the pin moved at
     CK-83a with this reason) — and, since CK-83b, on twenty-six of 0036's
     lines, as the 0030 round trip's docstring says (113 failed of 376; the
-    pin moved at CK-83b with this reason); up
+    pin moved at CK-83b with this reason) — and, since CK-92, on seventeen
+    of 0037's lines, as the 0030 round trip's docstring says (130 failed of
+    393; the pin moved at CK-92 with this reason, measured); up
     — the columns back, nullable, on the enum and timestamptz, no default,
     the CHECK back, and a pair planted at head LOST and not resurrected (a
     migration cannot ask Stripe); the CHECK refused on a real row by name,
@@ -2507,7 +2515,7 @@ async def test_0031_round_trip_adds_the_two_columns_and_the_check_and_the_downgr
         assert await db.scalar(text("SELECT count(*) FROM subscriptions")) == 1
         assert (await db.execute(text("SELECT version_num FROM alembic_version"))).scalar_one() == "0030"
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (263, 113, 1), out
+    assert (passed, failed, code) == (263, 130, 1), out
     for line in LINES_0031:
         assert f"FAIL  {line}" in out, line
 
@@ -2517,7 +2525,7 @@ async def test_0031_round_trip_adds_the_two_columns_and_the_check_and_the_downgr
     rows = await _subscription_rows(db_session_factory)
     assert len(rows) == 1 and rows[0].scheduled_plan is None and rows[0].scheduled_plan_at is None
     assert rows[0].plan == BillingPlan.PHOTOS_300K and rows[0].status == "active"
-    assert _verifier()[:3] == (438, 0, 0)
+    assert _verifier()[:3] == (458, 0, 0)
 
     # The CHECK, on a real row, by name — half a change is refused both ways.
     for sql in (
@@ -2572,7 +2580,7 @@ async def test_the_verifier_asserts_the_scheduled_change_shape_and_its_pair_inva
         scheduled_plan_at=_instant(NEXT_START),
     )
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (438, 0, 0), out
+    assert (passed, failed, code) == (458, 0, 0), out
     for line in (
         *LINES_0031[1:8],
         pair,
@@ -2593,7 +2601,7 @@ async def test_the_verifier_asserts_the_scheduled_change_shape_and_its_pair_inva
         )
         assert planted == 1, "the plant did not land"
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (436, 2, 1), out
+    assert (passed, failed, code) == (456, 2, 1), out
     assert f"FAIL  {shape}" in out and f"FAIL  {pair}" in out
     assert "1 subscription row(s) with half a scheduled change" in out
 
@@ -2606,7 +2614,7 @@ async def test_the_verifier_asserts_the_scheduled_change_shape_and_its_pair_inva
             )
         )
         await db.commit()
-    assert _verifier()[:3] == (438, 0, 0)
+    assert _verifier()[:3] == (458, 0, 0)
 
 
 # --- CK-74: your plan — the caller's own usage and the plans on GET /billing ---------

@@ -164,8 +164,11 @@ BOTH_INDEXES = {"ix_gatherings_keeper_account_id", "ix_groups_keeper_account_id"
 # the three cover columns on `gatherings` and on `groups` with their CHECKs
 # and partial indexes, and touches neither; 0036, CK-83b, creates
 # `cover_images`, adds `cover_image_id` on `gatherings` and `groups` and
-# widens their cover CHECKs, and touches neither.)
-HEAD = "0036"
+# widens their cover CHECKs, and touches neither; 0037, CK-92, adds the
+# outside-invitation setting on `gatherings` with its two CHECKs,
+# `from_outside` on `gathering_invitations` and the
+# `gathering_outside_alert_dismissals` table, and touches neither.)
+HEAD = "0037"
 
 
 async def test_0024_round_trip_backfills_the_count_and_the_downgrade_is_genuine(

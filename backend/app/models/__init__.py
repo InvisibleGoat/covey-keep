@@ -38,6 +38,7 @@ from app.models.gathering import (
     GatheringInvitation,
     GatheringInvitationPending,
     GatheringMemberPlace,
+    GatheringOutsideAlertDismissal,
     Occurrence,
 )
 from app.models.group import (
@@ -74,6 +75,7 @@ __all__ = [
     "GatheringInvitation",
     "GatheringInvitationPending",
     "GatheringMemberPlace",
+    "GatheringOutsideAlertDismissal",
     "GatheringType",
     "Group",
     "GroupCoAdmin",

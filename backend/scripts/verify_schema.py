@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0036"
+EXPECTED_REVISION = "0037"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -1122,23 +1122,48 @@ async def verify(conn, ck: Checks) -> None:
         columns["gatherings"]
     ):
         # (2) MEMBERS ONLY, AS DATA (record §9): a group's gathering reaches
-        # the group's members by rows and nobody outside the group until
-        # sharing outside it ships, so no pending (destination) invitation
+        # the group's members by rows, so no pending (destination) invitation
         # may sit on a gathering that belongs to a group — the create route
         # refuses one with a 409 `members_only` before anything is written,
         # and this is the deployed backstop. The failing write is a
         # destination row written around the refusal.
-        pending_on_group_gathering = await scalar(
-            conn,
-            "SELECT count(*) FROM gathering_invitations_pending p "
-            "JOIN gatherings g ON g.id = p.gathering_id "
-            "WHERE g.owning_group_id IS NOT NULL",
-        )
-        ck.check(
-            pending_on_group_gathering == 0,
-            "no pending (destination) invitation sits on a gathering that belongs to a group",
-            f"{pending_on_group_gathering} pending invitation row(s) on a group gathering",
-        )
+        #
+        # NARROWED AT 0037 (CK-92; the record §5): with a gathering's OUTSIDE
+        # INVITATIONS on, the create writes pending rows on a group's
+        # gathering, and turning them off revokes every LIVE one (neither
+        # consumed nor revoked, an expired one included) in the transaction
+        # that clears the setting — while a consumed or revoked row stays as
+        # the history it is. So from 0037 the line reads: no LIVE pending row
+        # on a group's gathering whose outside invitations are off. Below
+        # 0037 the column does not exist and the old form stands, one line
+        # either way.
+        if "outside_invitations_since" in set(columns["gatherings"]):
+            live_pending_while_off = await scalar(
+                conn,
+                "SELECT count(*) FROM gathering_invitations_pending p "
+                "JOIN gatherings g ON g.id = p.gathering_id "
+                "WHERE g.owning_group_id IS NOT NULL "
+                "AND g.outside_invitations_since IS NULL "
+                "AND p.consumed_at IS NULL AND p.revoked_at IS NULL",
+            )
+            ck.check(
+                live_pending_while_off == 0,
+                "no LIVE pending invitation (neither consumed nor revoked) sits on a group's gathering "
+                "whose outside invitations are off",
+                f"{live_pending_while_off} live pending invitation row(s) on a group gathering that is off",
+            )
+        else:
+            pending_on_group_gathering = await scalar(
+                conn,
+                "SELECT count(*) FROM gathering_invitations_pending p "
+                "JOIN gatherings g ON g.id = p.gathering_id "
+                "WHERE g.owning_group_id IS NOT NULL",
+            )
+            ck.check(
+                pending_on_group_gathering == 0,
+                "no pending (destination) invitation sits on a gathering that belongs to a group",
+                f"{pending_on_group_gathering} pending invitation row(s) on a group gathering",
+            )
         # (3) EVERY GATHERING THAT BELONGS TO A GROUP BELONGS TO A HOUSEHOLD
         # GROUP (record §4: household groups only; the create route refuses
         # any other type with a field-level 422 at `group_id` — the rung-2
@@ -1980,6 +2005,142 @@ async def verify(conn, ck: Checks) -> None:
             False,
             "member place integrity",
             "gathering_member_places / gathering_invitations / gatherings.invitees_chosen missing",
+        )
+
+    print("\n-- outside invitations (0037, CK-92) --")
+    # INVITING PEOPLE OUTSIDE THE GROUP (the 2026-10-04 record §5, §6, §10):
+    # a SETTING on a group's gathering — `outside_invitations_since` (when it
+    # was turned on, NULL while off) and `outside_invitations_by_person_id`
+    # (who turned it on, FK -> people with NO delete rule, the house habit),
+    # both set or both NULL (the first CHECK) and only on a gathering that
+    # belongs to a group (the second — a standalone gathering takes an
+    # emailed invitation from anyone already); `from_outside` on every
+    # invitation row — NOT NULL, boolean, DEFAULT false, because every
+    # writer that does not know about outsiders (the group create, joining,
+    # the places route, a standalone accept) writes a member's or a
+    # standalone row — true on exactly the rows turning the setting off
+    # removes; and `gathering_outside_alert_dismissals`, one row per
+    # (gathering, person) who dismissed the line at the top, both FKs with
+    # NO delete rule. Every line is the 0037 shape read back from the
+    # catalog — the 0022 idiom.
+    assert_columns(
+        ck,
+        columns,
+        "gatherings",
+        nullable=("outside_invitations_since", "outside_invitations_by_person_id"),
+    )
+    opener_fk = await fk_rule(conn, "fk_gatherings_outside_invitations_by_person_id")
+    ck.check(
+        opener_fk is not None and opener_fk[0] == "people",
+        "gatherings.outside_invitations_by_person_id references people",
+        f"found {opener_fk!r}",
+    )
+    ck.check(
+        opener_fk is not None and opener_fk[1] == "a",
+        "gatherings.outside_invitations_by_person_id has no delete rule (nothing cascades from a person)",
+        f"delete rule is {opener_fk[1] if opener_fk else None!r}",
+    )
+    for conname in (
+        "ck_gatherings_outside_invitations_both_or_neither",
+        "ck_gatherings_outside_invitations_need_group",
+    ):
+        ck.check(conname in check_constraints, f"CHECK {conname} exists", "constraint missing")
+    assert_columns(ck, columns, "gathering_invitations", not_null=("from_outside",))
+    outside_shape = await column_type_and_default(conn, "gathering_invitations", "from_outside")
+    ck.check(
+        outside_shape is not None and outside_shape[0] == "boolean",
+        "gathering_invitations.from_outside is boolean",
+        "column missing" if outside_shape is None else f"type is {outside_shape[0]!r}",
+    )
+    ck.check(
+        outside_shape is not None and outside_shape[1] == "false",
+        "gathering_invitations.from_outside defaults to false (a member's row, unless an outsider accepts)",
+        "column missing" if outside_shape is None else f"default is {outside_shape[1]!r}",
+    )
+    ck.check(
+        "gathering_outside_alert_dismissals" in tables,
+        "table gathering_outside_alert_dismissals exists",
+        "table missing",
+    )
+    assert_columns(
+        ck,
+        columns,
+        "gathering_outside_alert_dismissals",
+        not_null=("gathering_id", "person_id", "dismissed_at"),
+    )
+    dismissal_pk = await pk_columns(conn, "pk_gathering_outside_alert_dismissals")
+    ck.check(
+        dismissal_pk == ["gathering_id", "person_id"],
+        "gathering_outside_alert_dismissals primary key is (gathering_id, person_id) "
+        "- one dismissal per person per gathering",
+        f"found {dismissal_pk!r}",
+    )
+    for column, target, conname in (
+        ("gathering_id", "gatherings", "fk_gathering_outside_alert_dismissals_gathering_id"),
+        ("person_id", "people", "fk_gathering_outside_alert_dismissals_person_id"),
+    ):
+        fk = await fk_rule(conn, conname)
+        ck.check(
+            fk is not None and fk[0] == target,
+            f"gathering_outside_alert_dismissals.{column} references {target}",
+            f"found {fk!r}",
+        )
+        ck.check(
+            fk is not None and fk[1] == "a",
+            f"gathering_outside_alert_dismissals.{column} has no delete rule "
+            "(nothing cascades from a person or a gathering)",
+            f"delete rule is {fk[1] if fk else None!r}",
+        )
+
+    print("\n-- outside invitation integrity (CK-92) --")
+    # Guarded on the columns (the CK-43 lesson): below 0037 a query over them
+    # is a crash, not a FAIL.
+    if {"gathering_invitations", "gatherings", "memberships"} <= tables and (
+        "from_outside" in set(columns["gathering_invitations"])
+        and "outside_invitations_since" in set(columns["gatherings"])
+    ):
+        # (1) AN OUTSIDER IS THERE ONLY WHILE THE SETTING IS ON: turning it
+        # off deletes every `from_outside` row in the transaction that clears
+        # the setting, and an acceptance writes one only under the gathering's
+        # row lock with the setting on. The failing state is an outsider's
+        # row left behind — someone outside the group still reading a
+        # gathering its organisers closed to them. (A standalone gathering
+        # has no setting, so a `from_outside` row there fails this line too.)
+        stranded = await scalar(
+            conn,
+            "SELECT count(*) FROM gathering_invitations i "
+            "JOIN gatherings g ON g.id = i.gathering_id "
+            "WHERE i.from_outside "
+            "AND (g.owning_group_id IS NULL OR g.outside_invitations_since IS NULL)",
+        )
+        ck.check(
+            stranded == 0,
+            "every from_outside invitation row sits on a group's gathering whose outside invitations are on",
+            f"{stranded} from_outside row(s) on a gathering that is off or standalone",
+        )
+        # (2) A MEMBER IS NEVER AN OUTSIDER: joining the group clears the flag
+        # on every one of the person's rows on the group's gatherings, in the
+        # admission's transaction, and an acceptance writes it false for a
+        # member. The failing state is a member whom a turn-off would remove.
+        # Read against membership as DATA, here and nowhere at read time: the
+        # flag is a row, and the routes never compute it.
+        member_outsiders = await scalar(
+            conn,
+            "SELECT count(*) FROM gathering_invitations i "
+            "JOIN gatherings g ON g.id = i.gathering_id "
+            "JOIN memberships m ON m.group_id = g.owning_group_id AND m.person_id = i.person_id "
+            "WHERE i.from_outside",
+        )
+        ck.check(
+            member_outsiders == 0,
+            "no from_outside invitation row's person holds a membership of the gathering's group",
+            f"{member_outsiders} from_outside row(s) held by a member of the group",
+        )
+    else:
+        ck.check(
+            False,
+            "outside invitation integrity",
+            "gathering_invitations.from_outside / gatherings.outside_invitations_since missing",
         )
 
     print("\n-- covers from photographs (0035, CK-83a) --")
@@ -3044,6 +3205,11 @@ async def verify(conn, ck: Checks) -> None:
         # `gathering_member_places` joins at CK-77 (0034): zero on the deploy
         # until (kb) makes the first choice.
         "gathering_member_places",
+        # `gathering_outside_alert_dismissals` joins at CK-92 (0037): zero on
+        # the deploy until someone dismisses the line at the top. Never
+        # reaped — a dismissal is a person's choice, kept (not in
+        # EPHEMERAL_TABLES).
+        "gathering_outside_alert_dismissals",
         "billing_customers",
         "subscriptions",
     ):

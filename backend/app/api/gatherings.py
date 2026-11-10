@@ -152,8 +152,16 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import case, delete, exists, func, or_, select
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    field_validator,
+    model_validator,
+)
+from sqlalchemy import and_, case, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -162,6 +170,7 @@ from app.api.groups import (
     _group_for_read,
     _no_such_member,
     _not_found as _group_not_found,
+    may_administer_group,
     member_of,
 )
 from app.models import (
@@ -171,7 +180,9 @@ from app.models import (
     Gathering,
     GatheringCoHost,
     GatheringInvitation,
+    GatheringInvitationPending,
     GatheringMemberPlace,
+    GatheringOutsideAlertDismissal,
     GatheringType,
     Group,
     GroupType,
@@ -696,6 +707,7 @@ def _gathering_body(
     caller_role: Optional[str],
     caller_view: str,
     caller_responses: Optional[Mapping[UUID, str]] = None,
+    outside: Optional[Mapping[str, object]] = None,
 ) -> dict:
     # The gate, resolved for this body (CK-41): `requires_approval` is the
     # EFFECTIVE value — a plain boolean, the same field every consumer has
@@ -781,6 +793,15 @@ def _gathering_body(
             # No dates, so no answers: the memory view carries no
             # `caller_response` anywhere.
             body["occurrences"] = None
+    if outside is not None:
+        # INVITING PEOPLE OUTSIDE THE GROUP (CK-92): `outside_invitations`,
+        # `caller_in_group` and `outside_alert`, on a body for ONE gathering
+        # — the detail, the setting route's answer, a create's and a patch's
+        # — null on a standalone gathering, and never on a list item or a
+        # calendar answer (no caller hands them in there, so those bodies and
+        # their statements are unchanged). Not logistics: the memory view
+        # carries them too.
+        body.update(outside)
     return body
 
 
@@ -1066,6 +1087,175 @@ async def _gathering_for_host(
     return gathering
 
 
+# --- inviting people outside the group (CK-92) ------------------------------
+# decisions/2026-10-04-a-groups-gathering-stays-in-the-group.md §5–§7, §11;
+# decisions/2026-10-23-joining-a-group-and-co-admins.md §6, §9. A group's
+# gathering reaches its members by rows; the setting lets its organisers — or
+# the group's admin and co-admins — invite people outside the group by email,
+# and the alert tells the members once. ON exactly when
+# `gatherings.outside_invitations_since` is set (migration 0037), a column
+# read fresh and never off a loaded row (the model's `deferred_raiseload`).
+
+
+async def may_change_outside_invitations(
+    db: AsyncSession, gathering: Gathering, ctx: AuthContext
+) -> bool:
+    """WHO MAY TURN INVITING PEOPLE OUTSIDE THE GROUP ON OR OFF (CK-92), the
+    one question every gate on it asks: the host or a co-host
+    (`may_administer` — the gathering's delegable set); or, on a group's
+    gathering, the group's admin or a co-admin (`may_administer_group`) WHO
+    CAN READ THE GATHERING ON THE MEMORY TIER — invited, a co-host or the
+    host, or shared with. Running the group does not reach past a place the
+    host chose: an admin or co-admin LEFT OUT of a gathering (the surprise
+    is for them) is answered no, so the setting route gives them the 404 a
+    stranger draws and they learn nothing (the record §5's admin check).
+    Cheapest first: the host from the row, then one lookup per fact, each
+    made only when the ones before it fail."""
+    if await may_administer(db, gathering, ctx):
+        return True
+    if gathering.owning_group_id is None:
+        return False
+    readable = await _in_invited_tier(db, gathering, ctx) or await _holds_place(
+        db, ctx.person.id, gathering.id, MemberPlace.SHARED_WITH
+    )
+    if not readable:
+        return False
+    group = await db.get(Group, gathering.owning_group_id)
+    return group is not None and await may_administer_group(db, group, ctx)
+
+
+async def _gathering_for_outside_setting(
+    db: AsyncSession, ctx: AuthContext, gathering_id: UUID
+) -> Gathering:
+    """The setting's loader (CK-92): `may_change_outside_invitations`, and
+    everyone else — an invited member who runs nothing, the keeper by
+    keeping, an outsider, a stranger, a left-out admin — draws the 404
+    byte-identical to a missing id. A standalone gathering's host is then
+    refused with 409 `not_in_a_group`, AFTER the audience check, so the
+    refusal discloses nothing a stranger could not already read."""
+    gathering = await db.get(Gathering, gathering_id)
+    if gathering is None or not await may_change_outside_invitations(db, gathering, ctx):
+        raise _not_found()
+    if gathering.owning_group_id is None:
+        raise HTTPException(
+            409,
+            detail={
+                "code": NOT_IN_A_GROUP,
+                "message": (
+                    "this gathering doesn't belong to a group, so anyone can be "
+                    "invited to it by email already"
+                ),
+            },
+        )
+    return gathering
+
+
+def _opener_join():
+    """The outer join to the person who turned the setting on, whose
+    `display_name` is the body's `by` — NULL when nobody did or when their
+    account was deleted (an anonymized person names nobody)."""
+    return and_(
+        Person.id == Gathering.outside_invitations_by_person_id,
+        Person.anonymized_at.is_(None),
+    )
+
+
+async def _outside_fields(
+    db: AsyncSession,
+    gathering: Gathering,
+    ctx: AuthContext,
+    *,
+    may_change: Optional[bool] = None,
+) -> dict:
+    """The detail body's three fields (CK-92). On a standalone gathering all
+    three are null, nothing read. On a group's gathering, ONE statement
+    reads the setting fresh, the opener's name, whether the caller holds a
+    membership of the group (`caller_in_group` — the membership ROW, as the
+    group's read audience reads it) and whether they dismissed the alert at
+    or after the setting's stamp; `may_change` is handed in where the
+    caller's seat already says it (a create, a patch), else asked.
+
+    `outside_alert` is true exactly when the setting is on, the caller is a
+    member of the group, did not turn it on, and holds no dismissal at or
+    after the stamp — so never for an outsider, whom no membership row
+    names, and back again for everyone after a turn-off and a turn-on (a
+    new stamp)."""
+    if gathering.owning_group_id is None:
+        return {"outside_invitations": None, "caller_in_group": None, "outside_alert": None}
+    if may_change is None:
+        may_change = await may_change_outside_invitations(db, gathering, ctx)
+    person_id = ctx.person.id
+    since, by_person_id, by_name, in_group, dismissed = (
+        await db.execute(
+            select(
+                Gathering.outside_invitations_since,
+                Gathering.outside_invitations_by_person_id,
+                Person.display_name,
+                member_of(person_id, Gathering.owning_group_id),
+                exists(
+                    select(GatheringOutsideAlertDismissal.person_id).where(
+                        GatheringOutsideAlertDismissal.gathering_id == Gathering.id,
+                        GatheringOutsideAlertDismissal.person_id == person_id,
+                        GatheringOutsideAlertDismissal.dismissed_at
+                        >= Gathering.outside_invitations_since,
+                    )
+                ),
+            )
+            .select_from(Gathering)
+            .outerjoin(Person, _opener_join())
+            .where(Gathering.id == gathering.id)
+        )
+    ).one()
+    on = since is not None
+    return {
+        "outside_invitations": {
+            "on": on,
+            "since": since.isoformat() if on else None,
+            "by": by_name if on else None,
+            "may_change": may_change,
+        },
+        "caller_in_group": bool(in_group),
+        "outside_alert": bool(on and in_group and by_person_id != person_id and not dismissed),
+    }
+
+
+async def _detail_body(
+    db: AsyncSession, gathering: Gathering, ctx: AuthContext, view: str
+) -> dict:
+    """The detail body for a caller the memory tier admitted, in `view` —
+    the detail's answer and, since CK-92, the setting route's, so the two
+    can never disagree."""
+    if view == VIEW_FULL:
+        occurrences = list(
+            (
+                await db.scalars(
+                    select(Occurrence)
+                    .where(Occurrence.gathering_id == gathering.id)
+                    .order_by(Occurrence.starts_at, Occurrence.id)
+                )
+            ).all()
+        )
+        caller_role = await _role_of(db, gathering, ctx)
+        # The caller's own answer on each date, in one statement (CK-87).
+        responses = await _caller_responses(db, ctx.person.id, [o.id for o in occurrences])
+    else:
+        # Not read at all in the memory view — the body carries the key as
+        # null — and a member only shared with is neither host nor co-host;
+        # with no dates there are no answers to read (CK-87).
+        occurrences = []
+        caller_role = None
+        responses = None
+    return _gathering_body(
+        gathering,
+        occurrences,
+        facts=await _home_facts(db, gathering),
+        caller_role=caller_role,
+        caller_view=view,
+        caller_responses=responses,
+        outside=await _outside_fields(db, gathering, ctx),
+    )
+
+
 async def _occurrence_for_organiser(
     db: AsyncSession, ctx: AuthContext, occurrence_id: UUID
 ) -> tuple[Occurrence, Gathering]:
@@ -1271,6 +1461,23 @@ async def create_gathering(
         ),
         caller_role=ROLE_HOST,
         caller_view=VIEW_FULL,
+        # A gathering made a moment ago has its outside invitations off,
+        # its creator (a member — the create refuses anyone else) may turn
+        # them on, and nobody has an alert: literal, nothing read (CK-92).
+        outside=(
+            {
+                "outside_invitations": {
+                    "on": False,
+                    "since": None,
+                    "by": None,
+                    "may_change": True,
+                },
+                "caller_in_group": True,
+                "outside_alert": False,
+            }
+            if group is not None
+            else {"outside_invitations": None, "caller_in_group": None, "outside_alert": None}
+        ),
         # Nobody has answered a date that did not exist a moment ago: every
         # date carries null, and nothing is read to say so (CK-87).
         caller_responses={},
@@ -1565,34 +1772,7 @@ async def get_gathering(
     keeping and a stranger each draw the 404 byte-identical to a missing
     id."""
     gathering, view = await _gathering_for_memory(db, ctx, gathering_id)
-    if view == VIEW_FULL:
-        occurrences = list(
-            (
-                await db.scalars(
-                    select(Occurrence)
-                    .where(Occurrence.gathering_id == gathering.id)
-                    .order_by(Occurrence.starts_at, Occurrence.id)
-                )
-            ).all()
-        )
-        caller_role = await _role_of(db, gathering, ctx)
-        # The caller's own answer on each date, in one statement (CK-87).
-        responses = await _caller_responses(db, ctx.person.id, [o.id for o in occurrences])
-    else:
-        # Not read at all in the memory view — the body carries the key as
-        # null — and a member only shared with is neither host nor co-host;
-        # with no dates there are no answers to read (CK-87).
-        occurrences = []
-        caller_role = None
-        responses = None
-    return _gathering_body(
-        gathering,
-        occurrences,
-        facts=await _home_facts(db, gathering),
-        caller_role=caller_role,
-        caller_view=view,
-        caller_responses=responses,
-    )
+    return await _detail_body(db, gathering, ctx, view)
 
 
 @router.patch("/gatherings/{gathering_id}")
@@ -1658,6 +1838,7 @@ async def patch_gathering(
         # co-host — no second lookup, and the full view by construction.
         caller_role=ROLE_HOST if is_host(gathering, ctx) else ROLE_CO_HOST,
         caller_view=VIEW_FULL,
+        outside=await _outside_fields(db, gathering, ctx, may_change=True),
     )
 
 
@@ -2045,3 +2226,194 @@ async def put_place(
         await db.execute(_places_statement(gathering).where(Membership.id == membership.id))
     ).one()
     return _place_entry(*entry)
+
+
+# --- the outside-invitations routes (CK-92) --------------------------------
+
+
+class OutsideInvitationsIn(BaseModel):
+    """`{"on": true}` or `{"on": false}` and nothing else: a JSON boolean,
+    never a string or a number read as one, and no other key."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    on: StrictBool
+
+
+async def _lock_setting(db: AsyncSession, gathering_id: UUID) -> Optional[datetime]:
+    """THE GATHERING'S ROW LOCK, taken first by every writer that depends on
+    the setting — the setting route, an emailed invitation's create and its
+    accept on a group's gathering (api/invitations.py takes the same
+    statement) — and the setting read under it, fresh. Two of them on one
+    gathering take turns: an acceptance a turn-off waited for is removed by
+    it, and an acceptance or an invitation that waited for a turn-off finds
+    the setting off. The lock is the gathering's alone, so the covers' order
+    (the photograph, then the subject, then cover images) is untouched: none
+    of these paths locks a photograph or a cover image."""
+    return await db.scalar(
+        select(Gathering.outside_invitations_since)
+        .where(Gathering.id == gathering_id)
+        .with_for_update()
+    )
+
+
+@router.put("/gatherings/{gathering_id}/outside-invitations")
+async def put_outside_invitations(
+    gathering_id: UUID,
+    body: OutsideInvitationsIn,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Turn inviting people outside the group on or off (CK-92; the record
+    §5, §6). `may_change_outside_invitations`; everyone else the gathering's
+    404; a standalone gathering 409 `not_in_a_group`. ON stamps now and the
+    caller's person; on again writes nothing. OFF, in ONE transaction:
+    every invitation row an outsider holds (`from_outside`) is deleted, so
+    they lose the gathering on every route at once; every LIVE pending
+    invitation (neither consumed nor revoked, an expired one included) is
+    revoked in the revoke route's shape, so its link answers `revoked`; and
+    the setting is cleared. Off again writes nothing. Nothing else is
+    touched: a member's row — a member who left the group included, read
+    from the row and never from membership — their answers, an outsider's
+    answers and photographs (still stored and charged), the places. Answers
+    the detail body; `updated_at` is not stamped (who can see a gathering is
+    not an edit of it)."""
+    gathering = await _gathering_for_outside_setting(db, ctx, gathering_id)
+    person_id = ctx.person.id
+    since = await _lock_setting(db, gathering.id)
+    now = datetime.now(timezone.utc)
+    if body.on and since is None:
+        await db.execute(
+            update(Gathering)
+            .where(Gathering.id == gathering.id)
+            .values(outside_invitations_since=now, outside_invitations_by_person_id=person_id)
+            .execution_options(synchronize_session=False)
+        )
+    elif not body.on and since is not None:
+        await db.execute(
+            delete(GatheringInvitation).where(
+                GatheringInvitation.gathering_id == gathering.id,
+                GatheringInvitation.from_outside.is_(True),
+            )
+        )
+        await db.execute(
+            update(GatheringInvitationPending)
+            .where(
+                GatheringInvitationPending.gathering_id == gathering.id,
+                GatheringInvitationPending.consumed_at.is_(None),
+                GatheringInvitationPending.revoked_at.is_(None),
+            )
+            .values(
+                revoked_at=now,
+                expires_at=func.least(GatheringInvitationPending.expires_at, now),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        await db.execute(
+            update(Gathering)
+            .where(Gathering.id == gathering.id)
+            .values(outside_invitations_since=None, outside_invitations_by_person_id=None)
+            .execution_options(synchronize_session=False)
+        )
+    # Already as asked, nothing was written; either way the commit lets the
+    # lock go — a commit, never a rollback, which would expire `ctx.person`
+    # and the gathering this session holds (CK-77.1).
+    await db.commit()
+    # The caller's view of the gathering now: the invited tier reads it in
+    # full, a group's admin or co-admin only shared with in the memory view.
+    view = VIEW_FULL if await _in_invited_tier(db, gathering, ctx) else VIEW_MEMORY
+    return await _detail_body(db, gathering, ctx, view)
+
+
+@router.get("/gatherings/{gathering_id}/outside-invitations")
+async def get_outside_invitations(
+    gathering_id: UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """What turning it off would do (CK-92), for whoever may change it — the
+    same audience and refusals as the PUT: whether it is on, since when and
+    by whom, the outsiders who would lose the gathering — display names
+    alone, in the order they accepted, then by row — and how many live
+    pending invitations would be revoked. No address, no person id, no
+    invitation id: an organiser who may turn it off reads who it affects,
+    and nothing more."""
+    gathering = await _gathering_for_outside_setting(db, ctx, gathering_id)
+    since, by_name = (
+        await db.execute(
+            select(Gathering.outside_invitations_since, Person.display_name)
+            .select_from(Gathering)
+            .outerjoin(Person, _opener_join())
+            .where(Gathering.id == gathering.id)
+        )
+    ).one()
+    outsiders = (
+        await db.scalars(
+            select(Person.display_name)
+            .select_from(GatheringInvitation)
+            .join(Person, Person.id == GatheringInvitation.person_id)
+            .where(
+                GatheringInvitation.gathering_id == gathering.id,
+                GatheringInvitation.from_outside.is_(True),
+            )
+            .order_by(GatheringInvitation.created_at, GatheringInvitation.id)
+        )
+    ).all()
+    pending = await db.scalar(
+        select(func.count())
+        .select_from(GatheringInvitationPending)
+        .where(
+            GatheringInvitationPending.gathering_id == gathering.id,
+            GatheringInvitationPending.consumed_at.is_(None),
+            GatheringInvitationPending.revoked_at.is_(None),
+        )
+    )
+    on = since is not None
+    return {
+        "on": on,
+        "since": since.isoformat() if on else None,
+        "by": by_name if on else None,
+        "outsiders": [{"display_name": name} for name in outsiders],
+        "pending": pending,
+    }
+
+
+@router.post("/gatherings/{gathering_id}/outside-alert/dismiss", status_code=204)
+async def dismiss_outside_alert(
+    gathering_id: UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Dismiss the alert that this group's gathering invites people outside
+    the group (CK-92; the record §7), for anyone the memory tier admits —
+    everyone else the gathering's 404. The dismissal is a row per (gathering,
+    person) whose `dismissed_at` moves to now on each press (an upsert on
+    the key); it silences the alert until the setting is turned on again (a
+    new stamp). With the setting off, or for a caller who is not a member of
+    the group — an outsider, to whom the alert is never shown — nothing is
+    written and the answer is still 204."""
+    gathering, _view = await _gathering_for_memory(db, ctx, gathering_id)
+    person_id = ctx.person.id
+    if gathering.owning_group_id is None:
+        return None
+    on, in_group = (
+        await db.execute(
+            select(
+                Gathering.outside_invitations_since.is_not(None),
+                member_of(person_id, Gathering.owning_group_id),
+            ).where(Gathering.id == gathering.id)
+        )
+    ).one()
+    if not (on and in_group):
+        return None
+    now = datetime.now(timezone.utc)
+    await db.execute(
+        pg_insert(GatheringOutsideAlertDismissal)
+        .values(gathering_id=gathering.id, person_id=person_id, dismissed_at=now)
+        .on_conflict_do_update(
+            index_elements=["gathering_id", "person_id"],
+            set_={"dismissed_at": now},
+        )
+    )
+    await db.commit()
+    return None

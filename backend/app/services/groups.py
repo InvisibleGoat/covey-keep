@@ -52,7 +52,7 @@ was dropped at 0034 (CK-77).
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Uuid, delete, exists, func, insert, literal, null, select
+from sqlalchemy import Uuid, delete, exists, func, insert, literal, null, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -307,9 +307,20 @@ async def invite_newcomer_to_upcoming_gatherings(
     already holds a row of EITHER kind for, and each INSERT carries ON
     CONFLICT DO NOTHING on its index, so two admissions racing — an approval
     and an acceptance landing together — write each row once. TWO
-    statements, one per table. Returns the number of rows written, both
-    kinds. Never commits — the admission's transaction does, so the
-    membership and the newcomer's places land together or not at all."""
+    statements, one per table, then a third:
+
+    JOINING ENDS BEING AN OUTSIDER (CK-92; the 2026-10-04 record §6): every
+    invitation row the person holds on ANY of the group's gatherings — past
+    ones included, since they were invited to those too — has
+    `from_outside` set false, so turning a gathering's outside invitations
+    off no longer removes a member. One UPDATE, guarded on the flag, so it
+    writes nothing for a person who never came from outside. Nothing ever
+    sets the flag back: leaving the group never makes a member an outsider.
+
+    Returns the number of rows WRITTEN by the two inserts, both kinds (the
+    clearing is not a new place). Never commits — the admission's
+    transaction does, so the membership, the newcomer's places and the
+    cleared flags land together or not at all."""
     already_invited = exists(
         select(GatheringInvitation.id).where(
             GatheringInvitation.gathering_id == Gathering.id,
@@ -359,5 +370,17 @@ async def invite_newcomer_to_upcoming_gatherings(
         pg_insert(GatheringMemberPlace)
         .from_select(["gathering_id", "person_id", "place", "set_by_person_id"], place_source)
         .on_conflict_do_nothing(index_elements=["gathering_id", "person_id"])
+    )
+    await db.execute(
+        update(GatheringInvitation)
+        .where(
+            GatheringInvitation.person_id == person_id,
+            GatheringInvitation.from_outside.is_(True),
+            GatheringInvitation.gathering_id.in_(
+                select(Gathering.id).where(Gathering.owning_group_id == group_id)
+            ),
+        )
+        .values(from_outside=False)
+        .execution_options(synchronize_session=False)
     )
     return invitations.rowcount + places.rowcount
