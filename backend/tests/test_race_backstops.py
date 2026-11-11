@@ -32,18 +32,38 @@ Red first against CK-77's code (2026-10-25): each test failed on exactly
 its defect — the escaped `IntegrityError` (`UniqueViolationError`) for the
 three autoflush sites, `MissingGreenlet` after the rollback for the other
 three (the report records each).
+
+THE TWO PLACES-ROUTE TESTS ARE RESTAGED (CK-92.1). `put_place` now takes the
+gathering's row lock first (`_lock_setting`, `SELECT … FOR UPDATE`), and any
+other writer of a row that references the gathering — another place change,
+an acceptance, joining's newcomer helper — takes the foreign key's `FOR KEY
+SHARE` on that row, which `FOR UPDATE` blocks. So the race these two staged
+— a competitor committing between the route's check and its first write —
+can no longer happen through the route: staged there, the competitor waits
+on the route and the route waits on the hook, one event loop, a hang. They
+now stage the race that CAN happen: the competitor's rows written and held
+uncommitted BEFORE the route starts; the route waits at the lock's own
+statement (pg_locks and pg_stat_activity, CK-77.2's watcher); the competitor
+commits; the route reads what it committed and answers as each name says,
+never a 500. The backstop's rollback path is still pinned by the four other
+routes here.
+
+`_stage` BOUNDS ITS COMPETITOR (CK-92.1, `STAGE_BOUND`): a staging that a
+later lock makes impossible fails by name instead of hanging the suite.
 """
 
+import asyncio
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.sql import Delete, Insert, Select, Update
+from sqlalchemy.sql import Select
 
 from app.models import (
     RSVP,
@@ -77,7 +97,11 @@ from tests.test_group_membership import ADMIN, CO_ADMIN, MEMBER, _add_member, _c
 from tests.test_invitations import _invite_token
 from tests.test_rsvps import RSVP_YES, _gathering_with_invitee, _put_rsvp
 
-PLACE_TABLES = ("gathering_member_places", "gathering_invitations")
+# How long a staged competitor may take. Every competitor here writes rows
+# no one else holds, so it finishes in milliseconds; one that waits on the
+# route it is staged inside can never finish (the route waits on the hook),
+# and this turns that into a named failure rather than a hung suite.
+STAGE_BOUND = 15
 
 
 # --- staging a race ---------------------------------------------------------------
@@ -85,18 +109,6 @@ PLACE_TABLES = ("gathering_member_places", "gathering_invitations")
 
 def _sql(statement) -> str:
     return str(statement.compile(dialect=postgresql.dialect()))
-
-
-def _dml_on(*tables: str):
-    """The first INSERT, UPDATE or DELETE the route issues against one of
-    `tables` — the statement whose autoflush carries the route's own
-    pending write (the hook runs BEFORE it)."""
-
-    def when(statement) -> bool:
-        table = getattr(statement, "table", None)
-        return isinstance(statement, (Insert, Update, Delete)) and getattr(table, "name", None) in tables
-
-    return when
 
 
 def _select_from(table: str, *, containing: str = ""):
@@ -123,8 +135,21 @@ def _stage(monkeypatch, *, when, competitor, before: bool = False) -> dict:
     whose autoflush would carry the route's write). `AsyncSession.scalar`
     does not go through `AsyncSession.execute`, so both are wrapped. The
     state is disarmed before the competitor runs, so the competitor's own
-    statements never re-enter the hook."""
+    statements never re-enter the hook.
+
+    The competitor is bounded by `STAGE_BOUND` (CK-92.1): if it waits on a
+    lock the route holds — a staging a later lock has made impossible — the
+    wait can never end, so it fails by name instead."""
     state = {"fired": False}
+
+    async def bounded() -> None:
+        try:
+            await asyncio.wait_for(competitor(), timeout=STAGE_BOUND)
+        except TimeoutError:
+            raise AssertionError(
+                f"the staged competitor did not finish within {STAGE_BOUND} s — it is waiting on a "
+                "lock the route holds, so this race can no longer be staged at this moment"
+            ) from None
     real_execute = AsyncSession.execute
     real_scalar = AsyncSession.scalar
 
@@ -133,11 +158,11 @@ def _stage(monkeypatch, *, when, competitor, before: bool = False) -> dict:
             armed = not state["fired"] and when(statement)
             if armed and before:
                 state["fired"] = True
-                await competitor()
+                await bounded()
             result = await real(self, statement, *args, **kwargs)
             if armed and not before:
                 state["fired"] = True
-                await competitor()
+                await bounded()
             return result
 
         return wrapped
@@ -149,6 +174,38 @@ def _stage(monkeypatch, *, when, competitor, before: bool = False) -> dict:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+async def _until_the_route_waits_on_the_gathering(db_session_factory, route: asyncio.Task) -> tuple[str, list[str]]:
+    """From a THIRD connection, watch `pg_locks` until the route's session
+    is waiting on an ungranted lock or the route has finished, whichever
+    comes first, bounded by a deadline (CK-77.2's watcher — kept here
+    because `test_double_requests` imports this module); then read the
+    statement each waiting backend is running. Returns (what it saw, those
+    statements). Nothing else runs against the test database, so any
+    ungranted lock is the route's."""
+    deadline = time.monotonic() + STAGE_BOUND
+    async with db_session_factory() as watch:
+        while time.monotonic() < deadline:
+            if route.done():
+                return "finished", []
+            if await watch.scalar(text("SELECT count(*) FROM pg_locks WHERE NOT granted")):
+                waiting = (
+                    await watch.execute(
+                        text(
+                            "SELECT query FROM pg_stat_activity "
+                            "WHERE wait_event_type = 'Lock' AND datname = current_database()"
+                        )
+                    )
+                ).scalars()
+                return "waiting", list(waiting)
+            await asyncio.sleep(0)
+    raise AssertionError("the route neither waited on a lock nor finished within the bound")
+
+
+def _is_the_setting_lock(statement: str) -> bool:
+    """`_lock_setting`'s statement: the setting read FOR UPDATE on the gathering."""
+    return "outside_invitations_since" in statement and "FROM gatherings" in statement and "FOR UPDATE" in statement
 
 
 async def _place_row(db_session_factory, gathering_id: str, person_id: UUID):
@@ -203,15 +260,23 @@ async def _gathering_pending_consumed(db_session_factory) -> list[bool]:
 
 
 async def test_two_organisers_placing_a_member_at_once_both_read_the_place_that_holds(
-    client, capsys, db_session_factory, monkeypatch
+    client, capsys, db_session_factory
 ):
     """The deploy's reproduction (2026-10-25): two identical first-time
     moves to `shared_with` for a member with NO place row answered 200 and
     500 — the primary key violation raised at the `delete` that autoflushed
-    the add, outside the `try`. Staged: the co-admin's move commits from a
-    second session after the member's route has checked and before its
-    first write lands; the member's route answers 200 with the place that
-    holds, one place row, no invitation row, `invitees_chosen` true."""
+    the add, outside the `try`. The member's route answers 200 with the
+    place that holds, one place row (the co-admin's), no invitation row,
+    `invitees_chosen` true.
+
+    RESTAGED AT CK-92.1, the pin moved for the lock: until then the
+    co-admin's move committed from a second session after the route's check
+    and before its first write. `put_place` now holds the gathering's row
+    lock by then, and the co-admin's insert takes the foreign key's lock on
+    that row, so it waits on the route — that race can no longer happen. The
+    co-admin's move is now written and held uncommitted first; the route
+    waits at the lock's own statement; the move commits; the route reads it
+    and answers as before."""
     cast = await _cast(client, capsys, db_session_factory)
     await _signed_in_headers(client, capsys, "e@example.com")
     e_membership = await _add_member(db_session_factory, cast.group_id, "e@example.com")
@@ -221,33 +286,37 @@ async def test_two_organisers_placing_a_member_at_once_both_read_the_place_that_
     gathering_id = created["id"]
     assert await _invitation_row(db_session_factory, gathering_id, e_person)  # invited by the rule
 
-    async def competitor() -> None:
-        # Another organiser's identical move, committed first.
-        async with db_session_factory() as db:
-            await db.execute(
-                pg_insert(GatheringMemberPlace).values(
-                    gathering_id=UUID(gathering_id),
-                    person_id=e_person,
-                    place=MemberPlace.SHARED_WITH,
-                    set_by_person_id=co_admin_person,
-                )
+    # Another organiser's identical move, held uncommitted while the route runs.
+    async with db_session_factory() as competitor:
+        await competitor.execute(
+            pg_insert(GatheringMemberPlace).values(
+                gathering_id=UUID(gathering_id),
+                person_id=e_person,
+                place=MemberPlace.SHARED_WITH,
+                set_by_person_id=co_admin_person,
             )
-            await db.execute(
-                delete(GatheringInvitation).where(
-                    GatheringInvitation.gathering_id == UUID(gathering_id),
-                    GatheringInvitation.person_id == e_person,
-                )
+        )
+        await competitor.execute(
+            delete(GatheringInvitation).where(
+                GatheringInvitation.gathering_id == UUID(gathering_id),
+                GatheringInvitation.person_id == e_person,
             )
-            await db.execute(
-                update(Gathering).where(Gathering.id == UUID(gathering_id)).values(invitees_chosen=True)
+        )
+        await competitor.execute(
+            update(Gathering).where(Gathering.id == UUID(gathering_id)).values(invitees_chosen=True)
+        )
+        route = asyncio.create_task(
+            client.put(
+                f"/gatherings/{gathering_id}/places/{e_membership}", json={"place": "shared_with"}, headers=cast.member
             )
-            await db.commit()
-
-    staged = _stage(monkeypatch, when=_dml_on(*PLACE_TABLES), competitor=competitor, before=True)
-    response = await client.put(
-        f"/gatherings/{gathering_id}/places/{e_membership}", json={"place": "shared_with"}, headers=cast.member
-    )
-    assert staged["fired"], "the race was not staged — the hook never fired"
+        )
+        try:
+            seen, waiting_on = await _until_the_route_waits_on_the_gathering(db_session_factory, route)
+        finally:
+            await competitor.commit()
+        response = await route
+    assert seen == "waiting", f"the route never took its turn behind the other move ({seen})"
+    assert any(_is_the_setting_lock(q) for q in waiting_on), waiting_on
     assert response.status_code == 200, response.text
     assert response.json()["membership_id"] == e_membership
     assert response.json()["place"] == "shared_with"
@@ -261,14 +330,20 @@ async def test_two_organisers_placing_a_member_at_once_both_read_the_place_that_
 
 
 async def test_two_organisers_inviting_a_placed_member_at_once_both_read_invited(
-    client, capsys, db_session_factory, monkeypatch
+    client, capsys, db_session_factory
 ):
     """The other branch: a member holding a `shared_with` row is moved back
     to `invited` by two organisers at once — the partial unique on the
     person target held for the competitor, and the route's add was
-    autoflushed by its `delete` of the place row. Staged the same way; the
-    route answers 200 `invited`, one invitation row (the competitor's), no
-    place row, `invitees_chosen` still true (once chosen, chosen)."""
+    autoflushed by its `delete` of the place row. The route answers 200
+    `invited`, one invitation row (the competitor's), no place row,
+    `invitees_chosen` still true (once chosen, chosen).
+
+    RESTAGED AT CK-92.1, for the same reason as the test above: the
+    competitor's invitation insert takes the foreign key's lock on the
+    gathering row `put_place` now holds, so staged between the route's check
+    and its write it waits on the route. It is now held uncommitted first,
+    and the route waits at the lock's own statement."""
     cast = await _cast(client, capsys, db_session_factory)
     await _signed_in_headers(client, capsys, "e@example.com")
     e_membership = await _add_member(db_session_factory, cast.group_id, "e@example.com")
@@ -282,26 +357,30 @@ async def test_two_organisers_inviting_a_placed_member_at_once_both_read_invited
     assert moved.status_code == 200, moved.text
     assert await _place_row(db_session_factory, gathering_id, e_person)
 
-    async def competitor() -> None:
-        async with db_session_factory() as db:
-            await db.execute(
-                pg_insert(GatheringInvitation).values(
-                    gathering_id=UUID(gathering_id), person_id=e_person, invited_by_person_id=co_admin_person
-                )
+    async with db_session_factory() as competitor:
+        await competitor.execute(
+            pg_insert(GatheringInvitation).values(
+                gathering_id=UUID(gathering_id), person_id=e_person, invited_by_person_id=co_admin_person
             )
-            await db.execute(
-                delete(GatheringMemberPlace).where(
-                    GatheringMemberPlace.gathering_id == UUID(gathering_id),
-                    GatheringMemberPlace.person_id == e_person,
-                )
+        )
+        await competitor.execute(
+            delete(GatheringMemberPlace).where(
+                GatheringMemberPlace.gathering_id == UUID(gathering_id),
+                GatheringMemberPlace.person_id == e_person,
             )
-            await db.commit()
-
-    staged = _stage(monkeypatch, when=_dml_on(*PLACE_TABLES), competitor=competitor, before=True)
-    response = await client.put(
-        f"/gatherings/{gathering_id}/places/{e_membership}", json={"place": "invited"}, headers=cast.member
-    )
-    assert staged["fired"], "the race was not staged — the hook never fired"
+        )
+        route = asyncio.create_task(
+            client.put(
+                f"/gatherings/{gathering_id}/places/{e_membership}", json={"place": "invited"}, headers=cast.member
+            )
+        )
+        try:
+            seen, waiting_on = await _until_the_route_waits_on_the_gathering(db_session_factory, route)
+        finally:
+            await competitor.commit()
+        response = await route
+    assert seen == "waiting", f"the route never took its turn behind the other move ({seen})"
+    assert any(_is_the_setting_lock(q) for q in waiting_on), waiting_on
     assert response.status_code == 200, response.text
     assert response.json()["place"] == "invited"
     assert await _invitation_row(db_session_factory, gathering_id, e_person) == [(co_admin_person,)]

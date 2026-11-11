@@ -28,6 +28,19 @@ The load-bearing pins:
 - the detail body's three fields by seat, the list item and the calendar
   byte-identical and no new query; the alert and its dismissal; the
   verifier's lines, each fired by a plant; the 0037 round trip.
+
+CK-92.1, the fix-up (Steven's answers of 2026-11-10 on the review):
+- AN OUTSIDER IS A PERSON WITH NO MEMBERSHIP AND NO PLACE: a former member
+  who still held a place row (shared with or left out) and accepts from
+  outside ends invited with `from_outside` false, so a turn-off leaves them
+  alone; a person with no place — a stranger, or a former member who left
+  before the gathering existed — is an outsider, as before;
+- A MEMBER'S PLACE TAKES THE GATHERING'S LOCK: `put_place` and an
+  acceptance take turns, staged both ways, and the person ends with one
+  place;
+- THE PREVIEW COUNTS INVITATIONS THAT STILL WORK, and the turn-off still
+  revokes the expired ones too;
+- A DELETED HOST'S ANSWER is kept and stays out of the list.
 """
 
 import asyncio
@@ -36,14 +49,22 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+import pytest
 from sqlalchemy import event, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.api import gatherings as gatherings_api
 from app.api import invitations as invitations_api
 from app.api.gatherings import NOT_IN_A_GROUP
 from app.api.invitations import MEMBERS_ONLY
 from app.db import engine
-from app.models import Gathering, GatheringInvitationPending, PublicationState
+from app.models import (
+    Gathering,
+    GatheringInvitationPending,
+    GatheringMemberPlace,
+    MemberPlace,
+    PublicationState,
+)
 from app.security import hash_token
 from tests.test_account_deletion import DELETE_BODY
 from tests.test_calendar import _calendar
@@ -78,7 +99,7 @@ from tests.test_invitations import _accept as _accept_invitation
 from tests.test_media_intents import _intents, _item
 from tests.test_media_reads import _ids, _url
 from tests.test_media_reads import _list as _media_list
-from tests.test_member_places import _extra_member, _place_rows, _places, _usage
+from tests.test_member_places import _extra_member, _place_rows, _places, _put_place, _usage
 from tests.test_photo_count import _migrate, at_head_afterwards  # noqa: F401 — the fixture
 from tests.test_race_backstops import _select_from, _stage
 from tests.test_rsvps import _get_rsvps, _put_rsvp
@@ -1152,6 +1173,324 @@ async def test_an_invitation_waits_for_a_turn_off_holding_the_lock_and_is_member
     assert response.json()["detail"]["code"] == MEMBERS_ONLY
     assert "late@example.com" not in await _pending_rows(db_session_factory, gid)
     assert INVITE_LINK_RE.search(capsys.readouterr().out) is None
+
+
+# --- CK-92.1: a former member who had a place is not an outsider -------------------
+
+FORMER = "former@example.com"  # a member who leaves the group holding a place
+EARLY = "early@example.com"  # a member who left before the gathering existed: no place on it
+PLACED = "placed@example.com"  # a member whose place is changed while they accept
+
+
+def _place_value(place) -> str:
+    return getattr(place, "value", place)
+
+
+async def _former_member_accepts_and_keeps_the_gathering(client, capsys, db_session_factory, place: str) -> None:
+    """A member holding `place` on a chosen gathering leaves the group (their
+    place row stays: rows, never a lookup), is invited by email while the
+    outside invitations are on, and accepts. They end invited — one
+    invitation row, `from_outside` FALSE, no place row — read the full view,
+    are never named by the preview, and a turn-off leaves them the full view."""
+    cast = await _cast(client, capsys, db_session_factory)
+    former, former_membership, former_person = await _extra_member(client, capsys, db_session_factory, cast, FORMER)
+    overrides: dict = {"invited": [cast.admin_membership]}
+    if place == "left_out":
+        overrides["left_out"] = [former_membership]
+    gid = (await _create_in_group(client, cast.member, cast.group_id, **overrides))["id"]
+    assert _place_value((await _place_rows(db_session_factory, gid))[former_person][0]) == place
+    assert (await _leave(client, former, cast.group_id)).status_code == 204
+    assert _place_value((await _place_rows(db_session_factory, gid))[former_person][0]) == place
+
+    await _on(client, cast.admin, gid)
+    await _let_in(client, capsys, cast.member, gid, FORMER, headers=former)
+    assert (await _outside_rows(db_session_factory, gid))[former_person] is False
+    assert former_person not in await _place_rows(db_session_factory, gid)
+    assert (await _detail(client, former, gid))["caller_view"] == "full"
+    preview = await _preview(client, cast.member, gid)
+    assert preview.status_code == 200 and preview.json()["outsiders"] == [], preview.text
+
+    await _off(client, cast.admin, gid)
+    assert (await _outside_rows(db_session_factory, gid))[former_person] is False
+    assert (await _detail(client, former, gid))["caller_view"] == "full"
+    assert (await _preview(client, cast.member, gid)).json()["outsiders"] == []
+
+
+async def test_a_former_member_who_was_shared_with_keeps_the_gathering_through_a_turn_off(
+    client, capsys, db_session_factory
+):
+    await _former_member_accepts_and_keeps_the_gathering(client, capsys, db_session_factory, "shared_with")
+
+
+async def test_a_former_member_who_was_left_out_keeps_the_gathering_through_a_turn_off(
+    client, capsys, db_session_factory
+):
+    await _former_member_accepts_and_keeps_the_gathering(client, capsys, db_session_factory, "left_out")
+
+
+async def test_a_person_who_never_held_a_place_is_an_outsider(client, capsys, db_session_factory):
+    """The third case beside the two above: a stranger to the group, and a
+    former member who left BEFORE the gathering existed (so the group's rule
+    never gave them a place on it), each accept from outside — `from_outside`
+    TRUE, named by the preview, and removed by a turn-off. The rule is the
+    place, never "was ever a member"."""
+    cast = await _cast(client, capsys, db_session_factory)
+    early, _, early_person = await _extra_member(client, capsys, db_session_factory, cast, EARLY)
+    assert (await _leave(client, early, cast.group_id)).status_code == 204
+    gid = (await _create_in_group(client, cast.member, cast.group_id, invited=[cast.admin_membership]))["id"]
+    assert early_person not in await _place_rows(db_session_factory, gid)
+
+    await _on(client, cast.admin, gid)
+    outsider = await _let_in(client, capsys, cast.member, gid, OUTSIDER)
+    await _let_in(client, capsys, cast.member, gid, EARLY, headers=early)
+    outsider_person = await _person_id(db_session_factory, OUTSIDER)
+    rows = await _outside_rows(db_session_factory, gid)
+    assert rows[outsider_person] is True and rows[early_person] is True
+    names = [o["display_name"] for o in (await _preview(client, cast.member, gid)).json()["outsiders"]]
+    assert names == ["outsider", "early"]
+
+    await _off(client, cast.admin, gid)
+    rows = await _outside_rows(db_session_factory, gid)
+    assert outsider_person not in rows and early_person not in rows
+    for headers in (outsider, early):
+        refused = await client.get(f"/gatherings/{gid}", headers=headers)
+        assert (refused.status_code, refused.content) == await _gathering_404(client, headers)
+
+
+# --- CK-92.1: a member's place takes the gathering's lock ---------------------------
+
+
+async def _placed_world(client, capsys, db_session_factory, start: str) -> tuple[Cast, str, dict, str, UUID, str]:
+    """A chosen group gathering whose date has passed, its outside invitations
+    on, and a live member who has not answered and holds `start` — a
+    `shared_with` row (they were a member when it was made), or nothing at all
+    (they joined after its date had passed, the shape the newcomer rule
+    leaves) — with an unaccepted emailed invitation of their own. Returns
+    (cast, gathering id, their headers, their membership id, their person id,
+    their token)."""
+    cast = await _cast(client, capsys, db_session_factory)
+    past = [{"starts_at": _iso(_now() - timedelta(days=10))}]
+    if start == "shared_with":
+        headers, membership, person = await _extra_member(client, capsys, db_session_factory, cast, PLACED)
+        gid = (await _create_in_group(client, cast.member, cast.group_id, invited=[cast.admin_membership], occurrences=past))["id"]
+        assert _place_value((await _place_rows(db_session_factory, gid))[person][0]) == "shared_with"
+    else:
+        gid = (await _create_in_group(client, cast.member, cast.group_id, invited=[cast.admin_membership], occurrences=past))["id"]
+        headers, membership, person = await _extra_member(client, capsys, db_session_factory, cast, PLACED)
+        assert person not in await _place_rows(db_session_factory, gid)
+    assert person not in await _outside_rows(db_session_factory, gid)
+    await _on(client, cast.admin, gid)
+    token = await _invite_token(client, capsys, cast.member, gid, PLACED)
+    return cast, gid, headers, membership, person, token
+
+
+async def _waiting_statements(db_session_factory) -> list[str]:
+    """From a third connection: the statement each backend waiting on a lock
+    is running (nothing else runs against the test database)."""
+    async with db_session_factory() as watch:
+        return list(
+            (
+                await watch.execute(
+                    text(
+                        "SELECT query FROM pg_stat_activity "
+                        "WHERE wait_event_type = 'Lock' AND datname = current_database()"
+                    )
+                )
+            ).scalars()
+        )
+
+
+def _is_the_setting_lock(statement: str) -> bool:
+    """`_lock_setting`'s statement: the setting read FOR UPDATE on the gathering."""
+    return (
+        "outside_invitations_since" in statement
+        and "FROM gatherings" in statement
+        and "FOR UPDATE" in statement
+    )
+
+
+async def _one_place_holds(db_session_factory, gid: str, person: UUID) -> None:
+    """At most one place each, read from the rows and from the verifier's line."""
+    in_places = person in await _place_rows(db_session_factory, gid)
+    in_invitations = person in await _outside_rows(db_session_factory, gid)
+    assert (in_places, in_invitations) != (True, True), "the person holds two places"
+    passed, failed, code, out = _verifier()
+    assert (passed, failed, code) == (VERIFIER_TOTAL, 0, 0), out
+    assert any(row.startswith(f"PASS  {ONE_PLACE_LINE}") for row in out.splitlines()), out
+
+
+@pytest.mark.parametrize("start", ["shared_with", "none"])
+async def test_a_place_change_waits_for_an_acceptance_holding_the_lock_and_then_finds_its_row(
+    client, capsys, db_session_factory, start
+):
+    """The acceptance holds the gathering's row lock — the token consumed,
+    any place row deleted and the invitation row written, uncommitted — while
+    an organiser moves the member to left out: `put_place` WAITS on the
+    gathering's row, and once the acceptance commits it finds the invitation
+    row and deletes it. The member ends left out, with one place.
+
+    WHERE IT WAITS IS THE RULE: on the gathering's row, at the lock's own
+    statement, before it reads anything. Without that lock the two still
+    take turns here, on locks no line of put_place asks for — from
+    `shared_with` the upsert waits on the place row the acceptance deleted,
+    and from no place its insert's foreign-key check waits on the gathering
+    row the acceptance holds — so the end state alone cannot tell the lock
+    is there (CK-92.1's report, plant 2); the waiting statement can."""
+    cast, gid, _, membership, person, token = await _placed_world(client, capsys, db_session_factory, start)
+    pending_id = await _pending_id(db_session_factory, token)
+    host_person = await _person_id(db_session_factory, MEMBER)
+    async with db_session_factory() as competitor:
+        await competitor.execute(select(Gathering).where(Gathering.id == UUID(gid)).with_for_update())
+        await competitor.execute(
+            update(GatheringInvitationPending).where(GatheringInvitationPending.id == pending_id).values(consumed_at=_now())
+        )
+        await competitor.execute(
+            text("DELETE FROM gathering_member_places WHERE gathering_id = :g AND person_id = :p"),
+            {"g": UUID(gid), "p": person},
+        )
+        await competitor.execute(
+            text(
+                "INSERT INTO gathering_invitations (gathering_id, person_id, invited_by_person_id, from_outside) "
+                "VALUES (:g, :p, :b, false)"
+            ),
+            {"g": UUID(gid), "p": person, "b": host_person},
+        )
+        route = asyncio.create_task(_put_place(client, cast.member, gid, membership, "left_out"))
+        try:
+            seen = await _until_the_route_waits_or_finishes(db_session_factory, route)
+            waiting_on = await _waiting_statements(db_session_factory)
+        finally:
+            await competitor.commit()
+        response = await route
+    assert seen == "waiting", f"the place change never took its turn behind the acceptance ({seen})"
+    assert any(_is_the_setting_lock(q) for q in waiting_on), waiting_on
+    assert response.status_code == 200, response.text
+    assert response.json()["place"] == "left_out"
+    places = await _place_rows(db_session_factory, gid)
+    assert _place_value(places[person][0]) == "left_out"
+    assert person not in await _outside_rows(db_session_factory, gid)
+    await _one_place_holds(db_session_factory, gid, person)
+
+
+@pytest.mark.parametrize("start", ["shared_with", "none"])
+async def test_an_acceptance_waits_for_a_place_change_holding_the_lock_and_then_replaces_it(
+    client, capsys, db_session_factory, start
+):
+    """A place change holds the gathering's row lock — the member's place
+    row written as left out and any invitation row deleted, uncommitted —
+    while the member accepts: the acceptance WAITS, and once the place change
+    commits it deletes the place row and writes the invitation row,
+    `from_outside` false. The member ends invited, with one place."""
+    cast, gid, headers, _, person, token = await _placed_world(client, capsys, db_session_factory, start)
+    host_person = await _person_id(db_session_factory, MEMBER)
+    async with db_session_factory() as competitor:
+        await competitor.execute(select(Gathering).where(Gathering.id == UUID(gid)).with_for_update())
+        await competitor.execute(
+            pg_insert(GatheringMemberPlace)
+            .values(gathering_id=UUID(gid), person_id=person, place=MemberPlace.LEFT_OUT, set_by_person_id=host_person)
+            .on_conflict_do_update(
+                index_elements=["gathering_id", "person_id"],
+                set_={"place": MemberPlace.LEFT_OUT, "set_by_person_id": host_person, "updated_at": _now()},
+            )
+        )
+        await competitor.execute(
+            text("DELETE FROM gathering_invitations WHERE gathering_id = :g AND person_id = :p"),
+            {"g": UUID(gid), "p": person},
+        )
+        route = asyncio.create_task(_accept(client, headers, token))
+        try:
+            seen = await _until_the_route_waits_or_finishes(db_session_factory, route)
+            waiting_on = await _waiting_statements(db_session_factory)
+        finally:
+            await competitor.commit()
+        response = await route
+    assert seen == "waiting", f"the acceptance never took its turn behind the place change ({seen})"
+    assert any(_is_the_setting_lock(q) for q in waiting_on), waiting_on
+    assert response.json() == {"status": "accepted", "gathering_id": gid}
+    assert person not in await _place_rows(db_session_factory, gid)
+    assert (await _outside_rows(db_session_factory, gid))[person] is False
+    await _one_place_holds(db_session_factory, gid, person)
+
+
+# --- CK-92.1: the preview counts invitations that still work -------------------------
+
+
+async def test_the_preview_counts_only_invitations_that_still_work_and_a_turn_off_revokes_the_expired_too(
+    client, capsys, db_session_factory
+):
+    """Two pending invitations, one expired by hand: the preview's `pending`
+    is 1 (an expired invitation already doesn't work). The turn-off revokes
+    BOTH — the members-only line reads every row neither consumed nor
+    revoked — so the verifier passes, and the expired one's link answers
+    `revoked` once the setting is on again."""
+    world = await _world(client, capsys, db_session_factory)
+    cast, gid = world.cast, world.gathering_id
+    await _on(client, cast.admin, gid)
+    await _invite_token(client, capsys, cast.member, gid, "waiting@example.com")
+    stale_token = await _invite_token(client, capsys, cast.member, gid, "stale@example.com")
+    async with db_session_factory() as db:
+        await db.execute(
+            update(GatheringInvitationPending)
+            .where(GatheringInvitationPending.id == await _pending_id(db_session_factory, stale_token))
+            .values(expires_at=_now() - timedelta(minutes=10))  # expired, and inside the reaper's grace
+        )
+        await db.commit()
+    preview = await _preview(client, cast.member, gid)
+    assert preview.status_code == 200 and preview.json()["pending"] == 1, preview.text
+
+    await _off(client, cast.admin, gid)
+    assert await _pending_rows(db_session_factory, gid) == {
+        "waiting@example.com": (False, True),
+        "stale@example.com": (False, True),
+    }
+    assert (await _preview(client, cast.member, gid)).json()["pending"] == 0
+    passed, failed, code, out = _verifier()
+    assert (passed, failed, code) == (VERIFIER_TOTAL, 0, 0), out
+    assert any(row.startswith(f"PASS  {LIVE_PENDING_LINE}") for row in out.splitlines()), out
+
+    await _on(client, cast.admin, gid)
+    stale = await _signed_in_headers(client, capsys, "stale@example.com")
+    assert (await _accept(client, stale, stale_token)).json() == {"status": "revoked", "gathering_id": None}
+
+
+# --- CK-92.1: a deleted host's answer stays out of the list --------------------------
+
+
+async def test_a_deleted_hosts_answer_is_kept_and_stays_out_of_the_list(client, capsys, db_session_factory):
+    """Steven's answer of 2026-11-10: on a standalone gathering and on a
+    group's gathering, the host answers yes, a co-host answers maybe, and
+    the host deletes their account. The host held no invitation row and the
+    deletion NULLs the host column, so the answer leaves the list — the
+    rows a client totals — while the RSVP row is still stored. (The host
+    holds no billing customer, so the deletion makes no Stripe call — the
+    path tests/test_account_deletion.py takes.)"""
+    cast = await _cast(client, capsys, db_session_factory)
+    standalone = await _create(
+        client, cast.member, title="Just ours", occurrences=[{"starts_at": _iso(_now() + timedelta(days=30))}]
+    )
+    guest = await _let_in(client, capsys, cast.member, standalone["id"], "guest@example.com")
+    handle = await _invitation_id(db_session_factory, standalone["id"], "guest@example.com")
+    assert (await _add_co_host(client, cast.member, standalone["id"], handle)).status_code == 201
+    whole = await _create_in_group(client, cast.member, cast.group_id, title="Whole")
+    handle = await _invitation_id(db_session_factory, whole["id"], CO_ADMIN)
+    assert (await _add_co_host(client, cast.member, whole["id"], handle)).status_code == 201
+    occurrence = {g["id"]: g["occurrences"][0]["id"] for g in (standalone, whole)}
+    readers = {standalone["id"]: (guest, "guest"), whole["id"]: (cast.co_admin, "coadmin")}
+    for gathering_id, (headers, _) in readers.items():
+        assert (await _put_rsvp(client, cast.member, occurrence[gathering_id], {"response": "yes"})).status_code == 200
+        assert (await _put_rsvp(client, headers, occurrence[gathering_id], {"response": "maybe"})).status_code == 200
+    for gathering_id, (headers, name) in readers.items():
+        assert await _rsvp_names(client, headers, occurrence[gathering_id]) == [("member", "yes"), (name, "maybe")]
+    host_person = await _person_id(db_session_factory, MEMBER)
+
+    assert (await client.post("/me/delete", json=DELETE_BODY, headers=cast.member)).status_code == 204
+
+    for gathering_id, (headers, name) in readers.items():
+        response = await _get_rsvps(client, headers, occurrence[gathering_id])
+        assert response.status_code == 200, response.text
+        assert [(row["display_name"], row["response"]) for row in response.json()["rsvps"]] == [(name, "maybe")]
+        assert response.json()["own"]["response"] == "maybe"
+    assert await _rsvp_count(db_session_factory, host_person) == 2
 
 
 # --- the verifier ------------------------------------------------------------------

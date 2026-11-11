@@ -350,7 +350,10 @@ def _answerer_in_invited_tier(gathering: Gathering):
     place from someone who had answered — the places route refuses
     `has_answered`), with one exception this criterion now hides: a host who
     deleted their account answered as the host and holds no invitation row,
-    and the deletion NULLs the host column — the report's divergence."""
+    and the deletion NULLs the host column. KEPT OUT BY STEVEN'S ANSWER OF
+    2026-11-10 (CK-92.1): the account is gone and can't see the gathering,
+    so the list and its count are more accurate without it; the answer is
+    still stored, and tests/test_outside_invitations.py pins both."""
     terms = [
         exists(
             select(GatheringInvitation.id).where(

@@ -2098,6 +2098,15 @@ async def put_place(
     that holds: each row is written as an INSERT … ON CONFLICT (CK-77.1),
     so the writes cannot conflict and nothing here is caught.
 
+    THE GATHERING'S ROW LOCK FIRST (CK-92.1): `_lock_setting`, taken right
+    after the group check and before anything the writes depend on is read
+    — the member, `_holds_invitation`, `is_co_host`, the answered check — so
+    a place change and an emailed invitation's acceptance on this gathering
+    take turns, each finding the other's committed rows, and a person ends
+    with one place. The lock is the gathering's row alone (no photograph,
+    no cover image), the order every other taker keeps. A refusal after it
+    raises with no commit; the session's close lets it go.
+
     REFUSED, each with a stable code and nothing written: 409 `is_co_host`
     — a co-host stays invited (CK-68's handle is their invitation row;
     remove them as a co-host first); 409 `has_answered` — a member who has
@@ -2109,6 +2118,7 @@ async def put_place(
     member's entry, the list's item shape."""
     gathering = await _gathering_for_organiser(db, ctx, gathering_id)
     _require_group(gathering)
+    await _lock_setting(db, gathering.id)
     found = (
         await db.execute(
             select(Membership, Person)
@@ -2244,7 +2254,9 @@ async def _lock_setting(db: AsyncSession, gathering_id: UUID) -> Optional[dateti
     """THE GATHERING'S ROW LOCK, taken first by every writer that depends on
     the setting — the setting route, an emailed invitation's create and its
     accept on a group's gathering (api/invitations.py takes the same
-    statement) — and the setting read under it, fresh. Two of them on one
+    statement) — and the setting read under it, fresh; and, since CK-92.1,
+    the places route (`put_place`), which reads nothing of the setting but
+    writes the place rows an acceptance deletes, so the two take turns. Two of them on one
     gathering take turns: an acceptance a turn-off waited for is removed by
     it, and an acceptance or an invitation that waited for a turn-off finds
     the setting off. The lock is the gathering's alone, so the covers' order
@@ -2334,8 +2346,11 @@ async def get_outside_invitations(
     """What turning it off would do (CK-92), for whoever may change it — the
     same audience and refusals as the PUT: whether it is on, since when and
     by whom, the outsiders who would lose the gathering — display names
-    alone, in the order they accepted, then by row — and how many live
-    pending invitations would be revoked. No address, no person id, no
+    alone, in the order they accepted, then by row — and how many pending
+    invitations still work and would stop: neither consumed nor revoked,
+    and not yet expired (CK-92.1). The turn-off revokes the expired ones
+    too, but an expired invitation already doesn't work, so it is not
+    counted. No address, no person id, no
     invitation id: an organiser who may turn it off reads who it affects,
     and nothing more."""
     gathering = await _gathering_for_outside_setting(db, ctx, gathering_id)
@@ -2366,6 +2381,7 @@ async def get_outside_invitations(
             GatheringInvitationPending.gathering_id == gathering.id,
             GatheringInvitationPending.consumed_at.is_(None),
             GatheringInvitationPending.revoked_at.is_(None),
+            GatheringInvitationPending.expires_at > datetime.now(timezone.utc),
         )
     )
     on = since is not None

@@ -619,15 +619,25 @@ async def _accept_into_group_gathering(
     acceptance that won is a rowcount of 0, re-read and answered by its own
     status); then the caller's membership ROW decides what the row says —
     never the address, which is never looked up:
-      * not a member — an invitation row with `from_outside` TRUE, which a
-        turn-off removes and joining the group clears;
+      * not a member and holding no place on the gathering — an invitation
+        row with `from_outside` TRUE, which a turn-off removes and joining
+        the group clears;
       * a member already invited — `already_accepted`, no second row;
       * a member shared with or left out — the place row DELETED and an
         invitation row written with `from_outside` false, in this one
         transaction, so a person holds one place (moving a member TO
         invited is never refused — the places route's own rule).
-    A place row is deleted whoever holds it, so a former member holding one
-    from before they left ends invited, from outside. The insert is ON
+    A FORMER MEMBER STILL HOLDING A PLACE ROW is not an outsider (CK-92.1;
+    Steven, 2026-11-10): the row is deleted all the same, so one place per
+    person holds, and the invitation row is written with `from_outside`
+    false, so a turn-off leaves them alone. The record's outsider is someone
+    the setting let in; a former member with a place was in the gathering's
+    audience before the setting existed — the group's rule put them there,
+    and leaving the group changed none of their places (the archive record
+    §6.1) — and every writer of a place row writes it for a member. The
+    delete's rowcount is the fact: read under the gathering's lock, which
+    every other writer of a place row on a group's gathering takes too
+    (the places route since CK-92.1). The insert is ON
     CONFLICT DO NOTHING on the (gathering, person) partial unique: a row a
     concurrent join wrote first is a member's row, and stands."""
     if await _lock_setting(db, gathering_id) is None:
@@ -659,19 +669,21 @@ async def _accept_into_group_gathering(
         await db.commit()
         return {"status": "already_accepted", "gathering_id": str(gathering_id)}
     member = await db.scalar(select(member_of(person_id, group_id)))
-    await db.execute(
-        delete(GatheringMemberPlace).where(
-            GatheringMemberPlace.gathering_id == gathering_id,
-            GatheringMemberPlace.person_id == person_id,
+    had_place = (
+        await db.execute(
+            delete(GatheringMemberPlace).where(
+                GatheringMemberPlace.gathering_id == gathering_id,
+                GatheringMemberPlace.person_id == person_id,
+            )
         )
-    )
+    ).rowcount > 0
     await db.execute(
         pg_insert(GatheringInvitation)
         .values(
             gathering_id=gathering_id,
             person_id=person_id,
             invited_by_person_id=invited_by_person_id,
-            from_outside=not member,
+            from_outside=not member and not had_place,
         )
         .on_conflict_do_nothing(
             index_elements=["gathering_id", "person_id"],
