@@ -14,6 +14,9 @@ export interface AcceptedInvitation {
   id: string
   display_name: string
   accepted_at: string
+  // On a group's gathering (CK-92): true for a person invited from outside
+  // the group. Optional — absent reads as a member's row (CK-93).
+  from_outside?: boolean
 }
 
 export interface InvitationLists {

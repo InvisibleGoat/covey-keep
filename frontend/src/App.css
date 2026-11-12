@@ -3652,3 +3652,121 @@ body.menu-open {
     grid-template-columns: minmax(0, 1fr) 320px;
   }
 }
+
+/* ---------- inviting people outside the group (CK-93; the mockup's .gline, and the app's own cards, pills and second steps — the mockup draws no switch and no alert) ---------- */
+
+/* The line at the top of Photos, for the group's members (the record §6):
+   the mockup's .gline, in its tokens. Inside the Photos section's flex
+   column the column's gap spaces it, so its own bottom margin goes. */
+.gline {
+  margin: 0 0 0.875rem;
+  padding: 0.625rem 0.75rem;
+  border-left: 3px solid var(--pg-events-accent);
+  border-radius: 0;
+  background: var(--ck-tint);
+  font-size: 0.875rem;
+}
+
+.media-block > .gline {
+  margin-bottom: 0;
+}
+
+/* The card: its heading and the switch the heading names, on one row; a
+   long group name wraps beside the switch, which keeps its size. */
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.switch-row > h2 {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The switch: a 44px target around a 44×26 track. It is a button, so the
+   pill's border, ground and padding are taken off; the focus ring is the
+   app's own. Off, the muted track; on, the accent track — each at 3:1 or
+   better against the card, the thumb against its track. */
+.ck-switch {
+  flex: none;
+  min-width: 52px;
+  min-height: 44px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+}
+
+.ck-switch-track {
+  position: relative;
+  display: block;
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--ck-muted);
+  transition: background-color 0.18s ease;
+}
+
+.ck-switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--pg-surface);
+  transition: transform 0.18s ease;
+}
+
+.ck-switch[aria-checked='true'] .ck-switch-track {
+  background: var(--pg-events-accent);
+}
+
+.ck-switch[aria-checked='true'] .ck-switch-thumb {
+  background: var(--pg-events-accent-ink);
+  transform: translateX(18px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ck-switch-track,
+  .ck-switch-thumb {
+    transition: none;
+  }
+}
+
+/* A second step beneath the switch, and the alert's row: the sentence, then
+   its two buttons keeping to their words, wrapping on a phone. */
+.outside-step,
+.outside-alert {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.outside-step > p,
+.outside-alert > p {
+  margin: 0;
+}
+
+.outside-step-actions,
+.outside-alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.outside-alert-actions > .form-error {
+  margin: 0;
+}
+
+/* Waiting on inside the card: an address is one long run with no space in it,
+   so one longer than the card wraps inside itself rather than running past the
+   card's edge (measured at 320px). Scoped to the card: a standalone gathering's
+   Invitations section is left as it was. */
+.outside-card .occurrence-list > li {
+  overflow-wrap: anywhere;
+}

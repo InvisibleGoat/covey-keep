@@ -412,6 +412,10 @@ interface Props {
   // The page's address is the gathering's Photos (CK-88.1b, point 14): read
   // once, as this section mounts.
   arrivedAtPhotos?: boolean
+  // The line about who can see a group's gathering (CK-93; the record §6),
+  // drawn straight after the section's head in both views: the page hands
+  // it to the group's members alone. Absent or null draws nothing.
+  groupLine?: string | null
 }
 
 // What this device knows about a row that the server cannot: whether the
@@ -694,6 +698,7 @@ export function GatheringMedia({
   searchDebounceMs = SEARCH_DEBOUNCE_MS,
   ref,
   arrivedAtPhotos = false,
+  groupLine = null,
 }: Props) {
   // The delegable flag (point 9): a host organises by definition.
   const organises = organisesProp ?? isHost
@@ -2133,6 +2138,10 @@ export function GatheringMedia({
         </h2>
         {countLine !== '' && <span className="meta">{countLine}</span>}
       </div>
+
+      {/* The line (CK-93; the mockup's .gline): who can see this group's
+          gathering, until the chat is built to carry it (the record §6). */}
+      {groupLine !== null && groupLine !== '' && <p className="gline">{groupLine}</p>}
 
       {/* The view switch — the organisers' (the host's alone until CK-69).
           The queue (CK-43.1; CK-44) is a view of this same list asked for

@@ -2,6 +2,7 @@
 // backend/app/api/gatherings.py's response bodies exactly — see
 // reference/backend/api-reference.md, Gatherings router.
 import type { CoverBody } from './covers'
+import type { OutsideInvitationsBody } from './outsideInvitations'
 import { formatDayWithYear, formatTime, formatWeekdayDay } from './datetime'
 import { photoCountLabel } from './media'
 
@@ -127,8 +128,17 @@ export function viewOf(view: unknown): ViewFlags {
 
 // The detail body: the gathering plus its dates. `occurrences` is NULL in
 // the photos-only view (CK-77) — the dates are logistics, withheld.
+//
+// On a group's gathering the body also carries the outside-invitation
+// setting (CK-92) — `outside_invitations` (`{on, since, by, may_change}`),
+// `caller_in_group` and `outside_alert` — each null on a standalone
+// gathering. Optional and read through lib/outsideInvitations.ts's
+// `outsideFlags` alone (CK-93), so a body without them renders nothing new.
 export interface GatheringWithOccurrences extends Gathering {
   occurrences: Occurrence[] | null
+  outside_invitations?: OutsideInvitationsBody | null
+  caller_in_group?: boolean | null
+  outside_alert?: boolean | null
 }
 
 // A GET /gatherings item (CK-20): the gathering plus an occurrence summary.

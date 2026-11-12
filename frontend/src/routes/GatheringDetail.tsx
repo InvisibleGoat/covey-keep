@@ -5,11 +5,12 @@ import { DateBadge } from '../components/Cover'
 import { FieldError, FormLevelErrors } from '../components/FieldError'
 import { GatheringMedia, type GatheringMediaHandle } from '../components/GatheringMedia'
 import { Icon } from '../components/Icons'
+import { InviteForm, WaitingOn } from '../components/InviteByEmail'
+import { OutsideAlert, OutsideInvitationsCard } from '../components/OutsideInvitations'
 import { PageCover } from '../components/PageCover'
 import { authFetch } from '../lib/api'
 import {
   effectiveZone,
-  formatInstant,
   formatInstantRange,
   instantToWallClock,
   wallClockToInstant,
@@ -43,6 +44,14 @@ import {
   type Occurrence,
 } from '../lib/gatherings'
 import { initials } from '../lib/groups'
+import {
+  alertSentence,
+  fromOutsideLabel,
+  groupLine,
+  openerOf,
+  outsideFlags,
+  turnedOffMeanwhile,
+} from '../lib/outsideInvitations'
 import {
   CO_HOST_ALWAYS_INVITED,
   newcomerLine,
@@ -616,6 +625,18 @@ function OccurrenceRsvp({
   )
 }
 
+// The stable code a refusal carries (`detail.code`), read from a copy of
+// the response so the mapper can still read the body; '' when none.
+async function refusalCode(response: Response): Promise<string> {
+  try {
+    const body = (await response.clone().json()) as { detail?: { code?: unknown } } | null
+    const code = body?.detail?.code
+    return typeof code === 'string' ? code : ''
+  } catch {
+    return ''
+  }
+}
+
 // The view-and-edit detail (CK-17 read-only; editing CK-18). Nothing here
 // surfaces keeper counts or gathering removal: those are later phases'
 // surfaces. `requires_approval` — the EFFECTIVE value, resolved through the
@@ -651,7 +672,21 @@ function OccurrenceRsvp({
 // `organises` — delegable), the prompt to share once a date has started, and
 // an Invitations section that is co-host management alone — no email form
 // and no Waiting on, because every emailed invitation to a group's gathering
-// is the 409 `members_only`. Nobody is told their place.
+// is the 409 `members_only` while its outside invitations are off. Nobody is
+// told their place.
+//
+// INVITING PEOPLE OUTSIDE THE GROUP (CK-93; the surface for CK-92's backend;
+// the record §5–§7). Three body fields, read through
+// lib/outsideInvitations.ts's `outsideFlags` and nowhere by hand, decide
+// four things: `may_change` THE CARD (components/OutsideInvitations.tsx —
+// the switch, its two steps and, while on, for the organisers, the email
+// form and *Waiting on*, moved from the standalone section and shared),
+// after Who it's for in the full view and after Photos in the photos-only
+// view; `caller_in_group` true THE LINE at the top of Photos; `outside_alert`
+// THE ALERT beneath the cover card; and `caller_in_group` exactly false AN
+// OUTSIDER'S PAGE, which never reaches for the group — its crumb is
+// *Gatherings*, and the Photos section is given no group, so the viewer
+// reads none. A body without the fields renders none of it.
 //
 // THE MOCKUP'S LAYOUT (CK-87; its screens 08 and 09, `gatheringPage()`; the
 // merge record §3 item 7; Steven's answers of 2026-11-01). The page column
@@ -741,6 +776,12 @@ export function GatheringDetail() {
   const [inviteDestination, setInviteDestination] = useState('')
   const [inviteErrors, setInviteErrors] = useState<FormErrors>(noErrors())
   const [inviteSubmitting, setInviteSubmitting] = useState(false)
+  // A send on a group's gathering the server refused with `members_only`
+  // (CK-93): its outside invitations were turned off meanwhile. The card
+  // says so beneath its switch until a send or a change lands.
+  const [inviteTurnedOff, setInviteTurnedOff] = useState(false)
+  // The page's <h1> (CK-93): Got it on the alert moves focus to it.
+  const titleRef = useRef<HTMLHeadingElement>(null)
 
   // Co-host management (CK-69), inside the Invitations section: the co-host
   // list loads with the invitations when the section opens (only an
@@ -786,10 +827,25 @@ export function GatheringDetail() {
     }
   }, [])
 
-  // Loads only once an organiser opens the section; re-fetched after every
-  // successful send or revoke (optimistic-free, like everything else here).
+  const loadedGathering = state.status === 'loaded' ? state.gathering : null
+  // THE PAGE'S ONE ROSTER READ (CK-93): the Co-hosts or Invitations
+  // section's lists and the outside card's *Waiting on* are one request.
+  // It is read while that section is open (only an organiser ever has it),
+  // or while the setting is on and the caller organises a group's gathering
+  // in the full view — the server refuses the roster to anyone else, a
+  // group's admin who organises nothing included — and once per reload
+  // whichever holds: the effect keys on the one boolean. Re-fetched after
+  // every successful send or revoke, and after a turn-off (optimistic-free,
+  // like everything else here).
+  const rosterWanted =
+    invitationsOpen ||
+    (loadedGathering !== null &&
+      loadedGathering.group !== null &&
+      viewOf(loadedGathering.caller_view).full &&
+      roleFlags(loadedGathering.caller_role).organises &&
+      outsideFlags(loadedGathering).on)
   useEffect(() => {
-    if (!invitationsOpen) return
+    if (!rosterWanted) return
     let cancelled = false
     async function load() {
       try {
@@ -810,7 +866,7 @@ export function GatheringDetail() {
     return () => {
       cancelled = true
     }
-  }, [id, invitationsOpen, invitationsReloadKey])
+  }, [id, rosterWanted, invitationsReloadKey])
 
   // The co-host list (CK-69), beside the invitations: the same trigger,
   // its own reload key (a make or a remove changes this list and not the
@@ -843,7 +899,6 @@ export function GatheringDetail() {
   // organiser of a group's gathering, in the full view. For anyone else the
   // route is the gathering's 404 — and in the photos-only view the page asks
   // for nothing the view withholds — so it is never asked.
-  const loadedGathering = state.status === 'loaded' ? state.gathering : null
   const wantsPlaces =
     loadedGathering !== null &&
     loadedGathering.group !== null &&
@@ -938,6 +993,64 @@ export function GatheringDetail() {
   const { gathering } = state
   const isMemorial = gathering.gathering_type === 'memorial'
 
+  // Inviting people outside the group (CK-93): the body's three fields,
+  // read once. AN OUTSIDER'S PAGE NEVER REACHES FOR THE GROUP: the crumb and
+  // the Photos section are handed no group, so the crumb is *Gatherings* and
+  // the viewer reads nothing about the group's seat.
+  const outside = outsideFlags(gathering)
+  const shownGroup = outside.outsider ? null : gathering.group
+  // THE LINE, for the group's members alone, in both views.
+  const lineForGroup =
+    outside.inGroup && gathering.group !== null ? groupLine(gathering.group.name, outside.on) : null
+
+  // A change to the setting landed: the returned body replaces the page's;
+  // a turn-off reads the roster again (the outsiders' rows and every
+  // pending invitation are gone with it).
+  function settingLanded(body: GatheringWithOccurrences, turnedOff: boolean) {
+    setInviteTurnedOff(false)
+    setState({ status: 'loaded', gathering: body })
+    if (turnedOff) setInvitationsReloadKey((key) => key + 1)
+  }
+
+  // Got it landed: the alert goes from the body the page holds, nothing
+  // re-read, and focus goes to the page's <h1>.
+  function alertDismissed() {
+    titleRef.current?.focus()
+    setState((current) =>
+      current.status === 'loaded'
+        ? { status: 'loaded', gathering: { ...current.gathering, outside_alert: false } }
+        : current,
+    )
+  }
+
+  // THE ALERT (the record §5), beneath the cover card in both views.
+  const alert =
+    outside.alert && gathering.group !== null ? (
+      <OutsideAlert
+        gatheringId={gathering.id}
+        sentence={alertSentence(openerOf(gathering), gathering.title, gathering.group.name)}
+        onDismissed={alertDismissed}
+      />
+    ) : null
+
+  // THE CARD, for everyone the body says `may_change`; `children` the email
+  // form and *Waiting on*, the full view's organisers' while it is on.
+  function outsideCard(children: ReactNode) {
+    if (!outside.mayChange || gathering.group === null) return null
+    return (
+      <OutsideInvitationsCard
+        gatheringId={gathering.id}
+        groupName={gathering.group.name}
+        on={outside.on}
+        notice={inviteTurnedOff ? turnedOffMeanwhile(gathering.group.name) : null}
+        onLanded={settingLanded}
+        onRefresh={() => setReloadKey((key) => key + 1)}
+      >
+        {children}
+      </OutsideInvitationsCard>
+    )
+  }
+
   // The cover a page act landed, drawn at once from the server's answer (the
   // PUT's `cover` from the viewer's Use as cover — CK-84).
   function coverSet(cover: CoverBody | null) {
@@ -956,7 +1069,7 @@ export function GatheringDetail() {
   // title, the type and, for a memorial, the decedent line over the scrim.
   // `badge` is the full view's alone: the photos-only view has no dates.
   function head(badge: ReactNode | undefined) {
-    const group = gathering.group
+    const group = shownGroup
     return (
       <>
         <div className="crumb">
@@ -977,7 +1090,9 @@ export function GatheringDetail() {
           photoRemovalSentence={removePhotoSentence(gathering.title)}
           onChanged={() => setReloadKey((key) => key + 1)}
         >
-          <h1>{gathering.title}</h1>
+          <h1 ref={titleRef} tabIndex={-1}>
+            {gathering.title}
+          </h1>
           <p className="cover-card-meta">{gatheringTypeLabel(gathering.gathering_type)}</p>
           {gathering.memorial_decedent_name && (
             <p className="cover-card-meta">In memory of {gathering.memorial_decedent_name}</p>
@@ -1003,6 +1118,7 @@ export function GatheringDetail() {
     return (
       <main className="auth-screen page-column gathering-page">
         {head(undefined)}
+        {alert}
         <p>{PHOTOS_ONLY_LINE}</p>
         <section className="auth-card" aria-labelledby="photos-heading">
           <GatheringMedia
@@ -1013,13 +1129,17 @@ export function GatheringDetail() {
             occurrences={null}
             canUpload={false}
             cover={gathering.cover}
-            group={gathering.group}
+            group={shownGroup}
             gatheringTitle={gathering.title}
             onCoverSet={coverSet}
             zone={zone}
             arrivedAtPhotos={arrivedAtPhotos}
+            groupLine={lineForGroup}
           />
         </section>
+        {/* The card after Photos (CK-93): a group's admin or co-admin only
+            shared with may change the setting, and gets the switch alone. */}
+        {outsideCard(null)}
       </main>
     )
   }
@@ -1219,7 +1339,15 @@ export function GatheringDetail() {
       if (!alive.current) return
       if (response.status === 201) {
         setInviteDestination('')
+        setInviteTurnedOff(false)
         setInvitationsReloadKey((key) => key + 1)
+      } else if (response.status === 409 && group !== null && (await refusalCode(response)) === 'members_only') {
+        // A group's gathering whose outside invitations were turned off
+        // meanwhile (CK-93): its own line, and the gathering re-read, so the
+        // card shows off. Nothing was sent.
+        if (!alive.current) return
+        setInviteTurnedOff(true)
+        setReloadKey((key) => key + 1)
       } else if (response.status === 429) {
         // A rate limit is neither a validation failure nor a server error —
         // it gets its own honest line instead of the mapper's generic one.
@@ -1416,6 +1544,8 @@ export function GatheringDetail() {
   return (
     <main className="auth-screen page-column gathering-page">
       {head(badge)}
+
+      {alert}
 
       {/* THE ACTIONS (CK-87; the mockup's `.gactions`): Add photos for
           everyone who can upload — ONE press opens the device's picker
@@ -1906,11 +2036,12 @@ export function GatheringDetail() {
           occurrences={occurrences}
           canUpload={canUpload}
           cover={gathering.cover}
-          group={group}
+          group={shownGroup}
           gatheringTitle={gathering.title}
           onCoverSet={coverSet}
           zone={zone}
           arrivedAtPhotos={arrivedAtPhotos}
+          groupLine={lineForGroup}
         />
       </section>
 
@@ -1997,14 +2128,48 @@ export function GatheringDetail() {
         </section>
       )}
 
+      {/* THE CARD (CK-93), after Who it's for: the switch for everyone the
+          body says may change it; while on, for the gathering's organisers,
+          the email form and *Waiting on* — the standalone section's, shared
+          — beneath it. A group's admin who organises nothing gets the switch
+          alone (the server refuses them the create and the roster). */}
+      {outsideCard(
+        outside.on && organises ? (
+          <>
+            <InviteForm
+              destination={inviteDestination}
+              onDestinationChange={setInviteDestination}
+              errors={inviteErrors}
+              submitting={inviteSubmitting}
+              onSubmit={(event) => void sendInvitation(event)}
+            />
+            {invitationsFailed && (
+              <p className="form-error" role="alert">
+                <span aria-hidden="true">⚠ </span>
+                The invitation list couldn't be loaded just now.
+              </p>
+            )}
+            {invitations && (
+              <WaitingOn
+                pending={invitations.pending}
+                zone={zone}
+                onRevoke={(pendingId) => void revokeInvitation(pendingId)}
+              />
+            )}
+          </>
+        ) : null,
+      )}
+
       {organises && (
         // The Invitations section (CK-25). On a GROUP's gathering it is the
         // co-host section alone (CK-80): every emailed invitation to a
-        // group's gathering is the 409 `members_only` (CK-76) — its members
-        // get their place on Who it's for — so no email form and no
-        // *Waiting on* is offered (the CK-18 lesson). What stays is CK-69's
-        // co-host management: the co-host list, and the invited members —
-        // the materialized invitation rows — with Make co-host.
+        // group's gathering is the 409 `members_only` (CK-76) while its
+        // outside invitations are off (CK-92) — its members get their place
+        // on Who it's for — so no email form and no *Waiting on* is offered
+        // here (the CK-18 lesson); while they are on, both are in the card
+        // above (CK-93). What stays is CK-69's co-host management: the
+        // co-host list, and the invited members — the materialized
+        // invitation rows — with Make co-host.
         <section className="auth-card" aria-labelledby="invitations-heading">
           <h2 id="invitations-heading">{group !== null ? 'Co-hosts' : 'Invitations'}</h2>
           {!invitationsOpen ? (
@@ -2018,30 +2183,13 @@ export function GatheringDetail() {
           ) : (
             <>
               {group === null && (
-                <form onSubmit={(event) => void sendInvitation(event)}>
-                  <label htmlFor="invite-destination">Email address</label>
-                  <input
-                    id="invite-destination"
-                    type="email"
-                    required
-                    value={inviteDestination}
-                    aria-describedby={describedBy(inviteErrors, 'destination')}
-                    onChange={(event) => setInviteDestination(event.target.value)}
-                  />
-                  <FieldError errors={inviteErrors} field="destination" />
-                  <FieldError errors={inviteErrors} field="channel" />
-                  <p className="field-hint">
-                    They'll get an email with a link to this gathering. Invitations expire
-                    after 7 days.
-                  </p>
-                  <button
-                    type="submit"
-                    disabled={inviteDestination.trim() === '' || inviteSubmitting}
-                  >
-                    {inviteSubmitting ? 'Sending…' : 'Send invitation'}
-                  </button>
-                  <FormLevelErrors errors={inviteErrors} />
-                </form>
+                <InviteForm
+                  destination={inviteDestination}
+                  onDestinationChange={setInviteDestination}
+                  errors={inviteErrors}
+                  submitting={inviteSubmitting}
+                  onSubmit={(event) => void sendInvitation(event)}
+                />
               )}
 
               {invitationsFailed && (
@@ -2055,31 +2203,11 @@ export function GatheringDetail() {
               {invitations && (
                 <>
                   {group === null && (
-                    <>
-                      <h3>Waiting on</h3>
-                      {invitations.pending.length === 0 ? (
-                        <p className="field-hint">No pending invitations.</p>
-                      ) : (
-                        <ul className="occurrence-list">
-                          {invitations.pending.map((pending) => (
-                            <li key={pending.id}>
-                              {pending.destination}
-                              {' — '}
-                              {new Date(pending.expires_at).getTime() <= Date.now()
-                                ? 'expired'
-                                : `expires ${formatInstant(pending.expires_at, zone)}`}{' '}
-                              <button
-                                type="button"
-                                className="link-button"
-                                onClick={() => void revokeInvitation(pending.id)}
-                              >
-                                Revoke
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </>
+                    <WaitingOn
+                      pending={invitations.pending}
+                      zone={zone}
+                      onRevoke={(pendingId) => void revokeInvitation(pendingId)}
+                    />
                   )}
                   {/* Co-hosts (CK-69; co-hosts §4): the list for every
                       organiser; the host alone makes and removes one, and
@@ -2191,6 +2319,17 @@ export function GatheringDetail() {
                         // "Make co-host" while it might already be one.
                         const isCoHost =
                           coHosts !== null && coHosts.some((row) => row.invitation_id === accepted.id)
+                        // Someone invited from outside the group (CK-93;
+                        // Steven's answer 4) says so, and is offered no
+                        // Make co-host: a group's gathering's co-host is a
+                        // member (the server's `not_a_member`).
+                        if (group !== null && accepted.from_outside === true) {
+                          return (
+                            <li key={accepted.id}>
+                              {fromOutsideLabel(coHostName(accepted.display_name), group.name)}
+                            </li>
+                          )
+                        }
                         return (
                           <li key={accepted.id}>
                             {accepted.display_name}

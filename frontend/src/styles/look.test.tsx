@@ -252,3 +252,16 @@ test('the precache: the default pattern kept, the font and the images added, and
   expect(viteConfig).toContain('injectRegister: null,')
   expect(viteConfig).toContain("registerType: 'autoUpdate',")
 })
+
+test("the card's Waiting on wraps a long address inside itself, and only inside the card", () => {
+  // CK-93's measurement: an address longer than the card at 320px ran past its
+  // edge. The rule is the card's alone; a standalone gathering's list is left as
+  // it was, so no unscoped rule on the list wraps anywhere.
+  const css = stripCss(appCss)
+  const scoped = css.match(/\.outside-card \.occurrence-list > li \{([^}]*)\}/)
+  expect(scoped?.[1]).toContain('overflow-wrap: anywhere;')
+  for (const rule of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+    if (!/\.occurrence-list/.test(rule[1]) || !/overflow-wrap/.test(rule[2])) continue
+    expect(rule[1].trim()).toBe('.outside-card .occurrence-list > li')
+  }
+})
