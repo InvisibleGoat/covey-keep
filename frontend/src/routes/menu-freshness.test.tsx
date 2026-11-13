@@ -14,6 +14,8 @@ import App from '../App'
 import { AuthContext, type AuthState, type Person } from '../auth/context'
 import { clearCoverPictures } from '../lib/covers'
 import { formatDayWithYear, formatWeekdayDay, instantToWallClock } from '../lib/datetime'
+import { approveSentence } from '../lib/groupJoining'
+import { removeMemberSentence } from '../lib/groups'
 import { chooseMenuLayout, type MenuLayout } from '../lib/menuLayout'
 
 const ZONE = 'America/Chicago'
@@ -327,9 +329,16 @@ async function rename(to: string) {
   fireEvent.click(within(form).getByRole('button', { name: 'Save' }))
 }
 
+// Moved pin (CK-94), in both helpers: a step is named by its sentence,
+// aria-labelledby, where until CK-94 an aria-label named it — focus lands on
+// the step, so it reads what the step says.
 async function approveZoe() {
   fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
-  fireEvent.click(within(screen.getByRole('group', { name: 'Approve Zoe' })).getByRole('button', { name: 'Approve Zoe' }))
+  fireEvent.click(
+    within(screen.getByRole('group', { name: approveSentence('Zoe', 'The Lees') })).getByRole('button', {
+      name: 'Approve Zoe',
+    }),
+  )
 }
 
 async function removeCal() {
@@ -339,7 +348,7 @@ async function removeCal() {
     .find((item) => item.querySelector('.member-name')?.textContent === 'Cal') as HTMLElement
   fireEvent.click(within(row).getByRole('button', { name: 'Remove from group' }))
   fireEvent.click(
-    within(screen.getByRole('group', { name: 'Remove Cal from the group' })).getByRole('button', { name: 'Remove from group' }),
+    within(screen.getByRole('group', { name: removeMemberSentence('Cal') })).getByRole('button', { name: 'Remove from group' }),
   )
 }
 

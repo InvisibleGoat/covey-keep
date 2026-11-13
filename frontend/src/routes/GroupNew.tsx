@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { FieldError, FormLevelErrors } from '../components/FieldError'
+import { firstFieldWithError, useFocusRequest } from '../components/useFocusRequest'
 import { describedBy, noErrors, type FormErrors } from '../lib/formErrors'
 import { createGroup } from '../lib/groups'
 
@@ -21,6 +22,12 @@ export function GroupNew() {
   const [name, setName] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [errors, setErrors] = useState<FormErrors>(noErrors())
+
+  // Focus after an answer (CK-94): a refusal on the name goes to the field,
+  // anything else back to Start group, which the press disabled.
+  const form = useRef<HTMLFormElement>(null)
+  const submit = useRef<HTMLButtonElement>(null)
+  const requestFocus = useFocusRequest(form)
 
   // Cancel-on-unmount for the submit handler (the CK-18 convention).
   const alive = useRef(true)
@@ -43,13 +50,14 @@ export function GroupNew() {
     }
     setErrors(outcome.errors)
     setSubmitting(false)
+    requestFocus(() => firstFieldWithError(form.current) ?? submit.current)
   }
 
   return (
     <main className="auth-screen">
       <h1>New group</h1>
 
-      <form className="auth-card" onSubmit={(event) => void handleSubmit(event)}>
+      <form ref={form} className="auth-card" onSubmit={(event) => void handleSubmit(event)}>
         <label htmlFor="group-name">Name</label>
         <input
           id="group-name"
@@ -62,7 +70,7 @@ export function GroupNew() {
         <p className="field-hint">Most groups are named for a family — the Hawkins Family, the Lees.</p>
         <FieldError errors={errors} field="name" />
 
-        <button type="submit" disabled={name.trim() === '' || submitting}>
+        <button ref={submit} type="submit" disabled={name.trim() === '' || submitting}>
           {submitting ? 'Starting…' : 'Start group'}
         </button>
         <FormLevelErrors errors={errors} />

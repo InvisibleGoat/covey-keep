@@ -37,8 +37,13 @@ import {
   LEAVE_COME_BACK,
   LEAVE_EXPLAINER,
   LEAVE_ONLY_MEMBER,
+  leaveSentence,
+  makeAdminSentence,
+  removeCoAdminSentence,
+  removeMemberSentence,
   STEP_DOWN_SENTENCE,
 } from '../lib/groups'
+import { approveSentence, REPLACE_LINK_SENTENCE, TURN_OFF_LINK_SENTENCE } from '../lib/groupJoining'
 import { GroupPeople } from './GroupPeople'
 import groupPeopleSource from './GroupPeople.tsx?raw'
 
@@ -578,20 +583,21 @@ test('Remove as co-admin: the first click asks, Keep as co-admin does nothing, t
   renderPage()
   await loaded()
   fireEvent.click(within(rowOf('Bea')).getByRole('button', { name: 'Remove as co-admin' }))
-  const step = screen.getByRole('group', { name: 'Remove Bea as co-admin' })
+  // Moved pin (CK-94): a step is named by its sentence, aria-labelledby, where until CK-94 an aria-label named it — focus lands on the step, so it reads what the step says.
+  const step = screen.getByRole('group', { name: removeCoAdminSentence('Bea') })
   expect(within(step).getByText(
     'Bea will no longer be able to rename the group, invite people, approve requests to join or remove members.',
   )).toBeTruthy()
   expect(WRITES(mock)).toBe(0)
 
   fireEvent.click(within(step).getByRole('button', { name: 'Keep as co-admin' }))
-  expect(screen.queryByRole('group', { name: 'Remove Bea as co-admin' })).toBeNull()
+  expect(screen.queryByRole('group', { name: removeCoAdminSentence('Bea') })).toBeNull()
   expect(WRITES(mock)).toBe(0)
   expect(buttonsIn(rowOf('Bea'))).toEqual(['Remove as co-admin', 'Make admin', 'Remove from group'])
 
   fireEvent.click(within(rowOf('Bea')).getByRole('button', { name: 'Remove as co-admin' }))
   fireEvent.click(
-    within(screen.getByRole('group', { name: 'Remove Bea as co-admin' })).getByRole('button', {
+    within(screen.getByRole('group', { name: removeCoAdminSentence('Bea') })).getByRole('button', {
       name: 'Remove as co-admin',
     }),
   )
@@ -609,18 +615,19 @@ test('Step down: the first click asks, Stay a co-admin does nothing, the confirm
   renderPage()
   await loaded()
   fireEvent.click(within(rowOf('Bea')).getByRole('button', { name: 'Step down' }))
-  const step = screen.getByRole('group', { name: 'Step down as co-admin' })
+  // Moved pin (CK-94): a step is named by its sentence, aria-labelledby, where until CK-94 an aria-label named it — focus lands on the step, so it reads what the step says.
+  const step = screen.getByRole('group', { name: STEP_DOWN_SENTENCE })
   expect(within(step).getByText(STEP_DOWN_SENTENCE)).toBeTruthy()
   expect(STEP_DOWN_SENTENCE).toBe(
     "You'll no longer be able to rename the group, invite people, approve requests to join or remove members. Only the admin can make you a co-admin again.",
   )
   fireEvent.click(within(step).getByRole('button', { name: 'Stay a co-admin' }))
   expect(WRITES(mock)).toBe(0)
-  expect(screen.queryByRole('group', { name: 'Step down as co-admin' })).toBeNull()
+  expect(screen.queryByRole('group', { name: STEP_DOWN_SENTENCE })).toBeNull()
 
   fireEvent.click(within(rowOf('Bea')).getByRole('button', { name: 'Step down' }))
   fireEvent.click(
-    within(screen.getByRole('group', { name: 'Step down as co-admin' })).getByRole('button', {
+    within(screen.getByRole('group', { name: STEP_DOWN_SENTENCE })).getByRole('button', {
       name: 'Step down',
     }),
   )
@@ -640,17 +647,18 @@ test('Make admin: the first click asks, Keep the role does nothing, the confirm 
   renderPage()
   await loaded()
   fireEvent.click(within(rowOf('Bea')).getByRole('button', { name: 'Make admin' }))
-  const step = screen.getByRole('group', { name: 'Make Bea the admin' })
+  // Moved pin (CK-94): a step is named by its sentence, aria-labelledby, where until CK-94 an aria-label named it — focus lands on the step, so it reads what the step says.
+  const step = screen.getByRole('group', { name: makeAdminSentence('Bea') })
   expect(within(step).getByText(
     "Bea will be the admin at once, and you'll be a member. Only Bea can make you the admin again.",
   )).toBeTruthy()
   fireEvent.click(within(step).getByRole('button', { name: 'Keep the role' }))
   expect(WRITES(mock)).toBe(0)
-  expect(screen.queryByRole('group', { name: 'Make Bea the admin' })).toBeNull()
+  expect(screen.queryByRole('group', { name: makeAdminSentence('Bea') })).toBeNull()
 
   fireEvent.click(within(rowOf('Bea')).getByRole('button', { name: 'Make admin' }))
   fireEvent.click(
-    within(screen.getByRole('group', { name: 'Make Bea the admin' })).getByRole('button', {
+    within(screen.getByRole('group', { name: makeAdminSentence('Bea') })).getByRole('button', {
       name: 'Make Bea the admin',
     }),
   )
@@ -674,17 +682,18 @@ for (const seat of ['ada', 'bea'] as const) {
     renderPage()
     await loaded()
     fireEvent.click(within(rowOf('Cal')).getByRole('button', { name: 'Remove from group' }))
-    const step = screen.getByRole('group', { name: 'Remove Cal from the group' })
+    // Moved pin (CK-94): a step is named by its sentence, aria-labelledby, where until CK-94 an aria-label named it — focus lands on the step, so it reads what the step says.
+    const step = screen.getByRole('group', { name: removeMemberSentence('Cal') })
     expect(within(step).getByText(
       "Cal will no longer be a member of this group. Gatherings they're already part of don't change.",
     )).toBeTruthy()
     fireEvent.click(within(step).getByRole('button', { name: 'Keep Cal' }))
     expect(WRITES(mock)).toBe(0)
-    expect(screen.queryByRole('group', { name: 'Remove Cal from the group' })).toBeNull()
+    expect(screen.queryByRole('group', { name: removeMemberSentence('Cal') })).toBeNull()
 
     fireEvent.click(within(rowOf('Cal')).getByRole('button', { name: 'Remove from group' }))
     fireEvent.click(
-      within(screen.getByRole('group', { name: 'Remove Cal from the group' })).getByRole('button', {
+      within(screen.getByRole('group', { name: removeMemberSentence('Cal') })).getByRole('button', {
         name: 'Remove from group',
       }),
     )
@@ -704,15 +713,16 @@ test('one step at a time on the whole page: opening another row’s step, or the
   renderPage()
   await loaded()
   fireEvent.click(within(rowOf('Cal')).getByRole('button', { name: 'Remove from group' }))
-  expect(screen.getByRole('group', { name: 'Remove Cal from the group' })).toBeTruthy()
+  // Moved pin (CK-94): a step is named by its sentence, aria-labelledby, where until CK-94 an aria-label named it — focus lands on the step, so it reads what the step says.
+  expect(screen.getByRole('group', { name: removeMemberSentence('Cal') })).toBeTruthy()
   fireEvent.click(within(rowOf('Bea')).getByRole('button', { name: 'Make admin' }))
-  expect(screen.queryByRole('group', { name: 'Remove Cal from the group' })).toBeNull()
-  expect(screen.getByRole('group', { name: 'Make Bea the admin' })).toBeTruthy()
+  expect(screen.queryByRole('group', { name: removeMemberSentence('Cal') })).toBeNull()
+  expect(screen.getByRole('group', { name: makeAdminSentence('Bea') })).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Leave this group' }))
-  expect(screen.queryByRole('group', { name: 'Make Bea the admin' })).toBeNull()
-  expect(screen.getByRole('group', { name: 'Leave The Lees' })).toBeTruthy()
+  expect(screen.queryByRole('group', { name: makeAdminSentence('Bea') })).toBeNull()
+  expect(screen.getByRole('group', { name: leaveSentence('The Lees') })).toBeTruthy()
   fireEvent.click(within(rowOf('Bea')).getByRole('button', { name: 'Remove as co-admin' }))
-  expect(screen.queryByRole('group', { name: 'Leave The Lees' })).toBeNull()
+  expect(screen.queryByRole('group', { name: leaveSentence('The Lees') })).toBeNull()
   expect(screen.getByRole('button', { name: 'Leave this group' })).toBeTruthy()
 })
 
@@ -887,7 +897,8 @@ test('leaving: its own card for every member, a second step that names the group
   expect(within(card).queryByRole('textbox')).toBeNull()
 
   fireEvent.click(within(card).getByRole('button', { name: 'Leave this group' }))
-  const step = within(card).getByRole('group', { name: 'Leave The Lees' })
+  // Moved pin (CK-94): a step is named by its sentence, aria-labelledby, where until CK-94 an aria-label named it — focus lands on the step, so it reads what the step says.
+  const step = within(card).getByRole('group', { name: leaveSentence('The Lees') })
   expect(within(step).getByText('Leave The Lees?')).toBeTruthy()
   expect(WRITES(mock)).toBe(0)
   fireEvent.click(within(step).getByRole('button', { name: 'Stay' }))
@@ -908,7 +919,8 @@ test('leaving as the admin with other members: the 409 hand_over_first line in t
   renderPage()
   await loaded()
   fireEvent.click(screen.getByRole('button', { name: 'Leave this group' }))
-  fireEvent.click(within(screen.getByRole('group', { name: 'Leave The Lees' })).getByRole('button', { name: 'Leave' }))
+  // Moved pin (CK-94): a step is named by its sentence, aria-labelledby, where until CK-94 an aria-label named it — focus lands on the step, so it reads what the step says.
+  fireEvent.click(within(screen.getByRole('group', { name: leaveSentence('The Lees') })).getByRole('button', { name: 'Leave' }))
   const alert = await within(leaveCard()).findByRole('alert')
   expect(alert.textContent).toBe(
     "⚠ You're the admin, so someone else needs the role before you leave. Choose Make admin beside a member's name.",
@@ -1185,7 +1197,8 @@ test('Approve takes a second step: the first click posts nothing, Not yet does n
   const requestsBefore = GET_REQUESTS(mock)
 
   fireEvent.click(within(requestRow('Zoe')).getByRole('button', { name: 'Approve' }))
-  const step = screen.getByRole('group', { name: 'Approve Zoe' })
+  // Moved pin (CK-94): a step is named by its sentence, aria-labelledby, where until CK-94 an aria-label named it — focus lands on the step, so it reads what the step says.
+  const step = screen.getByRole('group', { name: approveSentence('Zoe', 'The Lees') })
   expect(within(step).getByText(
     "Zoe will join The Lees and see its members. The group's upcoming gatherings will include them.",
   )).toBeTruthy()
@@ -1193,12 +1206,12 @@ test('Approve takes a second step: the first click posts nothing, Not yet does n
   expect(WRITES(mock)).toBe(0)
 
   fireEvent.click(within(step).getByRole('button', { name: 'Not yet' }))
-  expect(screen.queryByRole('group', { name: 'Approve Zoe' })).toBeNull()
+  expect(screen.queryByRole('group', { name: approveSentence('Zoe', 'The Lees') })).toBeNull()
   expect(buttonsIn(requestRow('Zoe'))).toEqual(['Approve', 'Decline'])
   expect(WRITES(mock)).toBe(0)
 
   fireEvent.click(within(requestRow('Zoe')).getByRole('button', { name: 'Approve' }))
-  fireEvent.click(within(screen.getByRole('group', { name: 'Approve Zoe' })).getByRole('button', { name: 'Approve Zoe' }))
+  fireEvent.click(within(screen.getByRole('group', { name: approveSentence('Zoe', 'The Lees') })).getByRole('button', { name: 'Approve Zoe' }))
   await within(region('Requests to join')).findByText('No one is waiting to join.')
   await waitFor(() => expect(rowOf('Zoe')).toBeTruthy())
   // MOVED AT CK-85, with its reason: the count says people (Steven).
@@ -1287,7 +1300,8 @@ for (const refusal of DECISION_REFUSALS) {
     const membersBefore = GET_MEMBERS(mock)
     fireEvent.click(within(requestRow('Zoe')).getByRole('button', { name: refusal.act }))
     if (refusal.act === 'Approve') {
-      fireEvent.click(within(screen.getByRole('group', { name: 'Approve Zoe' })).getByRole('button', { name: 'Approve Zoe' }))
+      // Moved pin (CK-94): a step is named by its sentence, aria-labelledby, where until CK-94 an aria-label named it — focus lands on the step, so it reads what the step says.
+      fireEvent.click(within(screen.getByRole('group', { name: approveSentence('Zoe', 'The Lees') })).getByRole('button', { name: 'Approve Zoe' }))
     }
     const alert = await within(requestRow('Zoe')).findByRole('alert')
     expect(alert.textContent).toContain(refusal.expected)
@@ -1400,22 +1414,23 @@ test('Make a new link: the first click asks with its sentence, Keep this link do
   const view = renderPage()
   await loaded()
   fireEvent.click(await screen.findByRole('button', { name: 'Make a new link' }))
-  let step = screen.getByRole('group', { name: 'Make a new link' })
+  // Moved pin (CK-94): a step is named by its sentence, aria-labelledby, where until CK-94 an aria-label named it — focus lands on the step, so it reads what the step says.
+  let step = screen.getByRole('group', { name: REPLACE_LINK_SENTENCE })
   expect(within(step).getByText(
     "The current link will stop working, and anyone who hasn't used it yet will need the new one.",
   )).toBeTruthy()
   expect(buttonsIn(step)).toEqual(['Make a new link', 'Keep this link'])
   expect(WRITES(mock)).toBe(0)
   fireEvent.click(within(step).getByRole('button', { name: 'Keep this link' }))
-  expect(screen.queryByRole('group', { name: 'Make a new link' })).toBeNull()
+  expect(screen.queryByRole('group', { name: REPLACE_LINK_SENTENCE })).toBeNull()
   expect(WRITES(mock)).toBe(0)
 
   fireEvent.click(screen.getByRole('button', { name: 'Make a new link' }))
-  step = screen.getByRole('group', { name: 'Make a new link' })
+  step = screen.getByRole('group', { name: REPLACE_LINK_SENTENCE })
   fireEvent.click(within(step).getByRole('button', { name: 'Make a new link' }))
   expect(await within(region('Invite people')).findByText('Works until Nov 10')).toBeTruthy()
   expect(calls(mock, 'POST', '/groups/g-1/link')).toHaveLength(1)
-  expect(screen.queryByRole('group', { name: 'Make a new link' })).toBeNull()
+  expect(screen.queryByRole('group', { name: REPLACE_LINK_SENTENCE })).toBeNull()
   expectNoLinkOrToken(view.container)
 })
 
@@ -1431,7 +1446,8 @@ test('Turn off the link: the first click asks with its sentence, Keep the link d
   renderPage()
   await loaded()
   fireEvent.click(await screen.findByRole('button', { name: 'Turn off the link' }))
-  let step = screen.getByRole('group', { name: 'Turn off the link' })
+  // Moved pin (CK-94): a step is named by its sentence, aria-labelledby, where until CK-94 an aria-label named it — focus lands on the step, so it reads what the step says.
+  let step = screen.getByRole('group', { name: TURN_OFF_LINK_SENTENCE })
   expect(within(step).getByText(
     'The link will stop working. Requests already made stay in Requests to join.',
   )).toBeTruthy()
@@ -1440,7 +1456,7 @@ test('Turn off the link: the first click asks with its sentence, Keep the link d
   expect(WRITES(mock)).toBe(0)
 
   fireEvent.click(screen.getByRole('button', { name: 'Turn off the link' }))
-  step = screen.getByRole('group', { name: 'Turn off the link' })
+  step = screen.getByRole('group', { name: TURN_OFF_LINK_SENTENCE })
   fireEvent.click(within(step).getByRole('button', { name: 'Turn off the link' }))
   await within(region('Invite people')).findByRole('button', { name: 'Make a link' })
   expect(calls(mock, 'DELETE', '/groups/g-1/link')).toHaveLength(1)
@@ -1659,19 +1675,20 @@ test('one step at a time on the whole page, with CK-79’s: opening an approval,
   await screen.findByRole('list', { name: 'Requests to join' })
   await screen.findByRole('button', { name: 'Share the link' })
   fireEvent.click(within(requestRow('Zoe')).getByRole('button', { name: 'Approve' }))
-  expect(screen.getByRole('group', { name: 'Approve Zoe' })).toBeTruthy()
+  // Moved pin (CK-94): a step is named by its sentence, aria-labelledby, where until CK-94 an aria-label named it — focus lands on the step, so it reads what the step says.
+  expect(screen.getByRole('group', { name: approveSentence('Zoe', 'The Lees') })).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Make a new link' }))
-  expect(screen.queryByRole('group', { name: 'Approve Zoe' })).toBeNull()
-  expect(screen.getByRole('group', { name: 'Make a new link' })).toBeTruthy()
+  expect(screen.queryByRole('group', { name: approveSentence('Zoe', 'The Lees') })).toBeNull()
+  expect(screen.getByRole('group', { name: REPLACE_LINK_SENTENCE })).toBeTruthy()
   fireEvent.click(within(rowOf('Cal')).getByRole('button', { name: 'Remove from group' }))
-  expect(screen.queryByRole('group', { name: 'Make a new link' })).toBeNull()
-  expect(screen.getByRole('group', { name: 'Remove Cal from the group' })).toBeTruthy()
+  expect(screen.queryByRole('group', { name: REPLACE_LINK_SENTENCE })).toBeNull()
+  expect(screen.getByRole('group', { name: removeMemberSentence('Cal') })).toBeTruthy()
   // The link step's openers are back once its step closed.
   fireEvent.click(screen.getByRole('button', { name: 'Turn off the link' }))
-  expect(screen.queryByRole('group', { name: 'Remove Cal from the group' })).toBeNull()
-  expect(screen.getByRole('group', { name: 'Turn off the link' })).toBeTruthy()
+  expect(screen.queryByRole('group', { name: removeMemberSentence('Cal') })).toBeNull()
+  expect(screen.getByRole('group', { name: TURN_OFF_LINK_SENTENCE })).toBeTruthy()
   fireEvent.click(within(requestRow('Zoe')).getByRole('button', { name: 'Approve' }))
-  expect(screen.queryByRole('group', { name: 'Turn off the link' })).toBeNull()
+  expect(screen.queryByRole('group', { name: TURN_OFF_LINK_SENTENCE })).toBeNull()
   expect(screen.getByRole('button', { name: 'Make a new link' })).toBeTruthy()
 })
 

@@ -206,7 +206,7 @@ export function fromOutsideLabel(name: string, group: string): string {
   return `${name} · From outside ${group}`
 }
 
-// --- copy: CK-93's kickoff, for Steven to approve or change --------------------
+// --- copy: CK-93's kickoff, approved by Steven on 2026-11-12 -------------------
 
 export const TURNING_IT_ON = 'Turning it on…'
 export const TURNING_IT_OFF = 'Turning it off…'

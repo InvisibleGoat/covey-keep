@@ -80,11 +80,17 @@
 //   invite by email — CK-25's form on the group — and read *Waiting on*.
 //   `device` is a prop for tests only (the CK-74 `follow` idiom); the app
 //   passes nothing and gets the browser's own.
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { FieldError, FormLevelErrors } from '../components/FieldError'
 import { Icon } from '../components/Icons'
+import {
+  firstFieldWithError,
+  useFocusRequest,
+  useRefMap,
+  type FocusSource,
+} from '../components/useFocusRequest'
 import { effectiveZone, formatDay } from '../lib/datetime'
 import { describedBy, noErrors, type FormErrors } from '../lib/formErrors'
 import { announceMenuChange } from '../lib/frame'
@@ -170,12 +176,12 @@ type Step =
   | { act: 'turn_off_link' }
 
 // What each second step says and offers. The sentence names what the
-// person loses; the confirm acts; the keep button does nothing.
+// person loses — and, since CK-94, names the step itself, which is where
+// focus lands when it opens; the confirm acts; the keep button does nothing.
 function stepCopy(act: RowStepAct, name: string) {
   switch (act) {
     case 'remove_co_admin':
       return {
-        label: `Remove ${name} as co-admin`,
         sentence: removeCoAdminSentence(name),
         confirm: 'Remove as co-admin',
         busy: 'Removing…',
@@ -183,7 +189,6 @@ function stepCopy(act: RowStepAct, name: string) {
       }
     case 'step_down':
       return {
-        label: 'Step down as co-admin',
         sentence: STEP_DOWN_SENTENCE,
         confirm: 'Step down',
         busy: 'Stepping down…',
@@ -191,7 +196,6 @@ function stepCopy(act: RowStepAct, name: string) {
       }
     case 'make_admin':
       return {
-        label: `Make ${name} the admin`,
         sentence: makeAdminSentence(name),
         confirm: `Make ${name} the admin`,
         busy: 'Handing over…',
@@ -199,7 +203,6 @@ function stepCopy(act: RowStepAct, name: string) {
       }
     case 'remove_member':
       return {
-        label: `Remove ${name} from the group`,
         sentence: removeMemberSentence(name),
         confirm: 'Remove from group',
         busy: 'Removing…',
@@ -292,6 +295,52 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
     }
   }, [])
 
+  // FOCUS AFTER AN ANSWER (CK-94; reference/frontend/components.md, Focus
+  // after an answer). A press disables or removes the control it was made
+  // on, and the browser drops focus to the body while the request waits, so
+  // every answer names where focus goes next: a 422 to the field it names, a
+  // failure back to the control pressed — or to the button that opened the
+  // step the failure closed — a success to the next thing the person acts
+  // on, or the section's heading where the row has left. Each section is its
+  // own container, so a person who moved elsewhere keeps their place. A step
+  // opens with focus on itself, labelled by its sentence; its keep button
+  // puts focus back on the button that opened it.
+  const membersSection = useRef<HTMLElement>(null)
+  const membersHeading = useRef<HTMLHeadingElement>(null)
+  // A member's row's buttons, by `<act>:<membership id>`.
+  const rowButtons = useRefMap<string>()
+  const requestsSection = useRef<HTMLElement>(null)
+  const requestsHeading = useRef<HTMLHeadingElement>(null)
+  // A request's Approve and Decline, by `<decision>:<request id>`.
+  const requestButtons = useRefMap<string>()
+  const inviteSection = useRef<HTMLElement>(null)
+  const linkTryAgain = useRef<HTMLButtonElement>(null)
+  const makeLinkButton = useRef<HTMLButtonElement>(null)
+  const shareButton = useRef<HTMLButtonElement>(null)
+  const newLinkOpener = useRef<HTMLButtonElement>(null)
+  const turnOffOpener = useRef<HTMLButtonElement>(null)
+  const inviteForm = useRef<HTMLFormElement>(null)
+  const inviteField = useRef<HTMLInputElement>(null)
+  const inviteSubmit = useRef<HTMLButtonElement>(null)
+  const revokeButtons = useRefMap<string>()
+  const renameForm = useRef<HTMLFormElement>(null)
+  const nameField = useRef<HTMLInputElement>(null)
+  const renameSave = useRef<HTMLButtonElement>(null)
+  const leaveSection = useRef<HTMLElement>(null)
+  const leaveOpener = useRef<HTMLButtonElement>(null)
+  // One step open on the page at a time, so one ref and one sentence id.
+  const stepRef = useRef<HTMLDivElement>(null)
+  const stepSentenceId = useId()
+  // Where focus goes once a re-read draws what a landed act changed: a
+  // member's other co-admin act, or Make a link once the link is off.
+  const membersAfterRead = useRef<FocusSource | null>(null)
+  const linkAfterRead = useRef<FocusSource | null>(null)
+  const focusInMembers = useFocusRequest(membersSection)
+  const focusInRequests = useFocusRequest(requestsSection)
+  const focusInInvite = useFocusRequest(inviteSection)
+  const focusInRename = useFocusRequest(renameForm)
+  const focusInLeave = useFocusRequest(leaveSection)
+
   useEffect(() => {
     let cancelled = false
     async function load() {
@@ -308,13 +357,18 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
     let cancelled = false
     async function load() {
       const result = await readMembers(groupId)
-      if (!cancelled) setMembersLoad(result)
+      if (!cancelled) {
+        setMembersLoad(result)
+        const target = membersAfterRead.current
+        membersAfterRead.current = null
+        if (target !== null && result.status === 'loaded') focusInMembers(target)
+      }
     }
     void load()
     return () => {
       cancelled = true
     }
-  }, [groupId, membersKey])
+  }, [groupId, membersKey, focusInMembers])
 
   // The two organiser reads wait for the group body to say the caller
   // organises: for anyone else they are the group's 404, and never asked.
@@ -326,13 +380,18 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
     let cancelled = false
     async function load() {
       const outcome = await readLink(groupId, device)
-      if (!cancelled) setLinkLoad(outcome.ok ? { status: 'loaded', value: outcome.link } : { status: 'failed' })
+      if (!cancelled) {
+        setLinkLoad(outcome.ok ? { status: 'loaded', value: outcome.link } : { status: 'failed' })
+        const target = linkAfterRead.current
+        linkAfterRead.current = null
+        if (target !== null) focusInInvite(outcome.ok ? target : linkTryAgain)
+      }
     }
     void load()
     return () => {
       cancelled = true
     }
-  }, [groupId, linkKey, device])
+  }, [groupId, linkKey, device, focusInInvite])
 
   useEffect(() => {
     if (!callerOrganises) return
@@ -430,9 +489,12 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
       setGroupKey((key) => key + 1)
       // The menu draws the name (CK-89.1).
       announceMenuChange()
+      // Save is disabled again, nothing being changed: to the name field.
+      focusInRename(nameField)
       return
     }
     setRenameErrors(outcome.errors)
+    focusInRename(() => firstFieldWithError(renameForm.current) ?? renameSave.current)
   }
 
   function clearRefusals() {
@@ -445,6 +507,22 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
   function openStep(next: Step) {
     clearRefusals()
     setStep(next)
+    focusInSectionOf(next)(stepRef)
+  }
+
+  // The section a step belongs to, whose request takes focus into it.
+  function focusInSectionOf(of: Step) {
+    switch (of.act) {
+      case 'leave':
+        return focusInLeave
+      case 'approve':
+        return focusInRequests
+      case 'replace_link':
+      case 'turn_off_link':
+        return focusInInvite
+      default:
+        return focusInMembers
+    }
   }
 
   // Every act on a member's row: one in flight at a time; a success re-reads
@@ -479,6 +557,16 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
       if (act === 'step_down' || act === 'make_admin' || act === 'remove_member') {
         setGroupKey((key) => key + 1)
       }
+      // Making or removing a co-admin leaves the row with its other act,
+      // drawn once the re-read lands; every other success takes the row or
+      // the caller's controls with it, so to Members' heading.
+      if (act === 'make_co_admin') {
+        membersAfterRead.current = () => rowButtons.get(`remove_co_admin:${member.membership_id}`)
+      } else if (act === 'remove_co_admin') {
+        membersAfterRead.current = () => rowButtons.get(`make_co_admin:${member.membership_id}`)
+      } else {
+        focusInMembers(membersHeading)
+      }
       setMembersKey((key) => key + 1)
       // The menu draws the count, and no role (CK-89.1).
       if (act === 'remove_member') announceMenuChange()
@@ -488,6 +576,8 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
       membershipId: member.membership_id,
       message: groupRefusalMessage(outcome.code, member.display_name, act),
     })
+    // The step closed: back to the button that opened it, or the one pressed.
+    focusInMembers(() => rowButtons.get(`${act}:${member.membership_id}`))
   }
 
   async function leave() {
@@ -505,6 +595,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
     }
     setStep(null)
     setLeaveRefusal(groupRefusalMessage(outcome.code, '', 'leave'))
+    focusInLeave(leaveOpener)
   }
 
   // --- joining on the surface (CK-79) ---------------------------------------
@@ -531,23 +622,30 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
         // The menu draws the count (CK-89.1).
         announceMenuChange()
       }
+      // The row leaves with the re-read: to Requests to join's heading.
+      focusInRequests(requestsHeading)
       return
     }
     setRequestRefusal({
       requestId: request.id,
       message: decisionRefusalMessage(outcome.code, outcome.outcome),
     })
+    focusInRequests(() => requestButtons.get(`${decision}:${request.id}`))
   }
 
+  // Refresh the list goes as it is pressed, and the row may go with the
+  // re-read: to Requests to join's heading (CK-94, the rule's last rung).
   function refreshRequests() {
     setRequestRefusal(null)
     setRequestsKey((key) => key + 1)
+    focusInRequests(requestsHeading)
   }
 
   // Make the link (one click) or replace it (behind its step): the 201's
   // body is the new link, rendered at once — the server's own.
   async function makeTheLink() {
     if (acting !== null) return
+    const replacing = step?.act === 'replace_link'
     setActing('link')
     clearRefusals()
     setShareOutcome(null)
@@ -557,9 +655,11 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
     setStep(null)
     if (outcome.ok) {
       setLinkLoad({ status: 'loaded', value: outcome.link })
+      focusInInvite(shareButton)
       return
     }
     setLinkRefusal(linkRefusalMessage(outcome.code))
+    focusInInvite(replacing ? newLinkOpener : makeLinkButton)
   }
 
   // Turn the link off (behind its step), then re-read: no link from here.
@@ -573,10 +673,13 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
     setActing(null)
     setStep(null)
     if (outcome.ok) {
+      // To Make a link, once the re-read draws it.
+      linkAfterRead.current = makeLinkButton
       setLinkKey((key) => key + 1)
       return
     }
     setLinkRefusal(linkRefusalMessage(outcome.code))
+    focusInInvite(turnOffOpener)
   }
 
   // Share the link: the device is called at once, inside the click, so the
@@ -599,9 +702,11 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
     if (outcome.ok) {
       setInviteDestination('')
       setInvitationsKey((key) => key + 1)
+      focusInInvite(inviteField)
       return
     }
     setInviteErrors(outcome.errors)
+    focusInInvite(() => firstFieldWithError(inviteForm.current) ?? inviteSubmit.current)
   }
 
   // Revoke is one click (CK-25). A 404 means it stopped being pending —
@@ -613,7 +718,16 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
     const outcome = await revokeGroupInvitation(group.id, invitationId)
     if (!alive.current) return
     setActing(null)
-    if (outcome.ok || outcome.code === 'not_found') setInvitationsKey((key) => key + 1)
+    if (outcome.ok || outcome.code === 'not_found') {
+      setInvitationsKey((key) => key + 1)
+      // The row leaves with the re-read: to the address field.
+      focusInInvite(inviteField)
+      return
+    }
+    // A failure says nothing (found, reported, not fixed — new words), and
+    // the row stays: back on its Revoke, re-enabled (CK-94, the rule's
+    // second rung).
+    focusInInvite(() => revokeButtons.get(invitationId))
   }
 
   const leaveStepOpen = step?.act === 'leave'
@@ -642,8 +756,12 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
         </div>
       </div>
 
-      <section className="auth-card" aria-labelledby="members-heading">
-        <h2 id="members-heading">Members</h2>
+      <section ref={membersSection} className="auth-card" aria-labelledby="members-heading">
+        {/* Focusable by script alone (tabIndex -1): where focus lands when a
+            landed act takes the row or the caller's controls (CK-94). */}
+        <h2 ref={membersHeading} id="members-heading" tabIndex={-1}>
+          Members
+        </h2>
         {isAdmin && <p className="field-hint">{CO_ADMIN_HINT}</p>}
         <ul className="occurrence-list member-list" aria-label="Members">
           {members.map((member) => {
@@ -674,8 +792,10 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                 {copy && openAct ? (
                   // The second, deliberate step: the first click only asked,
                   // and the do-nothing beside the confirm does nothing.
-                  <div role="group" aria-label={copy.label}>
-                    <p className="field-hint">{copy.sentence}</p>
+                  <div ref={stepRef} role="group" aria-labelledby={stepSentenceId} tabIndex={-1}>
+                    <p id={stepSentenceId} className="field-hint">
+                      {copy.sentence}
+                    </p>
                     <button
                       type="button"
                       disabled={acting !== null}
@@ -687,7 +807,10 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                       type="button"
                       className="link-button"
                       disabled={acting !== null}
-                      onClick={() => setStep(null)}
+                      onClick={() => {
+                        setStep(null)
+                        focusInMembers(() => rowButtons.get(`${openAct}:${member.membership_id}`))
+                      }}
                     >
                       {copy.keep}
                     </button>
@@ -696,6 +819,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                   <div className="member-actions">
                     {controls.makeCoAdmin && (
                       <button
+                        ref={rowButtons.register(`make_co_admin:${member.membership_id}`)}
                         type="button"
                         className="link-button"
                         disabled={acting !== null}
@@ -709,6 +833,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                     )}
                     {controls.removeCoAdmin && (
                       <button
+                        ref={rowButtons.register(`remove_co_admin:${member.membership_id}`)}
                         type="button"
                         className="link-button"
                         disabled={acting !== null}
@@ -721,6 +846,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                     )}
                     {controls.makeAdmin && (
                       <button
+                        ref={rowButtons.register(`make_admin:${member.membership_id}`)}
                         type="button"
                         className="link-button"
                         disabled={acting !== null}
@@ -733,6 +859,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                     )}
                     {controls.removeFromGroup && (
                       <button
+                        ref={rowButtons.register(`remove_member:${member.membership_id}`)}
                         type="button"
                         className="link-button"
                         disabled={acting !== null}
@@ -745,6 +872,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                     )}
                     {controls.stepDown && (
                       <button
+                        ref={rowButtons.register(`step_down:${member.membership_id}`)}
                         type="button"
                         className="link-button"
                         disabled={acting !== null}
@@ -767,8 +895,12 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
       </section>
 
       {organises && (
-        <section className="auth-card" aria-labelledby="requests-heading">
-          <h2 id="requests-heading">Requests to join</h2>
+        <section ref={requestsSection} className="auth-card" aria-labelledby="requests-heading">
+          {/* Focusable by script alone (tabIndex -1): where focus lands when
+              a decided request leaves (CK-94). */}
+          <h2 ref={requestsHeading} id="requests-heading" tabIndex={-1}>
+            Requests to join
+          </h2>
           <p className="field-hint">{REQUESTS_HINT}</p>
           {requestsLoad.status === 'loading' && <p>Loading…</p>}
           {requestsLoad.status === 'failed' && (
@@ -810,8 +942,10 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                     {approveOpen ? (
                       // The second, deliberate step (Steven, 2026-10-27): the
                       // first click only asked, and Not yet does nothing.
-                      <div role="group" aria-label={`Approve ${name}`}>
-                        <p className="field-hint">{approveSentence(name, group.name)}</p>
+                      <div ref={stepRef} role="group" aria-labelledby={stepSentenceId} tabIndex={-1}>
+                        <p id={stepSentenceId} className="field-hint">
+                          {approveSentence(name, group.name)}
+                        </p>
                         <button
                           type="button"
                           disabled={acting !== null}
@@ -823,7 +957,10 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                           type="button"
                           className="link-button"
                           disabled={acting !== null}
-                          onClick={() => setStep(null)}
+                          onClick={() => {
+                            setStep(null)
+                            focusInRequests(() => requestButtons.get(`approve:${request.id}`))
+                          }}
                         >
                           Not yet
                         </button>
@@ -831,6 +968,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                     ) : (
                       <div className="member-actions">
                         <button
+                          ref={requestButtons.register(`approve:${request.id}`)}
                           type="button"
                           className="link-button"
                           disabled={acting !== null}
@@ -839,6 +977,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                           Approve
                         </button>
                         <button
+                          ref={requestButtons.register(`decline:${request.id}`)}
                           type="button"
                           className="link-button"
                           disabled={acting !== null}
@@ -867,7 +1006,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
         </section>
       )}
 
-      <section className="auth-card" aria-labelledby="invite-heading">
+      <section ref={inviteSection} className="auth-card" aria-labelledby="invite-heading">
         <h2 id="invite-heading">Invite people</h2>
         {linkLoad.status === 'loading' && <p>Loading…</p>}
         {linkLoad.status === 'failed' && (
@@ -877,6 +1016,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
               The group's link couldn't be loaded just now.
             </p>
             <button
+              ref={linkTryAgain}
               type="button"
               onClick={() => {
                 setLinkLoad({ status: 'loading' })
@@ -890,7 +1030,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
         {linkLoad.status === 'loaded' && link === null && organises && (
           <>
             <p className="field-hint">{LINK_HINT}</p>
-            <button type="button" disabled={acting !== null} onClick={() => void makeTheLink()}>
+            <button ref={makeLinkButton} type="button" disabled={acting !== null} onClick={() => void makeTheLink()}>
               {acting === 'link' ? 'Making…' : 'Make a link'}
             </button>
           </>
@@ -898,15 +1038,17 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
         {linkLoad.status === 'loaded' && link === null && !organises && <p>{NO_LINK_MEMBER}</p>}
         {link !== null && (
           <>
-            <button type="button" disabled={acting === 'link'} onClick={() => shareTheLink(link)}>
+            <button ref={shareButton} type="button" disabled={acting === 'link'} onClick={() => shareTheLink(link)}>
               Share the link
             </button>
             <p>{linkExpiryLine(formatDay(link.expiresAt, zone))}</p>
             <p className="field-hint">{LINK_HINT}</p>
             {organises &&
               (step?.act === 'replace_link' ? (
-                <div role="group" aria-label="Make a new link">
-                  <p className="field-hint">{REPLACE_LINK_SENTENCE}</p>
+                <div ref={stepRef} role="group" aria-labelledby={stepSentenceId} tabIndex={-1}>
+                  <p id={stepSentenceId} className="field-hint">
+                    {REPLACE_LINK_SENTENCE}
+                  </p>
                   <button type="button" disabled={acting !== null} onClick={() => void makeTheLink()}>
                     {acting === 'link' ? 'Making…' : 'Make a new link'}
                   </button>{' '}
@@ -914,14 +1056,19 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                     type="button"
                     className="link-button"
                     disabled={acting !== null}
-                    onClick={() => setStep(null)}
+                    onClick={() => {
+                      setStep(null)
+                      focusInInvite(newLinkOpener)
+                    }}
                   >
                     Keep this link
                   </button>
                 </div>
               ) : step?.act === 'turn_off_link' ? (
-                <div role="group" aria-label="Turn off the link">
-                  <p className="field-hint">{TURN_OFF_LINK_SENTENCE}</p>
+                <div ref={stepRef} role="group" aria-labelledby={stepSentenceId} tabIndex={-1}>
+                  <p id={stepSentenceId} className="field-hint">
+                    {TURN_OFF_LINK_SENTENCE}
+                  </p>
                   <button
                     type="button"
                     disabled={acting !== null}
@@ -933,7 +1080,10 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                     type="button"
                     className="link-button"
                     disabled={acting !== null}
-                    onClick={() => setStep(null)}
+                    onClick={() => {
+                      setStep(null)
+                      focusInInvite(turnOffOpener)
+                    }}
                   >
                     Keep the link
                   </button>
@@ -941,6 +1091,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
               ) : (
                 <div className="member-actions">
                   <button
+                    ref={newLinkOpener}
                     type="button"
                     className="link-button"
                     disabled={acting !== null}
@@ -949,6 +1100,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                     Make a new link
                   </button>
                   <button
+                    ref={turnOffOpener}
                     type="button"
                     className="link-button"
                     disabled={acting !== null}
@@ -970,9 +1122,10 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
         {organises && (
           <>
             <h3>Invite by email</h3>
-            <form onSubmit={(event) => void sendInvitation(event)}>
+            <form ref={inviteForm} onSubmit={(event) => void sendInvitation(event)}>
               <label htmlFor="group-invite-destination">Email address</label>
               <input
+                ref={inviteField}
                 id="group-invite-destination"
                 type="email"
                 required
@@ -984,6 +1137,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
               <FieldError errors={inviteErrors} field="channel" />
               <p className="field-hint">{INVITE_HINT}</p>
               <button
+                ref={inviteSubmit}
                 type="submit"
                 disabled={inviteDestination.trim() === '' || inviteSubmitting}
               >
@@ -1027,6 +1181,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                       formatDay(invitation.expires_at, zone),
                     )}{' '}
                     <button
+                      ref={revokeButtons.register(invitation.id)}
                       type="button"
                       className="link-button"
                       disabled={acting !== null}
@@ -1044,6 +1199,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
 
       {organises && (
         <form
+          ref={renameForm}
           className="auth-card"
           aria-labelledby="rename-heading"
           onSubmit={(event) => void rename(event)}
@@ -1051,6 +1207,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
           <h2 id="rename-heading">Rename the group</h2>
           <label htmlFor="group-name">Group name</label>
           <input
+            ref={nameField}
             id="group-name"
             type="text"
             maxLength={200}
@@ -1059,7 +1216,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
             onChange={(event) => setNameDraft(event.target.value)}
           />
           <FieldError errors={renameErrors} field="name" />
-          <button type="submit" disabled={!renameDirty || renaming}>
+          <button ref={renameSave} type="submit" disabled={!renameDirty || renaming}>
             {renaming ? 'Saving…' : 'Save'}
           </button>
           <FormLevelErrors errors={renameErrors} />
@@ -1070,15 +1227,17 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
           the name field must never reach leaving (the Destructive-sections
           convention). Not type-to-confirm — the group can undo a leave and
           the account is untouched — but a second, deliberate step. */}
-      <section className="auth-card danger-zone" aria-labelledby="leave-heading">
+      <section ref={leaveSection} className="auth-card danger-zone" aria-labelledby="leave-heading">
         <h2 id="leave-heading">Leave this group</h2>
         <p className="danger-explainer">{LEAVE_EXPLAINER}</p>
         <p className="danger-explainer">
           {group.member_count === 1 ? LEAVE_ONLY_MEMBER : LEAVE_COME_BACK}
         </p>
         {leaveStepOpen ? (
-          <div role="group" aria-label={`Leave ${group.name}`}>
-            <p className="field-hint">{leaveSentence(group.name)}</p>
+          <div ref={stepRef} role="group" aria-labelledby={stepSentenceId} tabIndex={-1}>
+            <p id={stepSentenceId} className="field-hint">
+              {leaveSentence(group.name)}
+            </p>
             <button
               type="button"
               className="danger-button"
@@ -1091,13 +1250,17 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
               type="button"
               className="link-button"
               disabled={acting !== null}
-              onClick={() => setStep(null)}
+              onClick={() => {
+                setStep(null)
+                focusInLeave(leaveOpener)
+              }}
             >
               Stay
             </button>
           </div>
         ) : (
           <button
+            ref={leaveOpener}
             type="button"
             className="danger-button"
             disabled={acting !== null}

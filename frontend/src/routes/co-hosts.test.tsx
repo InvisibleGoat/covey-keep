@@ -19,7 +19,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AuthContext, type AuthState, type Person } from '../auth/context'
-import { CO_HOST_HINT, STEP_DOWN_SENTENCE } from '../lib/coHosts'
+import { CO_HOST_HINT, removeCoHostSentence, STEP_DOWN_SENTENCE } from '../lib/coHosts'
 import { GatheringDetail } from './GatheringDetail'
 
 const person: Person = {
@@ -400,23 +400,26 @@ test('management, host: Make co-host on Accepted rows not yet co-hosts, posting 
   expect(screen.queryByRole('button', { name: 'Step down' })).toBeNull()
   expect(document.body.textContent).not.toMatch(/i-peter|acct-|person-|@/)
 
-  // Remove as co-host: the first click only asks.
+  // Remove as co-host: the first click only asks. The step is named by its
+  // sentence since CK-94 (moved pin: until then an aria-label, "Remove peter
+  // as co-host"; now aria-labelledby the sentence, so focus landing on the
+  // step reads what the step says).
   fireEvent.click(within(coHostRows()[0]).getByRole('button', { name: 'Remove as co-host' }))
-  const step = within(coHostRows()[0]).getByRole('group', { name: 'Remove peter as co-host' })
+  const step = within(coHostRows()[0]).getByRole('group', { name: removeCoHostSentence('peter') })
   expect(step.textContent).toContain(
     'peter will no longer be able to edit this gathering, invite people, or take photos off it.',
   )
   expect(calls(mock, 'DELETE', () => true)).toHaveLength(0)
   // Keep as co-host: inert — the step closes, nothing sent.
   fireEvent.click(within(step).getByRole('button', { name: 'Keep as co-host' }))
-  expect(within(coHostRows()[0]).queryByRole('group', { name: /^Remove / })).toBeNull()
+  expect(within(coHostRows()[0]).queryByRole('group', { name: removeCoHostSentence('peter') })).toBeNull()
   expect(calls(mock, 'DELETE', () => true)).toHaveLength(0)
   expect(rows).toHaveLength(1)
   // The second, deliberate click: one DELETE to the row's own path, and the
   // list re-reads empty.
   fireEvent.click(within(coHostRows()[0]).getByRole('button', { name: 'Remove as co-host' }))
   fireEvent.click(
-    within(within(coHostRows()[0]).getByRole('group', { name: /^Remove / })).getByRole('button', {
+    within(within(coHostRows()[0]).getByRole('group', { name: removeCoHostSentence('peter') })).getByRole('button', {
       name: 'Remove as co-host',
     }),
   )
@@ -518,13 +521,15 @@ test("management, co-host: the list with no Make co-host or Remove as co-host an
   expect(screen.getByText('peter — Co-host')).toBeTruthy()
   expect(screen.getByText('Aunt May — Co-host')).toBeTruthy()
 
-  // Step down: the first click only asks; Stay a co-host is inert.
+  // Step down: the first click only asks; Stay a co-host is inert. The step
+  // is named by its sentence since CK-94 (moved pin: until then an
+  // aria-label, "Step down as co-host").
   fireEvent.click(within(coHostRows()[1]).getByRole('button', { name: 'Step down' }))
-  const step = within(coHostRows()[1]).getByRole('group', { name: 'Step down as co-host' })
+  const step = within(coHostRows()[1]).getByRole('group', { name: STEP_DOWN_SENTENCE })
   expect(step.textContent).toContain(STEP_DOWN_SENTENCE)
   expect(calls(mock, 'DELETE', () => true)).toHaveLength(0)
   fireEvent.click(within(step).getByRole('button', { name: 'Stay a co-host' }))
-  expect(within(coHostRows()[1]).queryByRole('group', { name: /step down/i })).toBeNull()
+  expect(within(coHostRows()[1]).queryByRole('group', { name: STEP_DOWN_SENTENCE })).toBeNull()
   expect(calls(mock, 'DELETE', () => true)).toHaveLength(0)
   expect(screen.getByRole('button', { name: /edit gathering/i })).toBeTruthy()
 
@@ -532,7 +537,7 @@ test("management, co-host: the list with no Make co-host or Remove as co-host an
   // the gathering re-read, and the page re-rendered as an invitee's.
   fireEvent.click(within(coHostRows()[1]).getByRole('button', { name: 'Step down' }))
   fireEvent.click(
-    within(within(coHostRows()[1]).getByRole('group', { name: 'Step down as co-host' })).getByRole('button', {
+    within(within(coHostRows()[1]).getByRole('group', { name: STEP_DOWN_SENTENCE })).getByRole('button', {
       name: 'Step down',
     }),
   )

@@ -11,10 +11,11 @@
 //   joins later is invited too.
 // The type, the title, the decedent name and the dates are the same fields
 // either way, mapped through the one 422 mapper.
-import { useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { FieldError, FormLevelErrors } from '../components/FieldError'
+import { firstFieldWithError, useFocusRequest, useRefMap } from '../components/useFocusRequest'
 import { authFetch } from '../lib/api'
 import { effectiveZone, wallClockToInstant } from '../lib/datetime'
 import {
@@ -73,6 +74,16 @@ export function GatheringNew({ inGroup }: { inGroup?: InGroup } = {}) {
   const [occurrences, setOccurrences] = useState<OccurrenceDraft[]>([emptyOccurrence()])
   const [submitting, setSubmitting] = useState(false)
   const [errors, setErrors] = useState<FormErrors>(noErrors())
+
+  // Focus after an answer (CK-94): a refusal goes to the first field it
+  // names, then to the checked choice of the first member row it names, and
+  // otherwise — a failure, or a 422 naming nothing on screen — back to
+  // Create gathering, which the press disabled. A create that lands
+  // navigates, and the new page starts its own focus.
+  const form = useRef<HTMLFormElement>(null)
+  const submit = useRef<HTMLButtonElement>(null)
+  const memberRows = useRefMap<string>()
+  const requestFocus = useFocusRequest(form)
 
   // Who it's for (CK-80): every member but the caller, in joining order,
   // each starting Invited. The choices are keyed by membership id — the
@@ -183,8 +194,19 @@ export function GatheringNew({ inGroup }: { inGroup?: InGroup } = {}) {
       }
       setRowErrors(onRows)
       setErrors(await errorsFromResponse(response, [...visibleFields, ...landed]))
+      // The first refused row in the order the form draws them.
+      const refusedRow = others.find((member) => member.membership_id in onRows)
+      requestFocus(
+        () =>
+          firstFieldWithError(form.current) ??
+          (refusedRow
+            ? memberRows.get(refusedRow.membership_id)?.querySelector<HTMLElement>('input:checked')
+            : null) ??
+          submit.current,
+      )
     } catch {
       setErrors(networkErrors())
+      requestFocus(submit)
     }
     setSubmitting(false)
   }
@@ -193,7 +215,7 @@ export function GatheringNew({ inGroup }: { inGroup?: InGroup } = {}) {
     <main className="auth-screen">
       <h1>{inGroup ? `New gathering in ${inGroup.group.name}` : 'New gathering'}</h1>
 
-      <form className="auth-card gathering-form" onSubmit={(event) => void handleSubmit(event)}>
+      <form ref={form} className="auth-card gathering-form" onSubmit={(event) => void handleSubmit(event)}>
         <label htmlFor="gathering-type">Type of gathering</label>
         <select
           id="gathering-type"
@@ -348,7 +370,11 @@ export function GatheringNew({ inGroup }: { inGroup?: InGroup } = {}) {
                 {others.map((member, index) => {
                   const chosen = choices[member.membership_id] ?? 'invited'
                   return (
-                    <fieldset key={member.membership_id} className="occurrence-fields">
+                    <fieldset
+                      key={member.membership_id}
+                      ref={memberRows.register(member.membership_id)}
+                      className="occurrence-fields"
+                    >
                       <legend>
                         <span className="member-initials" aria-hidden="true">
                           {initials(member.display_name)}
@@ -385,7 +411,7 @@ export function GatheringNew({ inGroup }: { inGroup?: InGroup } = {}) {
           </section>
         )}
 
-        <button type="submit" disabled={!plausible || submitting}>
+        <button ref={submit} type="submit" disabled={!plausible || submitting}>
           {submitting ? 'Creating…' : 'Create gathering'}
         </button>
         {Object.keys(rowErrors).length > 0 && (

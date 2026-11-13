@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   addPasskey,
   browserSupportsWebAuthn,
@@ -7,6 +7,7 @@ import {
   removePasskey,
   type Passkey,
 } from '../lib/passkeys'
+import { useFocusRequest, useRefMap } from './useFocusRequest'
 
 // Quiet by default (CK-10): this section exists in settings and nowhere else —
 // no prompt, no suggestion, no banner — until the custom domain is final,
@@ -33,6 +34,15 @@ export function PasskeySection() {
   const [nickname, setNickname] = useState('')
   const [busy, setBusy] = useState<'idle' | 'adding' | 'removing'>('idle')
   const [error, setError] = useState<string | null>(null)
+
+  // Focus after an answer (CK-94): the section is the container; Add a
+  // passkey after any answer to it, and after a removal the next passkey's
+  // Remove, else Add a passkey, else (no WebAuthn here) the heading.
+  const section = useRef<HTMLElement>(null)
+  const heading = useRef<HTMLHeadingElement>(null)
+  const addButton = useRef<HTMLButtonElement>(null)
+  const removeButtons = useRefMap<string>()
+  const requestFocus = useFocusRequest(section)
 
   useEffect(() => {
     let cancelled = false
@@ -65,6 +75,7 @@ export function PasskeySection() {
       }
     }
     setBusy('idle')
+    requestFocus(addButton)
   }
 
   async function handleRemove(id: string) {
@@ -73,15 +84,23 @@ export function PasskeySection() {
     try {
       await removePasskey(id)
       setPasskeys((current) => (current ?? []).filter((p) => p.id !== id))
+      const list = passkeys ?? []
+      const next = list[list.findIndex((p) => p.id === id) + 1]
+      requestFocus(() =>
+        next ? removeButtons.get(next.id) : (addButton.current ?? heading.current),
+      )
     } catch {
       setError('Something went wrong removing the passkey. Try again.')
+      requestFocus(() => removeButtons.get(id))
     }
     setBusy('idle')
   }
 
   return (
-    <section className="auth-card" aria-labelledby="passkeys-heading">
-      <h2 id="passkeys-heading">Passkeys</h2>
+    <section ref={section} className="auth-card" aria-labelledby="passkeys-heading">
+      <h2 ref={heading} id="passkeys-heading" tabIndex={-1}>
+        Passkeys
+      </h2>
       <p className="field-hint">
         If you already use passkeys, you can add one to sign in with this device's screen
         lock or PIN. Signing in by emailed link keeps working either way.
@@ -108,6 +127,7 @@ export function PasskeySection() {
             {/* Removing the last passkey needs no ceremony: email sign-in is
                 always available, so there is no lockout to protect against. */}
             <button
+              ref={removeButtons.register(passkey.id)}
               type="button"
               onClick={() => void handleRemove(passkey.id)}
               disabled={busy !== 'idle'}
@@ -133,6 +153,7 @@ export function PasskeySection() {
             }}
           />
           <button
+            ref={addButton}
             type="button"
             onClick={() => void handleAdd()}
             disabled={busy !== 'idle' || passkeys === null}
@@ -143,7 +164,11 @@ export function PasskeySection() {
       ) : (
         <p className="field-hint">This browser doesn't support adding passkeys.</p>
       )}
-      {error && <p className="form-error">{error}</p>}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
     </section>
   )
 }

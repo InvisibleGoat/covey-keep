@@ -24,6 +24,7 @@ import { AuthProvider } from '../auth/AuthContext'
 import { clearCoverPictures } from '../lib/covers'
 import { chooseMenuLayout } from '../lib/menuLayout'
 import { setToken } from '../lib/session'
+import { gate, pressHeld, settle, type Gate } from '../test-support/focus'
 
 const GROUP = { id: 'grp-lees-1', name: 'The Lees' }
 const GROUP_NAME = 'The Lees'
@@ -124,17 +125,6 @@ const PHOTO = {
   tags: [],
   published_at: '2026-11-02T15:00:05+00:00',
   failure_reason: null,
-}
-
-interface Gate {
-  promise: Promise<void>
-  release: () => void
-}
-
-function gate(): Gate {
-  let release = () => {}
-  const promise = new Promise<void>((resolve) => (release = resolve))
-  return { promise, release }
 }
 
 interface Preview {
@@ -328,10 +318,6 @@ function renderPage() {
       </AuthProvider>
     </MemoryRouter>,
   )
-}
-
-async function settle(ms = 30) {
-  await act(() => new Promise((resolve) => setTimeout(resolve, ms)))
 }
 
 async function open(seat: Record<string, unknown>, over: Partial<World> = {}) {
@@ -909,27 +895,8 @@ test('the page asks for nothing new for a member: no preview, no roster, no grou
 // the card (inside the alert for Got it), so a person who moved on keeps
 // their place.
 
-// Chrome's fixup, as jsdom can do it: jsdom will not blur a disabled
-// control (it is no longer a focusable area), so focus a throwaway button and
-// blur that — the body ends up focused, exactly where Chrome leaves it.
-function dropFocusToBody() {
-  const stand = document.createElement('button')
-  document.body.append(stand)
-  stand.focus()
-  stand.blur()
-  stand.remove()
-}
-
-async function pressHeld(control: HTMLElement, hold: Gate, movedTo?: HTMLElement) {
-  control.focus()
-  fireEvent.click(control)
-  await waitFor(() => expect(!control.isConnected || (control as HTMLButtonElement).disabled).toBe(true))
-  if (movedTo) movedTo.focus()
-  else dropFocusToBody()
-  expect(document.activeElement).toBe(movedTo ?? document.body)
-  await act(async () => hold.release())
-  await settle()
-}
+// Chrome's fixup and the held press: test-support/focus.ts (lifted from
+// here at CK-94, unchanged).
 
 const editGathering = () => screen.getByRole('button', { name: 'Edit gathering' })
 

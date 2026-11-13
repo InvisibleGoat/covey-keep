@@ -22,7 +22,8 @@
 // FOCUS AFTER AN ANSWER (CK-93.1). A press disables the control it was made
 // on, or removes it (Try again, Refresh), and the browser then drops focus to
 // the body — so each answer names where focus goes next, a request held in
-// state and read by one effect after the render that draws it: a failed
+// state and read by one effect after the render that draws it (since CK-94
+// the one copy, `useFocusRequest`): a failed
 // change in an open step to that step's own button, the step still open to
 // try again; a failed one-press turn-off, a preview that finds it already
 // off, Refresh and the email form's `members_only` to the switch; a failed
@@ -37,6 +38,7 @@
 // focus back on Got it, and a landed one hands the page whether it may move
 // focus to its <h1> — each only from the body or from inside the alert.
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { mayTakeFocus, useFocusRequest } from './useFocusRequest'
 import type { GatheringWithOccurrences } from '../lib/gatherings'
 import {
   ALERT_FAILED,
@@ -64,16 +66,6 @@ import {
 
 type Phase = 'idle' | 'confirmOn' | 'turningOn' | 'previewing' | 'confirmOff' | 'turningOff'
 type Problem = null | 'preview' | 'notAllowed' | 'failed'
-type FocusTarget = 'step' | 'switch' | 'confirm' | 'tryAgain' | 'refresh'
-
-// Whether a move after an answer may take focus: only from the body (where
-// the browser leaves it once the pressed control is disabled or gone) or
-// from inside the piece that asked, never from where the person moved to
-// while the request waited.
-function mayTakeFocus(container: HTMLElement | null): boolean {
-  const active = document.activeElement
-  return active === null || active === document.body || (container !== null && container.contains(active))
-}
 
 function ErrorLine({ children }: { children: ReactNode }) {
   return (
@@ -123,13 +115,10 @@ export function OutsideInvitationsCard({
   const refreshRef = useRef<HTMLButtonElement>(null)
   // Where focus goes once the render that draws it is on screen: the step
   // that just opened, the switch after a step closes or a change lands, or
-  // after a failure the control the table names (the header). STATE, set in
-  // the same batch as the phase it belongs to, never a ref: a ref set after
-  // an await can be read by the effect of an earlier render that commits in
-  // between — the switch still disabled — and spent on nothing (found in
-  // CK-93.1's tests).
-  const [focusRequest, setFocusRequest] = useState<{ target: FocusTarget } | null>(null)
-  const requestFocus = (target: FocusTarget) => setFocusRequest({ target })
+  // after a failure the control the table names (the header). Asked in the
+  // same batch as the phase it belongs to, and only from the body or from
+  // inside the card (`useFocusRequest`, CK-94).
+  const requestFocus = useFocusRequest(cardRef)
 
   const alive = useRef(true)
   useEffect(() => {
@@ -138,18 +127,6 @@ export function OutsideInvitationsCard({
       alive.current = false
     }
   }, [])
-
-  useEffect(() => {
-    if (focusRequest === null || !mayTakeFocus(cardRef.current)) return
-    const element = {
-      step: stepRef.current,
-      switch: switchRef.current,
-      confirm: confirmRef.current,
-      tryAgain: tryAgainRef.current,
-      refresh: refreshRef.current,
-    }[focusRequest.target]
-    element?.focus()
-  }, [focusRequest])
 
   // The email form's `members_only` (the page's notice, set when the 409
   // lands): focus to the switch, the notice beneath it.
@@ -165,7 +142,7 @@ export function OutsideInvitationsCard({
   const busy = phase === 'turningOn' || phase === 'previewing' || phase === 'turningOff'
 
   function close() {
-    requestFocus('switch')
+    requestFocus(switchRef)
     setPhase('idle')
     setPreview(null)
     setProblem(null)
@@ -177,14 +154,14 @@ export function OutsideInvitationsCard({
     const outcome = await setOutsideInvitations(gatheringId, value)
     if (!alive.current) return
     if (outcome.ok) {
-      requestFocus('switch')
+      requestFocus(switchRef)
       setPhase('idle')
       setPreview(null)
       onLanded(outcome.gathering, !value)
       return
     }
     if (outcome.code === 'not_found') {
-      requestFocus('refresh')
+      requestFocus(refreshRef)
       setPhase('idle')
       setPreview(null)
       setProblem('notAllowed')
@@ -192,7 +169,7 @@ export function OutsideInvitationsCard({
     }
     // The switch stays as it was; a step stays open to try again, focus on
     // its own button, and a one-press turn-off gives focus back to the switch.
-    requestFocus(fromStep ? 'confirm' : 'switch')
+    requestFocus(fromStep ? confirmRef : switchRef)
     setProblem('failed')
     setPhase(fromStep ? (value ? 'confirmOn' : 'confirmOff') : 'idle')
   }
@@ -203,14 +180,14 @@ export function OutsideInvitationsCard({
     const outcome = await readOutsideInvitations(gatheringId)
     if (!alive.current) return
     if (!outcome.ok) {
-      requestFocus(outcome.code === 'not_found' ? 'refresh' : 'tryAgain')
+      requestFocus(outcome.code === 'not_found' ? refreshRef : tryAgainRef)
       setPhase('idle')
       setProblem(outcome.code === 'not_found' ? 'notAllowed' : 'preview')
       return
     }
     if (!outcome.preview.on) {
       // Someone else turned it off meanwhile: re-read, post nothing.
-      requestFocus('switch')
+      requestFocus(switchRef)
       setPhase('idle')
       onRefresh()
       return
@@ -219,7 +196,7 @@ export function OutsideInvitationsCard({
       await turn(false, false)
       return
     }
-    requestFocus('step')
+    requestFocus(stepRef)
     setPreview(outcome.preview)
     setPhase('confirmOff')
   }
@@ -234,7 +211,7 @@ export function OutsideInvitationsCard({
     }
     setProblem(null)
     if (!on) {
-      requestFocus('step')
+      requestFocus(stepRef)
       setPhase('confirmOn')
       return
     }
@@ -318,7 +295,7 @@ export function OutsideInvitationsCard({
             type="button"
             onClick={() => {
               // Refresh goes when pressed: focus to the switch.
-              requestFocus('switch')
+              requestFocus(switchRef)
               setProblem(null)
               onRefresh()
             }}
@@ -352,11 +329,8 @@ export function OutsideAlert({
   const alertRef = useRef<HTMLDivElement>(null)
   const gotItRef = useRef<HTMLButtonElement>(null)
   // A failed dismissal puts focus back on Got it, in the render that enables
-  // it again (state, for the card's reason).
-  const [focusGotIt, setFocusGotIt] = useState<object | null>(null)
-  useEffect(() => {
-    if (focusGotIt !== null && mayTakeFocus(alertRef.current)) gotItRef.current?.focus()
-  }, [focusGotIt])
+  // it again (`useFocusRequest`, CK-94).
+  const requestFocus = useFocusRequest(alertRef)
   const alive = useRef(true)
   useEffect(() => {
     alive.current = true
@@ -376,7 +350,7 @@ export function OutsideAlert({
       onDismissed(mayTakeFocus(alertRef.current))
       return
     }
-    setFocusGotIt({})
+    requestFocus(gotItRef)
     setFailed(true)
   }
 

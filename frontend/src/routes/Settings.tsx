@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { FieldError, FormLevelErrors } from '../components/FieldError'
 import { PasskeySection } from '../components/PasskeySection'
+import { firstFieldWithError, useFocusRequest } from '../components/useFocusRequest'
 import { ACCOUNT_DELETED_SIGNAL } from '../lib/accountDeleted'
 import { authFetch } from '../lib/api'
 import { planLine, readBilling, type Billing } from '../lib/billing'
@@ -59,6 +60,22 @@ export function Settings() {
 
   const groups = useMemo(() => groupedTimeZones(person?.timezone), [person?.timezone])
 
+  // Focus after an answer (CK-94; reference/frontend/components.md). Each
+  // section is its own container, so a person who moved elsewhere while a
+  // request waited keeps their place.
+  const profileForm = useRef<HTMLFormElement>(null)
+  const saveButton = useRef<HTMLButtonElement>(null)
+  const emailSection = useRef<HTMLElement | null>(null)
+  const emailField = useRef<HTMLInputElement>(null)
+  const sendButton = useRef<HTMLButtonElement>(null)
+  const pendingSentence = useRef<HTMLParagraphElement>(null)
+  const cancelButton = useRef<HTMLButtonElement>(null)
+  const deleteSection = useRef<HTMLElement>(null)
+  const deleteButton = useRef<HTMLButtonElement>(null)
+  const focusInProfile = useFocusRequest(profileForm)
+  const focusInEmail = useFocusRequest(emailSection)
+  const focusInDelete = useFocusRequest(deleteSection)
+
   useEffect(() => {
     let cancelled = false
     void (async () => {
@@ -92,16 +109,20 @@ export function Settings() {
         // the new name show up in the signed-in shell without a reload.
         updatePerson((await response.json()) as Person)
         setSaveState('saved')
+        focusInProfile(saveButton)
       } else if (response.status === 422) {
         // A field the form shows lands on it; anything else — another field,
         // a string `detail` — lands form-level instead of vanishing.
         setProfileErrors(await errorsFromResponse(response, PROFILE_FIELDS))
         setSaveState('idle')
+        focusInProfile(() => firstFieldWithError(profileForm.current) ?? saveButton.current)
       } else {
         setSaveState('failed')
+        focusInProfile(saveButton)
       }
     } catch {
       setSaveState('failed')
+      focusInProfile(saveButton)
     }
   }
 
@@ -114,6 +135,7 @@ export function Settings() {
     // response is protecting. It is about the field, so it lands on it.
     if (person && target === person.email) {
       setEmailErrors({ ...noErrors(), fields: { new_email: "That's already your sign-in address." } })
+      focusInEmail(emailField)
       return
     }
     setEmailState('sending')
@@ -128,8 +150,10 @@ export function Settings() {
         // available — the pending copy mirrors that and promises nothing.
         setPendingEmail(target)
         setNewEmail('')
+        focusInEmail(pendingSentence)
       } else if (response.status === 429) {
         setEmailErrors(formLine('Too many attempts. Wait a few minutes and try again.'))
+        focusInEmail(sendButton)
       } else if (response.status === 422) {
         // A refusal on `new_email` keeps this screen's own line; any other
         // 422 — another field, a string `detail` — shows the mapper's
@@ -137,11 +161,14 @@ export function Settings() {
         const errors = await errorsFromResponse(response, EMAIL_FIELDS)
         if (errors.fields.new_email) errors.fields.new_email = NOT_AN_EMAIL
         setEmailErrors(errors)
+        focusInEmail(() => firstFieldWithError(emailSection.current) ?? sendButton.current)
       } else {
         setEmailErrors(formLine(SEND_FAILED))
+        focusInEmail(sendButton)
       }
     } catch {
       setEmailErrors(formLine(SEND_FAILED))
+      focusInEmail(sendButton)
     }
     setEmailState('idle')
   }
@@ -153,11 +180,14 @@ export function Settings() {
       const response = await authFetch('/me/email-change', { method: 'DELETE' })
       if (response.status === 204) {
         setPendingEmail(null)
+        focusInEmail(emailField)
       } else {
         setCancelError('Something went wrong cancelling. Try again.')
+        focusInEmail(cancelButton)
       }
     } catch {
       setCancelError('Something went wrong cancelling. Try again.')
+      focusInEmail(cancelButton)
     }
     setEmailState('idle')
   }
@@ -186,9 +216,11 @@ export function Settings() {
         navigate('/account-deleted', { replace: true, state: ACCOUNT_DELETED_SIGNAL })
       } else {
         setDeleteState('failed')
+        focusInDelete(deleteButton)
       }
     } catch {
       setDeleteState('failed')
+      focusInDelete(deleteButton)
     }
   }
 
@@ -196,7 +228,7 @@ export function Settings() {
     <main className="auth-screen">
       <h1>Settings</h1>
 
-      <form className="auth-card" onSubmit={(event) => void handleSubmit(event)}>
+      <form ref={profileForm} className="auth-card" onSubmit={(event) => void handleSubmit(event)}>
         <label htmlFor="display-name">Display name</label>
         <input
           id="display-name"
@@ -238,13 +270,19 @@ export function Settings() {
         <p className="field-hint">Gathering times are shown to you in this time zone.</p>
         <FieldError errors={profileErrors} field="timezone" />
 
-        <button type="submit" disabled={saveState === 'saving'}>
+        <button ref={saveButton} type="submit" disabled={saveState === 'saving'}>
           {saveState === 'saving' ? 'Saving…' : 'Save'}
         </button>
         <FormLevelErrors errors={profileErrors} />
-        {saveState === 'saved' && <p className="form-success">Saved.</p>}
+        {saveState === 'saved' && (
+          <p className="form-success" role="status">
+            Saved.
+          </p>
+        )}
         {saveState === 'failed' && (
-          <p className="form-error">Something went wrong saving your settings. Try again.</p>
+          <p className="form-error" role="alert">
+            Something went wrong saving your settings. Try again.
+          </p>
         )}
       </form>
 
@@ -264,24 +302,34 @@ export function Settings() {
           by proof of control over the new inbox, so this is its own form —
           never a field on the profile PATCH above. */}
       {pendingEmail ? (
-        <section className="auth-card" aria-labelledby="email-heading">
+        <section ref={emailSection} className="auth-card" aria-labelledby="email-heading">
           <h2 id="email-heading">Sign-in email</h2>
-          <p className="field-hint">
+          {/* Focusable by script alone (tabIndex -1): where focus lands once
+              the link is out, so the person hears what happened (CK-94). */}
+          <p ref={pendingSentence} className="field-hint" tabIndex={-1}>
             We sent a confirmation link to <strong>{pendingEmail}</strong> — check that inbox.
             The link works for one hour. Until it's used, you still sign in as{' '}
             <strong>{person?.email}</strong>.
           </p>
           <button
+            ref={cancelButton}
             type="button"
             onClick={() => void handleEmailCancel()}
             disabled={emailState === 'cancelling'}
           >
             {emailState === 'cancelling' ? 'Cancelling…' : 'Cancel the change'}
           </button>
-          {cancelError && <p className="form-error">{cancelError}</p>}
+          {cancelError && (
+            <p className="form-error" role="alert">
+              {cancelError}
+            </p>
+          )}
         </section>
       ) : (
         <form
+          ref={(element) => {
+            emailSection.current = element
+          }}
           className="auth-card"
           onSubmit={(event) => void handleEmailSubmit(event)}
           aria-labelledby="email-heading"
@@ -292,6 +340,7 @@ export function Settings() {
           </p>
           <label htmlFor="new-email">New email address</label>
           <input
+            ref={emailField}
             id="new-email"
             type="email"
             required
@@ -307,7 +356,7 @@ export function Settings() {
           <p className="field-hint">
             We'll send a confirmation link there — nothing changes until you open it.
           </p>
-          <button type="submit" disabled={emailState === 'sending'}>
+          <button ref={sendButton} type="submit" disabled={emailState === 'sending'}>
             {emailState === 'sending' ? 'Sending…' : 'Send confirmation link'}
           </button>
           <FormLevelErrors errors={emailErrors} />
@@ -318,7 +367,7 @@ export function Settings() {
 
       {/* Deliberately a section, not part of the form above: Enter in a
           profile field must never reach anything destructive. */}
-      <section className="auth-card danger-zone" aria-labelledby="delete-heading">
+      <section ref={deleteSection} className="auth-card danger-zone" aria-labelledby="delete-heading">
         <h2 id="delete-heading">Delete your account</h2>
         <p className="danger-explainer">
           Your account and your name are removed; what you contributed stays with the
@@ -338,6 +387,7 @@ export function Settings() {
           }}
         />
         <button
+          ref={deleteButton}
           type="button"
           className="danger-button"
           disabled={deleteConfirm !== 'DELETE' || deleteState === 'deleting'}
@@ -346,7 +396,9 @@ export function Settings() {
           {deleteState === 'deleting' ? 'Deleting…' : 'Delete my account'}
         </button>
         {deleteState === 'failed' && (
-          <p className="form-error">Something went wrong deleting your account. Try again.</p>
+          <p className="form-error" role="alert">
+            Something went wrong deleting your account. Try again.
+          </p>
         )}
       </section>
 

@@ -8,6 +8,12 @@ import { Icon } from '../components/Icons'
 import { InviteForm, WaitingOn } from '../components/InviteByEmail'
 import { OutsideAlert, OutsideInvitationsCard } from '../components/OutsideInvitations'
 import { PageCover } from '../components/PageCover'
+import {
+  firstFieldWithError,
+  useFocusRequest,
+  useRefMap,
+  type FocusSource,
+} from '../components/useFocusRequest'
 import { authFetch } from '../lib/api'
 import {
   effectiveZone,
@@ -346,6 +352,15 @@ function OccurrenceRsvp({
     onAnswerRef.current = onAnswer
   })
 
+  // Focus after an answer (CK-94), inside this date's block: a refusal to
+  // the first field it names, else back to the submit button the press
+  // disabled; a landed answer, once the re-read draws it, to the checked
+  // answer — the button is disabled again then, nothing being changed.
+  const blockRef = useRef<HTMLDivElement>(null)
+  const submitRef = useRef<HTMLButtonElement>(null)
+  const requestFocus = useFocusRequest(blockRef)
+  const focusAfterRead = useRef(false)
+
   useEffect(() => {
     let cancelled = false
     async function load() {
@@ -359,18 +374,34 @@ function OccurrenceRsvp({
           setFailed(false)
           // The server's answer for the caller — the date's chip follows it.
           onAnswerRef.current(body.own?.response ?? null)
+          if (focusAfterRead.current) {
+            focusAfterRead.current = false
+            requestFocus(
+              () => blockRef.current?.querySelector<HTMLElement>('input[type="radio"]:checked') ?? null,
+            )
+          }
         } else {
           setFailed(true)
+          if (focusAfterRead.current) {
+            focusAfterRead.current = false
+            requestFocus(submitRef)
+          }
         }
       } catch {
-        if (!cancelled) setFailed(true)
+        if (!cancelled) {
+          setFailed(true)
+          if (focusAfterRead.current) {
+            focusAfterRead.current = false
+            requestFocus(submitRef)
+          }
+        }
       }
     }
     void load()
     return () => {
       cancelled = true
     }
-  }, [occurrenceId, reloadKey])
+  }, [occurrenceId, reloadKey, requestFocus])
 
   async function save(event: FormEvent) {
     event.preventDefault()
@@ -398,6 +429,7 @@ function OccurrenceRsvp({
         // The answer the server took is the chip's at once (CK-87); the
         // re-read below confirms it.
         onAnswerRef.current(form.response)
+        focusAfterRead.current = true
         setReloadKey((key) => key + 1)
       } else {
         // Item-level errors index the SENT list ("companions.0", …).
@@ -407,9 +439,13 @@ function OccurrenceRsvp({
             ...sentCompanions.map((_, index) => `companions.${index}`),
           ]),
         )
+        requestFocus(() => firstFieldWithError(blockRef.current) ?? submitRef.current)
       }
     } catch {
-      if (alive.current) setErrors(networkErrors())
+      if (alive.current) {
+        setErrors(networkErrors())
+        requestFocus(submitRef)
+      }
     }
     if (alive.current) setSubmitting(false)
   }
@@ -424,7 +460,7 @@ function OccurrenceRsvp({
       (data.visibility === 'ATTENDEES' && data.own?.response === 'yes'))
 
   return (
-    <div className="rsvp-block" id={blockId}>
+    <div ref={blockRef} className="rsvp-block" id={blockId}>
       {failed && (
         <p className="form-error" role="alert">
           <span aria-hidden="true">⚠ </span>
@@ -554,7 +590,7 @@ function OccurrenceRsvp({
                 </>
               )}
 
-              <button type="submit" disabled={!rsvpDirty(form, data.own) || submitting}>
+              <button ref={submitRef} type="submit" disabled={!rsvpDirty(form, data.own) || submitting}>
                 {submitting ? 'Saving…' : data.own === null ? 'Send RSVP' : 'Update RSVP'}
               </button>
               <FormLevelErrors errors={errors} />
@@ -827,6 +863,53 @@ export function GatheringDetail() {
     }
   }, [])
 
+  // FOCUS AFTER AN ANSWER (CK-94; reference/frontend/components.md, Focus
+  // after an answer). A press disables or removes the control it was made
+  // on, and the browser drops focus to the body while the request waits, so
+  // every answer names where focus goes next: a 422 to the first field it
+  // names, a failure back to the pressed control, a success to the control
+  // that carries the act on, or a section's heading where nothing does. One
+  // request per piece of the page, each taking focus only from the body or
+  // from inside its own piece. A step opens with focus on itself, labelled
+  // by its sentence — never on its destructive button.
+  const editFormRef = useRef<HTMLFormElement>(null)
+  const editGatheringButton = useRef<HTMLButtonElement>(null)
+  const gatheringSave = useRef<HTMLButtonElement>(null)
+  const whenRef = useRef<HTMLElement>(null)
+  const whenHeading = useRef<HTMLHeadingElement>(null)
+  const occurrenceFormRef = useRef<HTMLFormElement>(null)
+  const occurrenceSave = useRef<HTMLButtonElement>(null)
+  const addFormRef = useRef<HTMLFormElement>(null)
+  const addSubmit = useRef<HTMLButtonElement>(null)
+  const addAnother = useRef<HTMLButtonElement>(null)
+  const removeStep = useRef<HTMLDivElement>(null)
+  const removeSentenceId = useId()
+  // `edit:<id>` and `remove:<id>`, a date's Edit this date and Remove this date.
+  const dateButtons = useRefMap<string>()
+  const promptRef = useRef<HTMLElement>(null)
+  const promptButtons = useRefMap<string>()
+  const placesRef = useRef<HTMLElement>(null)
+  const placesHeading = useRef<HTMLHeadingElement>(null)
+  const placeRows = useRefMap<string>()
+  const inviteField = useRef<HTMLInputElement>(null)
+  const inviteSubmit = useRef<HTMLButtonElement>(null)
+  const coHostsRef = useRef<HTMLElement>(null)
+  const coHostStep = useRef<HTMLDivElement>(null)
+  const coHostSentenceId = useId()
+  // `make:<id>` and `unmake:<id>`, by the accepted invitation's id.
+  const coHostButtons = useRefMap<string>()
+  // Where focus goes once the co-host list's re-read draws the row a
+  // landed make or remove moved (the row is not on screen until then).
+  const focusAfterCoHosts = useRef<FocusSource | null>(null)
+  const focusInEdit = useFocusRequest(editFormRef)
+  const focusInWhen = useFocusRequest(whenRef)
+  const focusInPrompt = useFocusRequest(promptRef)
+  const focusInPlaces = useFocusRequest(placesRef)
+  // The email form is drawn in one of two sections — the Invitations section
+  // or the outside card — so its piece is whichever holds it.
+  const focusInInvite = useFocusRequest(() => inviteField.current?.closest('section') ?? null)
+  const focusInCoHosts = useFocusRequest(coHostsRef)
+
   const loadedGathering = state.status === 'loaded' ? state.gathering : null
   // THE PAGE'S ONE ROSTER READ (CK-93): the Co-hosts or Invitations
   // section's lists and the outside card's *Waiting on* are one request.
@@ -882,18 +965,25 @@ export function GatheringDetail() {
           const body = (await response.json()) as Partial<CoHostList>
           setCoHosts(body.co_hosts ?? [])
           setCoHostsFailed(false)
+          const target = focusAfterCoHosts.current
+          focusAfterCoHosts.current = null
+          if (target !== null) focusInCoHosts(target)
         } else {
           setCoHostsFailed(true)
+          focusAfterCoHosts.current = null
         }
       } catch {
-        if (!cancelled) setCoHostsFailed(true)
+        if (!cancelled) {
+          setCoHostsFailed(true)
+          focusAfterCoHosts.current = null
+        }
       }
     }
     void load()
     return () => {
       cancelled = true
     }
-  }, [id, invitationsOpen, coHostsReloadKey])
+  }, [id, invitationsOpen, coHostsReloadKey, focusInCoHosts])
 
   // The places (CK-80) are read only where the server would answer them: an
   // organiser of a group's gathering, in the full view. For anyone else the
@@ -1256,11 +1346,16 @@ export function GatheringDetail() {
         setReloadKey((key) => key + 1)
         // The menu draws the title (CK-89.1).
         announceMenuChange()
+        focusInEdit(editGatheringButton)
       } else {
         setGatheringErrors(await errorsFromResponse(response, GATHERING_FIELDS))
+        focusInEdit(() => firstFieldWithError(editFormRef.current) ?? gatheringSave.current)
       }
     } catch {
-      if (alive.current) setGatheringErrors(networkErrors())
+      if (alive.current) {
+        setGatheringErrors(networkErrors())
+        focusInEdit(gatheringSave)
+      }
     }
     if (alive.current) setGatheringSubmitting(false)
   }
@@ -1282,11 +1377,16 @@ export function GatheringDetail() {
         setReloadKey((key) => key + 1)
         // The menu draws the next date (CK-89.1).
         announceMenuChange()
+        focusInWhen(() => dateButtons.get(`edit:${occurrence.id}`))
       } else {
         setOccurrenceErrors(await errorsFromResponse(response, OCCURRENCE_FIELDS))
+        focusInWhen(() => firstFieldWithError(occurrenceFormRef.current) ?? occurrenceSave.current)
       }
     } catch {
-      if (alive.current) setOccurrenceErrors(networkErrors())
+      if (alive.current) {
+        setOccurrenceErrors(networkErrors())
+        focusInWhen(occurrenceSave)
+      }
     }
     if (alive.current) setOccurrenceSubmitting(false)
   }
@@ -1314,11 +1414,16 @@ export function GatheringDetail() {
         setReloadKey((key) => key + 1)
         // The menu draws the next date (CK-89.1).
         announceMenuChange()
+        focusInWhen(addAnother)
       } else {
         setAddErrors(await errorsFromResponse(response, OCCURRENCE_FIELDS))
+        focusInWhen(() => firstFieldWithError(addFormRef.current) ?? addSubmit.current)
       }
     } catch {
-      if (alive.current) setAddErrors(networkErrors())
+      if (alive.current) {
+        setAddErrors(networkErrors())
+        focusInWhen(addSubmit)
+      }
     }
     if (alive.current) setAddSubmitting(false)
   }
@@ -1342,6 +1447,7 @@ export function GatheringDetail() {
         setInviteDestination('')
         setInviteTurnedOff(false)
         setInvitationsReloadKey((key) => key + 1)
+        focusInInvite(inviteField)
       } else if (response.status === 409 && group !== null && (await refusalCode(response)) === 'members_only') {
         // A group's gathering whose outside invitations were turned off
         // meanwhile (CK-93): its own line, and the gathering re-read, so the
@@ -1357,11 +1463,16 @@ export function GatheringDetail() {
           fields: {},
           form: ['Too many invitations just now. Try again in a few minutes.'],
         })
+        focusInInvite(inviteSubmit)
       } else {
         setInviteErrors(await errorsFromResponse(response, INVITE_FIELDS))
+        focusInInvite(() => firstFieldWithError(inviteField.current?.form ?? null) ?? inviteSubmit.current)
       }
     } catch {
-      if (alive.current) setInviteErrors(networkErrors())
+      if (alive.current) {
+        setInviteErrors(networkErrors())
+        focusInInvite(inviteSubmit)
+      }
     }
     if (alive.current) setInviteSubmitting(false)
   }
@@ -1376,6 +1487,9 @@ export function GatheringDetail() {
       // elsewhere) — either way the list is stale, so re-fetch it too.
       if (response.status === 204 || response.status === 404) {
         setInvitationsReloadKey((key) => key + 1)
+        // Revoke is never disabled, so focus is on it until its row goes:
+        // to the address field, where inviting goes on (CK-94).
+        focusInInvite(inviteField)
       }
     } catch {
       // The row still shows as pending; retrying the control is the recovery.
@@ -1402,6 +1516,8 @@ export function GatheringDetail() {
     if (!alive.current) return
     setCoHostActing(null)
     if (outcome.ok) {
+      // Focus to the new co-host's Remove as co-host, once the re-read draws it.
+      focusAfterCoHosts.current = () => coHostButtons.get(`unmake:${accepted.id}`)
       setCoHostsReloadKey((key) => key + 1)
       // Who it's for carries each member's `co_host` (CK-80): a co-host's
       // row offers Invited alone, so the places are re-read with the list.
@@ -1412,6 +1528,7 @@ export function GatheringDetail() {
       invitationId: accepted.id,
       errors: { fields: {}, form: [coHostRefusalMessage(outcome.code, coHostName(accepted.display_name))] },
     })
+    focusInCoHosts(() => coHostButtons.get(`make:${accepted.id}`))
   }
 
   // The host removes a co-host, or a co-host steps down — the same DELETE,
@@ -1428,8 +1545,13 @@ export function GatheringDetail() {
     setCoHostActing(null)
     setConfirmUnmake(null)
     if (outcome.ok) {
-      if (steppingDown) setReloadKey((key) => key + 1)
-      else {
+      if (steppingDown) {
+        setReloadKey((key) => key + 1)
+        // Every organiser control goes with the re-read: to the page's <h1>.
+        focusInCoHosts(titleRef)
+      } else {
+        // Focus to their Make co-host, once the re-read draws it.
+        focusAfterCoHosts.current = () => coHostButtons.get(`make:${row.invitation_id}`)
         setCoHostsReloadKey((key) => key + 1)
         // A removed co-host's row in Who it's for offers all three again.
         if (wantsPlaces) setPlacesKey((key) => key + 1)
@@ -1440,6 +1562,7 @@ export function GatheringDetail() {
       invitationId: row.invitation_id,
       errors: { fields: {}, form: [coHostRefusalMessage(outcome.code, coHostName(row.display_name))] },
     })
+    focusInCoHosts(() => coHostButtons.get(`unmake:${row.invitation_id}`))
   }
 
   // Change one member's place (CK-80) — Who it's for's one tap, and the
@@ -1472,6 +1595,14 @@ export function GatheringDetail() {
               },
             },
       )
+      if (where === 'prompt') {
+        // The prompt's line goes: to the next line's button, else to Who
+        // it's for's heading (the prompt has no heading of its own).
+        const next = stillASurprise[stillASurprise.findIndex((m) => m.membership_id === entry.membership_id) + 1]
+        focusInPrompt(() => (next ? promptButtons.get(next.membership_id) : placesHeading.current))
+      } else {
+        focusInPlaces(checkedPlace(entry.membership_id))
+      }
       return
     }
     setPlaceRefusal({
@@ -1479,11 +1610,22 @@ export function GatheringDetail() {
       where,
       message: placeRefusalMessage(outcome.code, entry.display_name, group.name),
     })
+    if (where === 'prompt') focusInPrompt(() => promptButtons.get(entry.membership_id))
+    else focusInPlaces(checkedPlace(entry.membership_id))
   }
 
+  // A member's row in Who it's for: its checked place, the one the server
+  // answered (the radio chosen on a success, the place kept on a refusal).
+  function checkedPlace(membershipId: string): FocusSource {
+    return () => placeRows.get(membershipId)?.querySelector<HTMLElement>('input:checked') ?? null
+  }
+
+  // Refresh the list goes as it is pressed: to Who it's for's heading
+  // (CK-94, the rule's last rung — the row is re-read).
   function refreshPlaces() {
     setPlaceRefusal(null)
     setPlacesKey((key) => key + 1)
+    focusInPlaces(placesHeading)
   }
 
   const places = placesLoad.status === 'loaded' ? placesLoad.value : null
@@ -1520,6 +1662,8 @@ export function GatheringDetail() {
         setReloadKey((key) => key + 1)
         // The menu draws the next date (CK-89.1).
         announceMenuChange()
+        // The date goes with the re-read: to When's heading.
+        focusInWhen(whenHeading)
         return
       }
       if (response.status === 409) {
@@ -1531,6 +1675,7 @@ export function GatheringDetail() {
           typeof body.detail.rsvp_count === 'number'
         ) {
           setConfirmRemove({ occurrenceId, rsvpCount: body.detail.rsvp_count })
+          focusInWhen(removeStep)
           return
         }
       }
@@ -1538,8 +1683,12 @@ export function GatheringDetail() {
         occurrenceId,
         errors: await errorsFromResponse(response, ['occurrence_id']),
       })
+      focusInWhen(() => dateButtons.get(`remove:${occurrenceId}`))
     } catch {
-      if (alive.current) setRemoveErrors({ occurrenceId, errors: networkErrors() })
+      if (alive.current) {
+        setRemoveErrors({ occurrenceId, errors: networkErrors() })
+        focusInWhen(() => dateButtons.get(`remove:${occurrenceId}`))
+      }
     }
   }
 
@@ -1565,6 +1714,7 @@ export function GatheringDetail() {
           )}
           {organises && (
             <button
+              ref={editGatheringButton}
               type="button"
               className="btn"
               aria-expanded={editingGathering}
@@ -1579,6 +1729,7 @@ export function GatheringDetail() {
 
       {organises && editingGathering && (
         <form
+          ref={editFormRef}
           id={editFormId}
           className="auth-card gathering-form"
           aria-labelledby="edit-gathering-heading"
@@ -1681,7 +1832,7 @@ export function GatheringDetail() {
             </>
           )}
 
-          <button type="submit" disabled={!gatheringDirty || gatheringSubmitting}>
+          <button ref={gatheringSave} type="submit" disabled={!gatheringDirty || gatheringSubmitting}>
             {gatheringSubmitting ? 'Saving…' : 'Save'}
           </button>
           <button
@@ -1699,12 +1850,13 @@ export function GatheringDetail() {
         // The prompt (CK-80): one line per member still kept a surprise once
         // a date has started, the one tap beside it — PUT shared_with, and
         // the line goes. Nothing is sent to the member.
-        <section className="auth-card" aria-label={PLACE_LABELS.left_out}>
+        <section ref={promptRef} className="auth-card" aria-label={PLACE_LABELS.left_out}>
           <ul className="occurrence-list">
             {stillASurprise.map((member) => (
               <li key={member.membership_id}>
                 <p>{promptLine(member.display_name)}</p>
                 <button
+                  ref={promptButtons.register(member.membership_id)}
                   type="button"
                   disabled={placeActing !== null}
                   onClick={() => void changePlace(member, 'shared_with', 'prompt')}
@@ -1721,14 +1873,18 @@ export function GatheringDetail() {
         </section>
       )}
 
-      <section className="auth-card" aria-labelledby="occurrences-heading">
-        <h2 id="occurrences-heading">When</h2>
+      <section ref={whenRef} className="auth-card" aria-labelledby="occurrences-heading">
+        {/* Focusable by script alone (tabIndex -1): where focus lands once a
+            removed date has gone (CK-94). */}
+        <h2 ref={whenHeading} id="occurrences-heading" tabIndex={-1}>
+          When
+        </h2>
         <p className="field-hint">Times in {zone}.</p>
         <ul className="occurrence-list occurrence-dates">
           {occurrences.map((occurrence) => (
             <li key={occurrence.id} className="occurrence-item">
               {organises && editingOccurrenceId === occurrence.id ? (
-                <form onSubmit={(event) => void saveOccurrence(event, occurrence)}>
+                <form ref={occurrenceFormRef} onSubmit={(event) => void saveOccurrence(event, occurrence)}>
                   <fieldset className="occurrence-fields">
                     <legend>Edit this date</legend>
 
@@ -1789,7 +1945,7 @@ export function GatheringDetail() {
                       there.
                     </p>
 
-                    <button type="submit" disabled={!occurrenceDirty || occurrenceSubmitting}>
+                    <button ref={occurrenceSave} type="submit" disabled={!occurrenceDirty || occurrenceSubmitting}>
                       {occurrenceSubmitting ? 'Saving…' : 'Save'}
                     </button>
                     <button
@@ -1854,6 +2010,7 @@ export function GatheringDetail() {
                     {organises && (
                       <>
                         <button
+                          ref={dateButtons.register(`edit:${occurrence.id}`)}
                           type="button"
                           className="link-button"
                           onClick={() => openOccurrenceEdit(occurrence)}
@@ -1861,6 +2018,7 @@ export function GatheringDetail() {
                           Edit this date
                         </button>
                         <button
+                          ref={dateButtons.register(`remove:${occurrence.id}`)}
                           type="button"
                           className="link-button"
                           aria-describedby={
@@ -1888,11 +2046,14 @@ export function GatheringDetail() {
                         </>
                       )}
                       {confirmRemove?.occurrenceId === occurrence.id && (
-                        <>
+                        // The step (CK-94): a group labelled by its sentence,
+                        // where focus lands when it opens — never on its
+                        // destructive button.
+                        <div ref={removeStep} role="group" aria-labelledby={removeSentenceId} tabIndex={-1}>
                           {/* The human consequence, in people, not rows —
                               and removing it is a deliberate second click,
                               never a default (CK-30). */}
-                          <p className="form-error" role="alert">
+                          <p id={removeSentenceId} className="form-error" role="alert">
                             <span aria-hidden="true">⚠ </span>
                             {confirmRemove.rsvpCount === 1
                               ? '1 person has answered for this date. Removing it discards their answer.'
@@ -1907,11 +2068,14 @@ export function GatheringDetail() {
                           <button
                             type="button"
                             className="link-button"
-                            onClick={() => setConfirmRemove(null)}
+                            onClick={() => {
+                              setConfirmRemove(null)
+                              focusInWhen(() => dateButtons.get(`remove:${occurrence.id}`))
+                            }}
                           >
                             Don't remove it
                           </button>
-                        </>
+                        </div>
                       )}
                     </>
                   )}
@@ -1932,6 +2096,7 @@ export function GatheringDetail() {
 
         {organises && !addingOccurrence && (
           <button
+            ref={addAnother}
             type="button"
             className="link-button"
             onClick={() => {
@@ -1944,7 +2109,7 @@ export function GatheringDetail() {
           </button>
         )}
         {organises && addingOccurrence && (
-          <form onSubmit={(event) => void addOccurrence(event)}>
+          <form ref={addFormRef} onSubmit={(event) => void addOccurrence(event)}>
             <fieldset className="occurrence-fields">
               <legend>New date</legend>
 
@@ -1998,7 +2163,7 @@ export function GatheringDetail() {
               />
               <FieldError errors={addErrors} field="map_url" />
 
-              <button type="submit" disabled={addForm.startsAt === '' || addSubmitting}>
+              <button ref={addSubmit} type="submit" disabled={addForm.startsAt === '' || addSubmitting}>
                 {addSubmitting ? 'Adding…' : 'Add this date'}
               </button>
               <button
@@ -2056,8 +2221,12 @@ export function GatheringDetail() {
         // every member reads on the group page; the places are the
         // organisers' alone. A radio group's name is its row's index, never
         // a membership id.
-        <section className="auth-card" aria-labelledby="places-heading">
-          <h2 id="places-heading">{PLACES_HEADING}</h2>
+        <section ref={placesRef} className="auth-card" aria-labelledby="places-heading">
+          {/* Focusable by script alone (tabIndex -1): where focus lands once
+              the prompt's last line has gone (CK-94). */}
+          <h2 ref={placesHeading} id="places-heading" tabIndex={-1}>
+            {PLACES_HEADING}
+          </h2>
           {placesLoad.status === 'loading' && <p>Loading…</p>}
           {placesLoad.status === 'failed' && (
             <>
@@ -2084,7 +2253,11 @@ export function GatheringDetail() {
                 <p className="field-hint">{noOtherMembersLine(group.name)}</p>
               )}
               {places.members.map((member, index) => (
-                <fieldset key={member.membership_id} className="occurrence-fields">
+                <fieldset
+                  key={member.membership_id}
+                  ref={placeRows.register(member.membership_id)}
+                  className="occurrence-fields"
+                >
                   <legend>
                     <span className="member-initials" aria-hidden="true">
                       {initials(member.display_name)}
@@ -2144,6 +2317,8 @@ export function GatheringDetail() {
               errors={inviteErrors}
               submitting={inviteSubmitting}
               onSubmit={(event) => void sendInvitation(event)}
+              fieldRef={inviteField}
+              submitRef={inviteSubmit}
             />
             {invitationsFailed && (
               <p className="form-error" role="alert">
@@ -2172,7 +2347,7 @@ export function GatheringDetail() {
         // above (CK-93). What stays is CK-69's co-host management: the
         // co-host list, and the invited members — the materialized
         // invitation rows — with Make co-host.
-        <section className="auth-card" aria-labelledby="invitations-heading">
+        <section ref={coHostsRef} className="auth-card" aria-labelledby="invitations-heading">
           <h2 id="invitations-heading">{group !== null ? 'Co-hosts' : 'Invitations'}</h2>
           {!invitationsOpen ? (
             <button
@@ -2191,6 +2366,8 @@ export function GatheringDetail() {
                   errors={inviteErrors}
                   submitting={inviteSubmitting}
                   onSubmit={(event) => void sendInvitation(event)}
+                  fieldRef={inviteField}
+                  submitRef={inviteSubmit}
                 />
               )}
 
@@ -2246,12 +2423,14 @@ export function GatheringDetail() {
                                 <>
                                   {' '}
                                   <button
+                                    ref={coHostButtons.register(`unmake:${row.invitation_id}`)}
                                     type="button"
                                     className="link-button"
                                     disabled={coHostActing !== null}
                                     onClick={() => {
                                       setCoHostError(null)
                                       setConfirmUnmake(row.invitation_id)
+                                      focusInCoHosts(coHostStep)
                                     }}
                                   >
                                     {steppingDown ? 'Step down' : 'Remove as co-host'}
@@ -2262,12 +2441,16 @@ export function GatheringDetail() {
                                 // The second, deliberate step: the person
                                 // loses their controls the moment it lands,
                                 // so the first click only asks, and the
-                                // do-nothing beside it does nothing.
+                                // do-nothing beside it does nothing. Since
+                                // CK-94 a group labelled by its sentence,
+                                // where focus lands when it opens.
                                 <div
+                                  ref={coHostStep}
                                   role="group"
-                                  aria-label={steppingDown ? 'Step down as co-host' : `Remove ${name} as co-host`}
+                                  aria-labelledby={coHostSentenceId}
+                                  tabIndex={-1}
                                 >
-                                  <p className="field-hint">
+                                  <p id={coHostSentenceId} className="field-hint">
                                     {steppingDown ? STEP_DOWN_SENTENCE : removeCoHostSentence(name)}
                                   </p>
                                   <button
@@ -2287,7 +2470,10 @@ export function GatheringDetail() {
                                     type="button"
                                     className="link-button"
                                     disabled={coHostActing !== null}
-                                    onClick={() => setConfirmUnmake(null)}
+                                    onClick={() => {
+                                      setConfirmUnmake(null)
+                                      focusInCoHosts(() => coHostButtons.get(`unmake:${row.invitation_id}`))
+                                    }}
                                   >
                                     {steppingDown ? 'Stay a co-host' : 'Keep as co-host'}
                                   </button>
@@ -2340,6 +2526,7 @@ export function GatheringDetail() {
                               <>
                                 {' '}
                                 <button
+                                  ref={coHostButtons.register(`make:${accepted.id}`)}
                                   type="button"
                                   className="link-button"
                                   disabled={coHostActing !== null}

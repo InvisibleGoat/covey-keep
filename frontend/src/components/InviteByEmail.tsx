@@ -9,7 +9,7 @@
 // THE ADDRESSES: *Waiting on* is the one place an address shows — the
 // addresses the organisers typed, to the organisers alone (CK-25's
 // precedent), on either kind of gathering.
-import type { FormEvent } from 'react'
+import type { FormEvent, Ref } from 'react'
 import { formatInstant } from '../lib/datetime'
 import { describedBy, type FormErrors } from '../lib/formErrors'
 import type { PendingInvitation } from '../lib/invitations'
@@ -21,17 +21,24 @@ export function InviteForm({
   errors,
   submitting,
   onSubmit,
+  fieldRef,
+  submitRef,
 }: {
   destination: string
   onDestinationChange: (value: string) => void
   errors: FormErrors
   submitting: boolean
   onSubmit: (event: FormEvent) => void
+  // The page's handles on the field and the button, where focus goes after
+  // an answer (CK-94): one pair, the form being drawn in one place at a time.
+  fieldRef?: Ref<HTMLInputElement>
+  submitRef?: Ref<HTMLButtonElement>
 }) {
   return (
     <form onSubmit={onSubmit}>
       <label htmlFor="invite-destination">Email address</label>
       <input
+        ref={fieldRef}
         id="invite-destination"
         type="email"
         required
@@ -44,7 +51,7 @@ export function InviteForm({
       <p className="field-hint">
         They'll get an email with a link to this gathering. Invitations expire after 7 days.
       </p>
-      <button type="submit" disabled={destination.trim() === '' || submitting}>
+      <button ref={submitRef} type="submit" disabled={destination.trim() === '' || submitting}>
         {submitting ? 'Sending…' : 'Send invitation'}
       </button>
       <FormLevelErrors errors={errors} />
