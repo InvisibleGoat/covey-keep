@@ -1017,7 +1017,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
             {pending !== null && pending.length > 0 && (
               // The one place an email address shows on this page: the
               // addresses organisers typed, to organisers alone (CK-25).
-              <ul className="occurrence-list" aria-label="Pending invitations">
+              <ul className="occurrence-list address-list" aria-label="Pending invitations">
                 {pending.map((invitation) => (
                   <li key={invitation.id}>
                     {invitation.destination}

@@ -157,7 +157,7 @@ interface World {
   previewStatus?: number
   dismissStatus?: number
   inviteStatus?: number
-  hold: { put?: Gate; preview?: Gate; dismiss?: Gate }
+  hold: { put?: Gate; preview?: Gate; dismiss?: Gate; invite?: Gate }
 }
 
 let world: World
@@ -259,6 +259,7 @@ function stubServer() {
     }
     if (p === '/gatherings/g-1/invitations' && method === 'GET') return json(200, world.roster)
     if (p === '/gatherings/g-1/invitations' && method === 'POST') {
+      await world.hold.invite?.promise
       const status = world.inviteStatus ?? 201
       if (status === 409) {
         // Someone turned it off meanwhile.
@@ -894,4 +895,245 @@ test('the page asks for nothing new for a member: no preview, no roster, no grou
   expect(log().filter((line) => line.includes('/outside-invitations'))).toEqual([])
   expect(count('GET /gatherings/g-1/invitations')).toBe(0)
   expect(count(`GET /groups/${GROUP.id}`)).toBe(0)
+})
+
+// ---------------------------------------------------------------------------
+// CK-93.1 — focus put back after a failed change. Measured in headless
+// Chrome before the fix: every press below disables the control it was made
+// on (or removes it), and Chrome's focus fixup then drops focus to the body,
+// where it stayed after the answer — a second Enter sent nothing. jsdom has no
+// such fixup, so each test stages it: the control focused and pressed, the
+// request held on a released promise, the control blurred while it waits
+// (what Chrome does), then the answer released and document.activeElement
+// read. A move after an answer takes focus only from the body or from inside
+// the card (inside the alert for Got it), so a person who moved on keeps
+// their place.
+
+// Chrome's fixup, as jsdom can do it: jsdom will not blur a disabled
+// control (it is no longer a focusable area), so focus a throwaway button and
+// blur that — the body ends up focused, exactly where Chrome leaves it.
+function dropFocusToBody() {
+  const stand = document.createElement('button')
+  document.body.append(stand)
+  stand.focus()
+  stand.blur()
+  stand.remove()
+}
+
+async function pressHeld(control: HTMLElement, hold: Gate, movedTo?: HTMLElement) {
+  control.focus()
+  fireEvent.click(control)
+  await waitFor(() => expect(!control.isConnected || (control as HTMLButtonElement).disabled).toBe(true))
+  if (movedTo) movedTo.focus()
+  else dropFocusToBody()
+  expect(document.activeElement).toBe(movedTo ?? document.body)
+  await act(async () => hold.release())
+  await settle()
+}
+
+const editGathering = () => screen.getByRole('button', { name: 'Edit gathering' })
+
+test('a failed Turn it on keeps its step open with focus on Turn it on, and a second press retries the same body', async () => {
+  world.putStatus = 500
+  world.hold.put = gate()
+  await open(SEATS.host())
+  fireEvent.click(theSwitch())
+  const step = await screen.findByRole('group', { name: TURN_ON_SENTENCE })
+  const turnOn = within(step).getByRole('button', { name: 'Turn it on' })
+  await pressHeld(turnOn, world.hold.put)
+  await within(card()).findByText('Something went wrong. Nothing was changed — try again.')
+  await waitFor(() => expect(document.activeElement).toBe(turnOn))
+  expect(screen.getByRole('group', { name: TURN_ON_SENTENCE })).toBe(step)
+  world.putStatus = undefined
+  world.hold.put = undefined
+  fireEvent.click(document.activeElement as HTMLElement)
+  await waitFor(() => expect(theSwitch().getAttribute('aria-checked')).toBe('true'))
+  await waitFor(() => expect(document.activeElement).toBe(theSwitch()))
+  expect(bodiesOf('PUT /gatherings/g-1/outside-invitations')).toEqual(['{"on":true}', '{"on":true}'])
+})
+
+test('a failed Turn it off keeps its step open with focus on Turn it off', async () => {
+  world.putStatus = 500
+  world.hold.put = gate()
+  world.preview = { ...world.preview, outsiders: [{ display_name: 'Joe Smith' }] }
+  await open(detail({ outside_invitations: ON }))
+  fireEvent.click(theSwitch())
+  const step = await screen.findByRole('group', { name: 'Joe Smith will no longer see this gathering.' })
+  const turnOff = within(step).getByRole('button', { name: 'Turn it off' })
+  await pressHeld(turnOff, world.hold.put)
+  await within(card()).findByText('Something went wrong. Nothing was changed — try again.')
+  await waitFor(() => expect(document.activeElement).toBe(turnOff))
+  expect(theSwitch().getAttribute('aria-checked')).toBe('true')
+})
+
+test('a failed one-press turn-off puts focus back on the switch', async () => {
+  world.putStatus = 500
+  world.hold.put = gate()
+  await open(detail({ outside_invitations: ON }))
+  await pressHeld(theSwitch(), world.hold.put)
+  await within(card()).findByText('Something went wrong. Nothing was changed — try again.')
+  await waitFor(() => expect(document.activeElement).toBe(theSwitch()))
+  expect(theSwitch().getAttribute('aria-checked')).toBe('true')
+})
+
+test('a failed preview from the switch puts focus on Try again', async () => {
+  world.previewStatus = 500
+  world.hold.preview = gate()
+  await open(detail({ outside_invitations: ON }))
+  await pressHeld(theSwitch(), world.hold.preview)
+  await within(card()).findByText("Who would lose access couldn't be checked just now.")
+  await waitFor(() => expect(document.activeElement).toBe(within(card()).getByRole('button', { name: 'Try again' })))
+})
+
+test('a failed preview from Try again, which goes when pressed, puts focus on the new Try again', async () => {
+  world.previewStatus = 500
+  await open(detail({ outside_invitations: ON }))
+  fireEvent.click(theSwitch())
+  const first = await within(card()).findByRole('button', { name: 'Try again' })
+  world.hold.preview = gate()
+  await pressHeld(first, world.hold.preview)
+  await waitFor(() => expect(document.activeElement).toBe(within(card()).getByRole('button', { name: 'Try again' })))
+  expect(count('GET /gatherings/g-1/outside-invitations')).toBe(2)
+})
+
+test('a 404 on the PUT puts focus on Refresh', async () => {
+  world.putStatus = 404
+  world.hold.put = gate()
+  await open(SEATS.host())
+  fireEvent.click(theSwitch())
+  const step = await screen.findByRole('group', { name: TURN_ON_SENTENCE })
+  await pressHeld(within(step).getByRole('button', { name: 'Turn it on' }), world.hold.put)
+  await within(card()).findByText("You can't change this setting any more.")
+  await waitFor(() => expect(document.activeElement).toBe(within(card()).getByRole('button', { name: 'Refresh' })))
+})
+
+test('a 404 on the preview puts focus on Refresh', async () => {
+  world.previewStatus = 404
+  world.hold.preview = gate()
+  await open(detail({ outside_invitations: ON }))
+  await pressHeld(theSwitch(), world.hold.preview)
+  await within(card()).findByText("You can't change this setting any more.")
+  await waitFor(() => expect(document.activeElement).toBe(within(card()).getByRole('button', { name: 'Refresh' })))
+})
+
+test('Refresh, which goes when pressed, puts focus on the switch', async () => {
+  world.previewStatus = 404
+  await open(detail({ outside_invitations: ON }))
+  fireEvent.click(theSwitch())
+  const refresh = await within(card()).findByRole('button', { name: 'Refresh' })
+  refresh.focus()
+  fireEvent.click(refresh)
+  await waitFor(() => expect(count('GET /gatherings/g-1')).toBe(2))
+  await waitFor(() => expect(document.activeElement).toBe(theSwitch()))
+})
+
+test('a preview that finds it already off puts focus on the switch', async () => {
+  world.preview = { on: false, since: null, by: null, outsiders: [], pending: 0 }
+  world.hold.preview = gate()
+  await open(detail({ outside_invitations: ON }))
+  world.detail = detail({ outside_invitations: OFF })
+  await pressHeld(theSwitch(), world.hold.preview)
+  await waitFor(() => expect(theSwitch().getAttribute('aria-checked')).toBe('false'))
+  await waitFor(() => expect(document.activeElement).toBe(theSwitch()))
+  expect(count('PUT /gatherings/g-1/outside-invitations')).toBe(0)
+})
+
+test('the email form refused with 409 members_only puts focus on the switch, the notice beneath it', async () => {
+  await open(detail({ outside_invitations: ON }))
+  world.inviteStatus = 409
+  world.hold.invite = gate()
+  fireEvent.change(within(card()).getByLabelText('Email address'), { target: { value: 'ann.lee@example.com' } })
+  await pressHeld(within(card()).getByRole('button', { name: 'Send invitation' }), world.hold.invite)
+  await within(card()).findByText('Inviting people outside The Lees was turned off. Nothing was sent.')
+  await waitFor(() => expect(document.activeElement).toBe(theSwitch()))
+  const notice = within(card()).getByText('Inviting people outside The Lees was turned off. Nothing was sent.')
+  expect(before(theSwitch(), notice)).toBe(true)
+})
+
+test('a failed Got it puts focus back on Got it', async () => {
+  world.dismissStatus = 500
+  world.hold.dismiss = gate()
+  await open(detail({ caller_role: null, outside_invitations: { ...ON, by: 'Bea Test', may_change: false }, outside_alert: true }))
+  const got = screen.getByRole('button', { name: 'Got it' })
+  await pressHeld(got, world.hold.dismiss)
+  await screen.findByText('Something went wrong. Try again.')
+  await waitFor(() => expect(document.activeElement).toBe(got))
+})
+
+test('a person who moved outside the card while a change failed keeps their place', async () => {
+  world.putStatus = 500
+  world.hold.put = gate()
+  await open(SEATS.host())
+  fireEvent.click(theSwitch())
+  const step = await screen.findByRole('group', { name: TURN_ON_SENTENCE })
+  const elsewhere = editGathering()
+  await pressHeld(within(step).getByRole('button', { name: 'Turn it on' }), world.hold.put, elsewhere)
+  await within(card()).findByText('Something went wrong. Nothing was changed — try again.')
+  await settle()
+  expect(document.activeElement).toBe(elsewhere)
+})
+
+test('a person who moved outside the card while Turn it on landed keeps their place', async () => {
+  world.hold.put = gate()
+  await open(SEATS.host())
+  fireEvent.click(theSwitch())
+  const step = await screen.findByRole('group', { name: TURN_ON_SENTENCE })
+  const elsewhere = editGathering()
+  await pressHeld(within(step).getByRole('button', { name: 'Turn it on' }), world.hold.put, elsewhere)
+  await waitFor(() => expect(theSwitch().getAttribute('aria-checked')).toBe('true'))
+  await settle()
+  expect(document.activeElement).toBe(elsewhere)
+})
+
+test('a person who moved outside the card while the preview failed keeps their place', async () => {
+  world.previewStatus = 404
+  world.hold.preview = gate()
+  await open(detail({ outside_invitations: ON }))
+  const elsewhere = editGathering()
+  await pressHeld(theSwitch(), world.hold.preview, elsewhere)
+  await within(card()).findByText("You can't change this setting any more.")
+  await settle()
+  expect(document.activeElement).toBe(elsewhere)
+})
+
+test('a person who moved away from the alert while Got it failed, and then while it landed, keeps their place', async () => {
+  world.dismissStatus = 500
+  world.hold.dismiss = gate()
+  await open(detail({ caller_role: null, outside_invitations: { ...ON, by: 'Bea Test', may_change: false }, outside_alert: true }))
+  const elsewhere = screen.getByRole('link', { name: 'The Lees' })
+  await pressHeld(screen.getByRole('button', { name: 'Got it' }), world.hold.dismiss, elsewhere)
+  await screen.findByText('Something went wrong. Try again.')
+  await settle()
+  expect(document.activeElement).toBe(elsewhere)
+  world.dismissStatus = undefined
+  world.hold.dismiss = gate()
+  await pressHeld(screen.getByRole('button', { name: 'Got it' }), world.hold.dismiss, elsewhere)
+  await waitFor(() => expect(screen.queryByText(ALERT_NAMED)).toBeNull())
+  await settle()
+  expect(document.activeElement).toBe(elsewhere)
+})
+
+// ---------------------------------------------------------------------------
+// CK-93.1 — a long invited address kept inside its card. Measured in headless
+// Chrome, a 72-character address with no break in it ran past a standalone
+// gathering's card; .address-list (overflow-wrap: anywhere on its rows) is
+// carried by every list that shows an address, WaitingOn's among them.
+
+const addressList = (region: HTMLElement) =>
+  within(region).getByText('cousin.joe@example.com', { exact: false }).closest('ul') as HTMLElement
+
+test("a standalone gathering's Waiting on carries .address-list", async () => {
+  world.roster = { pending: [PENDING_ONE], accepted: [] }
+  await open(SEATS.standalone())
+  const section = screen.getByRole('region', { name: 'Invitations' })
+  fireEvent.click(within(section).getByRole('button', { name: 'Invite people' }))
+  await within(section).findByText('cousin.joe@example.com', { exact: false })
+  expect(addressList(section).classList.contains('address-list')).toBe(true)
+})
+
+test("the card's Waiting on carries .address-list too", async () => {
+  world.roster = { pending: [PENDING_ONE], accepted: [] }
+  await open(detail({ outside_invitations: ON }))
+  await within(card()).findByText('cousin.joe@example.com', { exact: false })
+  expect(addressList(card()).classList.contains('address-list')).toBe(true)
 })

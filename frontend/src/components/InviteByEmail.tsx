@@ -67,7 +67,7 @@ export function WaitingOn({
       {pending.length === 0 ? (
         <p className="field-hint">No pending invitations.</p>
       ) : (
-        <ul className="occurrence-list">
+        <ul className="occurrence-list address-list">
           {pending.map((entry) => (
             <li key={entry.id}>
               {entry.destination}

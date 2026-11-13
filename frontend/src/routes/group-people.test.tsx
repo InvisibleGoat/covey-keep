@@ -1803,3 +1803,16 @@ test('the People page’s source names no gathering read and no cover, and spell
   expect(code).not.toMatch(/readGroupGatherings|PageCover|<Cover\b|gatheringSections/)
   expect(groupPeopleSource).not.toMatch(/covey ?keep/i)
 })
+
+// CK-93.1: measured in headless Chrome, a 72-character address with no break
+// in it ran past the Invite people card at 320–645px and 900–997px; the
+// Pending invitations list carries .address-list, whose rows wrap.
+test('the Pending invitations list carries .address-list, so a long address wraps inside its card', async () => {
+  stubServer(makeServer('ada'), {
+    getInvitations: () => json(200, { pending: [PENDING_DORA] }),
+  })
+  renderPage()
+  await loaded()
+  const list = await screen.findByRole('list', { name: 'Pending invitations' })
+  expect(list.classList.contains('address-list')).toBe(true)
+})

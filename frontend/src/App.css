@@ -350,6 +350,16 @@
   gap: 0.75rem;
 }
 
+/* A list that shows an invited address (CK-93.1): an address is one long run
+   with no space in it, so one longer than its card wraps inside its own row
+   rather than running past the card's edge — measured in Waiting on (the
+   outside card and a standalone gathering's Invitations) and a group's People
+   page's Pending invitations. Carried by those lists alone, never set on
+   .occurrence-list, whose other lists hold no address. */
+.address-list > li {
+  overflow-wrap: anywhere;
+}
+
 .occurrence-item + .occurrence-item,
 .member-list > li + li {
   padding-top: 0.75rem;
@@ -3763,10 +3773,3 @@ body.menu-open {
   margin: 0;
 }
 
-/* Waiting on inside the card: an address is one long run with no space in it,
-   so one longer than the card wraps inside itself rather than running past the
-   card's edge (measured at 320px). Scoped to the card: a standalone gathering's
-   Invitations section is left as it was. */
-.outside-card .occurrence-list > li {
-  overflow-wrap: anywhere;
-}

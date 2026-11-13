@@ -253,15 +253,31 @@ test('the precache: the default pattern kept, the font and the images added, and
   expect(viteConfig).toContain("registerType: 'autoUpdate',")
 })
 
-test("the card's Waiting on wraps a long address inside itself, and only inside the card", () => {
-  // CK-93's measurement: an address longer than the card at 320px ran past its
-  // edge. The rule is the card's alone; a standalone gathering's list is left as
-  // it was, so no unscoped rule on the list wraps anywhere.
+test('every list that shows an invited address wraps it inside its own line, and no rule on .occurrence-list wraps', () => {
+  // CK-93.1 (moved from CK-93's pin, which held the rule to the outside card
+  // alone): measured in headless Chrome with a 72-character address and no
+  // break opportunity in it, a standalone gathering's Waiting on ran past its
+  // card at 320–637px and 900–988px, and a group's People page's Pending
+  // invitations at 320–645px and 900–997px. So the rule is one class,
+  // .address-list, carried by every list that shows an address — WaitingOn's
+  // (the card and a standalone gathering's section, one component) and the
+  // People page's — in place of the card-scoped rule. .occurrence-list itself
+  // serves the dates, the members, requests, the co-hosts and the Invited
+  // list, none of which holds an address, so no rule on it may wrap.
   const css = stripCss(appCss)
-  const scoped = css.match(/\.outside-card \.occurrence-list > li \{([^}]*)\}/)
-  expect(scoped?.[1]).toContain('overflow-wrap: anywhere;')
-  for (const rule of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
-    if (!/\.occurrence-list/.test(rule[1]) || !/overflow-wrap/.test(rule[2])) continue
-    expect(rule[1].trim()).toBe('.outside-card .occurrence-list > li')
+  const rule = css.match(/(?:^|\})\s*\.address-list > li \{([^}]*)\}/)
+  expect(rule?.[1].trim()).toBe('overflow-wrap: anywhere;')
+  for (const each of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+    if (!/overflow-wrap/.test(each[2])) continue
+    expect(each[1], each[1].trim()).not.toMatch(/\.occurrence-list/)
   }
+  expect(css).not.toMatch(/\.outside-card \.occurrence-list/)
+  const lists: [string, RegExp][] = [
+    ['../components/InviteByEmail.tsx', /<ul className="occurrence-list address-list">/g],
+    ['../routes/GroupPeople.tsx', /<ul className="occurrence-list address-list" aria-label="Pending invitations">/g],
+  ]
+  for (const [file, list] of lists) expect(sources[file].match(list), file).toHaveLength(1)
+  // Nothing else carries the class: it is for an invited address alone.
+  const carriers = Object.entries(sources).filter(([, text]) => text.includes('address-list')).map(([file]) => file)
+  expect(carriers.sort()).toEqual(['../components/InviteByEmail.tsx', '../routes/GroupPeople.tsx'])
 })

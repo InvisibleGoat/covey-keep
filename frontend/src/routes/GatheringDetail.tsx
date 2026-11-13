@@ -1013,9 +1013,10 @@ export function GatheringDetail() {
   }
 
   // Got it landed: the alert goes from the body the page holds, nothing
-  // re-read, and focus goes to the page's <h1>.
-  function alertDismissed() {
-    titleRef.current?.focus()
+  // re-read, and focus goes to the page's <h1> — unless the person moved
+  // away from the alert while the request waited (CK-93.1).
+  function alertDismissed(takeFocus: boolean) {
+    if (takeFocus) titleRef.current?.focus()
     setState((current) =>
       current.status === 'loaded'
         ? { status: 'loaded', gathering: { ...current.gathering, outside_alert: false } }
@@ -1344,7 +1345,8 @@ export function GatheringDetail() {
       } else if (response.status === 409 && group !== null && (await refusalCode(response)) === 'members_only') {
         // A group's gathering whose outside invitations were turned off
         // meanwhile (CK-93): its own line, and the gathering re-read, so the
-        // card shows off. Nothing was sent.
+        // card shows off. Nothing was sent. The card moves focus to its switch
+        // when the line appears (CK-93.1).
         if (!alive.current) return
         setInviteTurnedOff(true)
         setReloadKey((key) => key + 1)
