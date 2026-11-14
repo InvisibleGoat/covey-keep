@@ -1072,6 +1072,13 @@ body.viewer-open {
   scroll-margin-top: 72px;
 }
 
+/* The Photos headings' own scroll margin (CK-96), as their sections have:
+   a heading focused at the window's top stops below the phone's top bar. */
+#photos-heading,
+.group-photos > .photos-head h2 {
+  scroll-margin-top: 72px;
+}
+
 .group-photos > .photos-head h2 {
   margin: 0;
   font-family: var(--font-display);
@@ -2181,6 +2188,11 @@ body.viewer-open {
   .group-photos > .photos-head {
     scroll-margin-top: 16px;
   }
+
+  #photos-heading,
+  .group-photos > .photos-head h2 {
+    scroll-margin-top: 16px;
+  }
 }
 
 /* ---------- the screens before the app (the mockup's 17–21) ---------- */
@@ -2772,6 +2784,14 @@ body.viewer-open {
    where the bars are, so no frameless page and no window from 900px takes it. */
 :root:has(.tabbar) {
   scrollbar-gutter: stable;
+}
+
+/* The phone's foot (CK-96): the bottom bar's 71px, kept out of what the
+   browser counts as in view, so a control Tab or a step brings into view
+   comes to rest above the bar, not under it. Only where the bar is; never
+   a top padding, which would add to the sections' own scroll margin. */
+:root:has(.tabbar) {
+  scroll-padding-bottom: calc(71px + env(safe-area-inset-bottom, 0px));
 }
 
 /* The update notice sits above the bottom bar, never under it. */

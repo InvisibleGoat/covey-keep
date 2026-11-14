@@ -17,10 +17,11 @@
 // The empty state is a real screen that promises nothing without a screen
 // yet (no invitation, gathering or photo); a failed read can be retried,
 // never "Try again." with nothing to press. Their words are today's.
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { CardLine, Cover } from '../components/Cover'
 import { Icon } from '../components/Icons'
+import { useFocusRequest } from '../components/useFocusRequest'
 import type { LinePiece } from '../lib/gatherings'
 import { listGroups, memberCountLabel, roleLabel, type Group } from '../lib/groups'
 
@@ -43,6 +44,19 @@ export function Groups() {
   // state (the CK-74.1 idiom on /plan).
   const [reloadKey, setReloadKey] = useState(0)
   const moreHeading = useId()
+  // Focus after Try again (CK-96): the page's <main> is the container. Try
+  // again leaves a marker the read spends: the <h1> of the screen it lands on,
+  // Groups or No groups yet; or, failing again, the new Try again.
+  const mainRef = useRef<HTMLElement>(null)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const tryAgainRef = useRef<HTMLButtonElement>(null)
+  const requestFocus = useFocusRequest(mainRef)
+  const retryOwed = useRef(false)
+  useEffect(() => {
+    if (status === 'loading' || !retryOwed.current) return
+    retryOwed.current = false
+    requestFocus(status === 'failed' ? tryAgainRef : headingRef)
+  }, [status, requestFocus])
 
   useEffect(() => {
     let cancelled = false
@@ -63,13 +77,14 @@ export function Groups() {
   }, [reloadKey])
 
   function tryAgain() {
+    retryOwed.current = true
     setStatus('loading')
     setReloadKey((key) => key + 1)
   }
 
   if (status === 'loading') {
     return (
-      <main className="auth-screen page-column">
+      <main className="auth-screen page-column" ref={mainRef}>
         <p>Loading your groups…</p>
       </main>
     )
@@ -77,7 +92,7 @@ export function Groups() {
 
   if (status === 'failed') {
     return (
-      <main className="auth-screen page-column">
+      <main className="auth-screen page-column" ref={mainRef}>
         <div className="page-head">
           <div>
             <h1>Groups</h1>
@@ -87,7 +102,7 @@ export function Groups() {
           <p className="form-error" role="alert">
             Something went wrong loading your groups.
           </p>
-          <button type="button" onClick={tryAgain}>
+          <button ref={tryAgainRef} type="button" onClick={tryAgain}>
             Try again
           </button>
         </div>
@@ -98,10 +113,12 @@ export function Groups() {
   // The empty state is a real screen — what a person in no group sees.
   if (groups.length === 0) {
     return (
-      <main className="auth-screen page-column">
+      <main className="auth-screen page-column" ref={mainRef}>
         <div className="page-head">
           <div>
-            <h1>No groups yet</h1>
+            <h1 ref={headingRef} tabIndex={-1}>
+              No groups yet
+            </h1>
             <p className="lede">Groups you start or join will be listed here.</p>
           </div>
           <Link className="btn btn-primary" to="/groups/new">
@@ -115,10 +132,12 @@ export function Groups() {
   const [featured, ...more] = groups
 
   return (
-    <main className="auth-screen page-column">
+    <main className="auth-screen page-column" ref={mainRef}>
       <div className="page-head">
         <div>
-          <h1>Groups</h1>
+          <h1 ref={headingRef} tabIndex={-1}>
+            Groups
+          </h1>
         </div>
         <Link className="btn btn-primary" to="/groups/new">
           <Icon name="plus" />

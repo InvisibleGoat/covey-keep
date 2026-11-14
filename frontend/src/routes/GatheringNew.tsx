@@ -11,7 +11,7 @@
 //   joins later is invited too.
 // The type, the title, the decedent name and the dates are the same fields
 // either way, mapped through the one 422 mapper.
-import { useRef, useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent, type Ref } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { FieldError, FormLevelErrors } from '../components/FieldError'
@@ -60,7 +60,15 @@ function emptyOccurrence(): OccurrenceDraft {
   return { key: nextKey, startsAt: '', endsAt: '', location: '', mapUrl: '' }
 }
 
-export function GatheringNew({ inGroup }: { inGroup?: InGroup } = {}) {
+export function GatheringNew({
+  inGroup,
+  headingRef,
+}: {
+  inGroup?: InGroup
+  // The <h1>, where the group form's Try again lands once its reads do
+  // (CK-96); GroupGatheringNew holds it.
+  headingRef?: Ref<HTMLHeadingElement>
+} = {}) {
   const { person } = useAuth()
   const navigate = useNavigate()
   const zone = effectiveZone(person?.timezone)
@@ -213,7 +221,9 @@ export function GatheringNew({ inGroup }: { inGroup?: InGroup } = {}) {
 
   return (
     <main className="auth-screen">
-      <h1>{inGroup ? `New gathering in ${inGroup.group.name}` : 'New gathering'}</h1>
+      <h1 ref={headingRef} tabIndex={inGroup ? -1 : undefined}>
+        {inGroup ? `New gathering in ${inGroup.group.name}` : 'New gathering'}
+      </h1>
 
       <form ref={form} className="auth-card gathering-form" onSubmit={(event) => void handleSubmit(event)}>
         <label htmlFor="gathering-type">Type of gathering</label>

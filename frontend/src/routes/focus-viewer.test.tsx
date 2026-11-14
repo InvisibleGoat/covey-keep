@@ -318,12 +318,17 @@ test("the viewer editor's Save, a 422 on the caption, puts focus on the Caption 
   expect(document.activeElement).toBe(within(editor()).getByLabelText('Caption'))
 })
 
-test("the viewer editor's Save, a tag's 422, puts focus back on Save", async () => {
+// Moved at CK-96: a 422 on one tag lands on that chip's Remove, which its
+// error now describes, and no longer on Save (the kickoff's rider; CK-95
+// pinned Save because no control carried the tag's error).
+test("the viewer editor's Save, a tag's 422, puts focus on that chip's Remove", async () => {
   await openEditor()
   fireEvent.change(within(editor()).getByLabelText('Caption'), { target: { value: 'At the dock' } })
   photosWorld.answer.patch = invalid('tags', 0)
   await held('patch', within(editor()).getByRole('button', { name: 'Save' }))
-  expect(document.activeElement).toBe(within(editor()).getByRole('button', { name: 'Save' }))
+  const remove = within(editor()).getByRole('button', { name: 'Remove tag dock' })
+  expect(document.activeElement).toBe(remove)
+  expect(remove.getAttribute('aria-describedby')).toBeTruthy()
 })
 
 test("the viewer editor's Save, failing, puts focus back on Save", async () => {

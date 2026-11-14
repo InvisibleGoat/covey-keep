@@ -924,6 +924,19 @@ test('the styles: 358px from 900 on the rail\'s class and 304 unchanged, no colo
   expect(css).toMatch(/^:root:has\(\.tabbar\) \{\n {2}scrollbar-gutter: stable;/m)
 })
 
+// CK-96: the phone's foot. A block of its own beside the gutter's, so the pin
+// above stays unedited: the bottom bar's height, 71px measured at 320 and 375,
+// plus the safe area, under :root:has(.tabbar) alone, top level, and
+// never a top padding, which would add to the sections' 72px scroll margin.
+test("the styles: the phone's foot — scroll-padding-bottom under :root:has(.tabbar) alone, in its own block, and no top padding", () => {
+  const css = appCss.replace(/\/\*[\s\S]*?\*\//g, '')
+  const foot = /([^{}]*)\{\s*scroll-padding-bottom: calc\(71px \+ env\(safe-area-inset-bottom, 0px\)\);\s*\}/.exec(css)
+  expect(foot?.[1].trim()).toBe(':root:has(.tabbar)')
+  expect(css).toMatch(/^:root:has\(\.tabbar\) \{\n {2}scroll-padding-bottom: calc\(71px \+ env\(safe-area-inset-bottom, 0px\)\);\n\}/m)
+  expect(css.match(/scroll-padding-bottom/g)).toHaveLength(1)
+  expect(css).not.toMatch(/scroll-padding-top|scroll-padding:/)
+})
+
 test('a tile or a row brought into view by the keyboard keeps its ring inside its scroller: 5px of ring, 8px of margin', () => {
   const css = appCss.replace(/\/\*[\s\S]*?\*\//g, '')
   expect(css).toMatch(/\.rail-item \{[^}]*scroll-margin-block: 8px;/)

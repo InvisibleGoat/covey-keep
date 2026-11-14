@@ -63,10 +63,16 @@ export function WaitingOn({
   pending,
   zone,
   onRevoke,
+  revokeError = null,
+  revokeRef,
 }: {
   pending: PendingInvitation[]
   zone: string
   onRevoke: (pendingId: string) => void
+  // A failed Revoke's line, beneath that row's Revoke (CK-96).
+  revokeError?: { id: string; message: string } | null
+  // Each row's Revoke, where focus stays after its press fails (CK-96).
+  revokeRef?: (pendingId: string) => Ref<HTMLButtonElement>
 }) {
   return (
     <>
@@ -82,9 +88,20 @@ export function WaitingOn({
               {new Date(entry.expires_at).getTime() <= Date.now()
                 ? 'expired'
                 : `expires ${formatInstant(entry.expires_at, zone)}`}{' '}
-              <button type="button" className="link-button" onClick={() => onRevoke(entry.id)}>
+              <button
+                ref={revokeRef?.(entry.id)}
+                type="button"
+                className="link-button"
+                onClick={() => onRevoke(entry.id)}
+              >
                 Revoke
               </button>
+              {revokeError?.id === entry.id && (
+                <p className="form-error" role="alert">
+                  <span aria-hidden="true">⚠ </span>
+                  {revokeError.message}
+                </p>
+              )}
             </li>
           ))}
         </ul>

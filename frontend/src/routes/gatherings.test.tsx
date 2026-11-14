@@ -621,7 +621,10 @@ test('a date with answers refuses once with the count, and "Remove it anyway" ca
   const warning = await screen.findByText(
     '3 people have answered for this date. Removing it discards their answers.',
   )
-  expect(warning.getAttribute('role')).toBe('alert')
+  // Moved at CK-96: the sentence labels the step, which takes focus, so it
+  // is read once there and is no alert (it was read twice).
+  expect(warning.getAttribute('role')).toBeNull()
+  expect(screen.getByRole('group', { name: /^⚠? ?3 people have answered for this date\. Removing it discards their answers\.$/ })).toBeTruthy()
 
   // Backing out clears the warning and sends nothing.
   fireEvent.click(screen.getByRole('button', { name: /don't remove it/i }))

@@ -483,12 +483,18 @@ test("Save's 422 on the caption puts focus on the Caption field", async () => {
   expect(document.activeElement).toBe(within(editor()).getByLabelText('Caption'))
 })
 
-test("Save's 422 on a tag, which names no field, puts focus back on Save", async () => {
+// Moved at CK-96: a 422 on one tag lands on that chip's Remove, which its
+// error now describes, and no longer on Save (the kickoff's rider; CK-95
+// pinned Save because no control carried the tag's error).
+test("Save's 422 on a tag puts focus on that chip's Remove, which its error describes", async () => {
   await open()
   await openEditor()
   photosWorld.answer.patch = invalid('tags', 0)
   await held('patch', within(editor()).getByRole('button', { name: 'Save' }))
-  expect(document.activeElement).toBe(within(editor()).getByRole('button', { name: 'Save' }))
+  const remove = within(editor()).getByRole('button', { name: 'Remove tag dock' })
+  expect(document.activeElement).toBe(remove)
+  expect(remove.getAttribute('aria-describedby')).toBeTruthy()
+  expect(document.getElementById(remove.getAttribute('aria-describedby')!.split(' ')[0])?.textContent).toBeTruthy()
 })
 
 test("Save's failure puts focus back on Save", async () => {

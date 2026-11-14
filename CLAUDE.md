@@ -1,11 +1,42 @@
 # CoveyKeep — Repo Operational Guide
 
-**Version:** 1.121.0
-**Last Updated:** 2026-11-13
+**Version:** 1.122.0
+**Last Updated:** 2026-11-14
 **Source:** the one-line list of every phase from CK-2 to CK-80 that stood here moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); each phase is named in its own changelog entry, here or there.
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.122.0** (2026-11-14): Phase CK-96 — **Focus after an answer, the rest: sign-in, Your plan, the join landing, every failed read's Try again and four new ones, the three Cancels, Revoke's failure and the phone's foot** — the last of the surfaces CK-94 named, on CK-94's hook and rule with no change to either, and Steven's two answers of 2026-11-14: a **Try again** on the RSVP block, the invitation list, the co-host list and Settings' passkeys, and Revoke's failure lines (`reference/frontend/components.md` 1.55.0 — the Focus after an answer convention's tables for the rest, its not-yet line gone; the Photographs convention's tag 422; the inventory). **Frontend only:**
+  - **changed:** `App.css`, `components/CalendarView.tsx`, `GatheringMedia.tsx`, `InviteByEmail.tsx`, `Menu.tsx` and `PasskeySection.tsx`, `lib/invitations.ts` (`REVOKE_REFUSED`), and `routes/Calendar.tsx`, `GatheringDetail.tsx`, `GatheringNew.tsx`, `Gatherings.tsx`, `GroupDetail.tsx`, `GroupGatheringNew.tsx`, `GroupJoin.tsx`, `GroupPeople.tsx`, `Groups.tsx`, `Plan.tsx` and `SignIn.tsx`;
+  - **tests:** new `routes/focus-entry.test.tsx`, `focus-reads.test.tsx`, `focus-rest.test.tsx` and `focus-riders.test.tsx` on a new fake server, `test-support/world96.ts`, and pins moved in four test files (below);
+  - **untouched:** `components/useFocusRequest.ts` and `firstFieldWithError`; nothing under `backend/`, no migration (head stays 0037), the verifier at 458, neither lock, `render.yaml`, `netlify.toml`, `vite.config.ts`, `index.html` and `styles/tokens.css`; no token, dependency, environment variable or logger added; no act's flow changed, and no word but Steven's two; `disabled` stays.
+
+  **1456 frontend tests in 77 files, 112 new** (`focus-reads` 43, `focus-rest` 33, `focus-entry` 31, `focus-riders` 4, `rail-and-panel` 1). Red first against the unchanged code, 99 of the 275 in the touched files failed: `focus-entry` 26 of 31, `focus-reads` 35 of 43, `focus-rest` 31 of 33, `focus-riders` 3 of its first 3, and each moved pin's one (`focus-photos`, `focus-viewer`, `gatherings.test`, `rail-and-panel`). Each that passed asserts what holds before by design: a person who moved on keeps their place. The fourth riders test was added for a mutation run's survivor, failing on its plant. The full suite ran alone, 1456 passed. Build and lint are clean (`index-DlBbka09.js`, `index-DNAc4SGG.css`, 951.00 KiB precache, 11 entries; `index-CQ1FD83C.js` is the harness's bundle, built with the API address pointed at the stand-in). **36 mutations, each caught by a named test**, with `tsc` clean: three were first planted in a form that broke compilation, which counts as nothing, and were rewritten to compile and caught; two survived and each became a test (below). One commit per root.
+
+  **THE FAULT, MEASURED FIRST** in headless Chrome against the stand-in at 375, every request held: every row of sign-in, Your plan, the join landing, every Try again (landing and failing) and the three Cancels **ended on the body**; the RSVP block, the invitation list, the co-host list and the passkeys had **no Try again**, the passkeys' line no role; a failed Revoke drew no line on either page, and on the People page an unreachable one left focus on the body; the remove-date sentence was an alert. **At the phone's foot** a focused step lay under the bottom bar — the remove-date step 71.1px at 320 and 16.8px at 375, the Photos decline step 71.3px at 320, a Tab to a control at the foot about 71px — the root's `scroll-padding-bottom` `auto`; and CK-95's queue-emptied heading lay 26.4px under the top bar at 375.
+
+  **THE BUILD**, the hook and the rule unchanged:
+  - **A Try again**: when its read lands, the heading of what it read or the `<h1>` of the screen it lands on, a not-found or empty screen included; when it fails again, the new Try again — the menu's (in both layouts, described by its line, which is no alert), the calendar's, both lists', a gathering's page and its Who it's for, a group's page and its strip, the group gathering form, the People page's four, Your plan's and the join landing's. A heading that becomes a target gains `tabIndex={-1}` and nothing else.
+  - **The four new Try agains** (Steven): the RSVP block, the invitation list (one roster read behind the outside card, Invitations and Co-hosts; focus lands in the section whose button was pressed), the co-host list and the passkeys (landing on Add a passkey); each line an alert.
+  - **Sign-in**: a link sent, the sent card's heading; Use a different address, the address field; a refusal, the button pressed; its three error lines alerts. **Your plan**: a refusal, the button pressed; `already_subscribed`, Manage your plan once the plan read again lands, else back on that Upgrade; the Checkout wait keeps Back to settings the same element. **The join landing**: a new screen's `<h1>`.
+  - **The three Cancels** back on the button that opened the form. **Revoke's failure** (Steven): a line beneath that row's Revoke, an alert — *Something went wrong. Nothing changed — try again.*, or the network line — gone on the row's next press and on a re-read, focus on that Revoke. **The remove-date sentence** labels its step and is no longer an alert.
+  - **The phone's foot**: `:root:has(.tabbar) { scroll-padding-bottom: calc(71px + env(safe-area-inset-bottom, 0px)); }` in a block of its own beside the gutter's; no `scroll-padding-top`, no scripted scroll. The Photos headings' own scroll margin.
+  - **CK-95's riders**: a media read the page moved past while its body was read lands nothing and spends nothing; Use as cover and a landed save drop a photo's refusal line; a tag's 422 lands on that chip's Remove, which its error describes.
+
+  **The moved pins, each with its reason in the test**: `focus-photos` and `focus-viewer` (a tag's 422 lands on the chip's Remove, not Save); `gatherings.test` (the remove-date sentence's role is none, the step named by it); `rail-and-panel` (one new test on the foot's block; CK-89's gutter pin unedited).
+
+  **Found by the mutation run and pinned**: `already_subscribed` focusing before the re-read survived until the test held the billing read; the row editor's save keeping a refusal line survived until a test of the row's own editor.
+
+  **Measured after** (`D:\projects\temp\CK-96-screenshots`; the harness `D:\projects\temp\CK-96-harness`):
+  - every row at 375 in light and dark where the tables say, none on the body, and sixteen rows, at least one per table, at 1440 in both. An unreachable Revoke is a dropped connection, which Chrome retried up to three times before failing; read after the retries, both pages show the network line with focus on Revoke;
+  - the foot at 320 and 375: every step and every Tab landing wholly above the bar (at most 0.3px of sub-pixel rounding), `scroll-padding-bottom` 71px; CK-95's heading at 71.8, clear of the 61px top bar; the arrival at `#photos` and a return by a link identical before and after at 320, 375 and 1440;
+  - the four keyboard journeys at 375 and 1440 in both themes, from the keyboard alone: sign-in's sent card and Use a different address; Groups' Try again failing again and then landing on its `<h1>`; Revoke refused and then landing on the address field; a date's Cancel. Every landing's ring is the 3px accent outline (`rgb(33, 122, 121)` in light, `rgb(61, 168, 165)` in dark);
+  - the boxes before and after at 320, 375 and 1440 identical: 14,095 over 54 scenes;
+  - no `X-Amz` in 18 scenes, and every photo a `blob:` URL.
+
+  **Found, reported, not fixed** (the kickoff's §7, each confirmed): Your plan's `already_subscribed` line goes with its card once the plan read shows that plan held — focus lands on Manage your plan, and the refusal's words are gone; the co-host list's line is drawn only inside `invitations &&`, so it is hidden while the roster has failed too; the reads that fail quietly by design keep no button (the billing reads on You and Settings, Your plan's `refresh()`, a group's calendar's opening-day read, `EmailChangeResult`, `GatheringMedia`'s group read, `GroupPhotos`' viewer read, `Cover` and `LazyThumbnail`); You's profile line has no Try again; the two accept pages' failure lines have no role and no button. CK-95's three left: *Decline it* is never disabled; the shared delete step's refusal on a gathering-bin row reads the personal bin's line; a row's Remove from gathering shows only during a view switch.
+
+  Not pushed. Netlify alone deploys, both Render services stay on `c5587d3`, and no verifier run is owed. Report: `D:\projects\temp\CK-96-report.md`.
 - **1.121.0** (2026-11-13): Phase CK-95 — **Focus after an answer in the photos: a gathering's Photos section, the photo viewer, a group's photos and Change cover, and the viewer's three steps open on their sentence, never their acting button** — the first of the surfaces CK-94 named, photos first by Steven's answer of 2026-11-13, on CK-94's hook and rule with no change to either (`reference/frontend/components.md` 1.54.0 — the Focus after an answer convention gains THE ROW GONE, the photos' containers and four tables as built, and its not-yet line now names CK-96's surfaces alone; the Photographs convention's viewer steps, Covers on the surface's Change cover lines and the inventory brought current). **Frontend only:**
   - **changed:** `components/GatheringMedia.tsx`, `components/PhotoViewer.tsx`, `components/GroupPhotos.tsx` and `components/PageCover.tsx`;
   - **tests:** new `routes/focus-photos.test.tsx`, `routes/focus-viewer.test.tsx` and `routes/focus-covers.test.tsx` on a new fake server, `test-support/photos.ts`, and pins moved in five test files (below);
@@ -577,6 +608,24 @@ npm run test       # vitest (jsdom) — brand pins (CK-14) + gathering surface (
                    #   press sending nothing, every keep on its opener; the
                    #   viewer's targets kept to the photo on screen; a person
                    #   who moved on, or pressed an arrow, keeping their place)
+                   # + focus after an answer, the rest (CK-96: through the
+                   #   real route table on a fake server (test-support/
+                   #   world96.ts) — sign-in's sent card, Use a different
+                   #   address and its alerts; Your plan's refusals,
+                   #   already_subscribed landing on Manage your plan once
+                   #   the read lands, the Checkout wait keeping Back to
+                   #   settings; the join landing's new screens; every
+                   #   failed read's Try again landing on its heading or
+                   #   <h1> and, failing again, on the new Try again; the
+                   #   RSVP block's, the invitation list's in each section,
+                   #   the co-host list's and the passkeys' new Try again;
+                   #   the three Cancels; Revoke's line on both pages,
+                   #   gone on the next press; the remove-date sentence no
+                   #   alert; the foot's scroll padding in a block of its
+                   #   own; CK-95's riders — a stale body landing nothing,
+                   #   a refusal line gone after Use as cover and a save, a
+                   #   tag's 422 on its chip's Remove; a person who moved
+                   #   on keeping their place)
 ```
 
 ### Dev database (repo root)
@@ -2514,12 +2563,10 @@ is Steven's call, not a session's: `.env` is his file.
   goes back to the opener; a navigation away needs nothing. **No act's flow,
   no word, and `disabled` stays** (`aria-disabled` weighed and not taken);
   Settings' three error lines and the passkeys' gained `role="alert"`, and
-  *Saved.* `role="status"`. The photos came onto the rule at CK-95 (the
-  next bullet); not yet on it: Your plan, the group's link landing,
-  sign-in, every other failed read's Try again, a gathering's three Cancel
-  buttons and the remove-date step's sentence; Revoke's silent failure needs
-  words. Detail: `reference/frontend/components.md` 1.54.0, the Focus after
-  an answer convention.
+  *Saved.* `role="status"`. The photos came onto the rule at CK-95, and
+  every other surface that waits on the server at CK-96 (the next two
+  bullets). Detail: `reference/frontend/components.md` 1.55.0, the Focus
+  after an answer convention.
 - Focus after an answer in the photos (CK-95; frontend only): **a
   gathering's Photos section, the photo viewer, a group's photos and Change
   cover on the same hook and the same rule**, no change to either — the
@@ -2544,13 +2591,50 @@ is Steven's call, not a session's: `.env` is his file.
   view that row's Put back, else the Photos heading; a re-read that fails,
   the section's Try again. A 422 on the files goes to the file input, on a
   caption to its field, on one photo of the batch to that row's checkbox
-  (now described by the error); every other failure to the control pressed.
+  (described by the error since CK-94), and since CK-96 on one tag to that
+  chip's Remove; every other failure to the control pressed.
   **No act's flow and no word changed; `disabled` stays.** Found and left
   (the CK-95 report): *Decline it* never disabled, a gathering-bin row's
   destroy refusal reading the personal bin's line, a row's Remove from
-  gathering seen only during a view switch, a tag's 422 described by no
-  field. Detail: `reference/frontend/components.md` 1.54.0, the Focus after
-  an answer convention's photo tables.
+  gathering seen only during a view switch — still left at CK-96; the
+  fourth, a tag's 422 described by no field, fixed at CK-96. Detail:
+  `reference/frontend/components.md` 1.55.0, the Focus after an answer
+  convention's photo tables.
+- Focus after an answer, the rest (CK-96; frontend only): **every surface
+  that waits on the server is on the rule now** — sign-in, Your plan, the
+  group's link landing, every failed read's Try again, a gathering's three
+  Cancels, Revoke's failure and a step at a phone's foot — on CK-94's hook
+  and rule, unchanged. **A Try again**: when its read lands, the heading of
+  what it read, or the `<h1>` of the screen it lands on, a not-found screen
+  included; when it fails again, the new Try again — the menu's, the
+  calendar's, both lists', a gathering's page and its Who it's for, a
+  group's page and its strip, the group gathering form, the People page's
+  four, Your plan's and the join landing's; a heading that becomes a target
+  gains `tabIndex={-1}` and nothing else. **Four reads gained a Try again**
+  (Steven, 2026-11-14): the RSVP block, the invitation list (one roster read
+  behind the outside card, Invitations and Co-hosts, focus landing in the
+  section whose button was pressed), the co-host list and Settings'
+  passkeys. **Sign-in**: the sent card's heading; Use a different address,
+  the address field; its three error lines alerts. **Your plan**:
+  `already_subscribed` lands on Manage your plan once the plan read lands;
+  the Checkout wait keeps Back to settings the same element. **The join
+  landing**: a new screen's `<h1>`. **The three Cancels**: back on the
+  button that opened the form. **Revoke's failure** (Steven, 2026-11-14):
+  a line beneath that row's Revoke, an alert — *Something went wrong.
+  Nothing changed — try again.*, or the network line — gone on the row's
+  next press and on a re-read, focus on that Revoke. **The remove-date
+  step's sentence** labels the step and is no longer an alert. **The
+  phone's foot**: `:root:has(.tabbar) { scroll-padding-bottom: … }`, the
+  bar's height and the safe area, in a block of its own beside the gutter's,
+  so a focused step at the foot sits above the bottom bar; no
+  `scroll-padding-top`. **The menu's Try again is described by its line**,
+  not an alert. **CK-95's riders**: the Photos headings' own scroll margin;
+  a load the page moved past while its body was read lands nothing and
+  spends nothing; Use as cover and the editor's save (on landing) drop a
+  photo's refusal line; a tag's 422 on its chip's Remove, which its error
+  describes. **No act's flow and no word changed but Steven's two;
+  `disabled` stays.** Detail: `reference/frontend/components.md` 1.55.0,
+  the Focus after an answer convention.
 - Browser session (CK-6, lifetime CK-9): `/auth/verify` 302s to
   `${APP_BASE_URL}/auth/callback#token=<jwt>` — the JWT rides the URL
   **fragment**, never the query string; the frontend stores it in
@@ -2655,7 +2739,7 @@ covey-keep/            # the code root (this repo)
 │   └── src/               # the application; each test sits beside its subject (*.test.ts, *.test.tsx)
 │       ├── main.tsx       # the entry: StrictMode, BrowserRouter, AuthProvider, App
 │       ├── App.tsx        # the route table inside AppUpdateProvider, with PwaUpdatePrompt; ONE layout route (RequireAuth around Frame) for every signed-in page, `/calendar` among them; `*` renders PageNotAvailable, never a redirect
-│       ├── App.css        # the class vocabulary every screen reuses, in the look, and the frame's, You's, the covers' (an empty cover's scrim on the words' own box), the two lists', a group's page and its People page's, a gathering's page's, the photo grid's and the photo viewer's, a group's photos in sections', Rail and panel's, and the calendar's (its column free to shrink, a phone's marks wrapping inside their day), and inviting people outside the group's (the line's tint, the switch, its two steps and the alert), `.address-list` (a long invited address wrapping inside its card, on every list that shows one), with the tabbar pages' stable gutter; names no colour (the Gotcha)
+│       ├── App.css        # the class vocabulary every screen reuses, in the look, and the frame's, You's, the covers' (an empty cover's scrim on the words' own box), the two lists', a group's page and its People page's, a gathering's page's, the photo grid's and the photo viewer's, a group's photos in sections', Rail and panel's, and the calendar's (its column free to shrink, a phone's marks wrapping inside their day), and inviting people outside the group's (the line's tint, the switch, its two steps and the alert), `.address-list` (a long invited address wrapping inside its card, on every list that shows one), with the tabbar pages' stable gutter; names no colour (the Gotcha); since CK-96 the tabbar pages' foot padding (`scroll-padding-bottom`, the bar and the safe area) in a block of its own beside the gutter, and the Photos headings' own scroll margin
 │       ├── index.css      # the stylesheet entry: styles/tokens.css, then styles/base.css
 │       ├── styles/        # the look (CK-81)
 │       │   ├── tokens.css     # THE ONLY PLACE A COLOUR IS NAMED: the mockup's tokens, a light and a dark block with the same names
@@ -2676,7 +2760,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── PageCover.tsx         # a page's cover card (the wide card, and a gathering page's badge) with the <h1> inside; for organisers Change cover over its panel: Upload a picture (followed to ready), Remove cover's step — the card's own — the hint; after an answer focus in the panel: the step on itself, never its Remove cover, a landing on Upload a picture (CK-95)
 │       │   ├── Frame.tsx             # the frame around every signed-in page: the top bar, the bottom bar, the menu as a drawer (a modal dialog) or a column from 900px (304, or 358 in Rail and panel); the drawer's one exception, a press held in a ref and spent in a layout effect, never in navigation state; calls useKeepPlace once and provides pagePlace, adding no element
 │       │   ├── frame.test.tsx        # the frame through the real route table: which routes carry it, the bars, the drawer as a dialog, the column, Home retired
-│       │   ├── Menu.tsx              # the menu in either layout. One list: the sections, Your groups, Gatherings coming up — each row's cover — the footer, no chevron, pin or panel. Rail and panel: the rail (the Home tile, a tile per group, +) and the panel, read from the address through lib/frame.ts's panelOf — Home's, or a group's with its back row, cover, four chevron rows (Calendar since CK-91) and gatherings. One GatheringRow; re-reads on a page change, a cover change and the menu's signal (lib/frame.ts); reads nothing else
+│       │   ├── Menu.tsx              # the menu in either layout. One list: the sections, Your groups, Gatherings coming up — each row's cover — the footer, no chevron, pin or panel. Rail and panel: the rail (the Home tile, a tile per group, +) and the panel, read from the address through lib/frame.ts's panelOf — Home's, or a group's with its back row, cover, four chevron rows (Calendar since CK-91) and gatherings. One GatheringRow; re-reads on a page change, a cover change and the menu's signal (lib/frame.ts); reads nothing else; its Try again described by its line, landing on the first list heading drawn or, failing again, the new Try again (CK-96)
 │       │   ├── menu.test.tsx         # the two lists, at most five coming up, never photos-only, Try again, the re-read on navigation, the footer
 │       │   ├── Icons.tsx             # the mockup's hand-drawn icons (the plus on the New buttons, the crumbs' back, a gathering page's addpic and the photo viewer's prev, next, expand, shrink, zoomIn and zoomOut, and the panel's home and photos, the calendar's calendar and the switch's cards among them), 24px, currentColor, aria-hidden; no icon set
 │       │   ├── appUpdate.ts          # the update-state context and its type
@@ -2685,17 +2769,17 @@ covey-keep/            # the code root (this repo)
 │       │   ├── app-update.test.tsx   # one registration owner in the tree, the notice, the checks
 │       │   ├── RequireAuth.tsx       # route guard: signed out goes to `/`; parks path + query (never the hash) as the return only if signedOutSinceLoad
 │       │   ├── FieldError.tsx        # FieldError and FormLevelErrors: the 422 mapper's rendering half, role="alert"
-│       │   ├── PasskeySection.tsx    # Settings' passkey list: add and remove; quiet, never promoted; after an answer focus on Add a passkey, the Remove pressed, or the next Remove (CK-94); its error line an alert
-│       │   ├── GatheringMedia.tsx    # the Photos section, open on load: its heading and count, upload, the rows (a thumbnail that can't be shown keeps its button, Retry beside it), words and search, the host's review, both bins, failed rows; the grid of published photos and See all; the photo viewer's set, its one history entry ({ photoViewer: true }) and the acts it carries (the covers among them); the page's Add photos handle (pickPhotos: the picker in one press); the arrival at #photos (arrivedAtPhotos: read once at mount, one scroll after the first read, none on a return); See all still out on a return; groupLine, the line about who can see a group's gathering, straight after the head (CK-93); after every act's answer focus where the Focus after an answer convention's photo tables say — each step on itself, the viewer's three no longer on their acting button, THE ROW GONE's marker spent by a read begun after the act, the viewer's targets kept to the photo on screen (CK-95)
+│       │   ├── PasskeySection.tsx    # Settings' passkey list: add and remove; quiet, never promoted; after an answer focus on Add a passkey, the Remove pressed, or the next Remove (CK-94); its error line an alert; since CK-96 a failed read's line an alert with Try again, landing on Add a passkey
+│       │   ├── GatheringMedia.tsx    # the Photos section, open on load: its heading and count, upload, the rows (a thumbnail that can't be shown keeps its button, Retry beside it), words and search, the host's review, both bins, failed rows; the grid of published photos and See all; the photo viewer's set, its one history entry ({ photoViewer: true }) and the acts it carries (the covers among them); the page's Add photos handle (pickPhotos: the picker in one press); the arrival at #photos (arrivedAtPhotos: read once at mount, one scroll after the first read, none on a return); See all still out on a return; groupLine, the line about who can see a group's gathering, straight after the head (CK-93); after every act's answer focus where the Focus after an answer convention's photo tables say — each step on itself, the viewer's three no longer on their acting button, THE ROW GONE's marker spent by a read begun after the act, the viewer's targets kept to the photo on screen (CK-95); since CK-96 a load the page moved past while its body was read lands nothing and spends nothing, Use as cover and a landed save drop a photo's refusal line, and a tag's 422 lands on that chip's Remove, which its error describes
 │       │   ├── GroupPhotos.tsx       # a group's photos in sections: its one read joined to the strip's list by gathering_id, the head, a banner or a plain head, the preview, See all, the photo viewer for viewing only; no act and no read of the group's seat; the arrival at #photos from another page or its own, once per key, none on a return; Try again's answer on the heading or the new Try again (CK-95)
 │       │   ├── usePreviewWide.ts     # the preview's width and its 6 and 8; one copy for both pages
 │       │   ├── useViewerEntry.ts     # the viewer's one history entry, exactly { photoViewer: true }: its push, pop and Back effect; one copy for both pages
 │       │   ├── useNearViewport.ts    # a ref and whether its element is near the viewport (a 200px margin; at once under jsdom); read by LazyThumbnail and the banner
 │       │   ├── useKeepPlace.ts       # THE ONE OWNER OF A NAVIGATION'S SCROLL, called once from Frame: acts only on a pathname change; a return by history or by a link to the page just left, or a new page at the top; the record in a ref alone; a return held until the window (5 s), the person's act, a pathname change or the frame going; focus back to a link pressed from the keyboard
 │       │   ├── pagePlace.ts          # the context a page reads about its own visit: isReturn, shownAll, rememberShownAll; outside the frame every page is a new visit
-│       │   ├── CalendarView.tsx      # the calendar, one component for the tab, a group's calendar and Your gatherings' Calendar view: one read per shown month of CK-90's route alone, in the profile's zone; the month card (a button per day, one tab stop, the arrows), covers on a phone and chips from 640px, the day's list with each row's answer chip or photo count; every move replaces ?day=, never a history entry; Nothing on this day. only once the answer lands
+│       │   ├── CalendarView.tsx      # the calendar, one component for the tab, a group's calendar and Your gatherings' Calendar view: one read per shown month of CK-90's route alone, in the profile's zone; the month card (a button per day, one tab stop, the arrows), covers on a phone and chips from 640px, the day's list with each row's answer chip or photo count; every move replaces ?day=, never a history entry; Nothing on this day. only once the answer lands; Try again landing on the day's heading or the new Try again (CK-96)
 │       │   ├── OutsideInvitations.tsx # inviting people outside the group: the card (its switch never moved before the server answers; the turn-on step always, the turn-off step only when the preview names someone or something pending; the page's email form and Waiting on handed in) and the alert (Got it posts the dismissal once); after a failed change focus goes back where it can be tried again, and no move takes focus from outside the card or the alert (CK-93.1), on the shared hook since CK-94; reads only what the page hands it — the body decides
-│       │   ├── InviteByEmail.tsx     # CK-25's email form and Waiting on, one copy for a standalone gathering's Invitations section and the outside card; Waiting on's list carries `.address-list`; the page holds the state and the handlers, and the field's and the button's refs (fieldRef, submitRef: where focus goes after an answer, CK-94)
+│       │   ├── InviteByEmail.tsx     # CK-25's email form and Waiting on, one copy for a standalone gathering's Invitations section and the outside card; Waiting on's list carries `.address-list`; the page holds the state and the handlers, and the field's and the button's refs (fieldRef, submitRef: where focus goes after an answer, CK-94); since CK-96 a failed Revoke's line beneath that row's Revoke, an alert, and each Revoke a ref
 │       │   ├── useFocusRequest.ts    # THE ONE FOCUS MECHANISM after an answer (CK-94, lifted from CK-93.1's card): requestFocus(target), the request held in state and spent after the render that draws its target, and only from the body or inside the act's section (mayTakeFocus); firstFieldWithError, useRefMap
 │       │   ├── useFocusRequest.test.tsx # the hook: state spent once after the render that draws its target, the container rule, the same target twice, a function target and container read when spent
 │       │   └── PhotoViewer.tsx       # the photo viewer: a modal dialog portalled into the body, the rest inert; the bar, the web layer with the arrows fixed on the stage, the words and acts, the strip; full screen, zoom, gestures, keys; at most three web layers held; acts and total optional (a group's page passes no acts, and a total until the list lands); TagList and LazyThumbnail (minted as it nears the viewport); Retry's answer on Full screen or the new Retry, while that photo is on screen (CK-95)
@@ -2710,7 +2794,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── url.ts                # safeHttpUrl: the render guard for user-controlled URLs, http and https only
 │       │   ├── url.test.ts           # the guard against the backend validator's hostile set
 │       │   ├── accountDeleted.ts     # ACCOUNT_DELETED_SIGNAL: the one-shot navigation state that lets /account-deleted end the session
-│       │   ├── invitations.ts        # gathering-invitation types and the token parked across the sign-in round trip; from_outside on an accepted entry (CK-93)
+│       │   ├── invitations.ts        # gathering-invitation types and the token parked across the sign-in round trip; from_outside on an accepted entry (CK-93); REVOKE_REFUSED, a refused Revoke's house line (CK-96)
 │       │   ├── gatherings.ts         # gathering types and labels; roleFlags and viewOf, the one reads of the role and the view; isComingUp, the one rule the list, the menu and a group page's strip read, the list's sections and card lines, in pieces (each date and time kept whole); sectionCountPieces, a section's count line on a group's page; caller_response on a date; the outside-invitation body fields, optional
 │       │   ├── gatherings.test.ts    # roleFlags and viewOf gate closed on anything unknown; the coming-up rule, the sections and the card lines
 │       │   ├── outsideInvitations.ts # inviting people outside the group: outsideFlags, the one read of the three body fields, failing closed; the PUT, the preview and the dismissal answering codes; turnOffNeedsStep; every line, the approved words as written
@@ -2749,41 +2833,45 @@ covey-keep/            # the code root (this repo)
 │       │   ├── billing.test.ts       # every number from the body; the URL never returned
 │       │   └── passkeys.ts           # WebAuthn ceremonies and usernameless sign-in
 │       ├── routes/        # one screen per route in App.tsx's table, tests beside them
-│       │   ├── SignIn.tsx                   # `/`: the prints, the lockup, the magic-link form with the private-test consent checkbox, and Use a passkey
+│       │   ├── SignIn.tsx                   # `/`: the prints, the lockup, the magic-link form with the private-test consent checkbox, and Use a passkey; after an answer focus on the sent card's heading, the address field or the button pressed, its three error lines alerts (CK-96)
 │       │   ├── AuthCallback.tsx             # `/auth/callback`: the session from the fragment, then the sign-in return, a parked invitation or /groups
-│       │   ├── Gatherings.tsx               # `/gatherings`: the featured card, Coming up, Past with Show all (still open on a return), Photos you can see; its empty state, Try again; since CK-91 the switch, Cards or Calendar (stored through lib/gatheringsView.ts), the Calendar view reading the calendar route alone
+│       │   ├── Gatherings.tsx               # `/gatherings`: the featured card, Coming up, Past with Show all (still open on a return), Photos you can see; its empty state, Try again; since CK-91 the switch, Cards or Calendar (stored through lib/gatheringsView.ts), the Calendar view reading the calendar route alone; Try again landing on the <h1> or the new Try again (CK-96)
 │       │   ├── GatheringNew.tsx             # `/gatherings/new`: the gathering form; with inGroup, a group's form with Who it's for; a refused create puts focus on the field, the member's checked radio or Create gathering (CK-94)
-│       │   ├── GatheringDetail.tsx          # `/gatherings/:id`, the mockup's layout: the crumb, the wide cover card and its badge, Add photos and Edit gathering, When with each date's answer chip, RSVP, Photos (open on load, the grid and the viewer; the whole grid out on arriving at #photos), places, invitations, co-hosts; the photos-only view; inviting people outside the group (the alert beneath the cover, the card after Who it's for — after Photos in the photos-only view — the line handed to Photos, an outsider's crumb to Gatherings and no group read), one roster read for the Co-hosts section and the card; after every act's answer focus where the Focus after an answer convention's table says, each step a group labelled by its sentence (CK-94)
-│       │   ├── Groups.tsx                   # `/groups`: the featured card and More groups, each card's count in people and the role kept whole
+│       │   ├── GatheringDetail.tsx          # `/gatherings/:id`, the mockup's layout: the crumb, the wide cover card and its badge, Add photos and Edit gathering, When with each date's answer chip, RSVP, Photos (open on load, the grid and the viewer; the whole grid out on arriving at #photos), places, invitations, co-hosts; the photos-only view; inviting people outside the group (the alert beneath the cover, the card after Who it's for — after Photos in the photos-only view — the line handed to Photos, an outsider's crumb to Gatherings and no group read), one roster read for the Co-hosts section and the card; after every act's answer focus where the Focus after an answer convention's table says, each step a group labelled by its sentence (CK-94); since CK-96 a Try again on the RSVP block, the invitation list and the co-host list, every Try again landing on its heading or the new Try again, the three Cancels back on their opener, a failed Revoke's line on its row with focus on that Revoke, and the remove-date sentence the step's label and no alert
+│       │   ├── Groups.tsx                   # `/groups`: the featured card and More groups, each card's count in people and the role kept whole; Try again landing on the <h1> or the new Try again (CK-96)
 │       │   ├── GroupNew.tsx                 # `/groups/new`: headed New group; one Name field and no type control; a refused create puts focus on the field or Start group (CK-94)
-│       │   ├── GroupDetail.tsx              # `/groups/:id`: the mockup's shape — the wide cover card with the count, New gathering, People and Calendar, the strip of its gatherings, the photos in sections (GroupPhotos); each load tagged with the group's id; never reads the members
-│       │   ├── GroupPeople.tsx              # `/groups/:id/people`: the crumb, People, Members and their acts, requests to join, invite people (the Pending invitations list carrying `.address-list`), rename, leave — moved from the group's page unchanged; after every act's answer focus where the Focus after an answer convention's table says, each step a group labelled by its sentence, never its destructive button (CK-94)
-│       │   ├── GroupGatheringNew.tsx        # `/groups/:id/gatherings/new`: reads the group and its members, then GatheringNew with inGroup
-│       │   ├── GroupJoin.tsx                # `/groups/join`, signed in or out: the link's landing; asking to join is a press, never an opening
+│       │   ├── GroupDetail.tsx              # `/groups/:id`: the mockup's shape — the wide cover card with the count, New gathering, People and Calendar, the strip of its gatherings, the photos in sections (GroupPhotos); each load tagged with the group's id; never reads the members; Try again on the page and the strip landing on the <h1> or the strip's label, or the new Try again (CK-96)
+│       │   ├── GroupPeople.tsx              # `/groups/:id/people`: the crumb, People, Members and their acts, requests to join, invite people (the Pending invitations list carrying `.address-list`), rename, leave — moved from the group's page unchanged; after every act's answer focus where the Focus after an answer convention's table says, each step a group labelled by its sentence, never its destructive button (CK-94); since CK-96 its four Try agains landing on their headings or the new Try again, and a failed Revoke's line on its row
+│       │   ├── GroupGatheringNew.tsx        # `/groups/:id/gatherings/new`: reads the group and its members, then GatheringNew with inGroup; Try again landing on the form's <h1> or the new Try again (CK-96)
+│       │   ├── GroupJoin.tsx                # `/groups/join`, signed in or out: the link's landing; asking to join is a press, never an opening; after an answer focus on Ask to join or the new screen's <h1>, Try again landing on the screen's <h1> (CK-96)
 │       │   ├── GroupInvitationAccept.tsx    # `/groups/invitations/accept`: an emailed group invitation's landing; opening accepts
 │       │   ├── InvitationAccept.tsx         # `/invitations/accept`, signed in or out: a gathering invitation's landing; accepts when signed in
 │       │   ├── Settings.tsx                 # `/settings`: profile, Your plan, sign-in email, passkeys, deleting the account (whose 204 only navigates); both forms on the one mapper; after an answer focus on the field, the button pressed, the pending sentence or the email field (CK-94); its error lines alerts and Saved. a status
-│       │   ├── Plan.tsx                     # `/plan`: the current plan, usage, the other plans, Checkout's return wait
+│       │   ├── Plan.tsx                     # `/plan`: the current plan, usage, the other plans, Checkout's return wait; after an answer focus on the button pressed, Manage your plan once the plan read lands, the <h1> or the new Try again, Back to settings kept the same element through the wait (CK-96)
 │       │   ├── Tos.tsx                      # `/tos`: the private test notice, version 3 (version 2 and the covers paragraph) — a living description of what is stored (the Gotcha)
 │       │   ├── EmailChangeResult.tsx        # `/email-change`: an email-change confirmation's outcome
 │       │   ├── AccountDeleted.tsx           # `/account-deleted`: ends the session once rendered, on the deletion's one-shot signal alone
 │       │   ├── PageNotAvailable.tsx         # `*`: keeps the address, reads nothing from it, offers Reload when a newer version waits
-│       │   ├── Calendar.tsx                 # `/calendar`: the Calendar tab, and a group's calendar at ?group=<id> (its name read first, its opening day from its gatherings only with no day; Showing … only and Show all groups; the group page's not-found screen for a group the caller cannot read)
+│       │   ├── Calendar.tsx                 # `/calendar`: the Calendar tab, and a group's calendar at ?group=<id> (its name read first, its opening day from its gatherings only with no day; Showing … only and Show all groups; the group page's not-found screen for a group the caller cannot read); Try again landing on the <h1> or the new Try again (CK-96)
 │       │   ├── You.tsx                      # `/you`: the person, Display → Menu layout (One list or Rail and panel, stored through lib/menuLayout.ts) and Appearance (Light or Dark, stored through lib/theme.ts), Settings, Your plan, Sign out
 │       │   ├── account-deleted.test.tsx     # the deletion through the real route table lands on /account-deleted, then signs out
 │       │   ├── calendar.test.tsx            # the calendar through the real route table: the tab, a group's calendar and the Calendar view; the read, the days, the moves and the address, the day's list, the states, the frame's fourth section, the panel's row, the switch
 │       │   ├── co-hosts.test.tsx            # the role from caller_role; co-host management from both seats; a step found by its sentence (CK-94)
 │       │   ├── covers.test.tsx              # covers through the pages: the lists, the cards, Change cover by seat, the upload, Remove cover, the viewer's two buttons; a step found by its sentence (CK-95)
 │       │   ├── focus-covers.test.tsx        # focus after an answer on Change cover — Upload a picture's endings, Remove cover's step, Keep it, its refusal and landing — and on a group's photos' Try again, a person who moved on keeping their place
+│       │   ├── focus-entry.test.tsx         # focus after an answer on sign-in, Your plan and the group's link landing — the sent card, Use a different address, the refusals, already_subscribed, the Checkout wait, a new screen, each Try again — a person who moved on keeping their place (CK-96)
 │       │   ├── focus-forms.test.tsx         # focus after a refused or landed create on the gathering forms and New group, and a person who moved on keeping their place
 │       │   ├── focus-gathering.test.tsx     # focus after every act's answer on a gathering's page — RSVP, the edit forms, When, the invite form, Revoke, the prompt, Who it's for, the co-hosts — each step on its group, each keep on its opener, a person who moved on keeping their place
-│       │   ├── focus-photos.test.tsx        # focus after every act's answer in a gathering's Photos section — each row act, its step and keep, THE ROW GONE in the queue, the Removed view and All photos, the editor, Refresh the list, the batch, Show all photos, the upload, Try again — a person who moved on keeping their place
+│       │   ├── focus-photos.test.tsx        # focus after every act's answer in a gathering's Photos section — each row act, its step and keep, THE ROW GONE in the queue, the Removed view and All photos, the editor, Refresh the list, the batch, Show all photos, the upload, Try again — a person who moved on keeping their place; a tag's 422 on its chip's Remove since CK-96
 │       │   ├── focus-people.test.tsx        # focus after every act's answer on a group's People page — rename, the member acts, requests, the link, the invite form, Revoke, Leave — each step on its group and never its destructive button, each keep on its opener, a person who moved on keeping their place
+│       │   ├── focus-reads.test.tsx         # every failed read's Try again — the menu in both layouts, the calendar, both lists, a gathering's page and Who it's for, a group's page and its strip, the group gathering form, the People page's four — landing on its heading or <h1>, failing again on the new Try again, the menu's described by its line (CK-96)
+│       │   ├── focus-rest.test.tsx          # the four reads given a Try again (the RSVP block, the invitation list in each section, the co-host list, the passkeys), Revoke's line on both pages and the three Cancels (CK-96)
+│       │   ├── focus-riders.test.tsx        # CK-95's riders: a stale queue body landing nothing and leaving THE ROW GONE owed, a refusal line gone after Use as cover and after a save (CK-96)
 │       │   ├── focus-settings.test.tsx      # focus after every act's answer on Settings — the profile, the email change, the passkeys, the deletion — the error lines alerts and Saved. a status, a person who moved on keeping their place
-│       │   ├── focus-viewer.test.tsx        # focus after every act's answer in the photo viewer — its three steps on the step and a second press sending nothing, each keep, refusals, Use as cover, the editor, Refresh the list, Retry on both pages — the targets kept to the photo on screen, an arrow or a move outside the words column keeping its place
+│       │   ├── focus-viewer.test.tsx        # focus after every act's answer in the photo viewer — its three steps on the step and a second press sending nothing, each keep, refusals, Use as cover, the editor, Refresh the list, Retry on both pages — the targets kept to the photo on screen, an arrow or a move outside the words column keeping its place; a tag's 422 on its chip's Remove since CK-96
 │       │   ├── gathering-in-group.test.tsx  # a group's gathering: the photos-only view, Who it's for, the prompt to share
 │       │   ├── gathering-page.test.tsx      # a gathering's page in the mockup's layout: the head, the badge, Add photos in one press, Edit gathering, When's line with its weekday, the chips, the row, the order by seat, the arrival at #photos
-│       │   ├── gatherings.test.tsx          # the list, the form, the detail, editing, the host's switch
+│       │   ├── gatherings.test.tsx          # the list, the form, the detail, editing, the host's switch; the remove-date sentence no alert since CK-96
 │       │   ├── group-detail.test.tsx        # a group's page: the wide card, the actions by seat, the strip in the one rule's order, no member read beside the photos' one read
 │       │   ├── group-gathering-new.test.tsx # the group form and its exact create body
 │       │   ├── group-invitation-accept.test.tsx # the emailed group invitation's landing
@@ -2806,7 +2894,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── page-place.test.tsx          # a page keeps its place through the real route table on a stub scroller: Back and Forward, a new page, the crumb, a hash, the viewer, the person acting, moving on after a return, the layouts and the breakpoint, a path's search, scrollRestoration, a sign-out, the lists that opened, focus, no markup moved
 │       │   ├── photo-viewer.test.tsx        # the section open on load and its count, the grid and See all, the viewer (modal, inert, focus, the bar, the layers, the keys, full screen and zoom, the history entry, the frame's scroll), the acts by seat, a row's photo alone, and its thumbnail when it can't be shown; the viewer's steps found by their sentence and taking focus on the step (CK-95)
 │       │   ├── plan.test.tsx                # the plan screen in every state
-│       │   ├── rail-and-panel.test.tsx      # Rail and panel through the real route table: the setting, One list unchanged, the panel from the address, Home's and a group's panels, the reads, the drawer's exception under StrictMode too, focus, the arrival at #photos, the strip, the gutter's rule
+│       │   ├── rail-and-panel.test.tsx      # Rail and panel through the real route table: the setting, One list unchanged, the panel from the address, Home's and a group's panels, the reads, the drawer's exception under StrictMode too, focus, the arrival at #photos, the strip, the gutter's rule; the foot's scroll padding in a block of its own, and no scroll-padding-top (CK-96)
 │       │   ├── rsvps.test.tsx               # the RSVP block, companions, arrival time
 │       │   ├── settings.test.tsx            # Settings' Your plan section
 │       │   ├── settings-errors.test.tsx     # Settings' two forms on the one mapper; the two Back to your gatherings links; EmailChangeResult's cancelled read
@@ -2816,6 +2904,7 @@ covey-keep/            # the code root (this repo)
 │       └── test-support/  # files only the test suite loads
 │           ├── focus.ts       # gate, settle, dropFocusToBody and pressHeld: a request held on a released promise, and focus dropped to the body by hand as Chrome drops it from a disabled control (jsdom does not)
 │           ├── photos.ts      # the fake server behind the photos' focus tests (CK-95): a gathering's photos, their acts, the viewer's layers, the uploads, the covers and a group's page, each answer changing the world as the backend would; photosWorld.answer refuses an act, photosWorld.hold holds it
+│           ├── world96.ts     # the fake server behind CK-96's focus tests: sign-in, the plan, the join landing, the menu, the calendar, the lists, a gathering's and a group's pages, the People page, Settings' passkeys; world96.answer refuses a read or an act, world96.hold holds it, world96.inflight counts what is still in flight
 │           ├── pwaRegister.ts # the inert virtual:pwa-register/react the tests resolve to; never imported by app code
 │           └── testingLibrary.ts # the one setup file: a 5 s limit on a findBy or a waitFor
 ├── backend/           # Python 3.13 + FastAPI; Render builds both services from it, the API and the worker

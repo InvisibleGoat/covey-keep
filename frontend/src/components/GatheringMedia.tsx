@@ -553,6 +553,8 @@ function MediaWordsEditor({
   const formRef = useRef<HTMLFormElement>(null)
   const saveRef = useRef<HTMLButtonElement>(null)
   const focusInForm = useFocusRequest(formRef)
+  // Each chip's Remove, by its index: a 422 on `tags.N` lands there (CK-96).
+  const removeButtons = useRefMap<number>()
 
   const scope = `media-${item.id}`
   const patch = mediaWordsPatch({ caption, tags }, item)
@@ -599,8 +601,18 @@ function MediaWordsEditor({
         onSaved()
         return
       }
-      setErrors(await errorsFromResponse(response, wordsErrorFields(tags.length)))
-      focusInForm(() => firstFieldWithError(formRef.current) ?? saveRef.current)
+      const refused = await errorsFromResponse(response, wordsErrorFields(tags.length))
+      setErrors(refused)
+      // A field that reads its own error first (the caption, the tag
+      // entry); else a tag the 422 names, on its chip's Remove — the first
+      // in the list's order (CK-96); else Save.
+      const tagIndex = tags.findIndex((_, index) => refused.fields[`tags.${index}`] !== undefined)
+      focusInForm(
+        () =>
+          firstFieldWithError(formRef.current) ??
+          (tagIndex >= 0 ? removeButtons.get(tagIndex) : null) ??
+          saveRef.current,
+      )
     } catch {
       if (alive.current) {
         setErrors(networkErrors())
@@ -642,9 +654,11 @@ function MediaWordsEditor({
             <li key={`${index}-${tag}`}>
               <span>{tag}</span>
               <button
+                ref={removeButtons.register(index)}
                 type="button"
                 className="link-button"
                 aria-label={`Remove tag ${tag}`}
+                aria-describedby={describedBy(errors, `tags.${index}`, scope)}
                 onClick={() => removeTag(index)}
               >
                 Remove
@@ -1025,6 +1039,9 @@ export function GatheringMedia({
         if (cancelled) return
         if (response.ok) {
           const body = (await response.json()) as Partial<MediaList>
+          // The page may have moved past this read while its body was read
+          // (CK-96): it lands nothing and spends nothing.
+          if (cancelled) return
           const media = body.media ?? []
           setItems(media)
           setLoadFailed(false)
@@ -1100,6 +1117,12 @@ export function GatheringMedia({
     if (coverActing || target === null) return
     setCoverActing(true)
     setCoverNote(null)
+    // A refusal line from an earlier act on this photo is spent (CK-96), as
+    // act, bin and dismiss spend it.
+    setRowErrors((prev) => {
+      const { [item.id]: _dropped, ...rest } = prev
+      return rest
+    })
     const outcome = await setCoverFromPhoto(subject, target, item.id)
     if (!alive.current) return
     setCoverActing(false)
@@ -1831,7 +1854,12 @@ export function GatheringMedia({
             autoFocus
             onSaved={() => {
               // Optimistic-free: the server's body is what renders — the
-              // viewer shows the saved words once the re-read lands.
+              // viewer shows the saved words once the re-read lands. A
+              // refusal line from an earlier act on it is spent (CK-96).
+              setRowErrors((prev) => {
+                const { [item.id]: _dropped, ...rest } = prev
+                return rest
+              })
               setEditingId(null)
               setViewerFocus('edit')
               setReloadKey((key) => key + 1)
@@ -2147,6 +2175,11 @@ export function GatheringMedia({
                   onSaved={() => {
                     // Optimistic-free: the server's body is what renders, and
                     // focus waits for it, on the row's Edit caption and tags.
+                    // A refusal line from an earlier act on it is spent (CK-96).
+                    setRowErrors((prev) => {
+                      const { [item.id]: _dropped, ...rest } = prev
+                      return rest
+                    })
                     setEditingId(null)
                     owe({
                       kind: 'row',

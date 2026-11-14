@@ -64,13 +64,14 @@
 // WHO THE CALLER IS COMES FROM THE BODY: `groupRoleFlags(caller_role)` —
 // `organises` (the admin or a co-admin) is Change cover's flag, and nothing
 // here compares person ids.
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { CardLine, Cover, DateBadge } from '../components/Cover'
 import { GroupPhotos } from '../components/GroupPhotos'
 import { Icon } from '../components/Icons'
 import { PageCover } from '../components/PageCover'
+import { useFocusRequest } from '../components/useFocusRequest'
 import { COVER_HINT_GROUP, REMOVE_PHOTO_SENTENCE_GROUP } from '../lib/covers'
 import { effectiveZone } from '../lib/datetime'
 import { cardDatePieces, gatheringSections, viewOf } from '../lib/gatherings'
@@ -106,6 +107,31 @@ export function GroupDetail() {
   const groupLoad: Load<Group> = groupRead?.groupId === groupId ? groupRead.load : { status: 'loading' }
   const stripLoad: GroupGatheringsLoad = stripRead?.groupId === groupId ? stripRead.load : { status: 'loading' }
 
+  // Each Try again (CK-96): its read lands on what it brought back — the
+  // group's name, the strip's label — and a read that fails again lands on
+  // the new Try again. The marker is set by the press alone.
+  const pageMain = useRef<HTMLElement>(null)
+  const pageHeading = useRef<HTMLHeadingElement>(null)
+  const pageTryAgain = useRef<HTMLButtonElement>(null)
+  const pageRetryOwed = useRef(false)
+  const focusInPage = useFocusRequest(pageMain)
+  const stripSection = useRef<HTMLElement>(null)
+  const stripHeading = useRef<HTMLHeadingElement>(null)
+  const stripTryAgain = useRef<HTMLButtonElement>(null)
+  const stripRetryOwed = useRef(false)
+  const focusInStrip = useFocusRequest(stripSection)
+  useEffect(() => {
+    if (groupLoad.status === 'loading' || !pageRetryOwed.current) return
+    pageRetryOwed.current = false
+    // A not-found screen lands on its own <h1>, which pageHeading is too.
+    focusInPage(groupLoad.status === 'failed' ? pageTryAgain : pageHeading)
+  }, [groupLoad.status, focusInPage])
+  useEffect(() => {
+    if (stripLoad.status === 'loading' || !stripRetryOwed.current) return
+    stripRetryOwed.current = false
+    focusInStrip(stripLoad.status === 'failed' ? stripTryAgain : stripHeading)
+  }, [stripLoad.status, focusInStrip])
+
   useEffect(() => {
     let cancelled = false
     async function load() {
@@ -137,11 +163,13 @@ export function GroupDetail() {
   }, [groupId, stripKey])
 
   function tryAgain() {
+    pageRetryOwed.current = true
     setGroupRead({ groupId, load: { status: 'loading' } })
     setGroupKey((key) => key + 1)
   }
 
   function retryStrip() {
+    stripRetryOwed.current = true
     setStripRead({ groupId, load: { status: 'loading' } })
     setStripKey((key) => key + 1)
   }
@@ -150,8 +178,10 @@ export function GroupDetail() {
     // One screen, no speculation: it must not hint whether a group exists
     // behind this address, or that the caller was ever in it.
     return (
-      <main className="auth-screen">
-        <h1>Nothing here</h1>
+      <main ref={pageMain} className="auth-screen">
+        <h1 ref={pageHeading} tabIndex={-1}>
+          Nothing here
+        </h1>
         <p>There's no group to show at this address.</p>
         <Link to="/groups">Back to your groups</Link>
       </main>
@@ -160,12 +190,12 @@ export function GroupDetail() {
 
   if (groupLoad.status === 'failed') {
     return (
-      <main className="auth-screen">
+      <main ref={pageMain} className="auth-screen">
         <h1>Something went wrong</h1>
         <p className="form-error" role="alert">
           Something went wrong loading this group.
         </p>
-        <button type="button" onClick={tryAgain}>
+        <button ref={pageTryAgain} type="button" onClick={tryAgain}>
           Try again
         </button>
         <Link to="/groups">Back to your groups</Link>
@@ -175,7 +205,7 @@ export function GroupDetail() {
 
   if (groupLoad.status === 'loading') {
     return (
-      <main className="auth-screen">
+      <main ref={pageMain} className="auth-screen">
         <p>Loading…</p>
       </main>
     )
@@ -208,7 +238,7 @@ export function GroupDetail() {
     strip.cards.some(({ item }) => viewOf(item.caller_view).full && item.next_occurrence !== null)
 
   return (
-    <main className="auth-screen page-column">
+    <main ref={pageMain} className="auth-screen page-column">
       <PageCover
         subject="group"
         id={group.id}
@@ -218,7 +248,10 @@ export function GroupDetail() {
         photoRemovalSentence={REMOVE_PHOTO_SENTENCE_GROUP}
         onChanged={() => setGroupKey((key) => key + 1)}
       >
-        <h1>{group.name}</h1>
+        {/* Focusable by script alone: where the page's Try again lands (CK-96). */}
+        <h1 ref={pageHeading} tabIndex={-1}>
+          {group.name}
+        </h1>
         <p className="cover-card-meta">{memberCountLabel(group.member_count)}</p>
       </PageCover>
 
@@ -237,8 +270,8 @@ export function GroupDetail() {
         </Link>
       </div>
 
-      <section className="group-strip" aria-labelledby={stripLabel}>
-        <h2 className="strip-label" id={stripLabel}>
+      <section ref={stripSection} className="group-strip" aria-labelledby={stripLabel}>
+        <h2 ref={stripHeading} className="strip-label" id={stripLabel} tabIndex={-1}>
           Gatherings
         </h2>
         {anyDate && <p className="field-hint">Times in {zone}.</p>}
@@ -249,7 +282,7 @@ export function GroupDetail() {
               <span aria-hidden="true">⚠ </span>
               The group's gatherings couldn't be loaded just now.
             </p>
-            <button type="button" onClick={retryStrip}>
+            <button ref={stripTryAgain} type="button" onClick={retryStrip}>
               Try again
             </button>
           </div>

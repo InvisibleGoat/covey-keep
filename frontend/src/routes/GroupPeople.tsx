@@ -92,7 +92,8 @@ import {
   type FocusSource,
 } from '../components/useFocusRequest'
 import { effectiveZone, formatDay } from '../lib/datetime'
-import { describedBy, noErrors, type FormErrors } from '../lib/formErrors'
+import { describedBy, networkErrors, noErrors, type FormErrors } from '../lib/formErrors'
+import { REVOKE_REFUSED } from '../lib/invitations'
 import { announceMenuChange } from '../lib/frame'
 import {
   approveRequest,
@@ -340,6 +341,24 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
   const focusInInvite = useFocusRequest(inviteSection)
   const focusInRename = useFocusRequest(renameForm)
   const focusInLeave = useFocusRequest(leaveSection)
+  // Every Try again on the page (CK-96): its read lands on what it brought
+  // back — the page's <h1>, the section's heading — and a read that fails
+  // again lands on the new Try again. The marker is set by the press alone,
+  // so a read the page made on its own moves nothing.
+  const pageMain = useRef<HTMLElement>(null)
+  const pageHeading = useRef<HTMLHeadingElement>(null)
+  const pageTryAgain = useRef<HTMLButtonElement>(null)
+  const pageRetryOwed = useRef(false)
+  const focusInPage = useFocusRequest(pageMain)
+  const requestsTryAgain = useRef<HTMLButtonElement>(null)
+  const requestsRetryOwed = useRef(false)
+  const inviteHeading = useRef<HTMLHeadingElement>(null)
+  const waitingOnHeading = useRef<HTMLHeadingElement>(null)
+  const invitationsTryAgain = useRef<HTMLButtonElement>(null)
+  const invitationsRetryOwed = useRef(false)
+  // A failed Revoke's line, on its row (CK-96): gone on that row's next
+  // press and on a re-read of the list.
+  const [revokeError, setRevokeError] = useState<{ id: string; message: string } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -400,13 +419,17 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
       const outcome = await readJoinRequests(groupId)
       if (!cancelled) {
         setRequestsLoad(outcome.ok ? { status: 'loaded', value: outcome.value } : { status: 'failed' })
+        if (requestsRetryOwed.current) {
+          requestsRetryOwed.current = false
+          focusInRequests(outcome.ok ? requestsHeading : requestsTryAgain)
+        }
       }
     }
     void load()
     return () => {
       cancelled = true
     }
-  }, [groupId, callerOrganises, requestsKey])
+  }, [groupId, callerOrganises, requestsKey, focusInRequests])
 
   useEffect(() => {
     if (!callerOrganises) return
@@ -415,15 +438,37 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
       const outcome = await readGroupInvitations(groupId)
       if (!cancelled) {
         setInvitationsLoad(outcome.ok ? { status: 'loaded', value: outcome.value } : { status: 'failed' })
+        if (outcome.ok) setRevokeError(null)
+        if (invitationsRetryOwed.current) {
+          invitationsRetryOwed.current = false
+          focusInInvite(outcome.ok ? waitingOnHeading : invitationsTryAgain)
+        }
       }
     }
     void load()
     return () => {
       cancelled = true
     }
-  }, [groupId, callerOrganises, invitationsKey])
+  }, [groupId, callerOrganises, invitationsKey, focusInInvite])
+
+  // The page's Try again: spent once both reads have settled (CK-96).
+  const pageSettled =
+    groupLoad.status !== 'loading' && membersLoad.status !== 'loading'
+      ? groupLoad.status === 'failed' || membersLoad.status === 'failed'
+        ? 'failed'
+        : groupLoad.status === 'notFound' || membersLoad.status === 'notFound'
+          ? 'notFound'
+          : 'loaded'
+      : null
+  useEffect(() => {
+    if (pageSettled === null || !pageRetryOwed.current) return
+    pageRetryOwed.current = false
+    // A not-found screen lands on its own <h1>, which pageHeading is too.
+    focusInPage(pageSettled === 'failed' ? pageTryAgain : pageHeading)
+  }, [pageSettled, focusInPage])
 
   function tryAgain() {
+    pageRetryOwed.current = true
     setGroupLoad({ status: 'loading' })
     setMembersLoad({ status: 'loading' })
     setGroupKey((key) => key + 1)
@@ -434,8 +479,10 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
     // One screen, no speculation: it must not hint whether a group exists
     // behind this address, or that the caller was ever in it.
     return (
-      <main className="auth-screen">
-        <h1>Nothing here</h1>
+      <main ref={pageMain} className="auth-screen">
+        <h1 ref={pageHeading} tabIndex={-1}>
+          Nothing here
+        </h1>
         <p>There's no group to show at this address.</p>
         <Link to="/groups">Back to your groups</Link>
       </main>
@@ -444,12 +491,12 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
 
   if (groupLoad.status === 'failed' || membersLoad.status === 'failed') {
     return (
-      <main className="auth-screen">
+      <main ref={pageMain} className="auth-screen">
         <h1>Something went wrong</h1>
         <p className="form-error" role="alert">
           Something went wrong loading this group.
         </p>
-        <button type="button" onClick={tryAgain}>
+        <button ref={pageTryAgain} type="button" onClick={tryAgain}>
           Try again
         </button>
         <Link to="/groups">Back to your groups</Link>
@@ -459,7 +506,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
 
   if (groupLoad.status === 'loading' || membersLoad.status === 'loading') {
     return (
-      <main className="auth-screen">
+      <main ref={pageMain} className="auth-screen">
         <p>Loading…</p>
       </main>
     )
@@ -715,6 +762,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
   async function revokeInvitation(invitationId: string) {
     if (acting !== null) return
     setActing(`invitation:${invitationId}`)
+    setRevokeError(null)
     const outcome = await revokeGroupInvitation(group.id, invitationId)
     if (!alive.current) return
     setActing(null)
@@ -724,9 +772,12 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
       focusInInvite(inviteField)
       return
     }
-    // A failure says nothing (found, reported, not fixed — new words), and
-    // the row stays: back on its Revoke, re-enabled (CK-94, the rule's
-    // second rung).
+    // The row stays, its line saying the press failed (CK-96), and focus
+    // goes back on its Revoke, re-enabled (CK-94, the rule's second rung).
+    setRevokeError({
+      id: invitationId,
+      message: outcome.code === 'unreachable' ? networkErrors().form[0] : REVOKE_REFUSED,
+    })
     focusInInvite(() => revokeButtons.get(invitationId))
   }
 
@@ -737,7 +788,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
   const shareLine = shareOutcomeLine(shareOutcome)
 
   return (
-    <main className="auth-screen page-column people-screen">
+    <main ref={pageMain} className="auth-screen page-column people-screen">
       {/* The crumb (the mockup's `.crumb .nrow`): back to the group's page,
           by the name the body carries — a rename shows here at once. */}
       <div className="crumb">
@@ -750,7 +801,10 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
       </div>
       <div className="page-head">
         <div>
-          <h1>People</h1>
+          {/* Focusable by script alone: where the page's Try again lands (CK-96). */}
+          <h1 ref={pageHeading} tabIndex={-1}>
+            People
+          </h1>
           <p className="lede">{memberCountLabel(group.member_count)}</p>
           {roleLine && <p className="lede">{roleLine}</p>}
         </div>
@@ -910,8 +964,10 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                 The requests to join couldn't be loaded just now.
               </p>
               <button
+                ref={requestsTryAgain}
                 type="button"
                 onClick={() => {
+                  requestsRetryOwed.current = true
                   setRequestsLoad({ status: 'loading' })
                   setRequestsKey((key) => key + 1)
                 }}
@@ -1007,7 +1063,10 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
       )}
 
       <section ref={inviteSection} className="auth-card" aria-labelledby="invite-heading">
-        <h2 id="invite-heading">Invite people</h2>
+        {/* Focusable by script alone: where the link's Try again lands (CK-96). */}
+        <h2 ref={inviteHeading} id="invite-heading" tabIndex={-1}>
+          Invite people
+        </h2>
         {linkLoad.status === 'loading' && <p>Loading…</p>}
         {linkLoad.status === 'failed' && (
           <>
@@ -1019,6 +1078,7 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
               ref={linkTryAgain}
               type="button"
               onClick={() => {
+                linkAfterRead.current = inviteHeading
                 setLinkLoad({ status: 'loading' })
                 setLinkKey((key) => key + 1)
               }}
@@ -1146,7 +1206,9 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
               <FormLevelErrors errors={inviteErrors} />
             </form>
 
-            <h3>Waiting on</h3>
+            <h3 ref={waitingOnHeading} tabIndex={-1}>
+              Waiting on
+            </h3>
             {invitationsLoad.status === 'loading' && <p>Loading…</p>}
             {invitationsLoad.status === 'failed' && (
               <>
@@ -1155,8 +1217,10 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                   The invitation list couldn't be loaded just now.
                 </p>
                 <button
+                  ref={invitationsTryAgain}
                   type="button"
                   onClick={() => {
+                    invitationsRetryOwed.current = true
                     setInvitationsLoad({ status: 'loading' })
                     setInvitationsKey((key) => key + 1)
                   }}
@@ -1189,6 +1253,12 @@ export function GroupPeople({ device }: { device?: ShareDevice } = {}) {
                     >
                       Revoke
                     </button>
+                    {revokeError?.id === invitation.id && (
+                      <p className="form-error" role="alert">
+                        <span aria-hidden="true">⚠ </span>
+                        {revokeError.message}
+                      </p>
+                    )}
                   </li>
                 ))}
               </ul>

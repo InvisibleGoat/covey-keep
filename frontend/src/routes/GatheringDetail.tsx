@@ -33,7 +33,7 @@ import {
 } from '../lib/coHosts'
 import { COVER_HINT_GATHERING, removePhotoSentence, type CoverBody } from '../lib/covers'
 import { announceMenuChange } from '../lib/frame'
-import { type InvitationLists } from '../lib/invitations'
+import { REVOKE_REFUSED, type InvitationLists } from '../lib/invitations'
 import {
   describedBy,
   errorsFromResponse,
@@ -360,6 +360,11 @@ function OccurrenceRsvp({
   const submitRef = useRef<HTMLButtonElement>(null)
   const requestFocus = useFocusRequest(blockRef)
   const focusAfterRead = useRef(false)
+  // Try again on a failed read (CK-96, approved 2026-11-14): its marker is
+  // spent by the read it starts — the checked answer, else the first answer,
+  // when it lands; the new Try again when it fails again.
+  const retryOwed = useRef(false)
+  const tryAgainRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -374,6 +379,15 @@ function OccurrenceRsvp({
           setFailed(false)
           // The server's answer for the caller — the date's chip follows it.
           onAnswerRef.current(body.own?.response ?? null)
+          if (retryOwed.current) {
+            retryOwed.current = false
+            requestFocus(
+              () =>
+                blockRef.current?.querySelector<HTMLElement>('input[type="radio"]:checked') ??
+                blockRef.current?.querySelector<HTMLElement>('input[type="radio"]') ??
+                null,
+            )
+          }
           if (focusAfterRead.current) {
             focusAfterRead.current = false
             requestFocus(
@@ -382,6 +396,10 @@ function OccurrenceRsvp({
           }
         } else {
           setFailed(true)
+          if (retryOwed.current) {
+            retryOwed.current = false
+            requestFocus(tryAgainRef)
+          }
           if (focusAfterRead.current) {
             focusAfterRead.current = false
             requestFocus(submitRef)
@@ -390,6 +408,10 @@ function OccurrenceRsvp({
       } catch {
         if (!cancelled) {
           setFailed(true)
+          if (retryOwed.current) {
+            retryOwed.current = false
+            requestFocus(tryAgainRef)
+          }
           if (focusAfterRead.current) {
             focusAfterRead.current = false
             requestFocus(submitRef)
@@ -462,10 +484,23 @@ function OccurrenceRsvp({
   return (
     <div ref={blockRef} className="rsvp-block" id={blockId}>
       {failed && (
-        <p className="form-error" role="alert">
-          <span aria-hidden="true">⚠ </span>
-          RSVPs couldn't be loaded just now.
-        </p>
+        <>
+          <p className="form-error" role="alert">
+            <span aria-hidden="true">⚠ </span>
+            RSVPs couldn't be loaded just now.
+          </p>
+          <button
+            ref={tryAgainRef}
+            type="button"
+            onClick={() => {
+              retryOwed.current = true
+              setFailed(false)
+              setReloadKey((key) => key + 1)
+            }}
+          >
+            Try again
+          </button>
+        </>
       )}
       {data && (
         <>
@@ -809,6 +844,10 @@ export function GatheringDetail() {
   const [invitations, setInvitations] = useState<InvitationLists | null>(null)
   const [invitationsFailed, setInvitationsFailed] = useState(false)
   const [invitationsReloadKey, setInvitationsReloadKey] = useState(0)
+  // A failed Revoke's line, on its row (CK-96): gone on that row's next
+  // press and on a re-read of the list.
+  const [revokeError, setRevokeError] = useState<{ id: string; message: string } | null>(null)
+  const revokeButtons = useRefMap<string>()
   const [inviteDestination, setInviteDestination] = useState('')
   const [inviteErrors, setInviteErrors] = useState<FormErrors>(noErrors())
   const [inviteSubmitting, setInviteSubmitting] = useState(false)
@@ -909,6 +948,28 @@ export function GatheringDetail() {
   // or the outside card — so its piece is whichever holds it.
   const focusInInvite = useFocusRequest(() => inviteField.current?.closest('section') ?? null)
   const focusInCoHosts = useFocusRequest(coHostsRef)
+  // Focus after Try again (CK-96): a Try again leaves a marker its read
+  // spends — the heading of what it read, or the <h1> of the screen it lands
+  // on, when it lands; the new Try again when it fails again. The page's own
+  // read lands in the page's <main>; Who it's for's in its section.
+  const pageRef = useRef<HTMLElement>(null)
+  const focusInPage = useFocusRequest(pageRef)
+  const pageRetryOwed = useRef(false)
+  const pageTryAgain = useRef<HTMLButtonElement>(null)
+  const notFoundHeading = useRef<HTMLHeadingElement>(null)
+  const placesRetryOwed = useRef(false)
+  const placesTryAgain = useRef<HTMLButtonElement>(null)
+  // The roster's Try again (approved 2026-11-14) is drawn where its line
+  // is — the outside card, the Invitations or Co-hosts section, or both —
+  // and its read lands in the place whose Try again was pressed: the switch
+  // in the card, the section's heading in the section.
+  const rosterRetryOwed = useRef<'card' | 'section' | null>(null)
+  const cardRosterTryAgain = useRef<HTMLButtonElement>(null)
+  const sectionRosterTryAgain = useRef<HTMLButtonElement>(null)
+  const invitationsHeading = useRef<HTMLHeadingElement>(null)
+  const coHostsListHeading = useRef<HTMLHeadingElement>(null)
+  const coHostsRetryOwed = useRef(false)
+  const coHostsTryAgain = useRef<HTMLButtonElement>(null)
 
   const loadedGathering = state.status === 'loaded' ? state.gathering : null
   // THE PAGE'S ONE ROSTER READ (CK-93): the Co-hosts or Invitations
@@ -938,18 +999,37 @@ export function GatheringDetail() {
           const body = (await response.json()) as Partial<InvitationLists>
           setInvitations({ pending: body.pending ?? [], accepted: body.accepted ?? [] })
           setInvitationsFailed(false)
+          setRevokeError(null)
+          spendRosterRetry(true)
         } else {
           setInvitationsFailed(true)
+          spendRosterRetry(false)
         }
       } catch {
-        if (!cancelled) setInvitationsFailed(true)
+        if (!cancelled) {
+          setInvitationsFailed(true)
+          spendRosterRetry(false)
+        }
+      }
+    }
+    function spendRosterRetry(landed: boolean) {
+      const owed = rosterRetryOwed.current
+      rosterRetryOwed.current = null
+      if (owed === 'card') {
+        focusInInvite(
+          landed
+            ? () => inviteField.current?.closest('section')?.querySelector<HTMLElement>('[role="switch"]') ?? null
+            : cardRosterTryAgain,
+        )
+      } else if (owed === 'section') {
+        focusInCoHosts(landed ? invitationsHeading : sectionRosterTryAgain)
       }
     }
     void load()
     return () => {
       cancelled = true
     }
-  }, [id, rosterWanted, invitationsReloadKey])
+  }, [id, rosterWanted, invitationsReloadKey, focusInInvite, focusInCoHosts])
 
   // The co-host list (CK-69), beside the invitations: the same trigger,
   // its own reload key (a make or a remove changes this list and not the
@@ -965,17 +1045,29 @@ export function GatheringDetail() {
           const body = (await response.json()) as Partial<CoHostList>
           setCoHosts(body.co_hosts ?? [])
           setCoHostsFailed(false)
+          if (coHostsRetryOwed.current) {
+            coHostsRetryOwed.current = false
+            focusInCoHosts(() => coHostsListHeading.current ?? invitationsHeading.current)
+          }
           const target = focusAfterCoHosts.current
           focusAfterCoHosts.current = null
           if (target !== null) focusInCoHosts(target)
         } else {
           setCoHostsFailed(true)
           focusAfterCoHosts.current = null
+          if (coHostsRetryOwed.current) {
+            coHostsRetryOwed.current = false
+            focusInCoHosts(coHostsTryAgain)
+          }
         }
       } catch {
         if (!cancelled) {
           setCoHostsFailed(true)
           focusAfterCoHosts.current = null
+          if (coHostsRetryOwed.current) {
+            coHostsRetryOwed.current = false
+            focusInCoHosts(coHostsTryAgain)
+          }
         }
       }
     }
@@ -1037,9 +1129,23 @@ export function GatheringDetail() {
     }
   }, [id, reloadKey])
 
+  useEffect(() => {
+    if (state.status === 'loading' || !pageRetryOwed.current) return
+    pageRetryOwed.current = false
+    focusInPage(
+      state.status === 'failed' ? pageTryAgain : state.status === 'notFound' ? notFoundHeading : titleRef,
+    )
+  }, [state.status, focusInPage])
+
+  useEffect(() => {
+    if (placesLoad.status === 'loading' || !placesRetryOwed.current) return
+    placesRetryOwed.current = false
+    focusInPlaces(placesLoad.status === 'failed' ? placesTryAgain : placesHeading)
+  }, [placesLoad.status, focusInPlaces])
+
   if (state.status === 'loading') {
     return (
-      <main className="auth-screen">
+      <main className="auth-screen" ref={pageRef}>
         <p>Loading…</p>
       </main>
     )
@@ -1049,8 +1155,10 @@ export function GatheringDetail() {
     // One screen, no speculation: it must not hint whether a gathering exists
     // behind this address.
     return (
-      <main className="auth-screen">
-        <h1>Nothing here</h1>
+      <main className="auth-screen" ref={pageRef}>
+        <h1 ref={notFoundHeading} tabIndex={-1}>
+          Nothing here
+        </h1>
         <p>There's no gathering to show at this address.</p>
         <Link to="/gatherings">Back to your gatherings</Link>
       </main>
@@ -1061,14 +1169,16 @@ export function GatheringDetail() {
     // A retry is a control, never a sentence with nothing to press (CK-80;
     // CK-74.1's idiom): Try again re-reads through the loading state.
     return (
-      <main className="auth-screen">
+      <main className="auth-screen" ref={pageRef}>
         <h1>Something went wrong</h1>
         <p className="form-error" role="alert">
           This gathering couldn't be loaded just now.
         </p>
         <button
+          ref={pageTryAgain}
           type="button"
           onClick={() => {
+            pageRetryOwed.current = true
             setState({ status: 'loading' })
             setReloadKey((key) => key + 1)
           }}
@@ -1207,7 +1317,7 @@ export function GatheringDetail() {
   // none whatever arrives.
   if (viewOf(gathering.caller_view).photosOnly) {
     return (
-      <main className="auth-screen page-column gathering-page">
+      <main className="auth-screen page-column gathering-page" ref={pageRef}>
         {head(undefined)}
         {alert}
         <p>{PHOTOS_ONLY_LINE}</p>
@@ -1478,6 +1588,7 @@ export function GatheringDetail() {
   }
 
   async function revokeInvitation(pendingId: string) {
+    setRevokeError(null)
     try {
       const response = await authFetch(`/invitations/pending/${pendingId}`, {
         method: 'DELETE',
@@ -1490,9 +1601,18 @@ export function GatheringDetail() {
         // Revoke is never disabled, so focus is on it until its row goes:
         // to the address field, where inviting goes on (CK-94).
         focusInInvite(inviteField)
+      } else {
+        // The row stays: its line says the press failed, and focus stays
+        // on that Revoke, which is never disabled (CK-96).
+        setRevokeError({ id: pendingId, message: REVOKE_REFUSED })
+        focusInInvite(() => revokeButtons.get(pendingId))
       }
     } catch {
-      // The row still shows as pending; retrying the control is the recovery.
+      // The request never arrived: the row stays, and its line says so.
+      if (alive.current) {
+        setRevokeError({ id: pendingId, message: networkErrors().form[0] })
+        focusInInvite(() => revokeButtons.get(pendingId))
+      }
     }
   }
 
@@ -1693,7 +1813,7 @@ export function GatheringDetail() {
   }
 
   return (
-    <main className="auth-screen page-column gathering-page">
+    <main className="auth-screen page-column gathering-page" ref={pageRef}>
       {head(badge)}
 
       {alert}
@@ -1838,7 +1958,11 @@ export function GatheringDetail() {
           <button
             type="button"
             className="link-button"
-            onClick={() => setEditingGathering(false)}
+            onClick={() => {
+              setEditingGathering(false)
+              // The form closes under the press: to Edit gathering (CK-96).
+              focusInEdit(editGatheringButton)
+            }}
           >
             Cancel
           </button>
@@ -1951,7 +2075,11 @@ export function GatheringDetail() {
                     <button
                       type="button"
                       className="link-button"
-                      onClick={() => setEditingOccurrenceId(null)}
+                      onClick={() => {
+                        setEditingOccurrenceId(null)
+                        // To that date's Edit this date (CK-96).
+                        focusInWhen(() => dateButtons.get(`edit:${occurrence.id}`))
+                      }}
                     >
                       Cancel
                     </button>
@@ -2053,7 +2181,7 @@ export function GatheringDetail() {
                           {/* The human consequence, in people, not rows —
                               and removing it is a deliberate second click,
                               never a default (CK-30). */}
-                          <p id={removeSentenceId} className="form-error" role="alert">
+                          <p id={removeSentenceId} className="form-error">
                             <span aria-hidden="true">⚠ </span>
                             {confirmRemove.rsvpCount === 1
                               ? '1 person has answered for this date. Removing it discards their answer.'
@@ -2169,7 +2297,11 @@ export function GatheringDetail() {
               <button
                 type="button"
                 className="link-button"
-                onClick={() => setAddingOccurrence(false)}
+                onClick={() => {
+                  setAddingOccurrence(false)
+                  // To Add another date (CK-96).
+                  focusInWhen(addAnother)
+                }}
               >
                 Cancel
               </button>
@@ -2235,8 +2367,10 @@ export function GatheringDetail() {
                 Who it's for couldn't be loaded just now.
               </p>
               <button
+                ref={placesTryAgain}
                 type="button"
                 onClick={() => {
+                  placesRetryOwed.current = true
                   setPlacesLoad({ status: 'loading' })
                   setPlacesKey((key) => key + 1)
                 }}
@@ -2321,16 +2455,31 @@ export function GatheringDetail() {
               submitRef={inviteSubmit}
             />
             {invitationsFailed && (
-              <p className="form-error" role="alert">
-                <span aria-hidden="true">⚠ </span>
-                The invitation list couldn't be loaded just now.
-              </p>
+              <>
+                <p className="form-error" role="alert">
+                  <span aria-hidden="true">⚠ </span>
+                  The invitation list couldn't be loaded just now.
+                </p>
+                <button
+                  ref={cardRosterTryAgain}
+                  type="button"
+                  onClick={() => {
+                    rosterRetryOwed.current = 'card'
+                    setInvitationsFailed(false)
+                    setInvitationsReloadKey((key) => key + 1)
+                  }}
+                >
+                  Try again
+                </button>
+              </>
             )}
             {invitations && (
               <WaitingOn
                 pending={invitations.pending}
                 zone={zone}
                 onRevoke={(pendingId) => void revokeInvitation(pendingId)}
+                revokeError={revokeError}
+                revokeRef={revokeButtons.register}
               />
             )}
           </>
@@ -2348,7 +2497,10 @@ export function GatheringDetail() {
         // co-host list, and the invited members — the materialized
         // invitation rows — with Make co-host.
         <section ref={coHostsRef} className="auth-card" aria-labelledby="invitations-heading">
-          <h2 id="invitations-heading">{group !== null ? 'Co-hosts' : 'Invitations'}</h2>
+          {/* Focusable by script alone: where a Try again's read lands (CK-96). */}
+          <h2 ref={invitationsHeading} id="invitations-heading" tabIndex={-1}>
+            {group !== null ? 'Co-hosts' : 'Invitations'}
+          </h2>
           {!invitationsOpen ? (
             <button
               type="button"
@@ -2372,12 +2524,25 @@ export function GatheringDetail() {
               )}
 
               {invitationsFailed && (
-                <p className="form-error" role="alert">
-                  <span aria-hidden="true">⚠ </span>
-                  {group !== null
-                    ? "The list of who's invited couldn't be loaded just now."
-                    : "The invitation list couldn't be loaded just now."}
-                </p>
+                <>
+                  <p className="form-error" role="alert">
+                    <span aria-hidden="true">⚠ </span>
+                    {group !== null
+                      ? "The list of who's invited couldn't be loaded just now."
+                      : "The invitation list couldn't be loaded just now."}
+                  </p>
+                  <button
+                    ref={sectionRosterTryAgain}
+                    type="button"
+                    onClick={() => {
+                      rosterRetryOwed.current = 'section'
+                      setInvitationsFailed(false)
+                      setInvitationsReloadKey((key) => key + 1)
+                    }}
+                  >
+                    Try again
+                  </button>
+                </>
               )}
               {invitations && (
                 <>
@@ -2386,6 +2551,8 @@ export function GatheringDetail() {
                       pending={invitations.pending}
                       zone={zone}
                       onRevoke={(pendingId) => void revokeInvitation(pendingId)}
+                      revokeError={revokeError}
+                      revokeRef={revokeButtons.register}
                     />
                   )}
                   {/* Co-hosts (CK-69; co-hosts §4): the list for every
@@ -2395,13 +2562,30 @@ export function GatheringDetail() {
                       own row — nobody else's — and nowhere else on the
                       page is the list shown. On a group's gathering the
                       section's own heading says Co-hosts (CK-80). */}
-                  {group === null && <h3>Co-hosts</h3>}
+                  {group === null && (
+                    <h3 ref={coHostsListHeading} tabIndex={-1}>
+                      Co-hosts
+                    </h3>
+                  )}
                   {isHost && <p className="field-hint">{CO_HOST_HINT}</p>}
                   {coHostsFailed && (
-                    <p className="form-error" role="alert">
-                      <span aria-hidden="true">⚠ </span>
-                      The co-host list couldn't be loaded just now.
-                    </p>
+                    <>
+                      <p className="form-error" role="alert">
+                        <span aria-hidden="true">⚠ </span>
+                        The co-host list couldn't be loaded just now.
+                      </p>
+                      <button
+                        ref={coHostsTryAgain}
+                        type="button"
+                        onClick={() => {
+                          coHostsRetryOwed.current = true
+                          setCoHostsFailed(false)
+                          setCoHostsReloadKey((key) => key + 1)
+                        }}
+                      >
+                        Try again
+                      </button>
+                    </>
                   )}
                   {coHosts !== null &&
                     (coHosts.length === 0 ? (

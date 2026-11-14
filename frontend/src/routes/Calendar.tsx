@@ -22,11 +22,12 @@
 // - THE DAY is `?day=YYYY-MM-DD`, written by replace, so moving around the
 //   calendar adds no history entry; `useKeepPlace` acts on a pathname change
 //   alone, and a move changes only the query.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { CalendarView } from '../components/CalendarView'
 import { Icon } from '../components/Icons'
+import { useFocusRequest } from '../components/useFocusRequest'
 import { CALENDAR, calendarLede, groupOpeningDay, parseGroupId, useCalendarDay } from '../lib/calendar'
 import { effectiveZone } from '../lib/datetime'
 import { readGroup, readGroupGatherings, type Group } from '../lib/groups'
@@ -80,6 +81,19 @@ function GroupCalendar({
   const [openedIn] = useState(zone)
   const [load, setLoad] = useState<GroupLoad>(groupId === null ? { status: 'notFound' } : { status: 'loading' })
   const [attempt, setAttempt] = useState(0)
+  // Focus after Try again (CK-96): the page's <main> is the container. Try
+  // again leaves a marker the group's read spends: the <h1> of the screen it
+  // lands on, Calendar or Nothing here; or, failing again, the new Try again.
+  const mainRef = useRef<HTMLElement>(null)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const tryAgainRef = useRef<HTMLButtonElement>(null)
+  const requestFocus = useFocusRequest(mainRef)
+  const retryOwed = useRef(false)
+  useEffect(() => {
+    if (load.status === 'loading' || !retryOwed.current) return
+    retryOwed.current = false
+    requestFocus(load.status === 'failed' ? tryAgainRef : headingRef)
+  }, [load, requestFocus])
 
   useEffect(() => {
     if (groupId === null) return
@@ -109,8 +123,10 @@ function GroupCalendar({
     // The group page's one screen, word for word (routes/GroupDetail.tsx): it
     // must not hint whether a group exists behind this address.
     return (
-      <main className="auth-screen">
-        <h1>Nothing here</h1>
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>
+          Nothing here
+        </h1>
         <p>There's no group to show at this address.</p>
         <Link to="/groups">Back to your groups</Link>
       </main>
@@ -119,14 +135,16 @@ function GroupCalendar({
 
   if (load.status === 'failed') {
     return (
-      <main className="auth-screen">
+      <main className="auth-screen" ref={mainRef}>
         <h1>Something went wrong</h1>
         <p className="form-error" role="alert">
           Something went wrong loading this group.
         </p>
         <button
+          ref={tryAgainRef}
           type="button"
           onClick={() => {
+            retryOwed.current = true
             setLoad({ status: 'loading' })
             setAttempt((value) => value + 1)
           }}
@@ -140,7 +158,7 @@ function GroupCalendar({
 
   if (load.status === 'loading') {
     return (
-      <main className="auth-screen">
+      <main className="auth-screen" ref={mainRef}>
         <p>Loading…</p>
       </main>
     )
@@ -148,10 +166,12 @@ function GroupCalendar({
 
   const { group, opening } = load
   return (
-    <main className="auth-screen page-column">
+    <main className="auth-screen page-column" ref={mainRef}>
       <div className="page-head">
         <div>
-          <h1>{CALENDAR}</h1>
+          <h1 ref={headingRef} tabIndex={-1}>
+            {CALENDAR}
+          </h1>
           <p className="lede">{calendarLede(zone)}</p>
         </div>
         <Link className="btn btn-primary" to={`/groups/${group.id}/gatherings/new`}>

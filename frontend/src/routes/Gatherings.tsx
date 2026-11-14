@@ -41,6 +41,7 @@ import { CalendarView } from '../components/CalendarView'
 import { CardLine, Cover, DateBadge } from '../components/Cover'
 import { Icon } from '../components/Icons'
 import { usePagePlace } from '../components/pagePlace'
+import { useFocusRequest } from '../components/useFocusRequest'
 import { authFetch } from '../lib/api'
 import { CALENDAR, CARDS, useCalendarDay, VIEW_SWITCH_LABEL } from '../lib/calendar'
 import { effectiveZone } from '../lib/datetime'
@@ -161,6 +162,19 @@ function CardsView({ zone, toolbar }: { zone: string; toolbar: ReactNode }) {
   const comingUpHeading = useId()
   const pastHeading = useId()
   const photosHeading = useId()
+  // Focus after Try again (CK-96): the page's <main> is the container. Try
+  // again leaves a marker the read spends: the <h1> of the screen it lands on,
+  // Your gatherings or No gatherings yet; or, failing again, the new Try again.
+  const mainRef = useRef<HTMLElement>(null)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const tryAgainRef = useRef<HTMLButtonElement>(null)
+  const requestFocus = useFocusRequest(mainRef)
+  const retryOwed = useRef(false)
+  useEffect(() => {
+    if (status === 'loading' || !retryOwed.current) return
+    retryOwed.current = false
+    requestFocus(status === 'failed' ? tryAgainRef : headingRef)
+  }, [status, requestFocus])
 
   useEffect(() => {
     let cancelled = false
@@ -198,7 +212,7 @@ function CardsView({ zone, toolbar }: { zone: string; toolbar: ReactNode }) {
 
   if (status === 'loading') {
     return (
-      <main className="auth-screen page-column">
+      <main className="auth-screen page-column" ref={mainRef}>
         <p>Loading your gatherings…</p>
       </main>
     )
@@ -208,7 +222,7 @@ function CardsView({ zone, toolbar }: { zone: string; toolbar: ReactNode }) {
     // A retry is a control, never a sentence with nothing to press (CK-80;
     // CK-74.1's idiom): Try again re-reads through the loading state.
     return (
-      <main className="auth-screen page-column">
+      <main className="auth-screen page-column" ref={mainRef}>
         <div className="page-head">
           <div>
             <h1>Your gatherings</h1>
@@ -220,8 +234,10 @@ function CardsView({ zone, toolbar }: { zone: string; toolbar: ReactNode }) {
             Something went wrong loading your gatherings.
           </p>
           <button
+            ref={tryAgainRef}
             type="button"
             onClick={() => {
+              retryOwed.current = true
               setStatus('loading')
               setReloadKey((key) => key + 1)
             }}
@@ -239,10 +255,12 @@ function CardsView({ zone, toolbar }: { zone: string; toolbar: ReactNode }) {
   // one in, so a gathering you keep and are none of those is not here.
   if (gatherings.length === 0) {
     return (
-      <main className="auth-screen page-column">
+      <main className="auth-screen page-column" ref={mainRef}>
         <div className="page-head">
           <div>
-            <h1>No gatherings yet</h1>
+            <h1 ref={headingRef} tabIndex={-1}>
+              No gatherings yet
+            </h1>
             <p className="lede">Gatherings you start or are invited to will be listed here.</p>
           </div>
           <Link className="btn btn-primary" to="/gatherings/new">
@@ -297,10 +315,12 @@ function CardsView({ zone, toolbar }: { zone: string; toolbar: ReactNode }) {
   }
 
   return (
-    <main className="auth-screen page-column">
+    <main className="auth-screen page-column" ref={mainRef}>
       <div className="page-head">
         <div>
-          <h1>Your gatherings</h1>
+          <h1 ref={headingRef} tabIndex={-1}>
+            Your gatherings
+          </h1>
           {anyDate && <p className="lede">Times in {zone}.</p>}
         </div>
         <Link className="btn btn-primary" to="/gatherings/new">

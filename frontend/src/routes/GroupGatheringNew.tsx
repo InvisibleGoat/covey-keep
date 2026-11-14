@@ -11,8 +11,9 @@
 // not-found screen; a failed read offers Try again. Then GatheringNew renders
 // with the group, and the form's fields, its body and its 422 mapping are
 // that one component's — never a copy here.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { useFocusRequest } from '../components/useFocusRequest'
 import { readGroup, readMembers, type Group, type GroupMember, type GroupRead } from '../lib/groups'
 import { GatheringNew } from './GatheringNew'
 
@@ -24,6 +25,27 @@ export function GroupGatheringNew() {
   const [groupLoad, setGroupLoad] = useState<Load<Group>>({ status: 'loading' })
   const [membersLoad, setMembersLoad] = useState<Load<GroupMember[]>>({ status: 'loading' })
   const [reloadKey, setReloadKey] = useState(0)
+  // The Try again (CK-96): its reads land on the form's <h1>, or on the new
+  // Try again, or on a not-found screen's <h1>. The form is GatheringNew's,
+  // so the container is whichever <main> is on screen.
+  const pageMain = useRef<HTMLElement>(null)
+  const pageHeading = useRef<HTMLHeadingElement>(null)
+  const tryAgainButton = useRef<HTMLButtonElement>(null)
+  const retryOwed = useRef(false)
+  const focusInPage = useFocusRequest(
+    () => pageMain.current ?? pageHeading.current?.closest('main') ?? null,
+  )
+  const settled =
+    groupLoad.status === 'loading' || membersLoad.status === 'loading'
+      ? null
+      : groupLoad.status === 'failed' || membersLoad.status === 'failed'
+        ? 'failed'
+        : 'drawn'
+  useEffect(() => {
+    if (settled === null || !retryOwed.current) return
+    retryOwed.current = false
+    focusInPage(settled === 'failed' ? tryAgainButton : pageHeading)
+  }, [settled, focusInPage])
 
   useEffect(() => {
     let cancelled = false
@@ -43,8 +65,10 @@ export function GroupGatheringNew() {
     // One screen, no speculation (CK-78's): it must not hint whether a group
     // exists behind this address, or that the caller was ever in it.
     return (
-      <main className="auth-screen">
-        <h1>Nothing here</h1>
+      <main ref={pageMain} className="auth-screen">
+        <h1 ref={pageHeading} tabIndex={-1}>
+          Nothing here
+        </h1>
         <p>There's no group to show at this address.</p>
         <Link to="/groups">Back to your groups</Link>
       </main>
@@ -53,14 +77,16 @@ export function GroupGatheringNew() {
 
   if (groupLoad.status === 'failed' || membersLoad.status === 'failed') {
     return (
-      <main className="auth-screen">
+      <main ref={pageMain} className="auth-screen">
         <h1>Something went wrong</h1>
         <p className="form-error" role="alert">
           Something went wrong loading this group.
         </p>
         <button
+          ref={tryAgainButton}
           type="button"
           onClick={() => {
+            retryOwed.current = true
             setGroupLoad({ status: 'loading' })
             setMembersLoad({ status: 'loading' })
             setReloadKey((key) => key + 1)
@@ -75,11 +101,16 @@ export function GroupGatheringNew() {
 
   if (groupLoad.status === 'loading' || membersLoad.status === 'loading') {
     return (
-      <main className="auth-screen">
+      <main ref={pageMain} className="auth-screen">
         <p>Loading…</p>
       </main>
     )
   }
 
-  return <GatheringNew inGroup={{ group: groupLoad.value, members: membersLoad.value }} />
+  return (
+    <GatheringNew
+      inGroup={{ group: groupLoad.value, members: membersLoad.value }}
+      headingRef={pageHeading}
+    />
+  )
 }

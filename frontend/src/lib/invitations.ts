@@ -71,3 +71,7 @@ export function clearInvitationToken(): void {
     // Nothing stored to clear.
   }
 }
+
+// A refused Revoke's line beneath its row (CK-96, approved 2026-11-14): one
+// copy, read by a gathering's Invitations and a group's People page.
+export const REVOKE_REFUSED = 'Something went wrong. Nothing changed — try again.'

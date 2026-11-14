@@ -31,6 +31,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { useFocusRequest } from '../components/useFocusRequest'
 import { networkErrors } from '../lib/formErrors'
 import {
   clearGroupLinkToken,
@@ -73,6 +74,17 @@ export function GroupJoin() {
   // The preview fires once per try (StrictMode re-runs effects).
   const previewedFor = useRef<number | null>(null)
   const alive = useRef(true)
+  // Focus after an answer (CK-96; the components doc's Focus after an
+  // answer): one screen at a time, each with its <h1> in headingRef; the
+  // press disables or replaces its control, so each answer names where
+  // focus goes, and only from the body or inside the page.
+  const mainRef = useRef<HTMLElement>(null)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const askRef = useRef<HTMLButtonElement>(null)
+  const tryAgainRef = useRef<HTMLButtonElement>(null)
+  const requestFocus = useFocusRequest(mainRef)
+  // Try again was pressed: the preview it starts hands focus over.
+  const retryOwed = useRef(false)
 
   useEffect(() => {
     alive.current = true
@@ -98,16 +110,20 @@ export function GroupJoin() {
     async function check(resolved: string) {
       const outcome = await previewLink(resolved)
       if (!alive.current) return
+      const owed = retryOwed.current
+      retryOwed.current = false
       if (!outcome.ok) {
         setPreview({ status: 'failed' })
+        if (owed) requestFocus(tryAgainRef)
         return
       }
+      if (owed) requestFocus(headingRef)
       // A dead token is spent for good: unpark it.
       if (outcome.status !== 'valid') clearGroupLinkToken()
       setPreview({ status: outcome.status, groupName: outcome.groupName })
     }
     void check(token)
-  }, [fragmentConsumed, token, previewKey])
+  }, [fragmentConsumed, token, previewKey, requestFocus])
 
   async function ask() {
     if (token === null || asking) return
@@ -121,6 +137,7 @@ export function GroupJoin() {
       if (outcome.code === 'rate_limited') setAskRefusal(JOIN_RATE_LIMITED)
       else if (outcome.code === 'unreachable') setAskRefusal(networkErrors().form[0])
       else setAskRefusal('Something went wrong. Nothing was sent — try again.')
+      requestFocus(askRef)
       return
     }
     clearGroupLinkToken()
@@ -132,9 +149,12 @@ export function GroupJoin() {
       // A member's outcome always carries the id; without one, the dead
       // link's screen is the honest answer.
       setAsked({ status: 'invalid' })
+      requestFocus(headingRef)
       return
     }
     setAsked({ status: outcome.status })
+    // A new screen: its <h1>.
+    requestFocus(headingRef)
   }
 
   function notNow() {
@@ -147,7 +167,7 @@ export function GroupJoin() {
 
   if (shown === 'working' || (preview.status === 'valid' && authStatus === 'loading')) {
     return (
-      <main className="auth-screen">
+      <main className="auth-screen" ref={mainRef}>
         <p>Checking the link…</p>
       </main>
     )
@@ -155,8 +175,8 @@ export function GroupJoin() {
 
   if (shown === 'requested' || shown === 'pending') {
     return (
-      <main className="auth-screen">
-        <h1>{shown === 'requested' ? 'Your request is in' : "You've already asked to join"}</h1>
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>{shown === 'requested' ? 'Your request is in' : "You've already asked to join"}</h1>
         <p>{requestInLine(groupName)}</p>
         <Link to="/groups">Your groups</Link>
       </main>
@@ -165,10 +185,10 @@ export function GroupJoin() {
 
   if (shown === 'valid' && authStatus === 'signedIn') {
     return (
-      <main className="auth-screen">
-        <h1>Join {groupLabel(groupName)}?</h1>
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>Join {groupLabel(groupName)}?</h1>
         <p>{joinConsentLine(person?.display_name ?? null)}</p>
-        <button type="button" disabled={asking} onClick={() => void ask()}>
+        <button ref={askRef} type="button" disabled={asking} onClick={() => void ask()}>
           {asking ? 'Asking…' : 'Ask to join'}
         </button>
         {askRefusal && (
@@ -186,8 +206,8 @@ export function GroupJoin() {
 
   if (shown === 'valid') {
     return (
-      <main className="auth-screen">
-        <h1>Join {groupLabel(groupName)}</h1>
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>Join {groupLabel(groupName)}</h1>
         <p>{JOIN_SIGNED_OUT_LINE}</p>
         <Link to="/" onClick={() => parkReturnPath('/groups/join')}>
           Sign in to ask to join
@@ -198,8 +218,8 @@ export function GroupJoin() {
 
   if (shown === 'expired') {
     return (
-      <main className="auth-screen">
-        <h1>This link has expired</h1>
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>This link has expired</h1>
         <p>Group links last 7 days. Ask someone in the group for the current one.</p>
       </main>
     )
@@ -207,8 +227,8 @@ export function GroupJoin() {
 
   if (shown === 'revoked') {
     return (
-      <main className="auth-screen">
-        <h1>This link has been turned off</h1>
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>This link has been turned off</h1>
         <p>Ask someone in the group for the current link.</p>
       </main>
     )
@@ -216,14 +236,16 @@ export function GroupJoin() {
 
   if (shown === 'failed') {
     return (
-      <main className="auth-screen">
-        <h1>Something went wrong</h1>
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>Something went wrong</h1>
         <p className="form-error" role="alert">
           The link couldn't be checked just now.
         </p>
         <button
+          ref={tryAgainRef}
           type="button"
           onClick={() => {
+            retryOwed.current = true
             setPreview({ status: 'working' })
             setPreviewKey((key) => key + 1)
           }}
@@ -236,8 +258,8 @@ export function GroupJoin() {
 
   // missing and invalid: the link never resolved to a group at all.
   return (
-    <main className="auth-screen">
-      <h1>That link didn't work</h1>
+    <main className="auth-screen" ref={mainRef}>
+      <h1 ref={headingRef} tabIndex={-1}>That link didn't work</h1>
       <p>The link looks incomplete or isn't valid. Ask someone in the group to send it again.</p>
     </main>
   )

@@ -39,6 +39,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { Quail } from '../components/AuthArt'
+import { useFocusRequest, useRefMap } from '../components/useFocusRequest'
 import {
   BACK_TO_FREE_LINE,
   type Billing,
@@ -91,6 +92,16 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
   // A refusal stays beside the control that drew it until the next act.
   const [refusal, setRefusal] = useState<{ at: string; message: string } | null>(null)
   const alive = useRef(true)
+  // Focus after an answer (CK-96; the components doc's Focus after an
+  // answer): every act's control is disabled while it waits, so each answer
+  // names where focus goes, and only from the body or inside the page.
+  const mainRef = useRef<HTMLElement>(null)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const tryAgainRef = useRef<HTMLButtonElement>(null)
+  const buttons = useRefMap<string>()
+  const requestFocus = useFocusRequest(mainRef)
+  // Try again was pressed: the read it starts hands focus over when it settles.
+  const retryOwed = useRef(false)
   const setParams = useRef(setSearchParams)
   setParams.current = setSearchParams
 
@@ -113,17 +124,21 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
     void (async () => {
       const result = await readBilling()
       if (cancelled) return
+      const owed = retryOwed.current
+      retryOwed.current = false
       if (result.ok) {
         setBilling(result.billing)
         setMode('loaded')
+        if (owed) requestFocus(headingRef)
       } else {
         setMode('failed')
+        if (owed) requestFocus(tryAgainRef)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [mode])
+  }, [mode, requestFocus])
 
   // The return from Checkout: re-read until a paid plan shows. A slow
   // webhook is a wait, never an error — a failed read is retried on the
@@ -157,10 +172,12 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
 
   // After a refusal that means the screen is stale, re-read in place: the
   // refusal stays where it landed and the figures catch up.
-  async function refresh() {
+  // It answers whether the read landed, so the act can say where focus goes.
+  async function refresh(): Promise<boolean> {
     const result = await readBilling()
-    if (!alive.current || !result.ok) return
+    if (!alive.current || !result.ok) return false
     setBilling(result.billing)
+    return true
   }
 
   async function upgrade(plan: BillingPlanId) {
@@ -171,7 +188,15 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
     setActing(null)
     if (outcome.ok) return
     setRefusal({ at: plan, message: billingRefusalMessage(outcome.code) })
-    if (outcome.code === 'already_subscribed') void refresh()
+    if (outcome.code !== 'already_subscribed') {
+      requestFocus(() => buttons.get(plan))
+      return
+    }
+    // The plan read again shows the plan held: Manage your plan carries the
+    // act on; if the read fails, back on the Upgrade pressed.
+    const landed = await refresh()
+    if (!alive.current) return
+    requestFocus(() => (landed ? buttons.get('manage') : null) ?? buttons.get(plan))
   }
 
   async function manage(at: string) {
@@ -182,19 +207,31 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
     setActing(null)
     if (outcome.ok) return
     setRefusal({ at, message: billingRefusalMessage(outcome.code) })
-    if (outcome.code === 'not_found') void refresh()
+    if (outcome.code !== 'not_found') {
+      requestFocus(() => buttons.get(at))
+      return
+    }
+    // Once the plan read again lands, the button pressed if it is still
+    // there, else the page's heading; if the read fails, the button pressed.
+    const landed = await refresh()
+    if (!alive.current) return
+    requestFocus(() => buttons.get(at) ?? (landed ? headingRef.current : null))
   }
 
   if (mode === 'waiting') {
     return (
-      <main className="auth-screen">
+      <main className="auth-screen" ref={mainRef}>
         <h1>Your plan</h1>
         <section className="plan-wait" role="status">
           <Quail />
           <p>{WAITING_LINE}</p>
           {slow && <p className="field-hint">{SLOW_LINE}</p>}
         </section>
-        <Link to="/settings">Back to settings</Link>
+        {/* The same key on every Back to settings, so the wait giving way to
+            the plan keeps the link a person may be resting on (CK-96). */}
+        <Link key="back-to-settings" to="/settings">
+          Back to settings
+        </Link>
       </main>
     )
   }
@@ -203,22 +240,31 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
     // Try again is the ordinary read over again: back to `loading`, whose
     // effect re-reads, then the screen or this state once more.
     return (
-      <main className="auth-screen">
+      <main className="auth-screen" ref={mainRef}>
         <h1>Your plan</h1>
         <p className="form-error" role="alert">
           Something went wrong loading your plan.
         </p>
-        <button type="button" onClick={() => setMode('loading')}>
+        <button
+          ref={tryAgainRef}
+          type="button"
+          onClick={() => {
+            retryOwed.current = true
+            setMode('loading')
+          }}
+        >
           Try again
         </button>
-        <Link to="/settings">Back to settings</Link>
+        <Link key="back-to-settings" to="/settings">
+          Back to settings
+        </Link>
       </main>
     )
   }
 
   if (mode === 'loading' || billing === null) {
     return (
-      <main className="auth-screen">
+      <main className="auth-screen" ref={mainRef}>
         <p>Loading your plan…</p>
       </main>
     )
@@ -230,8 +276,10 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
   const percent = usagePercent(billing.used, billing.allowance)
 
   return (
-    <main className="auth-screen plan-screen">
-      <h1>Your plan</h1>
+    <main className="auth-screen plan-screen" ref={mainRef}>
+      <h1 ref={headingRef} tabIndex={-1}>
+        Your plan
+      </h1>
       {/* The mockup's lede (decisions/2026-10-31-the-design-and-how-it-is-merged.md
           §1.4): true since CK-76 charged a group's gatherings to its keeper.
           From CK-74 to CK-81 it read "in the gatherings you keep", adjusted
@@ -261,6 +309,7 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
         </div>
         {paid && (
           <button
+            ref={buttons.register('manage')}
             type="button"
             className="btn-onhero"
             onClick={() => void manage('manage')}
@@ -293,6 +342,7 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
                 <p>{priceLabel(offer.monthly_price_cents)}</p>
                 {offer.plan !== null && offer.monthly_price_cents !== null && !paid && (
                   <button
+                    ref={buttons.register(key)}
                     type="button"
                     className={recommended ? 'btn-primary' : undefined}
                     onClick={() => void upgrade(offer.plan as BillingPlanId)}
@@ -303,6 +353,7 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
                 )}
                 {offer.plan !== null && paid && (
                   <button
+                    ref={buttons.register(key)}
                     type="button"
                     onClick={() => void manage(key)}
                     disabled={acting !== null}
@@ -337,7 +388,9 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
         {NO_DATA_LINE}
       </p>
       <p className="field-hint">{RENEWAL_LINE}</p>
-      <Link to="/settings">Back to settings</Link>
+      <Link key="back-to-settings" to="/settings">
+        Back to settings
+      </Link>
     </main>
   )
 }

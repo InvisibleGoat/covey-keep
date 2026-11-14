@@ -71,6 +71,7 @@ import { photoCountLabel } from '../lib/media'
 import { NOT_ANSWERED, rsvpResponseLabel } from '../lib/rsvps'
 import { Cover } from './Cover'
 import { Icon } from './Icons'
+import { useFocusRequest } from './useFocusRequest'
 import { usePreviewWide } from './usePreviewWide'
 
 // How many covers a day shows before its count: two on a phone, three chips
@@ -114,6 +115,14 @@ export function CalendarView({ zone, groupId, groupName, day, fallbackDay, onDay
   const today = todayIn(zone)
   const wide = usePreviewWide()
   const grid = useRef<HTMLDivElement>(null)
+  // Focus after Try again (CK-96): the calendar, `.cal`, is the container.
+  // Try again leaves a marker the month's next answer spends: the day's
+  // heading when it lands, the new Try again when it fails again.
+  const calRef = useRef<HTMLDivElement>(null)
+  const requestFocus = useFocusRequest(calRef)
+  const retryOwed = useRef(false)
+  const dayHeadingRef = useRef<HTMLHeadingElement>(null)
+  const tryAgainRef = useRef<HTMLButtonElement>(null)
   const [shown, setShown] = useState<Shown>(() => {
     const opening = day ?? fallbackDay ?? todayIn(zone)
     return { month: monthOf(opening), selected: opening }
@@ -165,6 +174,14 @@ export function CalendarView({ zone, groupId, groupName, day, fallbackDay, onDay
   useEffect(() => {
     if (read?.status === 'notFound') callbacks.current.onNotFound?.()
   }, [read])
+
+  useEffect(() => {
+    if (read === null || !retryOwed.current) return
+    retryOwed.current = false
+    // A not-found answer is the page's to land (a group's calendar).
+    if (read.status === 'notFound') return
+    requestFocus(() => (read.status === 'failed' ? tryAgainRef.current : dayHeadingRef.current))
+  }, [read, requestFocus])
 
   function select(next: string) {
     setShown({ month: monthOf(next), selected: next })
@@ -245,7 +262,15 @@ export function CalendarView({ zone, groupId, groupName, day, fallbackDay, onDay
   const failed = read?.status === 'failed' && (
     <div className="list-state">
       <p className="form-error">{MONTH_FAILED}</p>
-      <button type="button" className="btn-small" onClick={() => setAttempt((value) => value + 1)}>
+      <button
+        ref={tryAgainRef}
+        type="button"
+        className="btn-small"
+        onClick={() => {
+          retryOwed.current = true
+          setAttempt((value) => value + 1)
+        }}
+      >
         Try again
       </button>
     </div>
@@ -259,7 +284,9 @@ export function CalendarView({ zone, groupId, groupName, day, fallbackDay, onDay
     const now = Date.now()
     return (
       <>
-        <h3>{dayHeading(selected)}</h3>
+        <h3 ref={dayHeadingRef} tabIndex={-1}>
+          {dayHeading(selected)}
+        </h3>
         {line !== null && <p className="sub">{line}</p>}
         {read?.status === 'loaded' && entries.length === 0 && <p className="empty-day">{NOTHING_ON_THIS_DAY}</p>}
         {read?.status === 'loaded' && entries.length > 0 && (
@@ -285,7 +312,7 @@ export function CalendarView({ zone, groupId, groupName, day, fallbackDay, onDay
   }
 
   return (
-    <div className="cal">
+    <div className="cal" ref={calRef}>
       <div className="auth-card cal-card">
         <div className="cal-head">
           <h2 className="cal-title" aria-live="polite">

@@ -43,20 +43,35 @@ export function PasskeySection() {
   const addButton = useRef<HTMLButtonElement>(null)
   const removeButtons = useRefMap<string>()
   const requestFocus = useFocusRequest(section)
+  // The list's Try again (CK-96, approved 2026-11-14): its read lands on Add
+  // a passkey, else (no WebAuthn here) the heading, or on the new Try again.
+  const [reloadKey, setReloadKey] = useState(0)
+  const tryAgainButton = useRef<HTMLButtonElement>(null)
+  const retryOwed = useRef(false)
 
   useEffect(() => {
     let cancelled = false
     listPasskeys()
       .then((loaded) => {
-        if (!cancelled) setPasskeys(loaded)
+        if (cancelled) return
+        setPasskeys(loaded)
+        if (retryOwed.current) {
+          retryOwed.current = false
+          requestFocus(() => addButton.current ?? heading.current)
+        }
       })
       .catch(() => {
-        if (!cancelled) setLoadFailed(true)
+        if (cancelled) return
+        setLoadFailed(true)
+        if (retryOwed.current) {
+          retryOwed.current = false
+          requestFocus(tryAgainButton)
+        }
       })
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [reloadKey, requestFocus])
 
   async function handleAdd() {
     setError(null)
@@ -107,7 +122,22 @@ export function PasskeySection() {
       </p>
 
       {loadFailed && (
-        <p className="form-error">Your passkeys couldn't be loaded just now.</p>
+        <>
+          <p className="form-error" role="alert">
+            Your passkeys couldn't be loaded just now.
+          </p>
+          <button
+            ref={tryAgainButton}
+            type="button"
+            onClick={() => {
+              retryOwed.current = true
+              setLoadFailed(false)
+              setReloadKey((key) => key + 1)
+            }}
+          >
+            Try again
+          </button>
+        </>
       )}
       {passkeys && passkeys.length === 0 && (
         <p className="field-hint">No passkeys on this account.</p>

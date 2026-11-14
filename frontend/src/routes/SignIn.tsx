@@ -1,8 +1,9 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { PRODUCT_NAME, TAGLINE } from '../brand'
 import { Quail, SignInPrints } from '../components/AuthArt'
+import { useFocusRequest } from '../components/useFocusRequest'
 import { apiFetch, TOS_VERSION } from '../lib/api'
 import {
   browserSupportsWebAuthn,
@@ -21,6 +22,15 @@ export function SignIn() {
   const [passkeySupported] = useState(() => browserSupportsWebAuthn())
   const [passkeyState, setPasskeyState] = useState<'idle' | 'working'>('idle')
   const [passkeyError, setPasskeyError] = useState<string | null>(null)
+  // Focus after an answer (CK-96; the components doc's Focus after an
+  // answer): the press disables or replaces its control, so each answer
+  // names where focus goes, and only from the body or inside the column.
+  const sideRef = useRef<HTMLDivElement>(null)
+  const sentRef = useRef<HTMLHeadingElement>(null)
+  const emailRef = useRef<HTMLInputElement>(null)
+  const submitRef = useRef<HTMLButtonElement>(null)
+  const passkeyRef = useRef<HTMLButtonElement>(null)
+  const requestFocus = useFocusRequest(sideRef)
 
   // The CK-4 deploy end-to-end check: frontend reaching the API it was built for.
   useEffect(() => {
@@ -50,12 +60,18 @@ export function SignIn() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, tos_accepted: tosAccepted, tos_version: TOS_VERSION }),
       })
-      if (response.status === 202) setSubmitState('sent')
-      else if (response.status === 429) setSubmitState('rateLimited')
-      else setSubmitState('failed')
+      if (response.status === 202) {
+        setSubmitState('sent')
+        requestFocus(sentRef)
+        return
+      }
+      // A 422 keeps the generic line: the request's one field is the
+      // address, and naming it would be a new word.
+      setSubmitState(response.status === 429 ? 'rateLimited' : 'failed')
     } catch {
       setSubmitState('failed')
     }
+    requestFocus(submitRef)
   }
 
   async function handlePasskey() {
@@ -67,12 +83,16 @@ export function SignIn() {
       const token = await signInWithPasskey()
       signIn(token)
       // status flips to 'loading' → the redirect above navigates to /groups.
+      setPasskeyState('idle')
+      return
     } catch (err) {
       if (!isCeremonyCancelled(err)) {
         setPasskeyError("Passkey sign-in didn't work. Emailing yourself a link still does.")
       }
     }
     setPasskeyState('idle')
+    // Cancelled or failed alike: back on the button, to try again.
+    requestFocus(passkeyRef)
   }
 
   // The mockup's sign-in (CK-81; screens 17 and 18): the three prints, then
@@ -83,7 +103,7 @@ export function SignIn() {
   return (
     <main className="auth-screen auth-split">
       <SignInPrints />
-      <div className="auth-side">
+      <div className="auth-side" ref={sideRef}>
         <div className="auth-brand">
           <h1 className="lockup">
             <Quail />
@@ -94,12 +114,21 @@ export function SignIn() {
 
         {submitState === 'sent' ? (
           <section className="auth-card">
-            <h2>Check your email</h2>
+            <h2 ref={sentRef} tabIndex={-1}>
+              Check your email
+            </h2>
             {/* Mirrors the API's non-enumerating wording — never reveal whether
                 the address was known. */}
             <p>If that address can receive email, a sign-in link is on its way.</p>
             <p>The link works once and expires in 15 minutes.</p>
-            <button type="button" className="link-button" onClick={() => setSubmitState('idle')}>
+            <button
+              type="button"
+              className="link-button"
+              onClick={() => {
+                setSubmitState('idle')
+                requestFocus(emailRef)
+              }}
+            >
               Use a different address
             </button>
           </section>
@@ -108,6 +137,7 @@ export function SignIn() {
             <div className="field">
               <label htmlFor="email">Email address</label>
               <input
+                ref={emailRef}
                 id="email"
                 type="email"
                 required
@@ -126,14 +156,14 @@ export function SignIn() {
                 I've read the <Link to="/tos">private test notice</Link> and agree to take part
               </span>
             </label>
-            <button type="submit" disabled={!tosAccepted || submitState === 'submitting'}>
+            <button ref={submitRef} type="submit" disabled={!tosAccepted || submitState === 'submitting'}>
               {submitState === 'submitting' ? 'Sending…' : 'Email me a sign-in link'}
             </button>
             {submitState === 'rateLimited' && (
-              <p className="form-error">Too many link requests just now — wait a few minutes and try again.</p>
+              <p className="form-error" role="alert">Too many link requests just now — wait a few minutes and try again.</p>
             )}
             {submitState === 'failed' && (
-              <p className="form-error">Something went wrong sending the link. Try again.</p>
+              <p className="form-error" role="alert">Something went wrong sending the link. Try again.</p>
             )}
             {/* Secondary, never primary or default (sign-in-ergonomics §4):
                 passkeys are the security path for people who already know what
@@ -142,6 +172,7 @@ export function SignIn() {
                 path, in any form. */}
             {passkeySupported && (
               <button
+                ref={passkeyRef}
                 type="button"
                 className="link-button"
                 disabled={passkeyState === 'working'}
@@ -150,7 +181,11 @@ export function SignIn() {
                 {passkeyState === 'working' ? 'Waiting for your passkey…' : 'Use a passkey'}
               </button>
             )}
-            {passkeyError && <p className="form-error">{passkeyError}</p>}
+            {passkeyError && (
+              <p className="form-error" role="alert">
+                {passkeyError}
+              </p>
+            )}
           </form>
         )}
 

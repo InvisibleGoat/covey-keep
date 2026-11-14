@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent, type Ref } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import type { Person } from '../auth/context'
 import { useAuth } from '../auth/useAuth'
@@ -24,6 +24,7 @@ import { useMenuLayout } from '../lib/menuLayout'
 import { QuailHead } from './AuthArt'
 import { Cover } from './Cover'
 import { Icon } from './Icons'
+import { useFocusRequest } from './useFocusRequest'
 
 // The menu, in its two layouts (CK-82 One list; CK-89 Rail and panel; the
 // design handoff §3, the mockup's screens 02, 15 and 16): the same component
@@ -80,12 +81,23 @@ function MenuHead() {
   )
 }
 
-function SectionRows({ current }: { current: ReturnType<typeof sectionOf> }) {
+function SectionRows({
+  current,
+  groupsLinkRef,
+}: {
+  current: ReturnType<typeof sectionOf>
+  groupsLinkRef?: Ref<HTMLAnchorElement>
+}) {
   return (
     <ul className="nrows">
       {SECTIONS.map((section) => (
         <li key={section.id}>
-          <Link className="nrow" to={section.to} aria-current={current === section.id ? 'page' : undefined}>
+          <Link
+            ref={section.id === 'groups' ? groupsLinkRef : undefined}
+            className="nrow"
+            to={section.to}
+            aria-current={current === section.id ? 'page' : undefined}
+          >
             <Icon name={section.icon} />
             <span className="t">
               <b>{section.label}</b>
@@ -151,11 +163,15 @@ function MenuFoot({ person }: { person: Person | null }) {
   )
 }
 
-function MenuFailed({ onRetry }: { onRetry: () => void }) {
+// The line is not an alert: it would speak on every page change while the
+// server is down. Try again is described by it instead, so it is read where
+// focus lands after a failed retry (CK-96).
+function MenuFailed({ onRetry, buttonRef }: { onRetry: () => void; buttonRef: Ref<HTMLButtonElement> }) {
+  const lineId = useId()
   return (
     <div className="menu-failed">
-      <p>Your groups and gatherings couldn't be loaded just now.</p>
-      <button type="button" className="btn btn-small" onClick={onRetry}>
+      <p id={lineId}>Your groups and gatherings couldn't be loaded just now.</p>
+      <button ref={buttonRef} type="button" className="btn btn-small" aria-describedby={lineId} onClick={onRetry}>
         Try again
       </button>
     </div>
@@ -220,17 +236,49 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
   const standaloneHeading = useId()
   const gatheringsHeading = useId()
   const panelRef = useRef<HTMLElement>(null)
+  // Focus after Try again (CK-96; the components doc's Focus after an
+  // answer): the menu's nav is the container, so a person who moved to the
+  // page while the lists were read keeps their place. Try again leaves a
+  // marker the read spends when it lands: the first list heading drawn, else
+  // the Groups section link; or, failing again, the new Try again.
+  const navRef = useRef<HTMLElement | null>(null)
+  const requestFocus = useFocusRequest(navRef)
+  const retryOwed = useRef(false)
+  const tryAgainRef = useRef<HTMLButtonElement>(null)
+  const groupsLinkRef = useRef<HTMLAnchorElement>(null)
+  const groupsHeadingRef = useRef<HTMLHeadingElement>(null)
+  const upcomingHeadingRef = useRef<HTMLHeadingElement>(null)
+  const comingHeadingRef = useRef<HTMLHeadingElement>(null)
+  const standaloneHeadingRef = useRef<HTMLHeadingElement>(null)
+  // The panel's nav is also the scroller the layout effect below resets.
+  const setPanelNav = (element: HTMLElement | null) => {
+    navRef.current = element
+    panelRef.current = element
+  }
 
   useEffect(() => {
     let cancelled = false
     void (async () => {
       const result = await readMenuLists()
-      if (!cancelled) setLists(result)
+      if (cancelled) return
+      setLists(result)
+      if (retryOwed.current) {
+        retryOwed.current = false
+        requestFocus(() =>
+          result.ok
+            ? (groupsHeadingRef.current ??
+              upcomingHeadingRef.current ??
+              comingHeadingRef.current ??
+              standaloneHeadingRef.current ??
+              groupsLinkRef.current)
+            : tryAgainRef.current,
+        )
+      }
     })()
     return () => {
       cancelled = true
     }
-  }, [pathname, reloadKey])
+  }, [pathname, reloadKey, requestFocus])
 
   // A cover act landed on a page (CK-84): the two lists again at once, so a
   // thumbnail does not wait for the next navigation to show the new cover.
@@ -241,6 +289,7 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
   useEffect(() => onMenuChange(() => setReloadKey((key) => key + 1)), [])
 
   function tryAgain() {
+    retryOwed.current = true
     setLists(null)
     setReloadKey((key) => key + 1)
   }
@@ -260,15 +309,15 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
 
   if (layout === 'list') {
     return (
-      <nav className="menu" aria-label="Main">
+      <nav className="menu" aria-label="Main" ref={navRef}>
         <MenuHead />
-        <SectionRows current={current} />
+        <SectionRows current={current} groupsLinkRef={groupsLinkRef} />
 
-        {lists?.ok === false && <MenuFailed onRetry={tryAgain} />}
+        {lists?.ok === false && <MenuFailed onRetry={tryAgain} buttonRef={tryAgainRef} />}
 
         {groups.length > 0 && (
           <>
-            <h2 className="nav-label" id={groupsHeading}>
+            <h2 className="nav-label" id={groupsHeading} ref={groupsHeadingRef} tabIndex={-1}>
               Your groups
             </h2>
             <ul className="nrows" aria-labelledby={groupsHeading}>
@@ -289,7 +338,7 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
 
         {upcoming.length > 0 && (
           <>
-            <h2 className="nav-label" id={upcomingHeading}>
+            <h2 className="nav-label" id={upcomingHeading} ref={upcomingHeadingRef} tabIndex={-1}>
               Gatherings coming up
             </h2>
             <ul className="nrows" aria-labelledby={upcomingHeading}>
@@ -315,15 +364,15 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
   return (
     <>
       <Rail groups={groups} chosen={panel.kind === 'group' ? panel.group.id : null} press={press} />
-      <nav className="panel" aria-label="Main" ref={panelRef}>
+      <nav className="panel" aria-label="Main" ref={setPanelNav}>
         {panel.kind === 'home' && lists !== null && (
           <>
             <MenuHead />
-            <SectionRows current={current} />
-            {lists.ok === false && <MenuFailed onRetry={tryAgain} />}
+            <SectionRows current={current} groupsLinkRef={groupsLinkRef} />
+            {lists.ok === false && <MenuFailed onRetry={tryAgain} buttonRef={tryAgainRef} />}
             {home && home.withGroup.length > 0 && (
               <>
-                <h2 className="nav-label" id={comingHeading}>
+                <h2 className="nav-label" id={comingHeading} ref={comingHeadingRef} tabIndex={-1}>
                   Coming up
                 </h2>
                 <ul className="nrows" aria-labelledby={comingHeading}>
@@ -341,7 +390,7 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
             )}
             {home && home.standalone.length > 0 && (
               <>
-                <h2 className="nav-label" id={standaloneHeading}>
+                <h2 className="nav-label" id={standaloneHeading} ref={standaloneHeadingRef} tabIndex={-1}>
                   Not in a group
                 </h2>
                 <ul className="nrows" aria-labelledby={standaloneHeading}>
