@@ -791,19 +791,27 @@ test('Delete permanently takes today’s second step — the sentence, Keep it d
   const mock = stubServer(photos(2, (n) => (n === 2 ? { is_own: true } : {})))
   renderSection()
   const { viewer } = await openTile(2, 2)
+  // CK-95: pressed as a person presses it, with focus on it — the step takes
+  // focus only from the body or from inside the viewer's words, so focus left
+  // on Close, where opening the viewer put it, stays there.
+  within(viewer).getByRole('button', { name: 'Delete permanently' }).focus()
   fireEvent.click(within(viewer).getByRole('button', { name: 'Delete permanently' }))
   expect(paths(mock, 'POST')).toEqual([])
-  let step = within(viewer).getByRole('group', { name: 'Delete IMG_2.jpg' })
+  // CK-95 (the components doc's Focus after an answer): the step is named by its
+  // sentence, where until then an aria-label named it "Delete IMG_2.jpg"; and it
+  // takes focus as it opens on ITSELF, the group its sentence labels — never on
+  // its Delete permanently, as it did from CK-88, where a second Enter destroyed
+  // the photo — and gives it back to the button that opened it when it closes
+  // without acting.
+  let step = within(viewer).getByRole('group', { name: DELETE_PERMANENTLY_CONFIRMATION })
   expect(within(step).getByText(DELETE_PERMANENTLY_CONFIRMATION)).toBeTruthy()
-  // The step takes focus as it opens (the mockup's), and gives it back to the
-  // button that opened it when it closes without acting.
-  expect(document.activeElement).toBe(within(step).getByRole('button', { name: 'Delete permanently' }))
+  expect(document.activeElement).toBe(step)
   fireEvent.click(within(step).getByRole('button', { name: 'Keep it' }))
-  expect(within(viewer).queryByRole('group', { name: 'Delete IMG_2.jpg' })).toBeNull()
+  expect(within(viewer).queryByRole('group', { name: DELETE_PERMANENTLY_CONFIRMATION })).toBeNull()
   expect(paths(mock, 'POST')).toEqual([])
   await waitFor(() => expect(document.activeElement).toBe(within(viewer).getByRole('button', { name: 'Delete permanently' })))
   fireEvent.click(within(viewer).getByRole('button', { name: 'Delete permanently' }))
-  step = within(viewer).getByRole('group', { name: 'Delete IMG_2.jpg' })
+  step = within(viewer).getByRole('group', { name: DELETE_PERMANENTLY_CONFIRMATION })
   fireEvent.click(within(step).getByRole('button', { name: 'Delete permanently' }))
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   expect(paths(mock, 'POST')).toEqual(['/media/m-2/destroy'])
@@ -824,15 +832,21 @@ test('Remove from gathering: an organiser’s, on someone else’s photo, behind
     const mock = stubServer(photos(2))
     renderSection({ ...seat, requiresApproval })
     const { viewer } = await openTile(1, 2)
+    // CK-95: pressed with focus on it, as a person presses it (the step takes
+    // focus only from the body or from inside the viewer's words).
+    within(viewer).getByRole('button', { name: 'Remove from gathering' }).focus()
     fireEvent.click(within(viewer).getByRole('button', { name: 'Remove from gathering' }))
-    const step = within(viewer).getByRole('group', { name: 'Remove IMG_1.jpg from this gathering' })
+    // CK-95: the step is named by its sentence, where until then an aria-label
+    // named it "Remove IMG_1.jpg from this gathering", and it takes focus as it
+    // opens on itself — never on its Remove it, as it did from CK-88.
+    const step = within(viewer).getByRole('group', { name: sentence })
     expect(within(step).getByText(sentence)).toBeTruthy()
-    expect(document.activeElement).toBe(within(step).getByRole('button', { name: 'Remove it' }))
+    expect(document.activeElement).toBe(step)
     fireEvent.click(within(step).getByRole('button', { name: 'Leave it' }))
     expect(paths(mock, 'POST')).toEqual([])
     await waitFor(() => expect(document.activeElement).toBe(within(viewer).getByRole('button', { name: 'Remove from gathering' })))
     fireEvent.click(within(viewer).getByRole('button', { name: 'Remove from gathering' }))
-    fireEvent.click(within(within(viewer).getByRole('group', { name: /^Remove IMG_1/ })).getByRole('button', { name: 'Remove it' }))
+    fireEvent.click(within(within(viewer).getByRole('group', { name: sentence })).getByRole('button', { name: 'Remove it' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(paths(mock, 'POST')).toEqual(['/media/m-1/remove'])
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Removed from this gathering' })))
@@ -882,7 +896,14 @@ test('a refusal in the viewer renders from its code — never the server’s wor
   expect(screen.getByRole('dialog')).toBe(viewer)
   fireEvent.click(within(viewer).getByRole('button', { name: 'Previous photo' }))
   fireEvent.click(within(viewer).getByRole('button', { name: 'Remove from gathering' }))
-  fireEvent.click(within(within(viewer).getByRole('group', { name: /^Remove IMG_1/ })).getByRole('button', { name: 'Remove it' }))
+  // CK-95: the step is named by its sentence (the host's), not "Remove IMG_1.jpg …".
+  fireEvent.click(
+    within(
+      within(viewer).getByRole('group', {
+        name: 'Only you and any co-hosts will be able to see this photo. You can put it back for 30 days.',
+      }),
+    ).getByRole('button', { name: 'Remove it' }),
+  )
   expect(await within(viewer).findByText('This photo has already been removed — refresh the list to see where it is.')).toBeTruthy()
   expect(reads()).toBe(before)
   fireEvent.click(within(viewer).getByRole('button', { name: 'Refresh the list' }))

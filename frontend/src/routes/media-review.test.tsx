@@ -105,6 +105,13 @@ const listRequests = (mock: ReturnType<typeof vi.fn>) =>
 // entry with an item-level 422 carrying the single act's code.
 const STAMP = '2026-09-14T00:30:16+00:00'
 const SERVER_WORDING = 'SERVER WORDING XYZ — never rendered'
+// CK-95 (the components doc's Focus after an answer): a step is named by its
+// sentence — a group labelled by the sentence it says, which takes focus as it
+// opens — where until then an aria-label named it "Decline …". So the pins
+// below find the decline step by its sentence: the host's on someone else's
+// photo, and on their own; what each pin asserts is unchanged.
+const DECLINE_THEIRS_STEP = 'Only you and any co-hosts will be able to see this photo. You can put it back for 30 days.'
+const DECLINE_OWN_STEP = "The gathering won't see this photo. You can still see it yourself for 30 days."
 
 // A removal stamp relative to now (CK-64): the bin's line counts the days
 // left in the window, so a fixed date would change the line as the calendar
@@ -697,7 +704,7 @@ test("declining takes a second click, says what it is — only the organisers wi
 
   // grandma's: the first click asks; nothing is sent.
   fireEvent.click(within(rows[1]).getByRole('button', { name: 'Decline' }))
-  const confirm = within(rows[1]).getByRole('group', { name: /^Decline/ })
+  const confirm = within(rows[1]).getByRole('group', { name: DECLINE_THEIRS_STEP })
   // THE SENTENCE, MOVED AT CK-69 (its reason): a declined photograph is in
   // the GATHERING's bin — the uploader does not see it again — which the
   // ORGANISERS read in the Removed view (the host since CK-66/CK-67, a
@@ -730,7 +737,7 @@ test("declining takes a second click, says what it is — only the organisers wi
   expect(calls(mock, 'POST', () => true)).toHaveLength(0)
   // The do-nothing: back to the two acts, still nothing sent.
   fireEvent.click(within(confirm).getByRole('button', { name: 'Leave it waiting' }))
-  expect(within(rows[1]).queryByRole('group', { name: /^Decline/ })).toBeNull()
+  expect(within(rows[1]).queryByRole('group', { name: DECLINE_THEIRS_STEP })).toBeNull()
   expect(within(rows[1]).getByRole('button', { name: 'Decline' })).toBeTruthy()
   expect(calls(mock, 'POST', () => true)).toHaveLength(0)
 
@@ -749,7 +756,7 @@ test("declining takes a second click, says what it is — only the organisers wi
   // host declining THEIR OWN photograph is its remover and its uploader, so
   // that row is in their own bin (two-bins §3) and this line stays true.
   fireEvent.click(within(rows[0]).getByRole('button', { name: 'Decline' }))
-  expect(within(rows[0]).getByRole('group', { name: /^Decline/ }).textContent).toContain(
+  expect(within(rows[0]).getByRole('group', { name: DECLINE_OWN_STEP }).textContent).toContain(
     "The gathering won't see this photo. You can still see it yourself for 30 days.",
   )
   fireEvent.click(within(rows[0]).getByRole('button', { name: 'Decline it' }))

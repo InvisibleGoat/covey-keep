@@ -8,6 +8,7 @@ import { Quail } from './AuthArt'
 import { usePagePlace } from './pagePlace'
 import { CardLine, Cover } from './Cover'
 import { LazyThumbnail, PhotoViewer } from './PhotoViewer'
+import { useFocusRequest } from './useFocusRequest'
 import { PREVIEW_PHONE, PREVIEW_WIDE_COUNT, usePreviewWide } from './usePreviewWide'
 import { useViewerEntry } from './useViewerEntry'
 
@@ -149,6 +150,10 @@ export function GroupPhotos({
   const headingId = useId()
   const headingRef = useRef<HTMLHeadingElement>(null)
   const headRef = useRef<HTMLDivElement>(null)
+  const sectionRef = useRef<HTMLElement>(null)
+  const tryAgainRef = useRef<HTMLButtonElement>(null)
+  const retryOwed = useRef(false)
+  const focusInSection = useFocusRequest(sectionRef)
   const location = useLocation()
   const { isReturn } = usePagePlace()
   // The keys whose arrival at #photos has been handled (CK-89's *Photos* row,
@@ -246,6 +251,7 @@ export function GroupPhotos({
 
   // Try again re-reads whichever failed, one request each per press.
   function tryAgain() {
+    retryOwed.current = true
     if (mediaLoad.status === 'failed') {
       setMediaLoad({ status: 'loading' })
       setMediaKey((key) => key + 1)
@@ -260,6 +266,16 @@ export function GroupPhotos({
   // when the first read has settled (loaded or failed) and the page is tall
   // enough to get there (the CK-88.1b lesson).
   const settled = failed || loaded
+
+  // Try again's answer (CK-95): the reads landing, focus on the section's
+  // heading; a second failure, on the new Try again — and only from the body
+  // or from inside the section, so a person who moved on keeps their place.
+  useEffect(() => {
+    if (!retryOwed.current || !settled) return
+    retryOwed.current = false
+    focusInSection(failed ? tryAgainRef : headingRef)
+  }, [settled, failed, focusInSection])
+
   useEffect(() => {
     if (location.hash !== '#photos' || !settled) return
     const handled = handledKeys.current
@@ -282,7 +298,7 @@ export function GroupPhotos({
   const line = failed || total === 0 ? '' : `${photoCountLabel(total)} · newest first`
 
   return (
-    <section className="group-photos" aria-labelledby={headingId}>
+    <section className="group-photos" aria-labelledby={headingId} ref={sectionRef}>
       <div className="photos-head" ref={headRef}>
         <h2 id={headingId} ref={headingRef} tabIndex={-1}>
           Photos
@@ -296,7 +312,7 @@ export function GroupPhotos({
             <span aria-hidden="true">⚠ </span>
             Some photos couldn't be loaded just now.
           </p>
-          <button type="button" onClick={tryAgain}>
+          <button ref={tryAgainRef} type="button" onClick={tryAgain}>
             Try again
           </button>
         </div>

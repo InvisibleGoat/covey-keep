@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useImperativeHandle,
   useLayoutEffect,
   useRef,
@@ -79,6 +80,7 @@ import {
 import { FieldError, FormLevelErrors } from './FieldError'
 import { usePagePlace } from './pagePlace'
 import { LazyThumbnail, PhotoViewer, TagList } from './PhotoViewer'
+import { firstFieldWithError, useFocusRequest, useRefMap, type FocusSource } from './useFocusRequest'
 import { PREVIEW_PHONE, PREVIEW_WIDE_COUNT, usePreviewWide } from './usePreviewWide'
 import { useViewerEntry } from './useViewerEntry'
 
@@ -528,7 +530,8 @@ function MediaWordsEditor({
   item: MediaItem
   onSaved: () => void
   onClose: () => void
-  // The viewer's editor takes focus as it opens (CK-88); a row's does not.
+  // The viewer's editor takes focus as it opens (CK-88), and a row's too
+  // since CK-95.
   autoFocus?: boolean
 }) {
   // Initialised once from the row; a poll re-read while the person types
@@ -545,6 +548,11 @@ function MediaWordsEditor({
       alive.current = false
     }
   }, [])
+  // Focus after an answer (CK-95): a 422 on a field goes to that field, the
+  // first in the form's order; anything else back to Save, still there.
+  const formRef = useRef<HTMLFormElement>(null)
+  const saveRef = useRef<HTMLButtonElement>(null)
+  const focusInForm = useFocusRequest(formRef)
 
   const scope = `media-${item.id}`
   const patch = mediaWordsPatch({ caption, tags }, item)
@@ -592,15 +600,24 @@ function MediaWordsEditor({
         return
       }
       setErrors(await errorsFromResponse(response, wordsErrorFields(tags.length)))
+      focusInForm(() => firstFieldWithError(formRef.current) ?? saveRef.current)
     } catch {
-      if (alive.current) setErrors(networkErrors())
+      if (alive.current) {
+        setErrors(networkErrors())
+        focusInForm(saveRef)
+      }
     } finally {
       if (alive.current) setSaving(false)
     }
   }
 
   return (
-    <form className="media-editor" onSubmit={(event) => void save(event)} aria-label={`Edit ${mediaName(item)}`}>
+    <form
+      ref={formRef}
+      className="media-editor"
+      onSubmit={(event) => void save(event)}
+      aria-label={`Edit ${mediaName(item)}`}
+    >
       <label htmlFor={`${scope}-caption`}>Caption</label>
       <input
         id={`${scope}-caption`}
@@ -655,7 +672,7 @@ function MediaWordsEditor({
       </p>
       <FieldError errors={errors} field="tags" scope={scope} />
 
-      <button type="submit" disabled={!dirty || saving}>
+      <button ref={saveRef} type="submit" disabled={!dirty || saving}>
         {saving ? 'Saving…' : 'Save'}
       </button>
       <button type="button" className="link-button" onClick={onClose}>
@@ -674,6 +691,21 @@ type PendingFocus =
   | { kind: 'heading' }
   | { kind: 'binView' }
   | { kind: 'putBack'; mediaId: string; afterRead: number }
+
+// A focus owed to the re-read an act asked for (CK-95), spent by the first read
+// that STARTED after the act landed: a row's act on the row's own control that
+// carries it on, where the row is still listed, else on THE ROW GONE's rule
+// (GatheringMedia's afterRead); the section's own acts on the heading; the
+// viewer's Refresh on its Close. A read that fails spends it on the section's
+// Try again (the viewer's Close in the viewer).
+interface OwedAfterRead {
+  kind: 'row' | 'section' | 'viewer'
+  seq: number
+  mediaId?: string
+  index?: number
+  carryOn?: string
+  container?: HTMLElement | null
+}
 
 interface ViewerState {
   // 'grid': the grid's photos; 'row': one row's photo alone, with no act.
@@ -814,6 +846,103 @@ export function GatheringMedia({
   const uploadButton = useRef<HTMLButtonElement>(null)
   const pickedFromPage = useRef(false)
   const [focusUploadOwed, setFocusUploadOwed] = useState(false)
+
+  // FOCUS AFTER AN ANSWER (CK-95; the components doc's Focus after an answer).
+  // Each act's request is spent after the render that draws its target, and
+  // only from the body or from inside the act's own container — a row's acts
+  // their <li>, the upload form's and the batch's their form, the viewer's its
+  // words column (.vinfo), and the section's own acts (Refresh the list, Try
+  // again, Show all photos) the section — so a person who moved elsewhere
+  // while an answer waited keeps their place. A step is a group labelled by
+  // its sentence and takes focus as it opens, never its acting button.
+  const sectionFocus = useFocusRequest(blockRef)
+  const focusRow = useRef<HTMLElement | null>(null)
+  const rowFocus = useFocusRequest(() => focusRow.current)
+  const uploadForm = useRef<HTMLFormElement>(null)
+  const uploadFocus = useFocusRequest(uploadForm)
+  const batchForm = useRef<HTMLFormElement>(null)
+  const batchSubmit = useRef<HTMLButtonElement>(null)
+  const batchFocus = useFocusRequest(batchForm)
+  const viewerFocusReq = useFocusRequest(() => document.querySelector<HTMLElement>('.vinfo'))
+  const rowButtons = useRefMap<string>()
+  const allViewButton = useRef<HTMLButtonElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const tryAgainRef = useRef<HTMLButtonElement>(null)
+  const viewerStepRefs = useRef<Record<string, HTMLElement | null>>({})
+  const declineSentence = useId()
+  const deleteSentence = useId()
+  const removeSentence = useId()
+  const viewerDeleteSentence = useId()
+  const viewerRemoveSentence = useId()
+  const viewerGroupSentence = useId()
+  const owedAfterRead = useRef<OwedAfterRead | null>(null)
+  const loadSeq = useRef(0)
+  const latestRows = useRef<MediaItem[]>([])
+  const latestView = useRef<'all' | 'queue' | 'bin'>('all')
+  const latestViewerId = useRef<string | null>(null)
+
+  // A row's request: the row's <li> its container.
+  function focusInRow(mediaId: string, target: FocusSource) {
+    focusRow.current = rowButtons.get(`${mediaId}:row`)
+    rowFocus(target)
+  }
+
+  // The act landed: the re-read it asks for owes focus.
+  function owe(mark: Omit<OwedAfterRead, 'seq'>) {
+    owedAfterRead.current = { ...mark, seq: loadSeq.current }
+  }
+
+  // THE ROW GONE: once the re-read lands, the row's own control that carries
+  // the act on where the row is still listed; else in the queue Publish on the
+  // row now at its place (the last row's where it was last), in the Removed
+  // view Put back there; else the section's heading.
+  function afterRead(owed: OwedAfterRead): HTMLElement | null {
+    const listedNow = latestRows.current
+    if (
+      owed.mediaId !== undefined &&
+      owed.carryOn !== undefined &&
+      listedNow.some((item) => item.id === owed.mediaId)
+    ) {
+      const carry = rowButtons.get(`${owed.mediaId}:${owed.carryOn}`)
+      if (carry !== null) return carry
+    }
+    const shown = latestView.current
+    if (shown !== 'all' && listedNow.length > 0) {
+      const next = listedNow[Math.min(owed.index ?? 0, listedNow.length - 1)]
+      const carry = rowButtons.get(`${next.id}:${shown === 'queue' ? 'publish' : 'putBack'}`)
+      if (carry !== null) return carry
+    }
+    return headingRef.current
+  }
+
+  // Called by each read with its own number, so only a read that started
+  // after the act spends what the act owes.
+  function spendOwed(seq: number, landed: boolean) {
+    const owed = owedAfterRead.current
+    if (owed === null || seq <= owed.seq) return
+    owedAfterRead.current = null
+    if (owed.kind === 'viewer') viewerFocusReq(viewerClose)
+    else if (!landed) sectionFocus(tryAgainRef)
+    else if (owed.kind === 'section') sectionFocus(headingRef)
+    else {
+      focusRow.current = owed.container ?? null
+      rowFocus(() => afterRead(owed))
+    }
+  }
+  // The load's effect calls the latest spendOwed, as it calls the latest
+  // closeViewer, so the effect need not re-run on every render.
+  const latestSpendOwed = useRef(spendOwed)
+
+  function viewerClose(): HTMLElement | null {
+    return document.querySelector<HTMLElement>('[role="dialog"] button[aria-label="Close"]')
+  }
+
+  // In the viewer a target is the photograph's only while it is still the one
+  // on screen: a person who moved to another photo keeps their place.
+  function onViewerPhoto(mediaId: string, target: () => HTMLElement | null | undefined) {
+    return () => (latestViewerId.current === mediaId ? (target() ?? null) : null)
+  }
+
   const alive = useRef(true)
   useEffect(() => {
     alive.current = true
@@ -887,6 +1016,8 @@ export function GatheringMedia({
   useEffect(() => {
     let cancelled = false
     async function load() {
+      loadSeq.current += 1
+      const seq = loadSeq.current
       try {
         const response = await authFetch(
           mediaListPath(gatheringId, term, { awaitingReview: queueView, removed: binView }),
@@ -902,11 +1033,16 @@ export function GatheringMedia({
           }
           readSeqRef.current += 1
           setReadSeq(readSeqRef.current)
+          latestSpendOwed.current(seq, true)
         } else {
           setLoadFailed(true)
+          latestSpendOwed.current(seq, false)
         }
       } catch {
-        if (!cancelled) setLoadFailed(true)
+        if (!cancelled) {
+          setLoadFailed(true)
+          latestSpendOwed.current(seq, false)
+        }
       }
     }
     void load()
@@ -968,6 +1104,13 @@ export function GatheringMedia({
     if (!alive.current) return
     setCoverActing(false)
     setGroupStepFor(null)
+    // Focus (CK-95), while this photo is still the one on screen: the group's
+    // step closes on either answer, back to its opener; the gathering's
+    // refusal back on Use as cover; its success — the button gone, this photo
+    // the cover now — on the viewer's Close.
+    if (subject === 'group') viewerFocusReq(onViewerPhoto(item.id, () => viewerActRefs.current.group))
+    else if (!outcome.ok) viewerFocusReq(onViewerPhoto(item.id, () => viewerActRefs.current.cover))
+    else viewerFocusReq(onViewerPhoto(item.id, viewerClose))
     if (!outcome.ok) {
       setCoverNote({ mediaId: item.id, kind: 'refused' })
       return
@@ -1010,17 +1153,28 @@ export function GatheringMedia({
     clearBin()
   }
 
-  function showAll() {
+  function resetToAll() {
     setSearchInput('')
     setTerm('')
     clearBin()
     if (view !== 'all') switchView('all')
   }
 
-  function refresh() {
+  // Show all photos (CK-95): after a search, focus on Find a photo, cleared for
+  // the next one; otherwise on the view switch's All photos, where there is one.
+  function showAll() {
+    const searched = term !== ''
+    resetToAll()
+    sectionFocus(() => (searched ? searchRef.current : (allViewButton.current ?? searchRef.current)))
+  }
+
+  // Refresh the list (CK-95): once the re-read lands, focus on the section's
+  // heading — in the viewer, on its Close — and on Try again if it fails.
+  function refresh(from: 'section' | 'viewer' = 'section') {
     clearBatch()
     clearBin()
     setRowErrors({})
+    owe({ kind: from })
     setReloadKey((key) => key + 1)
   }
 
@@ -1031,7 +1185,7 @@ export function GatheringMedia({
   // code, and the list is NOT re-read — a re-read could drop the row the
   // message is about (a declined photograph is in nobody's queue) and take
   // the explanation with it; the refresh control beside it is the way on.
-  async function act(item: MediaItem, which: ReviewAct) {
+  async function act(item: MediaItem, which: ReviewAct, index = 0) {
     if (actingId !== null) return
     setActingId(item.id)
     setActingAct(which)
@@ -1047,6 +1201,15 @@ export function GatheringMedia({
     setActingAct(null)
     if (outcome.ok) {
       setSelected((current) => current.filter((id) => id !== item.id))
+      // A decline puts the host's own photo in their own bin, its row
+      // carrying Put back; any other landing leaves the row's place.
+      owe({
+        kind: 'row',
+        mediaId: item.id,
+        index,
+        carryOn: which === 'decline' ? 'putBack' : undefined,
+        container: rowButtons.get(`${item.id}:row`),
+      })
       setReloadKey((key) => key + 1)
       return
     }
@@ -1054,6 +1217,7 @@ export function GatheringMedia({
       ...prev,
       [item.id]: { fields: {}, form: [reviewRefusalMessage(which, outcome)] },
     }))
+    focusInRow(item.id, () => rowButtons.get(`${item.id}:${which}`))
   }
 
   // One of the three acts on a photograph (CK-64 the caller's own; CK-67
@@ -1075,13 +1239,16 @@ export function GatheringMedia({
   // request runs, so "Deleting…" shows where the person is looking, and
   // closes with the outcome either way.
   // It answers whether the act landed (CK-88), so the viewer can close on a
-  // landing; what the act does is unchanged.
+  // landing, or was refused (CK-95), so the viewer can put focus back; what
+  // the act does is unchanged. A row's act passes its place, and focus follows
+  // the rule on the row (CK-95).
   async function bin(
     item: MediaItem,
     which: BinAct,
     context: 'personal' | 'gathering' = 'personal',
-  ): Promise<boolean> {
-    if (actingId !== null) return false
+    row: { index: number } | null = null,
+  ): Promise<'landed' | 'refused' | null> {
+    if (actingId !== null) return null
     setActingId(item.id)
     setActingAct(which)
     setDecliningId(null)
@@ -1096,7 +1263,7 @@ export function GatheringMedia({
       return rest
     })
     const outcome = await binMedia(item.id, which)
-    if (!alive.current) return false
+    if (!alive.current) return null
     setActingId(null)
     setActingAct(null)
     setDeletingId(null)
@@ -1104,14 +1271,37 @@ export function GatheringMedia({
     if (outcome.ok) {
       if (which === 'destroy') setNotice('Photo deleted.')
       setSelected((current) => current.filter((id) => id !== item.id))
+      if (row !== null) {
+        // Your own photo, to the bin or back from it, keeps its row: the
+        // control that undoes the act carries it on.
+        owe({
+          kind: 'row',
+          mediaId: item.id,
+          index: row.index,
+          carryOn:
+            context === 'personal' && which === 'remove'
+              ? 'putBack'
+              : context === 'personal' && which === 'restore'
+                ? 'sendToBin'
+                : undefined,
+          container: rowButtons.get(`${item.id}:row`),
+        })
+      }
       setReloadKey((key) => key + 1)
-      return true
+      return 'landed'
     }
     setRowErrors((prev) => ({
       ...prev,
       [item.id]: { fields: {}, form: [binRefusalMessage(outcome, { bin: context })] },
     }))
-    return false
+    if (row !== null) {
+      // The step, where one was open, closed with the answer: back on the
+      // button that opens it, or on the act pressed.
+      const refused =
+        which === 'destroy' ? 'delete' : which === 'restore' ? 'putBack' : context === 'gathering' ? 'remove' : 'sendToBin'
+      focusInRow(item.id, () => rowButtons.get(`${item.id}:${refused}`))
+    }
+    return 'refused'
   }
 
   // Dismiss a photograph that could not be kept (CK-71; pipeline record §6.5
@@ -1122,7 +1312,7 @@ export function GatheringMedia({
   // is gone from it, which is the whole of what the person asked for, so no
   // status line follows; a refusal stays on the row, in this module's words
   // for the server's CODE, with Refresh the list beside it.
-  async function dismiss(item: MediaItem) {
+  async function dismiss(item: MediaItem, index = 0) {
     if (actingId !== null) return
     setActingId(item.id)
     setActingAct('dismiss')
@@ -1137,6 +1327,7 @@ export function GatheringMedia({
     setActingId(null)
     setActingAct(null)
     if (outcome.ok) {
+      owe({ kind: 'row', mediaId: item.id, index, container: rowButtons.get(`${item.id}:row`) })
       setReloadKey((key) => key + 1)
       return
     }
@@ -1144,6 +1335,7 @@ export function GatheringMedia({
       ...prev,
       [item.id]: { fields: {}, form: [dismissRefusalMessage(outcome)] },
     }))
+    focusInRow(item.id, () => rowButtons.get(`${item.id}:dismiss`))
   }
 
   // Bulk approve (roadmap §3's one tap; record §5): the batch endpoint, the
@@ -1166,14 +1358,29 @@ export function GatheringMedia({
       })
       if (!alive.current) return
       if (response.ok) {
+        // THE ROW GONE, from the first of the published rows' places.
+        const places = ids
+          .map((id) => latestRows.current.findIndex((item) => item.id === id))
+          .filter((place) => place !== -1)
+        owe({ kind: 'row', index: places.length > 0 ? Math.min(...places) : 0, container: batchForm.current })
         setSelected([])
         setBatchSent([])
         setReloadKey((key) => key + 1)
         return
       }
       setBatchErrors(await errorsFromResponse(response, publishBatchErrorFields(ids.length)))
+      // A refusal on one photo goes to its checkbox; any other, back to the
+      // button pressed.
+      batchFocus(
+        () =>
+          firstFieldWithError(blockRef.current?.querySelector<HTMLElement>('ul.media-list') ?? null) ??
+          batchSubmit.current,
+      )
     } catch {
-      if (alive.current) setBatchErrors(networkErrors())
+      if (alive.current) {
+        setBatchErrors(networkErrors())
+        batchFocus(batchSubmit)
+      }
     } finally {
       if (alive.current) setPublishing(false)
     }
@@ -1208,6 +1415,9 @@ export function GatheringMedia({
       if (response.status !== 201) {
         setErrors(await errorsFromResponse(response, intentErrorFields(chosen.length)))
         setProgress(null)
+        // A 422 names the files or the batch: the picker, their field;
+        // anything else back on Upload (CK-95).
+        uploadFocus(response.status === 422 ? fileInput : uploadButton)
         return
       }
       intents = ((await response.json()) as IntentResponse).intents
@@ -1215,6 +1425,7 @@ export function GatheringMedia({
       if (alive.current) {
         setErrors(networkErrors())
         setProgress(null)
+        uploadFocus(uploadButton)
       }
       return
     }
@@ -1226,7 +1437,7 @@ export function GatheringMedia({
     // local of this handler.
     setFiles([])
     if (fileInput.current) fileInput.current.value = ''
-    showAll()
+    resetToAll()
     setReloadKey((key) => key + 1)
 
     for (let index = 0; index < intents.length; index++) {
@@ -1247,6 +1458,8 @@ export function GatheringMedia({
     }
     setProgress(null)
     setReloadKey((key) => key + 1)
+    // Every file gone up: the picker, cleared for the next ones (CK-95).
+    uploadFocus(fileInput)
   }
 
   // §6.5's retry re-uploads FROM THE DEVICE — Try again, and since CK-71
@@ -1310,8 +1523,16 @@ export function GatheringMedia({
   // Delete permanently, beside "Photo deleted.". The act itself is bin(),
   // unchanged.
   async function viewerBin(item: MediaItem, which: BinAct, context: 'personal' | 'gathering') {
-    const landed = await bin(item, which, context)
-    if (!landed || !alive.current) return
+    const outcome = await bin(item, which, context)
+    if (outcome === null || !alive.current) return
+    if (outcome === 'refused') {
+      // The step, where one was open, closed with the answer: focus back on
+      // the button that opens it, or on Send to bin, while this photo is
+      // still the one on screen (CK-95).
+      const key = which === 'destroy' ? 'delete' : context === 'gathering' ? 'remove' : 'bin'
+      viewerFocusReq(onViewerPhoto(item.id, () => viewerActRefs.current[key]))
+      return
+    }
     closeViewer(
       which === 'destroy'
         ? { kind: 'heading' }
@@ -1367,6 +1588,15 @@ export function GatheringMedia({
   const latestCloseViewer = useRef(closeViewer)
   useLayoutEffect(() => {
     latestCloseViewer.current = closeViewer
+  })
+
+  // What a focus owed to a re-read reads when it is spent (CK-95): the rows
+  // and the view of the render that drew them, and the photo on screen.
+  useLayoutEffect(() => {
+    latestRows.current = rows
+    latestView.current = queueView ? 'queue' : binView ? 'bin' : 'all'
+    latestViewerId.current = viewer === null || viewerLost ? null : viewer.mediaId
+    latestSpendOwed.current = spendOwed
   })
 
   useEffect(() => {
@@ -1479,7 +1709,6 @@ export function GatheringMedia({
   // and the two covers. Nobody else is offered an act. Only the grid's
   // viewer has acts: a row keeps its own.
   function viewerActs(item: MediaItem): ReactNode {
-    const name = mediaName(item)
     const published = isPublishedPhoto(item)
     const own = published && item.is_own && problems[item.id] === undefined
     const editing = own && editingId === item.id
@@ -1514,7 +1743,14 @@ export function GatheringMedia({
             )}
             {own && !deleting && (
               <>
-                <button type="button" disabled={actingId !== null} onClick={() => void viewerBin(item, 'remove', 'personal')}>
+                <button
+                  ref={(element) => {
+                    viewerActRefs.current.bin = element
+                  }}
+                  type="button"
+                  disabled={actingId !== null}
+                  onClick={() => void viewerBin(item, 'remove', 'personal')}
+                >
                   {actingId === item.id && actingAct === 'remove' ? 'Sending to bin…' : 'Send to bin'}
                 </button>
                 <button
@@ -1527,6 +1763,7 @@ export function GatheringMedia({
                     setEditingId(null)
                     setRemovingId(null)
                     setDeletingId(item.id)
+                    viewerFocusReq(() => viewerStepRefs.current.delete ?? null)
                   }}
                 >
                   Delete permanently
@@ -1548,6 +1785,7 @@ export function GatheringMedia({
                   setDeletingId(null)
                   setDecliningId(null)
                   setRemovingId(item.id)
+                  viewerFocusReq(() => viewerStepRefs.current.remove ?? null)
                 }}
               >
                 Remove from gathering
@@ -1556,7 +1794,14 @@ export function GatheringMedia({
             {offerCover && (
               // Covers (point 11): only on a published photograph, hidden on
               // the one that already is the cover; one click.
-              <button type="button" disabled={coverActing} onClick={() => void chooseAsCover(item, 'gathering')}>
+              <button
+                ref={(element) => {
+                  viewerActRefs.current.cover = element
+                }}
+                type="button"
+                disabled={coverActing}
+                onClick={() => void chooseAsCover(item, 'gathering')}
+              >
                 {USE_AS_COVER}
               </button>
             )}
@@ -1571,6 +1816,7 @@ export function GatheringMedia({
                 onClick={() => {
                   setCoverNote(null)
                   setGroupStepFor(item.id)
+                  viewerFocusReq(() => viewerStepRefs.current.group ?? null)
                 }}
               >
                 {USE_AS_GROUP_COVER}
@@ -1597,11 +1843,22 @@ export function GatheringMedia({
           />
         )}
         {deleting && (
-          <div className="media-review media-decline" role="group" aria-label={`Delete ${name}`}>
-            <p className="field-hint">{DELETE_PERMANENTLY_CONFIRMATION}</p>
+          // The step takes focus as it opens, never its Delete permanently
+          // (CK-95): a second Enter confirms nothing.
+          <div
+            ref={(element) => {
+              viewerStepRefs.current.delete = element
+            }}
+            className="media-review media-decline"
+            role="group"
+            aria-labelledby={viewerDeleteSentence}
+            tabIndex={-1}
+          >
+            <p className="field-hint" id={viewerDeleteSentence}>
+              {DELETE_PERMANENTLY_CONFIRMATION}
+            </p>
             <button
               type="button"
-              autoFocus
               disabled={actingId !== null}
               onClick={() => void viewerBin(item, 'destroy', 'personal')}
             >
@@ -1621,11 +1878,20 @@ export function GatheringMedia({
           </div>
         )}
         {removing && (
-          <div className="media-review media-decline" role="group" aria-label={`Remove ${name} from this gathering`}>
-            <p className="field-hint">{takedownSentence({ isHost, requiresApproval })}</p>
+          <div
+            ref={(element) => {
+              viewerStepRefs.current.remove = element
+            }}
+            className="media-review media-decline"
+            role="group"
+            aria-labelledby={viewerRemoveSentence}
+            tabIndex={-1}
+          >
+            <p className="field-hint" id={viewerRemoveSentence}>
+              {takedownSentence({ isHost, requiresApproval })}
+            </p>
             <button
               type="button"
-              autoFocus
               disabled={actingId !== null}
               onClick={() => void viewerBin(item, 'remove', 'gathering')}
             >
@@ -1647,10 +1913,18 @@ export function GatheringMedia({
         {groupStep && groupSeat !== null && (
           // The second, deliberate step: the first click only asked, and Not
           // now does nothing.
-          <div className="media-decline" role="group" aria-label={USE_AS_GROUP_COVER}>
-            <p>{groupCoverConfirmSentence(groupSeat.name, gatheringTitle)}</p>
+          <div
+            ref={(element) => {
+              viewerStepRefs.current.group = element
+            }}
+            className="media-decline"
+            role="group"
+            aria-labelledby={viewerGroupSentence}
+            tabIndex={-1}
+          >
+            <p id={viewerGroupSentence}>{groupCoverConfirmSentence(groupSeat.name, gatheringTitle)}</p>
             <div className="media-review">
-              <button type="button" autoFocus disabled={coverActing} onClick={() => void chooseAsCover(item, 'group')}>
+              <button type="button" disabled={coverActing} onClick={() => void chooseAsCover(item, 'group')}>
                 {USE_AS_GROUP_COVER}
               </button>
               <button
@@ -1682,7 +1956,7 @@ export function GatheringMedia({
           // the server's code; nothing is re-read, and this is the way on.
           <div className="media-review">
             <FormLevelErrors errors={rowError} />
-            <button type="button" className="link-button" onClick={refresh}>
+            <button type="button" className="link-button" onClick={() => refresh('viewer')}>
               Refresh the list
             </button>
           </div>
@@ -1696,7 +1970,7 @@ export function GatheringMedia({
   // in the queue and the bin every row, as before. Each row keeps its acts.
   const rowsList = rows.length > 0 && (
     <ul className="media-list" aria-label="Photos">
-      {rows.map((item) => {
+      {rows.map((item, index) => {
           const problem = problems[item.id]
           const who = whoFor(item)
           const label = labelFor(item)
@@ -1793,7 +2067,7 @@ export function GatheringMedia({
           const batchField = batchIndex === -1 ? null : `media_ids.${batchIndex}`
           const rowError = rowErrors[item.id]
           return (
-            <li key={item.id} className="media-item">
+            <li key={item.id} className="media-item" ref={rowButtons.register(`${item.id}:row`)}>
               {queueView && reviewable && (
                 <input
                   type="checkbox"
@@ -1838,10 +2112,11 @@ export function GatheringMedia({
                     </button>
                   )}
                   <button
+                    ref={rowButtons.register(`${item.id}:dismiss`)}
                     type="button"
                     className="link-button"
                     disabled={actingId !== null}
-                    onClick={() => void dismiss(item)}
+                    onClick={() => void dismiss(item, index)}
                   >
                     {actingId === item.id && actingAct === 'dismiss' ? 'Dismissing…' : 'Dismiss'}
                   </button>
@@ -1849,6 +2124,7 @@ export function GatheringMedia({
               )}
               {offerEdit && !editing && (
                 <button
+                  ref={rowButtons.register(`${item.id}:edit`)}
                   type="button"
                   className="link-button"
                   onClick={() => {
@@ -1867,12 +2143,24 @@ export function GatheringMedia({
                 <MediaWordsEditor
                   key={item.id}
                   item={item}
+                  autoFocus
                   onSaved={() => {
-                    // Optimistic-free: the server's body is what renders.
+                    // Optimistic-free: the server's body is what renders, and
+                    // focus waits for it, on the row's Edit caption and tags.
                     setEditingId(null)
+                    owe({
+                      kind: 'row',
+                      mediaId: item.id,
+                      index,
+                      carryOn: 'edit',
+                      container: rowButtons.get(`${item.id}:row`),
+                    })
                     setReloadKey((key) => key + 1)
                   }}
-                  onClose={() => setEditingId(null)}
+                  onClose={() => {
+                    setEditingId(null)
+                    focusInRow(item.id, () => rowButtons.get(`${item.id}:edit`))
+                  }}
                 />
               )}
               {binnable && !deleting && (
@@ -1886,24 +2174,29 @@ export function GatheringMedia({
                 <div className="media-review media-bin">
                   {inBin ? (
                     <button
-                      ref={(element) => keepRef(putBackRefs.current, item.id, element)}
+                      ref={(element) => {
+                        keepRef(putBackRefs.current, item.id, element)
+                        rowButtons.register(`${item.id}:putBack`)(element)
+                      }}
                       type="button"
                       disabled={actingId !== null}
-                      onClick={() => void bin(item, 'restore')}
+                      onClick={() => void bin(item, 'restore', 'personal', { index })}
                     >
                       {actingId === item.id && actingAct === 'restore' ? 'Putting back…' : 'Put back'}
                     </button>
                   ) : (
                     <button
+                      ref={rowButtons.register(`${item.id}:sendToBin`)}
                       type="button"
                       className="link-button"
                       disabled={actingId !== null}
-                      onClick={() => void bin(item, 'remove')}
+                      onClick={() => void bin(item, 'remove', 'personal', { index })}
                     >
                       {actingId === item.id && actingAct === 'remove' ? 'Sending to bin…' : 'Send to bin'}
                     </button>
                   )}
                   <button
+                    ref={rowButtons.register(`${item.id}:delete`)}
                     type="button"
                     className="link-button"
                     disabled={actingId !== null}
@@ -1911,6 +2204,7 @@ export function GatheringMedia({
                       setEditingId(null)
                       setRemovingId(null)
                       setDeletingId(item.id)
+                      focusInRow(item.id, () => rowButtons.get(`${item.id}:deleteStep`))
                     }}
                   >
                     Delete permanently
@@ -1930,12 +2224,20 @@ export function GatheringMedia({
                 // beside it (the decline's shape; never a browser dialog). The
                 // step stays open while the request runs and closes with its
                 // outcome; the word "cancel" appears nowhere in it (CK-30).
-                <div className="media-review media-decline" role="group" aria-label={`Delete ${name}`}>
-                  <p className="field-hint">{DELETE_PERMANENTLY_CONFIRMATION}</p>
+                <div
+                  ref={rowButtons.register(`${item.id}:deleteStep`)}
+                  className="media-review media-decline"
+                  role="group"
+                  aria-labelledby={deleteSentence}
+                  tabIndex={-1}
+                >
+                  <p className="field-hint" id={deleteSentence}>
+                    {DELETE_PERMANENTLY_CONFIRMATION}
+                  </p>
                   <button
                     type="button"
                     disabled={actingId !== null}
-                    onClick={() => void bin(item, 'destroy')}
+                    onClick={() => void bin(item, 'destroy', 'personal', { index })}
                   >
                     {actingId === item.id ? 'Deleting…' : 'Delete permanently'}
                   </button>
@@ -1943,7 +2245,10 @@ export function GatheringMedia({
                     type="button"
                     className="link-button"
                     disabled={actingId !== null}
-                    onClick={() => setDeletingId(null)}
+                    onClick={() => {
+                      setDeletingId(null)
+                      focusInRow(item.id, () => rowButtons.get(`${item.id}:delete`))
+                    }}
                   >
                     Keep it
                   </button>
@@ -1957,6 +2262,7 @@ export function GatheringMedia({
                 // Opening it closes every other row step.
                 <div className="media-review media-bin">
                   <button
+                    ref={rowButtons.register(`${item.id}:remove`)}
                     type="button"
                     className="link-button"
                     disabled={actingId !== null}
@@ -1965,6 +2271,7 @@ export function GatheringMedia({
                       setDeletingId(null)
                       setDecliningId(null)
                       setRemovingId(item.id)
+                      focusInRow(item.id, () => rowButtons.get(`${item.id}:removeStep`))
                     }}
                   >
                     Remove from gathering
@@ -1984,15 +2291,19 @@ export function GatheringMedia({
                 // acts; "Leave it" does nothing; the step stays open while
                 // its request runs and closes with the outcome.
                 <div
+                  ref={rowButtons.register(`${item.id}:removeStep`)}
                   className="media-review media-decline"
                   role="group"
-                  aria-label={`Remove ${name} from this gathering`}
+                  aria-labelledby={removeSentence}
+                  tabIndex={-1}
                 >
-                  <p className="field-hint">{takedownSentence({ isHost, requiresApproval })}</p>
+                  <p className="field-hint" id={removeSentence}>
+                    {takedownSentence({ isHost, requiresApproval })}
+                  </p>
                   <button
                     type="button"
                     disabled={actingId !== null}
-                    onClick={() => void bin(item, 'remove', 'gathering')}
+                    onClick={() => void bin(item, 'remove', 'gathering', { index })}
                   >
                     {actingId === item.id && actingAct === 'remove' ? 'Removing…' : 'Remove it'}
                   </button>
@@ -2000,7 +2311,10 @@ export function GatheringMedia({
                     type="button"
                     className="link-button"
                     disabled={actingId !== null}
-                    onClick={() => setRemovingId(null)}
+                    onClick={() => {
+                      setRemovingId(null)
+                      focusInRow(item.id, () => rowButtons.get(`${item.id}:remove`))
+                    }}
                   >
                     Leave it
                   </button>
@@ -2022,9 +2336,10 @@ export function GatheringMedia({
                 // someone else's; no bulk empty exists.
                 <div className="media-review media-bin">
                   <button
+                    ref={rowButtons.register(`${item.id}:putBack`)}
                     type="button"
                     disabled={actingId !== null}
-                    onClick={() => void bin(item, 'restore', 'gathering')}
+                    onClick={() => void bin(item, 'restore', 'gathering', { index })}
                   >
                     {actingId === item.id && actingAct === 'restore' ? 'Putting back…' : 'Put back'}
                   </button>
@@ -2033,6 +2348,7 @@ export function GatheringMedia({
                   </p>
                   {destroyable && (
                     <button
+                      ref={rowButtons.register(`${item.id}:delete`)}
                       type="button"
                       className="link-button"
                       disabled={actingId !== null}
@@ -2040,6 +2356,7 @@ export function GatheringMedia({
                         setEditingId(null)
                         setRemovingId(null)
                         setDeletingId(item.id)
+                        focusInRow(item.id, () => rowButtons.get(`${item.id}:deleteStep`))
                       }}
                     >
                       Delete permanently
@@ -2050,13 +2367,15 @@ export function GatheringMedia({
               {reviewable && !declining && (
                 <div className="media-review">
                   <button
+                    ref={rowButtons.register(`${item.id}:publish`)}
                     type="button"
                     disabled={actingId !== null}
-                    onClick={() => void act(item, 'publish')}
+                    onClick={() => void act(item, 'publish', index)}
                   >
                     {actingId === item.id && actingAct === 'publish' ? 'Publishing…' : 'Publish'}
                   </button>
                   <button
+                    ref={rowButtons.register(`${item.id}:decline`)}
                     type="button"
                     className="link-button"
                     disabled={actingId !== null}
@@ -2065,6 +2384,7 @@ export function GatheringMedia({
                       // never share the screen: each closes the other.
                       setRemovingId(null)
                       setDecliningId(item.id)
+                      focusInRow(item.id, () => rowButtons.get(`${item.id}:declineStep`))
                     }}
                   >
                     Decline
@@ -2091,20 +2411,29 @@ export function GatheringMedia({
                 // THEIR OWN photograph is its remover and its uploader, so
                 // that row stays in their own bin: the own-photo line is
                 // true and stays.
-                <div className="media-review media-decline" role="group" aria-label={`Decline ${name}`}>
-                  <p className="field-hint">
+                <div
+                  ref={rowButtons.register(`${item.id}:declineStep`)}
+                  className="media-review media-decline"
+                  role="group"
+                  aria-labelledby={declineSentence}
+                  tabIndex={-1}
+                >
+                  <p className="field-hint" id={declineSentence}>
                     {item.is_own
                       ? `The gathering won't see this photo. You can still see it yourself for ${REMOVED_BIN_DAYS} days.`
                       : takedownSentence({ isHost: true, requiresApproval })}
                   </p>
-                  <button type="button" onClick={() => void act(item, 'decline')}>
+                  <button type="button" onClick={() => void act(item, 'decline', index)}>
                     {actingId === item.id ? 'Declining…' : 'Decline it'}
                   </button>
                   <button
                     type="button"
                     className="link-button"
                     disabled={actingId !== null}
-                    onClick={() => setDecliningId(null)}
+                    onClick={() => {
+                      setDecliningId(null)
+                      focusInRow(item.id, () => rowButtons.get(`${item.id}:decline`))
+                    }}
                   >
                     Leave it waiting
                   </button>
@@ -2114,7 +2443,7 @@ export function GatheringMedia({
               {rowError && (
                 <div className="media-review">
                   <FormLevelErrors errors={rowError} />
-                  <button type="button" className="link-button" onClick={refresh}>
+                  <button type="button" className="link-button" onClick={() => refresh()}>
                     Refresh the list
                   </button>
                 </div>
@@ -2158,6 +2487,7 @@ export function GatheringMedia({
           <button
             type="button"
             className="link-button"
+            ref={allViewButton}
             aria-pressed={allView}
             onClick={() => switchView('all')}
           >
@@ -2188,7 +2518,7 @@ export function GatheringMedia({
       {/* The upload form is the invited tier's (CK-80): none in the
           photos-only view, where the server refuses an intent. */}
       {canUpload && (
-        <form onSubmit={(event) => void upload(event)}>
+        <form ref={uploadForm} onSubmit={(event) => void upload(event)}>
           <label htmlFor="media-files">Add photos</label>
           <input
             id="media-files"
@@ -2267,9 +2597,13 @@ export function GatheringMedia({
           <span aria-hidden="true">⚠ </span>
           Photos couldn't be loaded just now.{' '}
           <button
+            ref={tryAgainRef}
             type="button"
             className="link-button"
             onClick={() => {
+              // Once the re-read lands, the heading; a second failure, the
+              // new Try again (CK-95).
+              owe({ kind: 'section' })
               setLoadFailed(false)
               setReloadKey((key) => key + 1)
             }}
@@ -2287,6 +2621,7 @@ export function GatheringMedia({
       <div className="media-search">
         <label htmlFor="media-search">Find a photo</label>
         <input
+          ref={searchRef}
           id="media-search"
           type="search"
           maxLength={200}
@@ -2350,6 +2685,7 @@ export function GatheringMedia({
         // NOTHING was published — and offers the re-read, because the rows
         // shown are the rows as they were when the batch was built.
         <form
+          ref={batchForm}
           className="media-batch"
           aria-label="Publish selected photos"
           onSubmit={(event) => void publishSelected(event)}
@@ -2362,6 +2698,7 @@ export function GatheringMedia({
             {allSelected ? 'Clear selection' : 'Select all'}
           </button>
           <button
+            ref={batchSubmit}
             type="submit"
             disabled={selected.length === 0 || selected.length > MAX_PUBLISH_BATCH || publishing}
           >
@@ -2379,7 +2716,7 @@ export function GatheringMedia({
             <p className="field-hint">
               Nothing was published — one of the selected photos can't be, and the note
               beside it says why.{' '}
-              <button type="button" className="link-button" onClick={refresh}>
+              <button type="button" className="link-button" onClick={() => refresh()}>
                 Refresh the list
               </button>{' '}
               and try again.

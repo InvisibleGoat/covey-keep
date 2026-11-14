@@ -89,6 +89,13 @@ const BIN_LINE_30 = 'In your bin. Only you can see it, and you can put it back f
 // The record's sentence, character for character (bin record §7.1; two-bins
 // §4) — pinned as a literal here, never through the constant that renders it.
 const CONFIRMATION = 'Are you sure? This will permanently remove the photo from CoveyKeep and cannot be recovered.'
+// CK-95 (the components doc's Focus after an answer): a step is named by its
+// sentence — a group labelled by the sentence it says, which takes focus as it
+// opens — where until then an aria-label named it after the act ("Delete
+// beach.jpg", "Decline …"). So the pins below find the delete step by
+// CONFIRMATION and the host's own decline step by its sentence; what each pin
+// asserts is unchanged.
+const OWN_DECLINE_STEP = /^The gathering won't see this photo\. /
 
 // The words the bin's surface may never use (the kickoff's ban list): each
 // promises something at the window's end, or a safety, that nothing enforces.
@@ -324,7 +331,7 @@ test("the three acts render on the caller's own ready photos and nowhere else �
   // CK-88: the own live photo's two acts are in the viewer its tile opens.
   let viewer = await openViewer(tiles[0], 'mine-live.jpg')
   expect(binActsOn(viewer)).toEqual(['Send to bin', 'Delete permanently'])
-  expect(within(viewer).queryByRole('group', { name: /^Delete / })).toBeNull()
+  expect(within(viewer).queryByRole('group', { name: CONFIRMATION })).toBeNull()
   closeViewer(viewer)
   expect(binActsOn(rows[0])).toEqual(['Send to bin', 'Delete permanently'])
   // The review's own acts on the waiting row, exactly as before.
@@ -350,13 +357,13 @@ test("the three acts render on the caller's own ready photos and nowhere else �
   expect(binActsOn(rows[3])).toEqual([])
   expect(binActsOn(rows[4])).toEqual([])
   // No delete step is open anywhere, and nothing was posted.
-  expect(screen.queryByRole('group', { name: /^Delete / })).toBeNull()
+  expect(screen.queryByRole('group', { name: CONFIRMATION })).toBeNull()
   expect(actRequests(mock)).toHaveLength(0)
 
   // The host's decline confirmation on their own waiting row — the other
   // confirmation the ban list covers — promises nothing at the window's end.
   fireEvent.click(within(rows[0]).getByRole('button', { name: 'Decline' }))
-  const decline = within(rows[0]).getByRole('group', { name: /^Decline / })
+  const decline = within(rows[0]).getByRole('group', { name: OWN_DECLINE_STEP })
   expect(decline.textContent).not.toMatch(BIN_BAN)
   fireEvent.click(within(decline).getByRole('button', { name: 'Leave it waiting' }))
 
@@ -423,7 +430,7 @@ test('Send to bin is one click — no confirmation — that posts once and re-re
   // controls say so and every other act on the page waits.
   expect(actRequests(mock)).toHaveLength(1)
   expect(actRequests(mock)[0][0].endsWith('/media/m-a/remove')).toBe(true)
-  expect(screen.queryByRole('group', { name: /^Delete / })).toBeNull()
+  expect(screen.queryByRole('group', { name: CONFIRMATION })).toBeNull()
   expect(within(viewer).getByRole('button', { name: 'Sending to bin…' })).toBeTruthy()
   expect(within(viewer).getByRole('button', { name: 'Delete permanently' }).hasAttribute('disabled')).toBe(true)
   // CK-88: the other photo's acts are in the viewer when it shows that
@@ -493,7 +500,7 @@ test('Delete permanently takes a second, deliberate step: nothing posted on the 
   expect(within(viewer).queryByRole('form', { name: 'Edit beach.jpg' })).toBeNull()
 
   // The first click asks, and nothing is sent.
-  let step = within(viewer).getByRole('group', { name: 'Delete beach.jpg' })
+  let step = within(viewer).getByRole('group', { name: CONFIRMATION })
   expect(within(step).getByText(CONFIRMATION)).toBeTruthy()
   expect(step.textContent).not.toMatch(BIN_BAN)
   // Never the word CK-30 keeps out of a warning, and no browser dialog.
@@ -511,26 +518,26 @@ test('Delete permanently takes a second, deliberate step: nothing posted on the 
   fireEvent.click(within(viewer).getByRole('button', { name: 'Next photo' }))
   viewer = screen.getByRole('dialog', { name: 'cake.jpg' })
   expect(binActsOn(viewer)).toEqual(['Send to bin', 'Delete permanently'])
-  expect(within(viewer).queryByRole('group', { name: /^Delete / })).toBeNull()
+  expect(within(viewer).queryByRole('group', { name: CONFIRMATION })).toBeNull()
   fireEvent.click(within(viewer).getByRole('button', { name: 'Previous photo' }))
   viewer = screen.getByRole('dialog', { name: 'beach.jpg' })
-  expect(within(viewer).queryByRole('group', { name: 'Delete beach.jpg' })).toBeNull()
+  expect(within(viewer).queryByRole('group', { name: CONFIRMATION })).toBeNull()
   expect(actRequests(mock)).toHaveLength(0)
   fireEvent.click(within(viewer).getByRole('button', { name: 'Delete permanently' }))
-  step = within(viewer).getByRole('group', { name: 'Delete beach.jpg' })
+  step = within(viewer).getByRole('group', { name: CONFIRMATION })
 
   // The do-nothing: the step closes, the controls return, nothing is sent.
   fireEvent.click(within(step).getByRole('button', { name: 'Keep it' }))
-  expect(within(viewer).queryByRole('group', { name: 'Delete beach.jpg' })).toBeNull()
+  expect(within(viewer).queryByRole('group', { name: CONFIRMATION })).toBeNull()
   expect(binActsOn(viewer)).toEqual(['Send to bin', 'Delete permanently'])
   expect(actRequests(mock)).toHaveLength(0)
   expect(server.rows.get('m-a')!.status).toBe('ready')
 
   // And the other way round: opening the editor closes the step.
   fireEvent.click(within(viewer).getByRole('button', { name: 'Delete permanently' }))
-  expect(within(viewer).getByRole('group', { name: 'Delete beach.jpg' })).toBeTruthy()
+  expect(within(viewer).getByRole('group', { name: CONFIRMATION })).toBeTruthy()
   fireEvent.click(within(viewer).getByRole('button', { name: 'Edit caption and tags' }))
-  expect(within(viewer).queryByRole('group', { name: 'Delete beach.jpg' })).toBeNull()
+  expect(within(viewer).queryByRole('group', { name: CONFIRMATION })).toBeNull()
   expect(within(viewer).getByRole('form', { name: 'Edit beach.jpg' })).toBeTruthy()
   fireEvent.click(within(viewer).getByRole('button', { name: 'Cancel' }))
   expect(actRequests(mock)).toHaveLength(0)
@@ -540,7 +547,7 @@ test('Delete permanently takes a second, deliberate step: nothing posted on the 
   const reads = listRequests(mock).length
   fireEvent.click(within(viewer).getByRole('button', { name: 'Delete permanently' }))
   fireEvent.click(
-    within(within(viewer).getByRole('group', { name: 'Delete beach.jpg' })).getByRole('button', {
+    within(within(viewer).getByRole('group', { name: CONFIRMATION })).getByRole('button', {
       name: 'Delete permanently',
     }),
   )
@@ -566,7 +573,7 @@ test('Delete permanently takes a second, deliberate step: nothing posted on the 
     expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Photos' }))
   })
   expect(screen.queryByText('beach.jpg')).toBeNull()
-  expect(screen.queryByRole('group', { name: /^Delete / })).toBeNull()
+  expect(screen.queryByRole('group', { name: CONFIRMATION })).toBeNull()
   expect(document.body.textContent).not.toMatch(BIN_BAN)
   expect(actRequests(mock)).toHaveLength(1)
 

@@ -21,6 +21,7 @@ import {
 } from '../lib/covers'
 import { PICKER_ACCEPT, POLL_INTERVAL_MS } from '../lib/media'
 import { Cover } from './Cover'
+import { useFocusRequest } from './useFocusRequest'
 
 // A PAGE'S COVER CARD (CK-84): the cover at the top of a group's or a
 // gathering's page, the page's <h1> over it, and — for the people who may
@@ -49,6 +50,15 @@ import { Cover } from './Cover'
 //   beside its members' — `removeStep`; those steps moved to the People
 //   page, and the cover's is the only step left on the group's page.)
 // - The hint: the way to a cover from a photograph, in the page's words.
+//
+// FOCUS AFTER AN ANSWER (CK-95; the components doc's Focus after an answer):
+// Upload a picture is disabled while its upload runs, so when the picture is
+// ready, has failed or was refused, focus goes back to it; Remove cover's step
+// takes focus as it opens — a group labelled by its sentence, never its Remove
+// cover — Keep it and a refusal put focus back on the opener, and a removal,
+// once the re-read has taken Remove cover away, goes to Upload a picture.
+// Every move only from the body or from inside the panel, so a person who
+// moved elsewhere while it waited keeps their place.
 //
 // The card is the cover's `wide` variant, the mockup's measure
 // (components/Cover.tsx) — a group's page since CK-86, a gathering's since
@@ -96,6 +106,15 @@ export function PageCover({
   const [removing, setRemoving] = useState(false)
   const [refusal, setRefusal] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const uploadRef = useRef<HTMLButtonElement>(null)
+  const removeOpenerRef = useRef<HTMLButtonElement>(null)
+  const removeStepRef = useRef<HTMLDivElement>(null)
+  const removeSentence = useId()
+  const focusInPanel = useFocusRequest(panelRef)
+  // A removal landed: focus is owed to Upload a picture once the re-read has
+  // taken the cover, and Remove cover with it, away.
+  const removedOwed = useRef(false)
 
   // Cancel-on-unmount for the handlers (the CK-18 convention).
   const alive = useRef(true)
@@ -133,21 +152,29 @@ export function PageCover({
       }
       if (progress.state === 'ready') {
         setPhase({ state: 'idle' })
+        focusInPanel(uploadRef)
         onChangedRef.current()
         announceCoverChange()
         return
       }
       setPhase({ state: 'failed', code: progress.code })
+      focusInPanel(uploadRef)
     }
     schedule()
     return () => {
       cancelled = true
       if (timer !== undefined) clearTimeout(timer)
     }
-  }, [preparingId, pollIntervalMs])
+  }, [preparingId, pollIntervalMs, focusInPanel])
 
   const busy = phase.state === 'uploading' || phase.state === 'preparing'
   const coverSet = cover !== null && cover !== undefined
+
+  useEffect(() => {
+    if (!removedOwed.current || coverSet) return
+    removedOwed.current = false
+    focusInPanel(uploadRef)
+  }, [coverSet, focusInPanel])
 
   function togglePanel() {
     if (open && removeOpen) setRemoveOpen(false)
@@ -165,6 +192,7 @@ export function PageCover({
         ? { state: 'preparing', coverImageId: outcome.coverImageId }
         : { state: 'failed', code: outcome.code },
     )
+    if (!outcome.ok) focusInPanel(uploadRef)
   }
 
   async function remove() {
@@ -176,11 +204,13 @@ export function PageCover({
     setRemoveOpen(false)
     if (outcome.ok) {
       forgetCoverPicture(subject, id)
+      removedOwed.current = true
       onChangedRef.current()
       announceCoverChange()
       return
     }
     setRefusal(COVER_REFUSED)
+    focusInPanel(removeOpenerRef)
   }
 
   const action = organises ? (
@@ -201,7 +231,7 @@ export function PageCover({
         {children}
       </Cover>
       {organises && (
-        <div id={panelId} className="auth-card cover-panel" hidden={!open}>
+        <div id={panelId} ref={panelRef} className="auth-card cover-panel" hidden={!open}>
           {open && (
             <>
               <input
@@ -216,7 +246,7 @@ export function PageCover({
                   if (file) void upload(file)
                 }}
               />
-              <button type="button" disabled={busy} onClick={() => fileInput.current?.click()}>
+              <button ref={uploadRef} type="button" disabled={busy} onClick={() => fileInput.current?.click()}>
                 {UPLOAD_A_PICTURE}
               </button>
               <p className="field-hint cover-status" role="status">
@@ -232,8 +262,8 @@ export function PageCover({
                 (removeOpen ? (
                   // The second, deliberate step: the first click only asked,
                   // and Keep it does nothing.
-                  <div role="group" aria-label={REMOVE_COVER}>
-                    <p className="field-hint">
+                  <div ref={removeStepRef} role="group" aria-labelledby={removeSentence} tabIndex={-1}>
+                    <p className="field-hint" id={removeSentence}>
                       {cover?.source === 'photo' ? photoRemovalSentence : REMOVE_UPLOADED_SENTENCE}
                     </p>
                     <button type="button" disabled={removing} onClick={() => void remove()}>
@@ -243,17 +273,22 @@ export function PageCover({
                       type="button"
                       className="link-button"
                       disabled={removing}
-                      onClick={() => setRemoveOpen(false)}
+                      onClick={() => {
+                        setRemoveOpen(false)
+                        focusInPanel(removeOpenerRef)
+                      }}
                     >
                       {KEEP_IT}
                     </button>
                   </div>
                 ) : (
                   <button
+                    ref={removeOpenerRef}
                     type="button"
                     onClick={() => {
                       setRefusal(null)
                       setRemoveOpen(true)
+                      focusInPanel(removeStepRef)
                     }}
                   >
                     {REMOVE_COVER}

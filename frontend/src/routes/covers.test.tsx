@@ -34,6 +34,15 @@ import { GroupDetail } from './GroupDetail'
 import { GroupPeople } from './GroupPeople'
 import { Groups } from './Groups'
 
+// CK-95 (the components doc's Focus after an answer): a step is named by its
+// sentence — a group labelled by the sentence it says, which takes focus as it
+// opens — where until then an aria-label named it after the act. So the pins
+// below that found Remove cover's step and the group cover's step by the act
+// find them by their sentence; what each pin asserts is unchanged.
+const REMOVE_UPLOADED_STEP = 'The picture will be deleted. The empty cover shows until someone chooses another.'
+const GROUP_COVER_STEP =
+  "Everyone in The Lees will see this photo as the group's cover, including people who can't see The Party."
+
 const person: Person = {
   id: 'person-ada',
   display_name: 'Ada Test',
@@ -751,15 +760,15 @@ test('Remove cover on a gathering’s page: the first click posts nothing, the u
   await waitFor(() => expect(cardImageSrc()).toBe('blob:cover-1'))
   fireEvent.click(screen.getByRole('button', { name: 'Remove cover' }))
   expect(requests(mock, 'DELETE', /cover/)).toHaveLength(0)
-  const step = screen.getByRole('group', { name: 'Remove cover' })
+  const step = screen.getByRole('group', { name: REMOVE_UPLOADED_STEP })
   expect(within(step).getByText('The picture will be deleted. The empty cover shows until someone chooses another.')).toBeTruthy()
   fireEvent.click(within(step).getByRole('button', { name: 'Keep it' }))
-  expect(screen.queryByRole('group', { name: 'Remove cover' })).toBeNull()
+  expect(screen.queryByRole('group', { name: REMOVE_UPLOADED_STEP })).toBeNull()
   expect(requests(mock, 'DELETE', /cover/)).toHaveLength(0)
   expect(cardImageSrc()).toBe('blob:cover-1')
 
   fireEvent.click(screen.getByRole('button', { name: 'Remove cover' }))
-  fireEvent.click(within(screen.getByRole('group', { name: 'Remove cover' })).getByRole('button', { name: 'Remove cover' }))
+  fireEvent.click(within(screen.getByRole('group', { name: REMOVE_UPLOADED_STEP })).getByRole('button', { name: 'Remove cover' }))
   await waitFor(() => expect(requests(mock, 'GET', '/gatherings/g-1')).toHaveLength(2))
   expect(requests(mock, 'DELETE', '/gatherings/g-1/cover')).toHaveLength(1)
   expect(await within(coverCard()).findByText('No cover photo yet')).toBeTruthy()
@@ -800,10 +809,10 @@ test('on a group’s page Remove cover’s step is the card’s own, the page’
   expect(document.querySelector('.member-name')).toBeNull()
   expect(screen.queryByRole('button', { name: /Remove from group|Make admin|Leave this group/ })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Remove cover' }))
-  const step = screen.getByRole('group', { name: 'Remove cover' })
+  const step = screen.getByRole('group', { name: REMOVE_UPLOADED_STEP })
   expect(screen.getAllByRole('group')).toEqual([step])
   fireEvent.click(within(step).getByRole('button', { name: 'Keep it' }))
-  expect(screen.queryByRole('group', { name: 'Remove cover' })).toBeNull()
+  expect(screen.queryByRole('group', { name: REMOVE_UPLOADED_STEP })).toBeNull()
   expect(screen.getByRole('button', { name: 'Remove cover' })).toBeTruthy()
   expect(requests(mock, 'DELETE', /./)).toHaveLength(0)
   view.unmount()
@@ -831,7 +840,7 @@ test('a refused Remove cover reads the house line, and nothing is re-read', asyn
   renderAt('/groups/grp-1')
   fireEvent.click(await screen.findByRole('button', { name: 'Change cover' }))
   fireEvent.click(screen.getByRole('button', { name: 'Remove cover' }))
-  fireEvent.click(within(screen.getByRole('group', { name: 'Remove cover' })).getByRole('button', { name: 'Remove cover' }))
+  fireEvent.click(within(screen.getByRole('group', { name: REMOVE_UPLOADED_STEP })).getByRole('button', { name: 'Remove cover' }))
   expect(await screen.findByText('Something went wrong. Nothing changed — try again.')).toBeTruthy()
   expect(requests(mock, 'GET', '/groups/grp-1')).toHaveLength(1)
   expect(heard).toBe(0)
@@ -968,7 +977,7 @@ test('Use as the group’s cover: the group read ONCE, when the viewer first ope
   expect(within(viewer).queryByRole('button', { name: 'Use as cover' })).toBeNull()
   const ask = await within(viewer).findByRole('button', { name: "Use as the group's cover" })
   fireEvent.click(ask)
-  const step = within(viewer).getByRole('group', { name: "Use as the group's cover" })
+  const step = within(viewer).getByRole('group', { name: GROUP_COVER_STEP })
   expect(
     within(step).getByText(
       "Everyone in The Lees will see this photo as the group's cover, including people who can't see The Party.",
@@ -976,19 +985,19 @@ test('Use as the group’s cover: the group read ONCE, when the viewer first ope
   ).toBeTruthy()
   expect(requests(mock, 'PUT', /cover/)).toHaveLength(0)
   fireEvent.click(within(step).getByRole('button', { name: 'Not now' }))
-  expect(within(viewer).queryByRole('group', { name: "Use as the group's cover" })).toBeNull()
+  expect(within(viewer).queryByRole('group', { name: GROUP_COVER_STEP })).toBeNull()
   expect(requests(mock, 'PUT', /cover/)).toHaveLength(0)
 
   fireEvent.click(within(viewer).getByRole('button', { name: "Use as the group's cover" }))
   fireEvent.click(
-    within(within(viewer).getByRole('group', { name: "Use as the group's cover" })).getByRole('button', {
+    within(within(viewer).getByRole('group', { name: GROUP_COVER_STEP })).getByRole('button', {
       name: "Use as the group's cover",
     }),
   )
   expect(await within(viewer).findByText("The Lees's cover is set.")).toBeTruthy()
   expect(within(viewer).getByRole('status').textContent).toBe("The Lees's cover is set.")
   expect(JSON.parse(String(requests(mock, 'PUT', '/groups/grp-1/cover')[0][1]?.body))).toEqual({ media_id: 'm-1' })
-  expect(within(viewer).queryByRole('group', { name: "Use as the group's cover" })).toBeNull()
+  expect(within(viewer).queryByRole('group', { name: GROUP_COVER_STEP })).toBeNull()
   expect(heard).toBe(1)
   // The gathering's own cover did not move, and nothing was re-read.
   expect(within(coverCard()).getByText('No cover photo yet')).toBeTruthy()
@@ -1052,7 +1061,7 @@ test('a refused Use as cover, or Use as the group’s cover, reads the house lin
   fireEvent.click(await within(viewer).findByRole('button', { name: "Use as the group's cover" }))
   expect(within(viewer).queryByRole('alert')).toBeNull()
   fireEvent.click(
-    within(within(viewer).getByRole('group', { name: "Use as the group's cover" })).getByRole('button', {
+    within(within(viewer).getByRole('group', { name: GROUP_COVER_STEP })).getByRole('button', {
       name: "Use as the group's cover",
     }),
   )

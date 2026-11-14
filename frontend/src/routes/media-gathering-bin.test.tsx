@@ -142,6 +142,22 @@ const CO_HOST_REMOVE_GATED =
 const CONFIRMATION =
   'Are you sure? This will permanently remove the photo from CoveyKeep and cannot be recovered.'
 
+// CK-95 (the components doc's Focus after an answer): a step is named by its
+// sentence — a group labelled by the sentence it says, which takes focus as it
+// opens — where until then an aria-label named it after the act ("Remove
+// beach.jpg from this gathering", "Delete mine.jpg", "Decline …"). So the pins
+// below find a step by its sentence. The host's remove step and their decline
+// step on someone else's photo say the same sentence (REMOVE_SENTENCE), so where
+// a pin asks that one of the two is NOT open, it finds a step by the button that
+// acts in it; what each pin asserts is unchanged.
+function stepActing(root: HTMLElement, acting: string): HTMLElement | null {
+  return (
+    within(root)
+      .queryAllByRole('group')
+      .find((group) => within(group).queryByRole('button', { name: acting }) !== null) ?? null
+  )
+}
+
 // The words the host's side may never use (the kickoff's ban list): each
 // promises something at the window's end, or a safety, that nothing
 // enforces.
@@ -533,7 +549,7 @@ test('the remove step, in the viewer: nothing posted on the first click, the exa
   // CK-88: in the viewer beach.jpg's tile opens, where its row's takedown went.
   let viewer = await openViewer(1, 2, 'beach.jpg')
   fireEvent.click(within(viewer).getByRole('button', { name: 'Remove from gathering' }))
-  const step = within(viewer).getByRole('group', { name: 'Remove beach.jpg from this gathering' })
+  const step = within(viewer).getByRole('group', { name: REMOVE_SENTENCE })
   expect(step.textContent).toContain(REMOVE_SENTENCE)
   expect(step.textContent).not.toMatch(BIN_BAN)
   expect(step.textContent).not.toMatch(/cancel|delet|destroy/i)
@@ -543,7 +559,7 @@ test('the remove step, in the viewer: nothing posted on the first click, the exa
 
   // The do-nothing: the step closes, nothing was sent, nothing moved.
   fireEvent.click(within(step).getByRole('button', { name: 'Leave it' }))
-  expect(within(viewer).queryByRole('group', { name: /^Remove / })).toBeNull()
+  expect(stepActing(viewer, 'Remove it')).toBeNull()
   expect(actRequests(mock)).toHaveLength(0)
   expect(server.rows.get('m-theirs')!.publication_state).toBe('live')
 
@@ -566,27 +582,28 @@ test('the remove step, in the viewer: nothing posted on the first click, the exa
   expect(screen.queryByRole('form', { name: 'Edit mine.jpg' })).toBeNull()
   next()
   fireEvent.click(within(viewer).getByRole('button', { name: 'Edit caption and tags' }))
-  expect(screen.queryByRole('group', { name: /^Remove / })).toBeNull()
+  expect(stepActing(document.body, 'Remove it')).toBeNull()
   fireEvent.click(within(viewer).getByRole('button', { name: 'Cancel' }))
   // The delete step on the host's own photo closes it too, and vice versa.
   previous()
   openRemove()
   next()
   fireEvent.click(within(viewer).getByRole('button', { name: 'Delete permanently' }))
-  expect(screen.queryByRole('group', { name: /^Remove / })).toBeNull()
-  expect(within(viewer).getByRole('group', { name: 'Delete mine.jpg' })).toBeTruthy()
+  expect(stepActing(document.body, 'Remove it')).toBeNull()
+  expect(within(viewer).getByRole('group', { name: CONFIRMATION })).toBeTruthy()
   previous()
   openRemove()
-  expect(screen.queryByRole('group', { name: 'Delete mine.jpg' })).toBeNull()
+  expect(screen.queryByRole('group', { name: CONFIRMATION })).toBeNull()
   // And the decline step on someone else's waiting row.
   // CK-88: the waiting photo stays a row, behind the modal viewer, so the
   // remove step is closed with the viewer before Decline can be pressed —
   // and the decline step opens with no remove step anywhere.
   closeViewer(viewer)
-  expect(screen.queryByRole('group', { name: /^Remove / })).toBeNull()
+  expect(stepActing(document.body, 'Remove it')).toBeNull()
   fireEvent.click(within(rowNamed('waiting.jpg')).getByRole('button', { name: 'Decline' }))
-  expect(screen.queryByRole('group', { name: /^Remove / })).toBeNull()
-  expect(within(rowNamed('waiting.jpg')).getByRole('group', { name: /^Decline / })).toBeTruthy()
+  expect(stepActing(document.body, 'Remove it')).toBeNull()
+  expect(within(rowNamed('waiting.jpg')).getByRole('group', { name: REMOVE_SENTENCE })).toBeTruthy()
+  expect(stepActing(rowNamed('waiting.jpg'), 'Decline it')).toBeTruthy()
   // CK-88: the remove step opens in beach.jpg's viewer, and — as on the row
   // it came from — opening it closes the decline step. SOFT, so the rest of
   // the test still runs: the viewer's Remove from gathering leaves the decline
@@ -594,14 +611,14 @@ test('the remove step, in the viewer: nothing posted on the first click, the exa
   // where the row's did) — reported as a component defect, left failing.
   viewer = await openViewer(1, 2, 'beach.jpg')
   openRemove()
-  expect.soft(screen.queryByRole('group', { name: /^Decline / })).toBeNull()
+  expect.soft(stepActing(document.body, 'Decline it')).toBeNull()
   expect(actRequests(mock)).toHaveLength(0)
 
   // The second click, deliberately: one POST to `remove`, then the re-read
   // — the photo leaves the host's default list (it is in the gathering's
   // bin, which the default list excludes) and the Removed view holds it.
   fireEvent.click(
-    within(within(viewer).getByRole('group', { name: /^Remove / })).getByRole('button', {
+    within(within(viewer).getByRole('group', { name: REMOVE_SENTENCE })).getByRole('button', {
       name: 'Remove it',
     }),
   )
@@ -812,7 +829,7 @@ test(`Delete permanently in the bin view is CK-64's step — the same sentence, 
   // The first click only opens the step: the sentence verbatim, nothing
   // posted, and the word CK-30 keeps out of a warning nowhere in it.
   fireEvent.click(within(rows[0]).getByRole('button', { name: 'Delete permanently' }))
-  const step = within(rows[0]).getByRole('group', { name: 'Delete binned.jpg' })
+  const step = within(rows[0]).getByRole('group', { name: CONFIRMATION })
   expect(within(step).getByText(CONFIRMATION)).toBeTruthy()
   expect(step.textContent).not.toMatch(BIN_BAN)
   expect(step.textContent).not.toMatch(/cancel/i)
@@ -820,7 +837,7 @@ test(`Delete permanently in the bin view is CK-64's step — the same sentence, 
 
   // Keep it: inert — the step closes, nothing posted, nothing moved.
   fireEvent.click(within(step).getByRole('button', { name: 'Keep it' }))
-  expect(within(rows[0]).queryByRole('group', { name: 'Delete binned.jpg' })).toBeNull()
+  expect(within(rows[0]).queryByRole('group', { name: CONFIRMATION })).toBeNull()
   expect(actRequests(mock)).toHaveLength(0)
   expect(server.rows.get('m-bin')!.status).toBe('ready')
 
@@ -829,7 +846,7 @@ test(`Delete permanently in the bin view is CK-64's step — the same sentence, 
   // line says why.
   fireEvent.click(within(rows[0]).getByRole('button', { name: 'Delete permanently' }))
   fireEvent.click(
-    within(within(rows[0]).getByRole('group', { name: 'Delete binned.jpg' })).getByRole('button', {
+    within(within(rows[0]).getByRole('group', { name: CONFIRMATION })).getByRole('button', {
       name: 'Delete permanently',
     }),
   )
@@ -967,13 +984,13 @@ test("a co-host's side: Remove from gathering in the viewer of someone else's li
   // CK-88: in theirs-live.jpg's viewer.
   viewer = await openViewer(1, 2, 'theirs-live.jpg')
   fireEvent.click(within(viewer).getByRole('button', { name: 'Remove from gathering' }))
-  let step = within(viewer).getByRole('group', { name: 'Remove theirs-live.jpg from this gathering' })
+  let step = within(viewer).getByRole('group', { name: CO_HOST_REMOVE_OPEN })
   expect(step.textContent).toContain(CO_HOST_REMOVE_OPEN)
   expect(step.textContent).not.toMatch(/nobody|grandma|any co-hosts|included/i)
   expect(step.textContent).not.toMatch(BIN_BAN)
   expect(actRequests(mock)).toHaveLength(0)
   fireEvent.click(within(step).getByRole('button', { name: 'Leave it' }))
-  expect(within(viewer).queryByRole('group', { name: /^Remove / })).toBeNull()
+  expect(stepActing(viewer, 'Remove it')).toBeNull()
   // CK-88: closed, as a person would, before the page changes beneath it.
   closeViewer(viewer)
 
@@ -983,7 +1000,7 @@ test("a co-host's side: Remove from gathering in the viewer of someone else's li
   // CK-88: in the viewer, opened afresh on the re-rendered page.
   viewer = await openViewer(1, 2, 'theirs-live.jpg')
   fireEvent.click(within(viewer).getByRole('button', { name: 'Remove from gathering' }))
-  step = within(viewer).getByRole('group', { name: /^Remove / })
+  step = within(viewer).getByRole('group', { name: CO_HOST_REMOVE_GATED })
   expect(step.textContent).toContain(CO_HOST_REMOVE_GATED)
   expect(step.textContent).not.toMatch(BIN_BAN)
   expect(step.textContent).not.toMatch(/approv|shared|screen|nobody|included/i)

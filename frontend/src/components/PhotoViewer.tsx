@@ -13,6 +13,7 @@ import {
 import { createPortal } from 'react-dom'
 import { fetchLayerObjectUrl, mediaName, type MediaItem } from '../lib/media'
 import { Icon } from './Icons'
+import { useFocusRequest } from './useFocusRequest'
 import { useNearViewport } from './useNearViewport'
 
 // The photo viewer (CK-88; the merge record §1.4 and §3 item 8, the mockup's
@@ -225,6 +226,17 @@ export function PhotoViewer({ photos, current, onMove, single, setLabel, total, 
     .map((position) => photos[position].id)
   const wantedKey = wanted.join(' ')
   const [retryKey, setRetryKey] = useState(0)
+  // Retry (CK-95): once its layer answers, focus on Full screen where the
+  // photo is shown, or on the new Retry where it failed again — while it is
+  // still the photo on screen, and only from the body or the stage, so a
+  // person who moved on keeps their place.
+  const retryRef = useRef<HTMLButtonElement>(null)
+  const retryOwed = useRef<string | null>(null)
+  const currentId = useRef<string | null>(null)
+  const focusInStage = useFocusRequest(stageRef)
+  useLayoutEffect(() => {
+    currentId.current = item.id
+  })
 
   useEffect(() => {
     const keep = new Set(wantedKey === '' ? [] : wantedKey.split(' '))
@@ -247,10 +259,16 @@ export function PhotoViewer({ photos, current, onMove, single, setLabel, total, 
           ? { status: 'shown', objectUrl: outcome.objectUrl }
           : { status: 'failed', reason: outcome.reason }
         layersChanged()
+        if (retryOwed.current === mediaId) {
+          retryOwed.current = null
+          focusInStage(() =>
+            currentId.current === mediaId ? (outcome.ok ? fullRef.current : retryRef.current) : null,
+          )
+        }
       })
     }
     layersChanged()
-  }, [wantedKey, retryKey])
+  }, [wantedKey, retryKey, focusInStage])
 
   useEffect(() => {
     const layers = held.current
@@ -269,6 +287,7 @@ export function PhotoViewer({ photos, current, onMove, single, setLabel, total, 
       entry.cancelled = true
       held.current.delete(item.id)
     }
+    retryOwed.current = item.id
     setRetryKey((key) => key + 1)
   }
 
@@ -704,7 +723,7 @@ export function PhotoViewer({ photos, current, onMove, single, setLabel, total, 
         ) : layer.status === 'failed' ? (
           <span className="vplaceholder">
             {layer.reason === 'not_ready' ? 'Not ready to show yet.' : "Couldn't show this photo just now."}{' '}
-            <button type="button" className="link-button" onClick={retryCurrent}>
+            <button ref={retryRef} type="button" className="link-button" onClick={retryCurrent}>
               Retry
             </button>
           </span>
