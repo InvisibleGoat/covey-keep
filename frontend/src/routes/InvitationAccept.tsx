@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { BrandMark, Quail, SignInPrints } from '../components/AuthArt'
+import { useFocusRequest } from '../components/useFocusRequest'
 import { apiFetch, authFetch } from '../lib/api'
 import {
   clearInvitationToken,
@@ -24,6 +25,12 @@ import { parkReturnPath } from '../lib/returnPath'
 // anyone is pushed through a pointless sign-in — and a valid one parks the
 // token (lib/invitations.ts) so it survives the magic-link round trip;
 // /auth/callback routes back here when a parked token exists.
+//
+// Since CK-97 a failed check says one sentence, an alert, and offers Try
+// again, which runs the same call once more on the token still held — the
+// preview signed out, the acceptance signed in. Focus lands on the new
+// screen's <h1>, or on the new Try again where it fails again; a landing
+// that navigates needs nothing.
 
 type ScreenState =
   | { status: 'working' }
@@ -43,8 +50,15 @@ export function InvitationAccept() {
   const [screen, setScreen] = useState<ScreenState>({ status: 'working' })
   // The accept/preview call fires exactly once (StrictMode re-runs effects);
   // accepting is idempotent server-side, but one call is still the contract.
-  const started = useRef(false)
+  // A Try again is a new attempt, the call made once more (CK-97).
+  const started = useRef<number | null>(null)
+  const [attempt, setAttempt] = useState(0)
+  const retryOwed = useRef(false)
   const alive = useRef(true)
+  const mainRef = useRef<HTMLElement>(null)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const tryAgainRef = useRef<HTMLButtonElement>(null)
+  const requestFocus = useFocusRequest(mainRef)
 
   useEffect(() => {
     alive.current = true
@@ -68,12 +82,20 @@ export function InvitationAccept() {
   }, [])
 
   useEffect(() => {
-    if (!fragmentConsumed || authStatus === 'loading' || started.current) return
+    if (!fragmentConsumed || authStatus === 'loading' || started.current === attempt) return
     if (token === null) {
       setScreen({ status: 'missing' })
       return
     }
-    started.current = true
+    started.current = attempt
+    const owed = retryOwed.current
+    retryOwed.current = false
+    // Where a retry's answer lands: the new screen's heading, or the new
+    // Try again (the hook spends it after the render that draws it).
+    const show = (next: ScreenState) => {
+      setScreen(next)
+      if (owed) requestFocus(next.status === 'failed' ? tryAgainRef : headingRef)
+    }
 
     async function act(resolved: string) {
       try {
@@ -85,7 +107,7 @@ export function InvitationAccept() {
           })
           if (!alive.current) return
           if (!response.ok) {
-            setScreen({ status: 'failed' })
+            show({ status: 'failed' })
             return
           }
           const result = (await response.json()) as AcceptResult
@@ -101,7 +123,7 @@ export function InvitationAccept() {
           // A dead token is spent for good — unpark it so the callback stops
           // routing back here.
           clearInvitationToken()
-          setScreen({ status: result.status as Exclude<AcceptResult['status'], 'accepted' | 'already_accepted'> })
+          show({ status: result.status as Exclude<AcceptResult['status'], 'accepted' | 'already_accepted'> })
         } else {
           const response = await apiFetch('/invitations/preview', {
             method: 'POST',
@@ -110,7 +132,7 @@ export function InvitationAccept() {
           })
           if (!alive.current) return
           if (!response.ok) {
-            setScreen({ status: 'failed' })
+            show({ status: 'failed' })
             return
           }
           const preview = (await response.json()) as InvitationPreview
@@ -120,18 +142,24 @@ export function InvitationAccept() {
             // invitation-token branch, which did this alone before CK-79,
             // stays as its fallback.
             parkReturnPath('/invitations/accept')
-            setScreen({ status: 'signInNeeded', title: preview.gathering_title })
+            show({ status: 'signInNeeded', title: preview.gathering_title })
           } else {
             clearInvitationToken()
-            setScreen({ status: preview.status })
+            show({ status: preview.status })
           }
         }
       } catch {
-        if (alive.current) setScreen({ status: 'failed' })
+        if (alive.current) show({ status: 'failed' })
       }
     }
     void act(token)
-  }, [fragmentConsumed, token, authStatus, navigate])
+  }, [fragmentConsumed, token, authStatus, attempt, navigate, requestFocus])
+
+  function tryAgain() {
+    retryOwed.current = true
+    setScreen({ status: 'working' })
+    setAttempt((n) => n + 1)
+  }
 
   // The two states the mockup draws (CK-81; screens 20 and 21): the waiting
   // quail while the invitation is checked, and the signed-out landing beside
@@ -139,7 +167,7 @@ export function InvitationAccept() {
   // tokens' screens below keep their markup and take the look.
   if (screen.status === 'working') {
     return (
-      <main className="auth-screen">
+      <main className="auth-screen" ref={mainRef}>
         <div className="auth-wait">
           <Quail />
           <p>Checking your invitation…</p>
@@ -150,12 +178,12 @@ export function InvitationAccept() {
 
   if (screen.status === 'signInNeeded') {
     return (
-      <main className="auth-screen auth-split">
+      <main className="auth-screen auth-split" ref={mainRef}>
         <SignInPrints />
         <div className="auth-side">
           <BrandMark />
           <div className="auth-head">
-            <h1>You're invited</h1>
+            <h1 ref={headingRef} tabIndex={-1}>You're invited</h1>
             {screen.title !== null && <p>You've been invited to "{screen.title}".</p>}
             <p>Sign in (or create your account) to accept — you'll come right back here.</p>
           </div>
@@ -169,8 +197,8 @@ export function InvitationAccept() {
 
   if (screen.status === 'expired') {
     return (
-      <main className="auth-screen">
-        <h1>This invitation has expired</h1>
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>This invitation has expired</h1>
         <p>Invitations last 7 days. Ask the person who invited you to send a fresh one.</p>
       </main>
     )
@@ -178,8 +206,8 @@ export function InvitationAccept() {
 
   if (screen.status === 'revoked') {
     return (
-      <main className="auth-screen">
-        <h1>This invitation is no longer active</h1>
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>This invitation is no longer active</h1>
         <p>It was withdrawn or replaced. Ask the person who invited you to send a fresh one.</p>
       </main>
     )
@@ -187,8 +215,8 @@ export function InvitationAccept() {
 
   if (screen.status === 'used') {
     return (
-      <main className="auth-screen">
-        <h1>This invitation has already been used</h1>
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>This invitation has already been used</h1>
         <p>
           If that was you, sign in with the same account and the gathering will be on your
           list. Otherwise, ask the person who invited you to send a fresh one.
@@ -200,20 +228,22 @@ export function InvitationAccept() {
 
   if (screen.status === 'failed') {
     return (
-      <main className="auth-screen">
-        <h1>Something went wrong</h1>
-        <p className="form-error">
-          The invitation couldn't be checked just now. Try the link from your invitation
-          again.
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>Something went wrong</h1>
+        <p className="form-error" role="alert">
+          The invitation couldn't be checked just now.
         </p>
+        <button ref={tryAgainRef} type="button" onClick={tryAgain}>
+          Try again
+        </button>
       </main>
     )
   }
 
   // missing and invalid: the link never resolved to an invitation at all.
   return (
-    <main className="auth-screen">
-      <h1>That invitation link didn't work</h1>
+    <main className="auth-screen" ref={mainRef}>
+      <h1 ref={headingRef} tabIndex={-1}>That invitation link didn't work</h1>
       <p>
         The link looks incomplete or isn't valid. Try opening it again from your
         invitation, or ask for a new one.

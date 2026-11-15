@@ -1,8 +1,11 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import type { Person } from '../auth/context'
 import { useAuth } from '../auth/useAuth'
 import { MAKER_LINE } from '../brand'
 import { Icon } from '../components/Icons'
+import { useFocusRequest } from '../components/useFocusRequest'
+import { authFetch } from '../lib/api'
 import { planLine, readBilling, type Billing } from '../lib/billing'
 import { initials } from '../lib/groups'
 import { chooseMenuLayout, useMenuLayout, type MenuLayout } from '../lib/menuLayout'
@@ -19,6 +22,12 @@ import { chooseTheme, readTheme, type Theme } from '../lib/theme'
 // and panel, lib/menuLayout.ts, the menu following at once), then Appearance.
 //
 // Not here, a later phase: Favorites (favourites are unbuilt, the record §4).
+//
+// Since CK-97 a profile that couldn't be loaded has a Try again beside its
+// line (Steven, 2026-11-14): `/auth/me` read once more through `authFetch`,
+// the person handed to the session on success, so the menu's footer follows;
+// focus on the <h1> You when it lands, on the new Try again when it fails
+// again. The line is no alert — it is what the page says, not news.
 
 const MENU_LAYOUTS: { layout: MenuLayout; label: string; hint: string }[] = [
   { layout: 'list', label: 'One list', hint: 'Your groups and gatherings together, with a picture beside each name.' },
@@ -31,7 +40,13 @@ const APPEARANCE: { theme: Theme; label: string; hint: string }[] = [
 ]
 
 export function You() {
-  const { person, signOut } = useAuth()
+  const { person, signOut, updatePerson } = useAuth()
+  const mainRef = useRef<HTMLElement>(null)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const tryAgainRef = useRef<HTMLButtonElement>(null)
+  const requestFocus = useFocusRequest(mainRef)
+  const [reading, setReading] = useState(false)
+  const alive = useRef(true)
   const [theme, setTheme] = useState<Theme>(readTheme)
   const menuLayout = useMenuLayout()
   // Your plan's line, read from GET /billing — the screen keeps no numbers
@@ -50,14 +65,42 @@ export function You() {
     }
   }, [])
 
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+
+  async function readAgain() {
+    setReading(true)
+    let loaded: Person | null = null
+    try {
+      const response = await authFetch('/auth/me')
+      if (response.ok) loaded = (await response.json()) as Person
+    } catch {
+      // Unreachable: the line stays, with Try again.
+    }
+    if (!alive.current) return
+    setReading(false)
+    if (loaded) {
+      updatePerson(loaded)
+      requestFocus(headingRef)
+    } else {
+      requestFocus(tryAgainRef)
+    }
+  }
+
   function choose(next: Theme) {
     chooseTheme(next)
     setTheme(next)
   }
 
   return (
-    <main className="auth-screen you-screen">
-      <h1>You</h1>
+    <main className="auth-screen you-screen" ref={mainRef}>
+      <h1 ref={headingRef} tabIndex={-1}>
+        You
+      </h1>
 
       <div className="auth-card you-who">
         {person ? (
@@ -71,7 +114,18 @@ export function You() {
             </div>
           </>
         ) : (
-          <p>You're signed in, but your profile couldn't be loaded just now.</p>
+          <div>
+            <p id={`${ids}-profile`}>You're signed in, but your profile couldn't be loaded just now.</p>
+            <button
+              ref={tryAgainRef}
+              type="button"
+              aria-describedby={`${ids}-profile`}
+              disabled={reading}
+              onClick={() => void readAgain()}
+            >
+              Try again
+            </button>
+          </div>
         )}
       </div>
 

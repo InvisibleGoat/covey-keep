@@ -53,7 +53,6 @@ const B1 = 'IMG_b1.jpg'
 const F1 = 'IMG_f1.jpg'
 const G1 = 'IMG_g1.jpg'
 const G2 = 'IMG_g2.jpg'
-const P1 = 'IMG_p1.jpg'
 
 const HOST_TAKEDOWN = takedownSentence({ isHost: true, requiresApproval: true })
 const OWN_DECLINE = `The gathering won't see this photo. You can still see it yourself for ${REMOVED_BIN_DAYS} days.`
@@ -375,59 +374,12 @@ test("the delete step's success in the Removed view puts focus on the next row's
 })
 
 // ---------------------------------------------------------------------------
-// Remove from gathering — a row offers it only while the list is being read
-// for another view (the All view's published photos are the grid's tiles),
-// so these hold the read.
+// Remove from gathering — a row no longer offers it (CK-97: the row's copy,
+// which only a view switch ever showed, is gone, and a switch draws no row of
+// the last view). CK-95's four tests of the row's step went with it; the
+// viewer's Remove from gathering is pinned in focus-viewer.test.tsx, and a
+// row offering it nowhere in focus-leftovers.test.tsx.
 // ---------------------------------------------------------------------------
-
-async function switchingToQueue() {
-  resetPhotosWorld([photo('p1'), ...theWorld().filter((row) => row.id !== 'p1')])
-  await open()
-  photosWorld.hold.list = gate()
-  fireEvent.click(sectionButton('Awaiting your review'))
-  await settle()
-  return inRow(P1, 'Remove from gathering')
-}
-
-test('Remove from gathering opens its step with focus on the step, never on Remove it', async () => {
-  const opener = await switchingToQueue()
-  opener.focus()
-  fireEvent.click(opener)
-  await settle()
-  expectStep(HOST_TAKEDOWN)
-  await pressFocusedAgain()
-})
-
-test('Leave it puts focus back on Remove from gathering', async () => {
-  const opener = await switchingToQueue()
-  fireEvent.click(opener)
-  await settle()
-  inRow(P1, 'Leave it').focus()
-  fireEvent.click(inRow(P1, 'Leave it'))
-  await settle()
-  expect(document.activeElement).toBe(inRow(P1, 'Remove from gathering'))
-})
-
-test("Remove it's refusal puts focus back on Remove from gathering", async () => {
-  const opener = await switchingToQueue()
-  fireEvent.click(opener)
-  await settle()
-  photosWorld.answer.remove = conflict('not_ready')
-  await held('remove', inRow(P1, 'Remove it'))
-  expect(document.activeElement).toBe(inRow(P1, 'Remove from gathering'))
-})
-
-test("Remove it's success, once the queue's read lands, puts focus on the Publish of the row now in its place", async () => {
-  const opener = await switchingToQueue()
-  fireEvent.click(opener)
-  await settle()
-  await held('remove', inRow(P1, 'Remove it'))
-  await act(async () => photosWorld.hold.list!.release())
-  await settle()
-  await settle()
-  expect(rowGone(P1)).toBe(true)
-  expect(document.activeElement).toBe(inRow(W1, 'Publish'))
-})
 
 // ---------------------------------------------------------------------------
 // Dismiss

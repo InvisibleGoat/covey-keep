@@ -118,6 +118,9 @@ interface World {
   writes: string[]
   coverImageStatus: string
   minted: number
+  // CK-97: a second gathering, The Picnic (g-2), listed and readable, with
+  // no photos of its own — so a test can move to it from g-1.
+  second: boolean
 }
 
 export const photosWorld: World = {
@@ -132,6 +135,7 @@ export const photosWorld: World = {
   writes: [],
   coverImageStatus: 'ready',
   minted: 0,
+  second: false,
 }
 
 export function resetPhotosWorld(rows: Row[], over: Record<string, unknown> = {}) {
@@ -231,7 +235,13 @@ export function stubPhotosServer() {
         })
       }
       if (p === '/groups') return json(200, { groups: photosWorld.detail.group === null ? [] : [groupBody()] })
-      if (p === '/gatherings' && method === 'GET') return json(200, { gatherings: [listItem()] })
+      if (p === '/gatherings' && method === 'GET') {
+        return json(200, { gatherings: photosWorld.second ? [listItem(), { ...listItem(), id: 'g-2', title: 'The Picnic' }] : [listItem()] })
+      }
+      if (photosWorld.second && p === '/gatherings/g-2' && method === 'GET') {
+        return json(200, { ...photosWorld.detail, id: 'g-2', title: 'The Picnic' })
+      }
+      if (photosWorld.second && method === 'GET' && path === '/gatherings/g-2/media') return reply('list', () => json(200, { media: [] }))
       if (p === '/billing') return json(404, {})
       if (p === '/gatherings/g-1' && method === 'GET') return json(200, photosWorld.detail)
 

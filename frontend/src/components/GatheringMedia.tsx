@@ -728,6 +728,13 @@ interface ViewerState {
   opener: HTMLElement | null
 }
 
+// The view a list read was for (CK-97): the gathering and its view. The
+// search term is left out on purpose — a search within one view keeps the old
+// matches on screen until the new ones land.
+function listKey(gatheringId: string, queueView: boolean, binView: boolean): string {
+  return `${gatheringId}:${queueView ? 'queue' : binView ? 'bin' : 'all'}`
+}
+
 export function GatheringMedia({
   gatheringId,
   isHost,
@@ -749,6 +756,12 @@ export function GatheringMedia({
   // The delegable flag (point 9): a host organises by definition.
   const organises = organisesProp ?? isHost
   const [items, setItems] = useState<MediaItem[] | null>(null)
+  // The view the list was read for — the gathering and All, the queue or the
+  // Removed view (CK-97). While the view on screen differs, no row, tile or
+  // empty line is drawn, so a switch never shows the last view's rows under
+  // the new view's switch. The search term is not part of it: within one
+  // view the old matches stay until the new ones land.
+  const [itemsFor, setItemsFor] = useState<string | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   // Every successful read, counted (CK-88): a focus owed to a row that the
@@ -758,6 +771,9 @@ export function GatheringMedia({
   // The heading's count (CK-88, point 13): the published, ready photos of the
   // last All-view read made without a search — null until one lands.
   const [publishedCount, setPublishedCount] = useState<number | null>(null)
+  // The gathering that count was read for (CK-97): another gathering's
+  // count is never shown.
+  const [publishedFor, setPublishedFor] = useState<string | null>(null)
   // See all (point 13): the grid's rest shown in place, for as long as the
   // page is open (Steven's answer of 2026-11-02); and the tile focus is owed
   // to once it has rendered. The arrival (point 14) starts it out, and so does
@@ -885,7 +901,6 @@ export function GatheringMedia({
   const viewerStepRefs = useRef<Record<string, HTMLElement | null>>({})
   const declineSentence = useId()
   const deleteSentence = useId()
-  const removeSentence = useId()
   const viewerDeleteSentence = useId()
   const viewerRemoveSentence = useId()
   const viewerGroupSentence = useId()
@@ -1044,9 +1059,11 @@ export function GatheringMedia({
           if (cancelled) return
           const media = body.media ?? []
           setItems(media)
+          setItemsFor(listKey(gatheringId, queueView, binView))
           setLoadFailed(false)
           if (!queueView && !binView && term === '') {
             setPublishedCount(media.filter(isPublishedPhoto).length)
+            setPublishedFor(gatheringId)
           }
           readSeqRef.current += 1
           setReadSeq(readSeqRef.current)
@@ -1212,7 +1229,10 @@ export function GatheringMedia({
     if (actingId !== null) return
     setActingId(item.id)
     setActingAct(which)
-    setDecliningId(null)
+    // The decline step stays open while Decline it waits, its two buttons
+    // disabled and Decline it reading Declining…, and closes with the
+    // answer (CK-97); any other act closes an open step at once.
+    if (which !== 'decline') setDecliningId(null)
     clearBin()
     setRowErrors((prev) => {
       const { [item.id]: _dropped, ...rest } = prev
@@ -1222,6 +1242,7 @@ export function GatheringMedia({
     if (!alive.current) return
     setActingId(null)
     setActingAct(null)
+    setDecliningId(null)
     if (outcome.ok) {
       setSelected((current) => current.filter((id) => id !== item.id))
       // A decline puts the host's own photo in their own bin, its row
@@ -1571,8 +1592,11 @@ export function GatheringMedia({
   }
 
   const filtered = term !== ''
-  const matchCount = items === null ? '' : photoCountLabel(items.length)
-  const listed = items ?? []
+  // The list as drawn: the last read's, only while it was read for the view
+  // on screen (CK-97).
+  const drawn = itemsFor === listKey(gatheringId, queueView, binView) ? items : null
+  const matchCount = drawn === null ? '' : photoCountLabel(drawn.length)
+  const listed = drawn ?? []
   const allSelected = listed.length > 0 && listed.every((item) => selected.includes(item.id))
   const batchRefused = Object.keys(batchErrors.fields).length > 0
 
@@ -1594,7 +1618,10 @@ export function GatheringMedia({
   const showEveryTile = filtered || expanded
   const shownTiles = showEveryTile ? gridItems : gridItems.slice(0, previewLimit)
   const offerSeeAll = !showEveryTile && gridItems.length > previewLimit
-  const countLine = publishedCount === null || publishedCount === 0 ? '' : photoCountLabel(publishedCount)
+  const countLine =
+    publishedCount === null || publishedCount === 0 || publishedFor !== gatheringId
+      ? ''
+      : photoCountLabel(publishedCount)
 
   // The viewer's set: the grid's photos, or a row's photo alone. If a re-read
   // takes the open photograph out of it, the viewer closes.
@@ -1604,7 +1631,7 @@ export function GatheringMedia({
       : viewer.mode === 'grid'
         ? gridItems
         : listed.filter((item) => item.id === viewer.mediaId)
-  const viewerLost = viewer !== null && items !== null && !viewerPhotos.some((item) => item.id === viewer.mediaId)
+  const viewerLost = viewer !== null && drawn !== null && !viewerPhotos.some((item) => item.id === viewer.mediaId)
 
   // The effects below close the viewer through the latest render's
   // closeViewer, which reads the state it closes.
@@ -2064,20 +2091,15 @@ export function GatheringMedia({
             ownReady &&
             !binView &&
             (inBin || item.publication_state === 'live' || item.publication_state === 'pending')
-          // The organisers' side (CK-67; a co-host's too since CK-69):
-          // Remove from gathering on someone ELSE's live, ready row and
-          // no other — not on a pending row, which keeps Decline (same
-          // result, one act per state; reserved to the host), not on the
-          // caller's own rows, which keep the personal controls above,
-          // and never for a non-organiser. And the gathering-bin controls
-          // on a gathering-bin row — someone else's removed, ready row,
-          // which only an organiser is ever shown (CK-66's audience
-          // rule), or ANY removed row in the Removed view, the caller's
-          // own included (the view lists gathering-bin rows and nothing
-          // else).
-          const removable =
-            organises && !item.is_own && item.status === 'ready' && item.publication_state === 'live'
-          const removing = removable && removingId === item.id
+          // The organisers' side (CK-67; a co-host's too since CK-69): the
+          // gathering-bin controls on a gathering-bin row — someone else's
+          // removed, ready row, which only an organiser is ever shown
+          // (CK-66's audience rule), or ANY removed row in the Removed
+          // view, the caller's own included (the view lists gathering-bin
+          // rows and nothing else). A published photograph is a tile since
+          // CK-88, and Remove from gathering is the photo viewer's alone:
+          // the row's copy, which only a view switch ever showed, is gone
+          // (CK-97).
           const inGatheringBin =
             organises &&
             item.status === 'ready' &&
@@ -2270,7 +2292,9 @@ export function GatheringMedia({
                   <button
                     type="button"
                     disabled={actingId !== null}
-                    onClick={() => void bin(item, 'destroy', 'personal', { index })}
+                    onClick={() =>
+                      void bin(item, 'destroy', inGatheringBin ? 'gathering' : 'personal', { index })
+                    }
                   >
                     {actingId === item.id ? 'Deleting…' : 'Delete permanently'}
                   </button>
@@ -2284,72 +2308,6 @@ export function GatheringMedia({
                     }}
                   >
                     Keep it
-                  </button>
-                </div>
-              )}
-              {removable && !removing && (
-                // The organiser's takedown (CK-67; two-bins §1; a
-                // co-host's since CK-69): only OPENS the step below —
-                // the uploader loses sight of the photograph at once, so
-                // the act takes a deliberate second click, like decline.
-                // Opening it closes every other row step.
-                <div className="media-review media-bin">
-                  <button
-                    ref={rowButtons.register(`${item.id}:remove`)}
-                    type="button"
-                    className="link-button"
-                    disabled={actingId !== null}
-                    onClick={() => {
-                      setEditingId(null)
-                      setDeletingId(null)
-                      setDecliningId(null)
-                      setRemovingId(item.id)
-                      focusInRow(item.id, () => rowButtons.get(`${item.id}:removeStep`))
-                    }}
-                  >
-                    Remove from gathering
-                  </button>
-                </div>
-              )}
-              {removing && (
-                // The remove step (CK-67; its sentence by seat and gate
-                // since CK-69): who will still see it — the organisers,
-                // named from the reader's seat, and nobody else: the
-                // uploader loses sight of it at once (two-bins §2: from
-                // their side it is gone; no notice exists, §8 open) — and
-                // the way back, which CK-63's REMOVED_BIN window enforces
-                // today; a co-host's way back passes through the gate,
-                // and their sentence says so where the gathering requires
-                // approval (lib/media.ts::takedownSentence). "Remove it"
-                // acts; "Leave it" does nothing; the step stays open while
-                // its request runs and closes with the outcome.
-                <div
-                  ref={rowButtons.register(`${item.id}:removeStep`)}
-                  className="media-review media-decline"
-                  role="group"
-                  aria-labelledby={removeSentence}
-                  tabIndex={-1}
-                >
-                  <p className="field-hint" id={removeSentence}>
-                    {takedownSentence({ isHost, requiresApproval })}
-                  </p>
-                  <button
-                    type="button"
-                    disabled={actingId !== null}
-                    onClick={() => void bin(item, 'remove', 'gathering', { index })}
-                  >
-                    {actingId === item.id && actingAct === 'remove' ? 'Removing…' : 'Remove it'}
-                  </button>
-                  <button
-                    type="button"
-                    className="link-button"
-                    disabled={actingId !== null}
-                    onClick={() => {
-                      setRemovingId(null)
-                      focusInRow(item.id, () => rowButtons.get(`${item.id}:remove`))
-                    }}
-                  >
-                    Leave it
                   </button>
                 </div>
               )}
@@ -2456,7 +2414,11 @@ export function GatheringMedia({
                       ? `The gathering won't see this photo. You can still see it yourself for ${REMOVED_BIN_DAYS} days.`
                       : takedownSentence({ isHost: true, requiresApproval })}
                   </p>
-                  <button type="button" onClick={() => void act(item, 'decline', index)}>
+                  <button
+                    type="button"
+                    disabled={actingId !== null}
+                    onClick={() => void act(item, 'decline', index)}
+                  >
                     {actingId === item.id ? 'Declining…' : 'Decline it'}
                   </button>
                   <button
@@ -2666,11 +2628,11 @@ export function GatheringMedia({
         </p>
       </div>
 
-      {items !== null && !loadFailed && allView && filtered && (
+      {drawn !== null && !loadFailed && allView && filtered && (
         // The filtered view says it is one, and how to leave it; an empty
         // result is a state with the way back, never a blank area.
         <p className="field-hint" role="status">
-          {items.length === 0
+          {drawn.length === 0
             ? `No photos match “${term}”.`
             : `Showing ${matchCount} matching “${term}”.`}{' '}
           <button type="button" className="link-button" onClick={showAll}>
@@ -2679,7 +2641,7 @@ export function GatheringMedia({
         </p>
       )}
 
-      {items !== null && !loadFailed && queueView && (
+      {drawn !== null && !loadFailed && queueView && (
         // The queue's state — what is waiting, or that nothing is — with
         // the way back to everything.
         <p className="field-hint" role="status">
@@ -2690,7 +2652,7 @@ export function GatheringMedia({
         </p>
       )}
 
-      {items !== null && !loadFailed && binView && (
+      {drawn !== null && !loadFailed && binView && (
         // The bin's state (CK-67) — what has been removed, or that nothing
         // has — with the way back to everything.
         <p className="field-hint" role="status">
@@ -2711,7 +2673,7 @@ export function GatheringMedia({
         </p>
       )}
 
-      {queueView && items !== null && !loadFailed && items.length > 0 && (
+      {queueView && drawn !== null && !loadFailed && drawn.length > 0 && (
         // Bulk approve: the batch endpoint over the selected rows, refused
         // whole on any bad item. A refusal lands on the row it names (below,
         // through the one mapper); the line here says the consequence — that
@@ -2800,7 +2762,7 @@ export function GatheringMedia({
         </div>
       )}
 
-      {items !== null && items.length === 0 && !loadFailed && !filtered && allView && (
+      {drawn !== null && drawn.length === 0 && !loadFailed && !filtered && allView && (
         // The empty state is a real screen (CK-17): the control that fills
         // it is right above.
         <p className="field-hint">No photos yet.</p>

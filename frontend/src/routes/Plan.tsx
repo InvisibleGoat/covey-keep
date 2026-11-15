@@ -35,7 +35,7 @@
 // through the loading state. The waiting page carries the heading above
 // its status region and the way back beneath it; leaving stops the
 // polling, and the plan lands anyway when the webhook writes the row.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { Quail } from '../components/AuthArt'
@@ -90,7 +90,11 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
   // One act at a time; which button is working, so the others wait.
   const [acting, setActing] = useState<string | null>(null)
   // A refusal stays beside the control that drew it until the next act.
-  const [refusal, setRefusal] = useState<{ at: string; message: string } | null>(null)
+  // `moved` is already_subscribed's line once the plan read again shows the
+  // plan held: beneath Manage your plan, describing it, and no alert — it was
+  // announced where it first landed (CK-97).
+  const [refusal, setRefusal] = useState<{ at: string; message: string; moved?: boolean } | null>(null)
+  const movedLine = useId()
   const alive = useRef(true)
   // Focus after an answer (CK-96; the components doc's Focus after an
   // answer): every act's control is disabled while it waits, so each answer
@@ -172,12 +176,13 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
 
   // After a refusal that means the screen is stale, re-read in place: the
   // refusal stays where it landed and the figures catch up.
-  // It answers whether the read landed, so the act can say where focus goes.
-  async function refresh(): Promise<boolean> {
+  // It answers what the read brought, or null when it did not land, so the
+  // act can say where its line and focus go.
+  async function refresh(): Promise<Billing | null> {
     const result = await readBilling()
-    if (!alive.current || !result.ok) return false
+    if (!alive.current || !result.ok) return null
     setBilling(result.billing)
-    return true
+    return result.billing
   }
 
   async function upgrade(plan: BillingPlanId) {
@@ -192,11 +197,15 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
       requestFocus(() => buttons.get(plan))
       return
     }
-    // The plan read again shows the plan held: Manage your plan carries the
-    // act on; if the read fails, back on the Upgrade pressed.
-    const landed = await refresh()
+    // Once the plan read again shows the plan held, the line moves beneath
+    // Manage your plan, which it describes and which carries the act on — no
+    // alert a second time (CK-97). If the read fails, or shows no plan held,
+    // the line stays beneath the Upgrade pressed, and focus goes there.
+    const read = await refresh()
     if (!alive.current) return
-    requestFocus(() => (landed ? buttons.get('manage') : null) ?? buttons.get(plan))
+    const held = read !== null && isPaid(read)
+    if (held) setRefusal({ at: 'manage', message: billingRefusalMessage(outcome.code), moved: true })
+    requestFocus(() => (held ? buttons.get('manage') : null) ?? buttons.get(plan))
   }
 
   async function manage(at: string) {
@@ -213,7 +222,7 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
     }
     // Once the plan read again lands, the button pressed if it is still
     // there, else the page's heading; if the read fails, the button pressed.
-    const landed = await refresh()
+    const landed = (await refresh()) !== null
     if (!alive.current) return
     requestFocus(() => buttons.get(at) ?? (landed ? headingRef.current : null))
   }
@@ -314,15 +323,21 @@ export function Plan({ follow = followUrl }: { follow?: (url: string) => void })
             className="btn-onhero"
             onClick={() => void manage('manage')}
             disabled={acting !== null}
+            aria-describedby={refusal?.at === 'manage' && refusal.moved ? movedLine : undefined}
           >
             {MANAGE_LABEL}
           </button>
         )}
-        {refusal?.at === 'manage' && (
-          <p className="form-error" role="alert">
-            {refusal.message}
-          </p>
-        )}
+        {refusal?.at === 'manage' &&
+          (refusal.moved ? (
+            <p className="form-error" id={movedLine}>
+              {refusal.message}
+            </p>
+          ) : (
+            <p className="form-error" role="alert">
+              {refusal.message}
+            </p>
+          ))}
       </section>
 
       <h2>{paid ? OTHER_PLANS_HEADING : MORE_SPACE_HEADING}</h2>

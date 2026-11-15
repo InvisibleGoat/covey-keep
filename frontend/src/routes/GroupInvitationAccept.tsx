@@ -17,9 +17,16 @@
 // `already_accepted` lands on the group's page. Acceptance is idempotent
 // server-side. The parked token is cleared on redemption and on any dead
 // state.
+//
+// Since CK-97 a failed check says one sentence, an alert, and offers Try
+// again, which runs the same call once more on the token still held — the
+// preview signed out, the acceptance signed in. Focus lands on the new
+// screen's <h1>, or on the new Try again where it fails again; a landing
+// that navigates needs nothing.
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { useFocusRequest } from '../components/useFocusRequest'
 import {
   acceptGroupInvitation,
   clearGroupInvitationToken,
@@ -49,8 +56,15 @@ export function GroupInvitationAccept() {
   // One call per auth state (StrictMode re-runs effects): the preview while
   // signed out, the acceptance once signed in — so a session that settles
   // after the preview still accepts.
+  // A Try again is a new attempt under the same auth state (CK-97).
   const startedFor = useRef<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
+  const retryOwed = useRef(false)
   const alive = useRef(true)
+  const mainRef = useRef<HTMLElement>(null)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const tryAgainRef = useRef<HTMLButtonElement>(null)
+  const requestFocus = useFocusRequest(mainRef)
 
   useEffect(() => {
     alive.current = true
@@ -67,19 +81,28 @@ export function GroupInvitationAccept() {
   }, [])
 
   useEffect(() => {
-    if (!fragmentConsumed || authStatus === 'loading' || startedFor.current === authStatus) return
+    const key = `${authStatus}:${attempt}`
+    if (!fragmentConsumed || authStatus === 'loading' || startedFor.current === key) return
     if (token === null) {
       setScreen({ status: 'missing' })
       return
     }
-    startedFor.current = authStatus
+    startedFor.current = key
+    const owed = retryOwed.current
+    retryOwed.current = false
+    // Where a retry's answer lands: the new screen's heading, or the new
+    // Try again (the hook spends it after the render that draws it).
+    const show = (next: ScreenState) => {
+      setScreen(next)
+      if (owed) requestFocus(next.status === 'failed' ? tryAgainRef : headingRef)
+    }
 
     async function act(resolved: string) {
       if (authStatus === 'signedIn') {
         const outcome = await acceptGroupInvitation(resolved)
         if (!alive.current) return
         if (!outcome.ok) {
-          setScreen({ status: 'failed' })
+          show({ status: 'failed' })
           return
         }
         if (
@@ -94,7 +117,7 @@ export function GroupInvitationAccept() {
         // routing back here.
         clearGroupInvitationToken()
         const dead = outcome.status
-        setScreen({
+        show({
           status:
             dead === 'expired' || dead === 'used' || dead === 'revoked' ? dead : 'invalid',
         })
@@ -103,22 +126,28 @@ export function GroupInvitationAccept() {
       const preview = await previewGroupInvitation(resolved)
       if (!alive.current) return
       if (!preview.ok) {
-        setScreen({ status: 'failed' })
+        show({ status: 'failed' })
         return
       }
       if (preview.status === 'valid') {
-        setScreen({ status: 'signInNeeded', groupName: preview.groupName })
+        show({ status: 'signInNeeded', groupName: preview.groupName })
         return
       }
       clearGroupInvitationToken()
-      setScreen({ status: preview.status })
+      show({ status: preview.status })
     }
     void act(token)
-  }, [fragmentConsumed, token, authStatus, navigate])
+  }, [fragmentConsumed, token, authStatus, attempt, navigate, requestFocus])
+
+  function tryAgain() {
+    retryOwed.current = true
+    setScreen({ status: 'working' })
+    setAttempt((n) => n + 1)
+  }
 
   if (screen.status === 'working') {
     return (
-      <main className="auth-screen">
+      <main className="auth-screen" ref={mainRef}>
         <p>Checking your invitation…</p>
       </main>
     )
@@ -126,8 +155,8 @@ export function GroupInvitationAccept() {
 
   if (screen.status === 'signInNeeded') {
     return (
-      <main className="auth-screen">
-        <h1>You're invited to join {screen.groupName ?? 'a group'}</h1>
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>You're invited to join {screen.groupName ?? 'a group'}</h1>
         <p>Sign in, or create your account, to accept — you'll come right back here.</p>
         <Link to="/" onClick={() => parkReturnPath('/groups/invitations/accept')}>
           Sign in to accept
@@ -138,8 +167,8 @@ export function GroupInvitationAccept() {
 
   if (screen.status === 'expired') {
     return (
-      <main className="auth-screen">
-        <h1>This invitation has expired</h1>
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>This invitation has expired</h1>
         <p>Invitations last 7 days. Ask the person who invited you to send a fresh one.</p>
       </main>
     )
@@ -147,8 +176,8 @@ export function GroupInvitationAccept() {
 
   if (screen.status === 'revoked') {
     return (
-      <main className="auth-screen">
-        <h1>This invitation is no longer active</h1>
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>This invitation is no longer active</h1>
         <p>It was withdrawn or replaced. Ask the person who invited you to send a fresh one.</p>
       </main>
     )
@@ -156,8 +185,8 @@ export function GroupInvitationAccept() {
 
   if (screen.status === 'used') {
     return (
-      <main className="auth-screen">
-        <h1>This invitation has already been used</h1>
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>This invitation has already been used</h1>
         <p>
           If that was you, sign in with the same account and the group will be in Your groups.
           Otherwise, ask the person who invited you to send a fresh one.
@@ -169,20 +198,22 @@ export function GroupInvitationAccept() {
 
   if (screen.status === 'failed') {
     return (
-      <main className="auth-screen">
-        <h1>Something went wrong</h1>
-        <p className="form-error">
-          The invitation couldn't be checked just now. Try the link from your invitation
-          again.
+      <main className="auth-screen" ref={mainRef}>
+        <h1 ref={headingRef} tabIndex={-1}>Something went wrong</h1>
+        <p className="form-error" role="alert">
+          The invitation couldn't be checked just now.
         </p>
+        <button ref={tryAgainRef} type="button" onClick={tryAgain}>
+          Try again
+        </button>
       </main>
     )
   }
 
   // missing and invalid: the link never resolved to an invitation at all.
   return (
-    <main className="auth-screen">
-      <h1>That invitation link didn't work</h1>
+    <main className="auth-screen" ref={mainRef}>
+      <h1 ref={headingRef} tabIndex={-1}>That invitation link didn't work</h1>
       <p>
         The link looks incomplete or isn't valid. Try opening it again from your
         invitation, or ask for a new one.

@@ -1433,10 +1433,13 @@ export function GatheringDetail() {
     setEditingGathering(true)
   }
 
+  // A press that replaces itself with a form puts focus on the form's first
+  // field (CK-97): Edit this date on its Starts.
   function openOccurrenceEdit(occurrence: Occurrence) {
     setOccurrenceForm(occurrenceToForm(occurrence, zone))
     setOccurrenceErrors(noErrors())
     setEditingOccurrenceId(occurrence.id)
+    focusInWhen(() => document.getElementById(`edit-starts-${occurrence.id}`))
   }
 
   async function saveGathering(event: FormEvent) {
@@ -1811,6 +1814,29 @@ export function GatheringDetail() {
       }
     }
   }
+
+  // The co-host list's failure line and its Try again, drawn wherever that
+  // read failed (CK-97): beneath the Co-hosts list when the invitation list
+  // loaded, beneath the invitation list's own line when both failed.
+  const coHostsFailure = coHostsFailed && (
+    <>
+      <p className="form-error" role="alert">
+        <span aria-hidden="true">⚠ </span>
+        The co-host list couldn't be loaded just now.
+      </p>
+      <button
+        ref={coHostsTryAgain}
+        type="button"
+        onClick={() => {
+          coHostsRetryOwed.current = true
+          setCoHostsFailed(false)
+          setCoHostsReloadKey((key) => key + 1)
+        }}
+      >
+        Try again
+      </button>
+    </>
+  )
 
   return (
     <main className="auth-screen page-column gathering-page" ref={pageRef}>
@@ -2231,6 +2257,8 @@ export function GatheringDetail() {
               setAddForm(EMPTY_OCCURRENCE_FORM)
               setAddErrors(noErrors())
               setAddingOccurrence(true)
+              // To the new form's Starts (CK-97).
+              focusInWhen(() => document.getElementById('add-starts'))
             }}
           >
             Add another date
@@ -2505,7 +2533,13 @@ export function GatheringDetail() {
             <button
               type="button"
               className="link-button"
-              onClick={() => setInvitationsOpen(true)}
+              onClick={() => {
+                setInvitationsOpen(true)
+                // Invite people replaces itself with the email form: focus
+                // on its field (CK-97). Show co-hosts opens a list, not a
+                // form, and moves nothing.
+                if (group === null) focusInCoHosts(inviteField)
+              }}
             >
               {group !== null ? 'Show co-hosts' : 'Invite people'}
             </button>
@@ -2544,6 +2578,11 @@ export function GatheringDetail() {
                   </button>
                 </>
               )}
+              {/* The co-host list's failure is drawn whenever that read
+                  failed, the invitation list's failing too (CK-97): beneath
+                  its line here, else in its place beneath the Co-hosts
+                  heading. */}
+              {!invitations && coHostsFailure}
               {invitations && (
                 <>
                   {group === null && (
@@ -2568,25 +2607,7 @@ export function GatheringDetail() {
                     </h3>
                   )}
                   {isHost && <p className="field-hint">{CO_HOST_HINT}</p>}
-                  {coHostsFailed && (
-                    <>
-                      <p className="form-error" role="alert">
-                        <span aria-hidden="true">⚠ </span>
-                        The co-host list couldn't be loaded just now.
-                      </p>
-                      <button
-                        ref={coHostsTryAgain}
-                        type="button"
-                        onClick={() => {
-                          coHostsRetryOwed.current = true
-                          setCoHostsFailed(false)
-                          setCoHostsReloadKey((key) => key + 1)
-                        }}
-                      >
-                        Try again
-                      </button>
-                    </>
-                  )}
+                  {coHostsFailure}
                   {coHosts !== null &&
                     (coHosts.length === 0 ? (
                       <p className="field-hint">No co-hosts yet.</p>

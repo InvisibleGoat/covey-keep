@@ -36,6 +36,11 @@ export type Key =
   | 'preview'
   | 'join'
   | 'media'
+  // CK-97: the two invitation pages' preview and acceptance.
+  | 'groupInvitationPreview'
+  | 'groupInvitationAccept'
+  | 'invitationPreview'
+  | 'invitationAccept'
 
 export interface Answer {
   status: number | 'network'
@@ -212,6 +217,18 @@ export function stubWorld96() {
       if (p === '/auth/passkey/begin' && method === 'POST') return reply('passkeyBegin', () => json(500, {}))
       if (p === '/group-links/preview' && method === 'POST') return reply('preview', () => json(200, w.preview))
       if (p === '/group-links/join' && method === 'POST') return reply('join', () => json(200, w.joinAnswer))
+      if (p === '/group-invitations/preview' && method === 'POST') {
+        return reply('groupInvitationPreview', () => json(200, { status: 'valid', group_name: GROUP.name }))
+      }
+      if (p === '/group-invitations/accept' && method === 'POST') {
+        return reply('groupInvitationAccept', () => json(200, { status: 'accepted', group_id: GROUP.id }))
+      }
+      if (p === '/invitations/preview' && method === 'POST') {
+        return reply('invitationPreview', () => json(200, { status: 'valid', gathering_title: 'The Party' }))
+      }
+      if (p === '/invitations/accept' && method === 'POST') {
+        return reply('invitationAccept', () => json(200, { status: 'accepted', gathering_id: 'g-1' }))
+      }
       if (p === '/groups' && method === 'GET') return reply('groups', () => json(200, { groups: w.groups }))
       if (p === '/gatherings' && method === 'GET') return reply('gatherings', () => json(200, { gatherings: w.gatherings }))
       if (p === '/billing') return reply('billing', () => json(200, w.billing))
