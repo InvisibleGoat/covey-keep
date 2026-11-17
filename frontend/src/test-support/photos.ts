@@ -121,6 +121,13 @@ interface World {
   // CK-97: a second gathering, The Picnic (g-2), listed and readable, with
   // no photos of its own — so a test can move to it from g-1.
   second: boolean
+  // CK-98: what The Picnic's detail says beside g-1's (its review off, say),
+  // and its own photos, read as g-1's are, by view.
+  secondDetail: Record<string, unknown>
+  secondRows: Row[]
+  // CK-98: every list read either gathering received, its path and query,
+  // in order, logged as it arrives (before any hold).
+  listReads: string[]
 }
 
 export const photosWorld: World = {
@@ -136,6 +143,9 @@ export const photosWorld: World = {
   coverImageStatus: 'ready',
   minted: 0,
   second: false,
+  secondDetail: {},
+  secondRows: [],
+  listReads: [],
 }
 
 export function resetPhotosWorld(rows: Row[], over: Record<string, unknown> = {}) {
@@ -150,6 +160,10 @@ export function resetPhotosWorld(rows: Row[], over: Record<string, unknown> = {}
   photosWorld.writes = []
   photosWorld.coverImageStatus = 'ready'
   photosWorld.minted = 0
+  photosWorld.second = false
+  photosWorld.secondDetail = {}
+  photosWorld.secondRows = []
+  photosWorld.listReads = []
 }
 
 function json(status: number, body: unknown): Response {
@@ -169,6 +183,18 @@ async function reply(key: Key, ok: () => Response): Promise<Response> {
   const given = photosWorld.answer[key]
   if (given !== undefined) return json(given.status, given.body ?? { detail: 'refused' })
   return ok()
+}
+
+// A gathering's list as the server answers it, by view and search.
+function listed(rows: Row[], p: string): Row[] {
+  const params = new URLSearchParams(p.split('?')[1] ?? '')
+  let listed: Row[]
+  if (params.get('awaiting_review') === 'true') listed = rows.filter((r) => r.status === 'ready' && r.publication_state === 'pending')
+  else if (params.get('removed') === 'true') listed = rows.filter((r) => r._bin === true)
+  else listed = rows.filter((r) => r._bin !== true)
+  const q = (params.get('q') ?? '').toLowerCase()
+  if (q) listed = listed.filter((r) => [r.caption, r.filename, ...(r.tags as string[])].some((s) => typeof s === 'string' && s.toLowerCase().includes(q)))
+  return listed
 }
 
 function bare(row: Row): Record<string, unknown> {
@@ -239,26 +265,23 @@ export function stubPhotosServer() {
         return json(200, { gatherings: photosWorld.second ? [listItem(), { ...listItem(), id: 'g-2', title: 'The Picnic' }] : [listItem()] })
       }
       if (photosWorld.second && p === '/gatherings/g-2' && method === 'GET') {
-        return json(200, { ...photosWorld.detail, id: 'g-2', title: 'The Picnic' })
+        return json(200, { ...photosWorld.detail, id: 'g-2', title: 'The Picnic', ...photosWorld.secondDetail })
       }
-      if (photosWorld.second && method === 'GET' && path === '/gatherings/g-2/media') return reply('list', () => json(200, { media: [] }))
+      if (photosWorld.second && method === 'GET' && path === '/gatherings/g-2/media') {
+        photosWorld.listReads.push(p)
+        return reply('list', () => json(200, { media: listed(photosWorld.secondRows, p).map(bare) }))
+      }
       if (p === '/billing') return json(404, {})
       if (p === '/gatherings/g-1' && method === 'GET') return json(200, photosWorld.detail)
 
       if (method === 'GET' && path === '/gatherings/g-1/media') {
+        photosWorld.listReads.push(p)
         return reply('list', () => {
           if (photosWorld.failList > 0) {
             photosWorld.failList -= 1
             return json(500, { detail: 'down' })
           }
-          const params = new URLSearchParams(p.split('?')[1] ?? '')
-          let listed: Row[]
-          if (params.get('awaiting_review') === 'true') listed = rows.filter((r) => r.status === 'ready' && r.publication_state === 'pending')
-          else if (params.get('removed') === 'true') listed = rows.filter((r) => r._bin === true)
-          else listed = rows.filter((r) => r._bin !== true)
-          const q = (params.get('q') ?? '').toLowerCase()
-          if (q) listed = listed.filter((r) => [r.caption, r.filename, ...(r.tags as string[])].some((s) => typeof s === 'string' && s.toLowerCase().includes(q)))
-          return json(200, { media: listed.map(bare) })
+          return json(200, { media: listed(rows, p).map(bare) })
         })
       }
 

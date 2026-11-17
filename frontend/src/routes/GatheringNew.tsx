@@ -330,7 +330,15 @@ export function GatheringNew({
               <button
                 type="button"
                 className="link-button"
-                onClick={() => setOccurrences((rows) => rows.filter((r) => r.key !== row.key))}
+                onClick={() => {
+                  // The press takes its button with it (CK-98): focus on the
+                  // Starts of the date now in its place, else the previous
+                  // date's.
+                  const rest = occurrences.filter((r) => r.key !== row.key)
+                  const next = rest[Math.min(index, rest.length - 1)]
+                  setOccurrences((rows) => rows.filter((r) => r.key !== row.key))
+                  requestFocus(() => form.current?.querySelector<HTMLElement>(`#starts-at-${next.key}`) ?? null)
+                }}
               >
                 Remove this date
               </button>

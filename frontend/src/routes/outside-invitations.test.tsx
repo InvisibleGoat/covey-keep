@@ -563,6 +563,10 @@ test('Turn it off: exactly {"on": false}, Turning it off… while in flight, the
   fireEvent.click(screen.getByRole('button', { name: 'Show co-hosts' }))
   await screen.findByRole('list', { name: 'Invited' })
   const rosterReads = count('GET /gatherings/g-1/invitations')
+  // Since CK-98 Show co-hosts puts focus on Co-hosts, outside the card, and
+  // jsdom's click moves no focus: the switch is focused before it is
+  // pressed, as a person's press does, so the card's move may take focus.
+  theSwitch().focus()
   fireEvent.click(theSwitch())
   const sentence =
     'Joe Smith will no longer see this gathering. Invitations not yet accepted will stop working.'

@@ -2537,8 +2537,10 @@ export function GatheringDetail() {
                 setInvitationsOpen(true)
                 // Invite people replaces itself with the email form: focus
                 // on its field (CK-97). Show co-hosts opens a list, not a
-                // form, and moves nothing.
-                if (group === null) focusInCoHosts(inviteField)
+                // form, so focus goes to the section's heading, Co-hosts, at
+                // once (CK-98): the list's read landing or failing moves
+                // nothing more.
+                focusInCoHosts(group === null ? inviteField : invitationsHeading)
               }}
             >
               {group !== null ? 'Show co-hosts' : 'Invite people'}

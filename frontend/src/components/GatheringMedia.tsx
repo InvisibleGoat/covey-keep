@@ -555,6 +555,8 @@ function MediaWordsEditor({
   const focusInForm = useFocusRequest(formRef)
   // Each chip's Remove, by its index: a 422 on `tags.N` lands there (CK-96).
   const removeButtons = useRefMap<number>()
+  // The Add a tag field: where Add tag and the last chip's Remove land (CK-98).
+  const entryRef = useRef<HTMLInputElement>(null)
 
   const scope = `media-${item.id}`
   const patch = mediaWordsPatch({ caption, tags }, item)
@@ -573,9 +575,14 @@ function MediaWordsEditor({
     setErrors(noErrors())
   }
 
+  // A chip's Remove takes its button with it (CK-98): focus goes to the
+  // Remove of the chip now in its place, else the previous chip's, else —
+  // no chip left — the Add a tag field.
   function removeTag(index: number) {
+    const left = tags.length - 1
     setTags((current) => current.filter((_, position) => position !== index))
     setErrors(noErrors())
+    focusInForm(() => (left === 0 ? entryRef.current : removeButtons.get(Math.min(index, left - 1))))
   }
 
   function onEntryKey(event: KeyboardEvent<HTMLInputElement>) {
@@ -670,6 +677,7 @@ function MediaWordsEditor({
       )}
       <label htmlFor={`${scope}-tag-entry`}>Add a tag</label>
       <input
+        ref={entryRef}
         id={`${scope}-tag-entry`}
         type="text"
         maxLength={50}
@@ -678,7 +686,17 @@ function MediaWordsEditor({
         onChange={(event) => setEntry(event.target.value)}
         onKeyDown={onEntryKey}
       />
-      <button type="button" onClick={addTag} disabled={entry.trim() === ''}>
+      {/* Add tag disables itself as it clears the entry (CK-98): focus on
+          the cleared Add a tag field, for the next one. Enter in the field
+          keeps focus there already. */}
+      <button
+        type="button"
+        onClick={() => {
+          addTag()
+          focusInForm(entryRef)
+        }}
+        disabled={entry.trim() === ''}
+      >
         Add tag
       </button>
       <p className="field-hint">
@@ -733,6 +751,11 @@ interface ViewerState {
 // matches on screen until the new ones land.
 function listKey(gatheringId: string, queueView: boolean, binView: boolean): string {
   return `${gatheringId}:${queueView ? 'queue' : binView ? 'bin' : 'all'}`
+}
+
+// The gathering a list read was for (CK-98), whatever its view.
+function listGathering(key: string | null): string | null {
+  return key === null ? null : key.slice(0, key.lastIndexOf(':'))
 }
 
 export function GatheringMedia({
@@ -812,7 +835,14 @@ export function GatheringMedia({
   // queue is a view of the same list (`awaiting_review=true`); the
   // selection is the batch's; a refused act's message is kept per row until
   // the row moves; a decline waits for its second click.
-  const reviewer = isHost && (requiresApproval || anyWaiting(items ?? []))
+  //
+  // Since CK-98 the gate and the poll read the list only while it was read
+  // for the gathering on screen (`ownItems`, any view): moved to another
+  // gathering, the last one's waiting rows open no review and its in-flight
+  // rows schedule no re-read, until the new gathering's own read lands.
+  // `drawn` (below) is stricter — the view as well — and is what is drawn.
+  const ownItems = listGathering(itemsFor) === gatheringId ? items : null
+  const reviewer = isHost && (requiresApproval || anyWaiting(ownItems ?? []))
   const [view, setView] = useState<'all' | 'queue' | 'bin'>('all')
   const queueView = reviewer && view === 'queue'
   // The gathering's bin (CK-67; a co-host's too since CK-69): a third view
@@ -1092,10 +1122,10 @@ export function GatheringMedia({
   // queue never polls by construction: every row in it is `ready`, and
   // nothing but the host's own act moves one (CK-43.1).
   useEffect(() => {
-    if (loadFailed || items === null || !anyInFlight(items)) return
+    if (loadFailed || ownItems === null || !anyInFlight(ownItems)) return
     const timer = setTimeout(() => setReloadKey((key) => key + 1), pollIntervalMs)
     return () => clearTimeout(timer)
-  }, [loadFailed, items, pollIntervalMs])
+  }, [loadFailed, ownItems, pollIntervalMs])
 
   // The batch selection follows the list: an id the last read no longer
   // returned (published, declined, or gone from the queue) is dropped, so
