@@ -240,7 +240,7 @@ PHOTOGRAPH_BYTES = 1_134_630
 # pending_upload alone; the reservation is widened to every in-flight rung
 # deliberately — a confirmed upload whose reservation lapsed at confirm
 # would hold real bytes in quarantine against nobody's quota until the
-# worker published it, and until CK-35 there is no worker.
+# worker published it, and until CK-35 there was no worker.
 IN_FLIGHT_STATUSES = (
     MediaStatus.PENDING_UPLOAD,
     MediaStatus.UPLOADED,

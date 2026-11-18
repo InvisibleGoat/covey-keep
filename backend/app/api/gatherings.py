@@ -2401,7 +2401,7 @@ async def dismiss_outside_alert(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Dismiss the alert that this group's gathering invites people outside
-    the group (CK-92; the record §7), for anyone the memory tier admits —
+    the group (CK-92; the record §5), for anyone the memory tier admits —
     everyone else the gathering's 404. The dismissal is a row per (gathering,
     person) whose `dismissed_at` moves to now on each press (an upsert on
     the key); it silences the alert until the setting is turned on again (a

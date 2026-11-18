@@ -41,12 +41,13 @@ the member list by display name). Authorization is the group posture:
 management is the ORGANISERS' — the admin or a co-admin, the delegable set
 (`_group_for_organiser`) — 404-never-403, byte-identical to a missing id.
 
-The frontend route does not exist yet (Groups 3). Since CK-75.1 the app's
-catch-all keeps such an address — path and fragment, the token with it —
-and says the page isn't available, offering a reload when a newer bundle is
-waiting; before CK-75.1 it redirected to `/` and dropped the fragment
-(CK-75's finding 1). What this router knows is only that the route does not
-exist yet, never where the link lands.
+The frontend route is `/groups/invitations/accept`
+(`routes/GroupInvitationAccept.tsx`, built at CK-79): it consumes the
+fragment once, parks the token across the sign-in round trip, and accepts
+on opening, the invitation being addressed to the person (CK-25's rule).
+Until CK-79 the route did not exist, and from CK-75.1 the app's catch-all
+kept such an address, fragment and token with it; before CK-75.1 it
+redirected to `/` and dropped the fragment (CK-75's finding 1).
 
 DATA-HANDLING: `destination` is an address supplied by one person ABOUT
 another — the invitee did not type it. The row is ephemeral (expires,
