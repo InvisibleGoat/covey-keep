@@ -33,6 +33,7 @@ import {
   type UploadInstruction,
 } from './media'
 import { subscribe } from './session'
+import { possessive } from './possessive'
 
 export type CoverSubject = 'gathering' | 'group'
 
@@ -398,7 +399,7 @@ export function groupCoverConfirmSentence(group: string, gathering: string): str
 // SETTLED: the group's cover changes on a page the person is not looking
 // at, so a line says the act took.
 export function groupCoverSetLine(group: string): string {
-  return `${group}'s cover is set.`
+  return `${possessive(group)} cover is set.`
 }
 
 // Remove cover's step, by source: an uploaded picture is deleted for good;

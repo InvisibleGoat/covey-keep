@@ -354,7 +354,12 @@ export function GatheringNew({
         <button
           type="button"
           className="link-button"
-          onClick={() => setOccurrences((rows) => [...rows, emptyOccurrence()])}
+          onClick={() => {
+            // Focus on the new date's Starts, its first field (CK-99).
+            const row = emptyOccurrence()
+            setOccurrences((rows) => [...rows, row])
+            requestFocus(() => form.current?.querySelector<HTMLElement>(`#starts-at-${row.key}`) ?? null)
+          }}
         >
           Add another date
         </button>

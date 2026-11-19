@@ -995,7 +995,8 @@ body.viewer-open {
 .media-view {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px;
+  /* 4px between wrapped rows, so each view's touch area reaches 44 (CK-99). */
+  gap: 4px 2px;
   width: fit-content;
   max-width: 100%;
   padding: 3px;
@@ -3793,3 +3794,150 @@ body.menu-open {
   margin: 0;
 }
 
+
+/* ---------- Who it's for's member boxes (CK-99) ---------- */
+
+/* On a gathering's page the member boxes sit in columns at least 18rem wide,
+   12px apart (the card's own gap): one on a phone, two at 1180, three at
+   1440. auto-fill, so two members keep their column width rather than
+   stretching across the card. The hint lines above stay full width. The
+   group's New gathering form keeps its 22rem card and its one column. */
+.places-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(18rem, 100%), 1fr));
+  gap: 12px;
+}
+
+/* A radio row in a box of choices — Who it's for's and the RSVP block's —
+   is drawn 44 tall, the radio centred in it, and the box's gap between two
+   rows taken off, so each row is the whole of its touch area. */
+.occurrence-fields > label:has(> input[type='radio']) {
+  min-height: 44px;
+  align-items: center;
+}
+
+.occurrence-fields > label:has(> input[type='radio']) > input {
+  margin: 0;
+}
+
+.occurrence-fields > label:has(> input[type='radio']) + label:has(> input[type='radio']) {
+  margin-top: -0.625rem;
+}
+
+/* Two rows of a photo's acts sit 8px apart, not 6, so each act's touch area
+   reaches 44 without meeting the row below. */
+.media-item > :is(.link-button, .media-review) + :is(.link-button, .media-review) {
+  margin-top: 2px;
+}
+
+/* ---------- the touch area (CK-99) ---------- */
+
+/* Every control a person presses is at least 44 by 44 to the touch. Where a
+   control is drawn smaller, its ::after — transparent, and pressed as the
+   control — reaches 44 by 44 about the control's centre; where it is drawn
+   larger the ::after is its own box exactly, which also gives a round
+   control its square's corners. Nothing is seen: no colour, no size as
+   drawn, and the focus ring stays on the control's own box. Where two
+   controls sit closer than 44 apart, neither touch area passes the midpoint
+   between them (the day buttons and Map, below). */
+/* :where(), so a control already positioned — the photo viewer's arrows, a
+   rail tile — keeps its own position and is the ::after's box as it is. */
+:where(
+    .brand,
+    .crumb .nrow,
+    .link-button,
+    .btn-small,
+    :where(.update-notice, .newer-version, .member-actions, .media-review, .media-batch, .passkey-row, .companion-row, .vacts)
+      button:where(:not(.link-button)),
+    .switch button,
+    .auth-screen > a:not([class]),
+    .auth-card > a:not([class]),
+    .plainhead h3 a,
+    .auth-card label:has(> input[type='checkbox'], > input[type='radio']),
+    .file-touch,
+    .iconbtn,
+    .ck-switch,
+    .day,
+    .occurrence-where a
+  ) {
+  position: relative;
+}
+
+.brand::after,
+.crumb .nrow::after,
+.link-button::after,
+.btn-small::after,
+:where(.update-notice, .newer-version, .member-actions, .media-review, .media-batch, .passkey-row, .companion-row, .vacts)
+  button:where(:not(.link-button))::after,
+.switch button::after,
+.auth-screen > a:not([class])::after,
+.auth-card > a:not([class])::after,
+.plainhead h3 a::after,
+.auth-card label:has(> input[type='checkbox'], > input[type='radio'])::after,
+.file-touch::after,
+.iconbtn::after,
+.ck-switch::after,
+.day::after,
+.occurrence-where a::after,
+.varrow::after,
+.rail-item::after {
+  content: '';
+  position: absolute;
+  top: min(0px, calc(50% - 22px));
+  right: min(0px, calc(50% - 22px));
+  bottom: min(0px, calc(50% - 22px));
+  left: min(0px, calc(50% - 22px));
+}
+
+/* The calendar's days sit 2px apart on a phone: each reaches 1px toward the
+   next and no further (38.3 wide at 320, accepted; Steven, 2026-11-19). */
+.day::after {
+  right: max(-1px, min(0px, calc(50% - 22px)));
+  left: max(-1px, min(0px, calc(50% - 22px)));
+}
+
+/* Map sits 9.5px above RSVP and who's coming: its touch area reaches up into
+   the date line, which is no control, and down short of the midpoint (44 by
+   about 36.5, accepted; Steven, 2026-11-19). */
+.occurrence-where a::after {
+  bottom: max(-4.5px, min(0px, calc(50% - 22px)));
+}
+
+/* The notice's link inside the sign-in checkbox's label stays above the
+   label's touch area, so a press on its words opens it; it keeps its drawn
+   size (accepted; Steven, 2026-11-19). */
+.tos-row a {
+  position: relative;
+  z-index: 1;
+}
+
+/* Two inputs no ::after draws on, each in a label of its own whose box is the
+   input's: a press on the label's touch area reaches the input, as a press on
+   any label does (the second sweep). The queue's checkbox takes the checkbox
+   labels' rule above; its label hugs it, its margin and all, rather than
+   spanning the row. The thumbnail sits 6px beneath it, so the checkbox has 7px
+   more room there and its square meets the thumbnail's edge, as the radio rows
+   meet (Steven, 2026-11-19); the label is drawn in the queue view alone. */
+.media-select-touch {
+  align-self: flex-start;
+  margin-top: 2px;
+  margin-bottom: 7px;
+}
+
+.media-select-touch > .media-select {
+  margin: 0;
+}
+
+/* The file chooser's label is no heading: the chooser's own words keep the
+   form's type, and the touch area sits beneath the chooser, so a press on the
+   chooser itself is the chooser's and its button keeps its own hover. */
+label.file-touch {
+  display: flex;
+  flex-direction: column;
+  z-index: 0;
+  font: inherit;
+}
+
+.file-touch::after {
+  z-index: -1;
+}

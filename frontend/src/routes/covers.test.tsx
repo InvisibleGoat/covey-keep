@@ -994,8 +994,10 @@ test('Use as the group’s cover: the group read ONCE, when the viewer first ope
       name: "Use as the group's cover",
     }),
   )
-  expect(await within(viewer).findByText("The Lees's cover is set.")).toBeTruthy()
-  expect(within(viewer).getByRole('status').textContent).toBe("The Lees's cover is set.")
+  // CK-99 rider 3: the settled line takes the possessive's apostrophe alone
+  // after a final s (until CK-99 this pinned "The Lees's cover is set.").
+  expect(await within(viewer).findByText("The Lees' cover is set.")).toBeTruthy()
+  expect(within(viewer).getByRole('status').textContent).toBe("The Lees' cover is set.")
   expect(JSON.parse(String(requests(mock, 'PUT', '/groups/grp-1/cover')[0][1]?.body))).toEqual({ media_id: 'm-1' })
   expect(within(viewer).queryByRole('group', { name: GROUP_COVER_STEP })).toBeNull()
   expect(heard).toBe(1)

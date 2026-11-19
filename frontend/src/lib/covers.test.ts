@@ -419,7 +419,9 @@ test('every approved line, as a literal', () => {
   expect(groupCoverConfirmSentence('The Lees', 'The Party')).toBe(
     "Everyone in The Lees will see this photo as the group's cover, including people who can't see The Party.",
   )
-  expect(groupCoverSetLine('The Lees')).toBe("The Lees's cover is set.")
+  // CK-99 rider 3: a name ending in s takes the apostrophe alone (until
+  // CK-99 this pinned "The Lees's cover is set.").
+  expect(groupCoverSetLine('The Lees')).toBe("The Lees' cover is set.")
   expect(REMOVE_UPLOADED_SENTENCE).toBe(
     'The picture will be deleted. The empty cover shows until someone chooses another.',
   )

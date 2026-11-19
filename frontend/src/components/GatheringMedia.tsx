@@ -2149,15 +2149,20 @@ export function GatheringMedia({
           return (
             <li key={item.id} className="media-item" ref={rowButtons.register(`${item.id}:row`)}>
               {queueView && reviewable && (
-                <input
-                  type="checkbox"
-                  className="media-select"
-                  aria-label={`Select ${name}`}
-                  checked={selected.includes(item.id)}
-                  disabled={publishing}
-                  aria-describedby={batchField ? describedBy(batchErrors, batchField, 'publish') : undefined}
-                  onChange={(event) => toggleSelected(item.id, event.target.checked)}
-                />
+                // The label is the checkbox's touch area (CK-99): its box is the
+                // checkbox's, and its ::after reaches 44 wide about it. It carries
+                // no words; the checkbox keeps its own name.
+                <label className="media-select-touch">
+                  <input
+                    type="checkbox"
+                    className="media-select"
+                    aria-label={`Select ${name}`}
+                    checked={selected.includes(item.id)}
+                    disabled={publishing}
+                    aria-describedby={batchField ? describedBy(batchErrors, batchField, 'publish') : undefined}
+                    onChange={(event) => toggleSelected(item.id, event.target.checked)}
+                  />
+                </label>
               )}
               {item.status === 'ready' && (
                 <RowThumbnail
@@ -2545,23 +2550,29 @@ export function GatheringMedia({
       {canUpload && (
         <form ref={uploadForm} onSubmit={(event) => void upload(event)}>
           <label htmlFor="media-files">Add photos</label>
-          <input
-            id="media-files"
-            ref={fileInput}
-            type="file"
-            multiple
-            accept={PICKER_ACCEPT}
-            aria-describedby={describedBy(errors, 'items')}
-            onChange={(event) => {
-              const chosen = Array.from(event.target.files ?? [])
-              setFiles(chosen)
-              setErrors(noErrors())
-              // Chosen after the page's Add photos (point 12): focus is owed
-              // to Upload once the button is enabled.
-              if (pickedFromPage.current && chosen.length > 0) setFocusUploadOwed(true)
-              pickedFromPage.current = false
-            }}
-          />
+          {/* The second label is the chooser's touch area (CK-99): its box is
+              the chooser's, and its ::after reaches 44 tall about it, so a press
+              there opens the picker. It carries no words; Add photos stays the
+              chooser's name. */}
+          <label className="file-touch">
+            <input
+              id="media-files"
+              ref={fileInput}
+              type="file"
+              multiple
+              accept={PICKER_ACCEPT}
+              aria-describedby={describedBy(errors, 'items')}
+              onChange={(event) => {
+                const chosen = Array.from(event.target.files ?? [])
+                setFiles(chosen)
+                setErrors(noErrors())
+                // Chosen after the page's Add photos (point 12): focus is owed
+                // to Upload once the button is enabled.
+                if (pickedFromPage.current && chosen.length > 0) setFocusUploadOwed(true)
+                pickedFromPage.current = false
+              }}
+            />
+          </label>
           {/* The product's first promise about a photograph, in the real
               order (pipeline record §3): uploaded, then prepared, and the
               location data removed as part of preparing it. Nothing here

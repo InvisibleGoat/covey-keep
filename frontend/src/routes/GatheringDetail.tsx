@@ -2414,52 +2414,59 @@ export function GatheringDetail() {
               {places.members.length === 0 && (
                 <p className="field-hint">{noOtherMembersLine(group.name)}</p>
               )}
-              {places.members.map((member, index) => (
-                <fieldset
-                  key={member.membership_id}
-                  ref={placeRows.register(member.membership_id)}
-                  className="occurrence-fields"
-                >
-                  <legend>
-                    <span className="member-initials" aria-hidden="true">
-                      {initials(member.display_name)}
-                    </span>{' '}
-                    {member.display_name}
-                    {member.co_host && (
-                      <>
-                        {' · '}
-                        <span className="member-role">Co-host</span>
-                      </>
-                    )}
-                  </legend>
-                  {PLACES.map((place) => (
-                    <label key={place}>
-                      <input
-                        type="radio"
-                        name={`gathering-place-${index}`}
-                        value={place}
-                        checked={member.place === place}
-                        disabled={placeActing !== null || (member.co_host && place !== 'invited')}
-                        onChange={() => void changePlace(member, place, 'row')}
-                      />{' '}
-                      {PLACE_LABELS[place]}
-                    </label>
+              {/* The member boxes in columns (CK-99): one on a phone, two
+                  at 1180, three at 1440; the hint lines above stay full
+                  width. */}
+              {places.members.length > 0 && (
+                <div className="places-grid">
+                  {places.members.map((member, index) => (
+                    <fieldset
+                      key={member.membership_id}
+                      ref={placeRows.register(member.membership_id)}
+                      className="occurrence-fields"
+                    >
+                      <legend>
+                        <span className="member-initials" aria-hidden="true">
+                          {initials(member.display_name)}
+                        </span>{' '}
+                        {member.display_name}
+                        {member.co_host && (
+                          <>
+                            {' · '}
+                            <span className="member-role">Co-host</span>
+                          </>
+                        )}
+                      </legend>
+                      {PLACES.map((place) => (
+                        <label key={place}>
+                          <input
+                            type="radio"
+                            name={`gathering-place-${index}`}
+                            value={place}
+                            checked={member.place === place}
+                            disabled={placeActing !== null || (member.co_host && place !== 'invited')}
+                            onChange={() => void changePlace(member, place, 'row')}
+                          />{' '}
+                          {PLACE_LABELS[place]}
+                        </label>
+                      ))}
+                      {member.co_host && <p className="field-hint">{CO_HOST_ALWAYS_INVITED}</p>}
+                      {member.place === null && (
+                        <p className="field-hint">{noPlaceLine(member.display_name)}</p>
+                      )}
+                      {placeRefusal?.where === 'row' &&
+                        placeRefusal.membershipId === member.membership_id && (
+                          <>
+                            <FormLevelErrors errors={{ fields: {}, form: [placeRefusal.message] }} />
+                            <button type="button" className="link-button" onClick={refreshPlaces}>
+                              Refresh the list
+                            </button>
+                          </>
+                        )}
+                    </fieldset>
                   ))}
-                  {member.co_host && <p className="field-hint">{CO_HOST_ALWAYS_INVITED}</p>}
-                  {member.place === null && (
-                    <p className="field-hint">{noPlaceLine(member.display_name)}</p>
-                  )}
-                  {placeRefusal?.where === 'row' &&
-                    placeRefusal.membershipId === member.membership_id && (
-                      <>
-                        <FormLevelErrors errors={{ fields: {}, form: [placeRefusal.message] }} />
-                        <button type="button" className="link-button" onClick={refreshPlaces}>
-                          Refresh the list
-                        </button>
-                      </>
-                    )}
-                </fieldset>
-              ))}
+                </div>
+              )}
             </>
           )}
         </section>

@@ -401,6 +401,24 @@ for (const role of ['host', 'co_host'] as const) {
   })
 }
 
+// CK-99 rider 2 (Steven, 2026-11-19): the member boxes sit together in one
+// grid of columns, the hint lines above it full width. jsdom has no layout:
+// the columns themselves are the stylesheet's (styles/touch-area.test.ts) and
+// the harness's, measured at 375, 900, 1180 and 1440.
+test("Who it's for's member boxes sit together in the places grid, the hint lines outside it", async () => {
+  stubServer({ detail: () => json(200, detail({ caller_role: 'host' })) })
+  renderPage()
+  await loaded()
+  const region = placesRegion()
+  await within(region).findByRole('group', { name: /^Bea Test/ })
+  const grid = region.querySelector('.places-grid') as HTMLElement
+  expect(grid).not.toBeNull()
+  expect([...grid.children].map((box) => box.tagName)).toEqual(['FIELDSET', 'FIELDSET', 'FIELDSET'])
+  for (const name of ['Bea Test', 'Cee Test', 'Dee Test']) expect(rowFor(name).parentElement).toBe(grid)
+  for (const hint of region.querySelectorAll(':scope > p.field-hint')) expect(grid.contains(hint)).toBe(false)
+  expect(region.querySelectorAll(':scope > p.field-hint').length).toBeGreaterThan(0)
+})
+
 test('Who it’s for is the organisers’ alone and a group’s gathering’s alone: an invitee and a standalone gathering’s host get no section and no request', async () => {
   const invitee = stubServer({ detail: () => json(200, detail({ caller_role: null })) })
   renderPage()
