@@ -151,9 +151,11 @@ def _payload(request) -> dict:
     return json.loads(request.data.decode())
 
 
-def test_a_reserved_address_never_reaches_the_provider_its_message_printed(
+async def test_a_reserved_address_never_reaches_the_provider_its_message_printed(
     provider, monkeypatch, capsys
 ):
+    # MOVED at CK-100's fix-up, with its reason: send_email is a coroutine since
+    # the sends moved off the event loop, so this test awaits it. Nothing else.
     built = []
     real_build = email_service.build_provider_request
 
@@ -163,7 +165,7 @@ def test_a_reserved_address_never_reaches_the_provider_its_message_printed(
 
     monkeypatch.setattr(email_service, "build_provider_request", _recording_build)
     body = "Sign in:\n\nhttp://testserver/auth/verify?token=abc123\n\nOnce."
-    assert send_email(to="throwaway@example.com", subject="Subject", body=body) is True
+    assert await send_email(to="throwaway@example.com", subject="Subject", body=body) is True
     assert built == []
     assert provider.requests == []
     assert capsys.readouterr().out == (
@@ -182,9 +184,10 @@ async def test_a_reserved_address_signs_in_from_the_log_in_provider_mode(
     assert provider.requests == []
 
 
-def test_a_real_address_in_provider_mode_is_never_printed(provider, capsys):
+async def test_a_real_address_in_provider_mode_is_never_printed(provider, capsys):
+    # MOVED at CK-100's fix-up: awaits the coroutine (the reason above).
     body = "Sign in:\n\nhttp://testserver/auth/verify?token=secret-token-value\n\nOnce."
-    assert send_email(to=AUNT, subject="A subject line", body=body) is True
+    assert await send_email(to=AUNT, subject="A subject line", body=body) is True
     out = capsys.readouterr().out
     assert out == f"[email] provider-mode send ok for [{_recipient_ref(AUNT)}] status=200\n"
     for secret in (AUNT, "kinmail", "auth/verify", "secret-token-value", "A subject line", FAKE_KEY):
@@ -198,12 +201,13 @@ def test_a_real_address_in_provider_mode_is_never_printed(provider, capsys):
     assert payload["from"] == f"{FROM_DISPLAY_NAME} <{FROM}>"
 
 
-def test_a_failed_send_to_a_real_address_prints_no_address(provider, monkeypatch, capsys):
+async def test_a_failed_send_to_a_real_address_prints_no_address(provider, monkeypatch, capsys):
+    # MOVED at CK-100's fix-up: awaits the coroutine (the reason above).
     def _refused(request, timeout=None):
         raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, None)
 
     monkeypatch.setattr(email_service.urllib.request, "urlopen", _refused)
-    assert send_email(to=AUNT, subject="S", body="http://testserver/auth/verify?token=t") is False
+    assert await send_email(to=AUNT, subject="S", body="http://testserver/auth/verify?token=t") is False
     out = capsys.readouterr().out
     assert out.startswith(f"[email] provider-mode send failed for [{_recipient_ref(AUNT)}]: ")
     assert AUNT not in out and "kinmail" not in out and "token" not in out

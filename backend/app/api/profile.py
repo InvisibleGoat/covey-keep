@@ -228,7 +228,7 @@ async def request_email_change(
     if not taken:
         # The link goes to the NEW address: controlling that inbox is the
         # entire proof.
-        send_email(
+        await send_email(
             to=body.new_email,
             subject=f"Confirm your new {PRODUCT_NAME} sign-in email",
             body=(
@@ -246,7 +246,7 @@ async def request_email_change(
     # — this goes to a party who may no longer control the account. A send
     # failure degrades (send_email never raises) and must not fail the request.
     if person.email is not None:
-        send_email(
+        await send_email(
             to=person.email,
             subject=f"A change to your {PRODUCT_NAME} sign-in email was requested",
             body=(

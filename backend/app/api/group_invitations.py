@@ -291,7 +291,7 @@ async def create_group_invitation(
     # The link targets the FRONTEND acceptance screen with the token in the
     # URL fragment (never the query string).
     link = f"{settings.app_base_url}/groups/invitations/accept#token={raw_token}"
-    send_email(
+    await send_email(
         to=body.destination,
         subject=f"You're invited to join {group.name} on {PRODUCT_NAME}",
         body=(

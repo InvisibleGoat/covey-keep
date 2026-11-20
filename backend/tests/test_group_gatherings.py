@@ -620,8 +620,11 @@ async def test_an_emailed_invitation_to_a_group_gathering_is_refused_before_anyt
     co-host, by the materialized row's id — the handle the host reads."""
     sends: list[str] = []
 
-    def record_send(*, to: str, subject: str, body: str) -> None:
+    # MOVED at CK-100's fix-up, with its reason: the router awaits the adapter
+    # since the sends moved off the event loop, so its stand-in is a coroutine.
+    async def record_send(*, to: str, subject: str, body: str) -> bool:
         sends.append(to)
+        return True
 
     monkeypatch.setattr(invitations_api, "send_email", record_send)
     cast = await _cast(client, capsys, db_session_factory)

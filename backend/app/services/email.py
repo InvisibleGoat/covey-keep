@@ -27,8 +27,18 @@ A send failure degrades, never raises: the caller's account/token records exist
 whether or not the email went out, so ``send_email`` returns a bool and nothing
 on this path may propagate an exception. Provider-mode log lines identify the
 recipient by hash prefix only — email addresses stay out of application logs.
+
+``send_email`` is a coroutine, and every caller awaits it (pinned by a scan of
+the application). The provider's HTTP call is blocking — ``urlopen`` with a
+10 s timeout — and every caller is an async route, so it runs in a worker
+thread (``asyncio.to_thread``) and is awaited: the event loop serves other
+requests while Resend answers, and the route still answers after the send is
+attempted, in the same order, with the same lines. Console mode and a reserved
+address print inline, on the loop. This module does the threading so that no
+caller can forget it.
 """
 
+import asyncio
 import hashlib
 import json
 import urllib.request
@@ -101,9 +111,11 @@ def build_provider_request(*, to: str, subject: str, body: str) -> urllib.reques
     )
 
 
-def send_email(*, to: str, subject: str, body: str) -> bool:
+async def send_email(*, to: str, subject: str, body: str) -> bool:
     if settings.email_mode == "provider" and not is_reserved_address(to):
-        return _send_via_provider(to=to, subject=subject, body=body)
+        # The blocking call goes to a worker thread and is awaited, so the loop
+        # stays free and the caller still answers after the send is attempted.
+        return await asyncio.to_thread(_send_via_provider, to=to, subject=subject, body=body)
     # Console mode prints the full message (link and address included) to the
     # service logs — the whole flow is verifiable from logs, and no real mail
     # can ever leave a dev or local run. A reserved test address takes this

@@ -260,7 +260,7 @@ async def request_link(
 
     if may_sign_in:
         link = f"{settings.api_base_url}/auth/verify?token={raw_token}"
-        send_email(
+        await send_email(
             to=body.email,
             subject=f"Your {PRODUCT_NAME} sign-in link",
             body=(
@@ -271,7 +271,7 @@ async def request_link(
             ),
         )
     else:
-        send_email(to=body.email, subject=INVITE_ONLY_SUBJECT, body=INVITE_ONLY_BODY)
+        await send_email(to=body.email, subject=INVITE_ONLY_SUBJECT, body=INVITE_ONLY_BODY)
     # The SAME answer in all three cases — an account, an invitation, neither
     # — and for a reserved address: the response says nothing about which
     # email went out (the no-enumeration rule above).

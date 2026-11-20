@@ -387,7 +387,7 @@ async def create_invitation(
     # access logs, or Referer): the frontend must hold the token across the
     # sign-in round trip, so the API never needs to see the raw token in a URL.
     link = f"{settings.app_base_url}/invitations/accept#token={raw_token}"
-    send_email(
+    await send_email(
         to=body.destination,
         subject=f"You're invited to {gathering.title} on {PRODUCT_NAME}",
         body=(

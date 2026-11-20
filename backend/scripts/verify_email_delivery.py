@@ -30,6 +30,7 @@ recipient).
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 from typing import Callable
@@ -88,8 +89,10 @@ def main(ask: Callable[[str], str] = input) -> int:
         return 2
 
     # send_email prints the adapter's own line: the recipient's hash prefix and
-    # the provider's status, or why the send failed. It never raises.
-    ok = send_email(to=recipient, subject=SUBJECT, body=BODY)
+    # the provider's status, or why the send failed. It never raises. It is the
+    # routes' coroutine, run here on a loop of its own, so the script sends
+    # through exactly the path the product does.
+    ok = asyncio.run(send_email(to=recipient, subject=SUBJECT, body=BODY))
     if ok:
         print("PASS: the provider accepted the message. Look for it in that inbox, spam included.")
         return 0
