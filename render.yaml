@@ -45,11 +45,25 @@ services:
         value: develop--covey-keep.netlify.app
       - key: WEBAUTHN_ORIGIN
         value: https://develop--covey-keep.netlify.app
-      # Console mode prints magic links to the service logs. The flip to real
-      # delivery (provider mode) is its own later phase, per the family
-      # transactional-email standard.
+      # Console mode prints every email, magic links included, to the service
+      # logs. It stays console here: the switch to provider is a dashboard edit
+      # on this service after the checks, never a blueprint change (CK-100,
+      # §7). The API refuses to boot on any other spelling, and in provider
+      # mode without EMAIL_API_KEY and EMAIL_FROM (app/config.py).
       - key: EMAIL_MODE
         value: console
+      # The sending address, bare: the display name rides in from app/brand.py.
+      # Read only in provider mode; in console mode it must still be a bare
+      # address (CK-100). coveykeep.com is verified in Resend before the switch.
+      - key: EMAIL_FROM
+        value: hello@coveykeep.com
+      # Resend's API key. Slot only: like SESSION_SECRET below, Render never
+      # populates a sync:false var added after the service exists, so the key
+      # is hand-set in THIS service's dashboard before the switch, and never on
+      # the worker. Empty is fine in console mode; provider mode refuses to
+      # boot without it.
+      - key: EMAIL_API_KEY
+        sync: false
       # Slot only — Render never populates a sync:false var added after the
       # service exists; the value is hand-set in the dashboard (CK-5 OOB step).
       - key: SESSION_SECRET

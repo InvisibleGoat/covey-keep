@@ -4,12 +4,13 @@ export const API_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:8000')
 
 // The ToS version the sign-in form presents, recorded per account at
 // creation. 1 = the CK-26 private test notice; 2 = the notice as revised at
-// CK-73.3; 3 = version 2 with CK-83b's paragraph on covers, true about what
-// is stored; the published terms take 4. Bump only
+// CK-73.3; 3 = version 2 with CK-83b's paragraph on covers; 4 = version 3
+// with CK-100's photos and email paragraphs, true about what is stored and
+// who handles email; the published terms take 5. Bump only
 // when the text behind /tos changes — a changed text is a NEW number, never
 // a rewrite under the old one, and an existing version is never renumbered
 // (decisions/2026-08-31-private-alpha-scope.md §3, §3.1).
-export const TOS_VERSION = 3
+export const TOS_VERSION = 4
 
 export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   return fetch(`${API_URL}${path}`, init)

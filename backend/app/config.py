@@ -43,7 +43,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pydantic import field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Anchor the env file to backend/.env so imports work regardless of cwd
@@ -148,6 +148,33 @@ def _stripe_api_key_shape(value: str) -> str:
     raise ValueError("the Stripe API key must start with rk_test_")
 
 
+# The email mode (CK-100; THE DESIGN §3). Exactly one of the two, spelled
+# exactly: a mistyped mode must refuse to boot, never fall through to one of
+# them — `consoIe` (a capital I) reading as provider would send real mail from
+# a deploy that meant to print it, and `Provider` reading as console would
+# print a real person's link to the deploy's log.
+EMAIL_MODES = ("console", "provider")
+
+# A bare address and nothing else: no display name, no angle brackets, no
+# quotes, no list, no space anywhere; one `@` with something on each side and
+# a dot in the domain. The display name rides in from app/brand.py
+# (services/email.py builds the `from` header), so a pasted `Name <addr>`
+# would send `CoveyKeep <Name <addr>>`, which the provider refuses.
+_BARE_ADDRESS = re.compile(r"""[^\s<>"',@]+@[^\s<>"',@]+\.[^\s<>"',@]+""")
+
+
+def _email_from_shape(value: str) -> str:
+    """A bare address, or a ValueError that names the variable and never the
+    value (the CK-61 rule, kept by the message as well as by
+    hide_input_in_errors)."""
+    if _BARE_ADDRESS.fullmatch(value):
+        return value
+    raise ValueError(
+        "EMAIL_FROM must be a bare address (name@domain), with no display name, "
+        "angle brackets, quotes, spaces or second address"
+    )
+
+
 def _stripe_webhook_secret_shape(value: str) -> str:
     """A webhook signing secret starts `whsec_`; anything else is a pasted
     wrong value, named by field and never echoed."""
@@ -198,12 +225,21 @@ class Settings(BaseSettings):
     webauthn_rp_id: str = "localhost"
     webauthn_origin: str = "http://localhost:5173"
 
-    # Email delivery mode: "console" prints the full message to the service logs;
-    # "provider" does real sends. The flip to provider is its own later phase.
+    # Email delivery mode: "console" prints the full message to the service
+    # logs; "provider" sends through Resend. Exactly one of the two, checked at
+    # boot (CK-100; the validators below). The switch to provider is a
+    # dashboard edit after the checks, never a code change, and the deploy
+    # stays console until then (render.yaml says so).
     email_mode: str = "console"
-    # Provider-mode credentials; deliberately unset until the cutover phase.
-    email_api_key: str = ""
-    email_from: str = ""
+    # Provider-mode values: REQUIRED in provider mode and refused at boot
+    # without them, naming the variable (CK-100); empty is meaningful in
+    # console mode alone. The key is a `sync: false` slot in render.yaml, set
+    # in covey-keep-api's dashboard; it takes NO shape check, because Resend's
+    # documentation states no fixed prefix (CK-100 measured it). The sender is
+    # a plain value in render.yaml and must be a bare address whenever it is
+    # set. validate_default, so an absent value is checked against the mode.
+    email_api_key: str = Field(default="", validate_default=True)
+    email_from: str = Field(default="", validate_default=True)
 
     # Cloudflare R2 (CK-33): the endpoint, the two buckets, and the two
     # web-service credentials (media pipeline record §11). ALL SEVEN REQUIRED,
@@ -259,6 +295,33 @@ class Settings(BaseSettings):
             if value.startswith(prefix):
                 return "postgresql+asyncpg://" + value.removeprefix(prefix)
         return value
+
+    @field_validator("email_mode")
+    @classmethod
+    def _email_mode_is_exactly_console_or_provider(cls, value: str) -> str:
+        if value in EMAIL_MODES:
+            return value
+        raise ValueError("EMAIL_MODE must be exactly console or provider, in lower case")
+
+    @field_validator("email_api_key")
+    @classmethod
+    def _email_api_key_present_in_provider_mode(cls, value: str, info: ValidationInfo) -> str:
+        # email_mode is declared first, so it is in info.data whenever it was
+        # valid; a mode that failed its own check adds no second error here.
+        if info.data.get("email_mode") == "provider" and not value:
+            raise ValueError("EMAIL_API_KEY is required when EMAIL_MODE is provider")
+        return value
+
+    @field_validator("email_from")
+    @classmethod
+    def _email_from_present_in_provider_mode_and_bare(
+        cls, value: str, info: ValidationInfo
+    ) -> str:
+        if not value:
+            if info.data.get("email_mode") == "provider":
+                raise ValueError("EMAIL_FROM is required when EMAIL_MODE is provider")
+            return value
+        return _email_from_shape(value)
 
     @field_validator("r2_upload_access_key_id", "r2_serve_access_key_id")
     @classmethod

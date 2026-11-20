@@ -1,23 +1,27 @@
-// CK-26 private-alpha notice pins, revised at CK-73.3 for version 2. The value
-// under test: /tos carries the load-bearing statements the alpha's condition 4
-// requires — private test, data not kept, what is stored (photos among it:
-// the three copies and the deleted original, location removed, the bin's 30
-// days, what deletion leaves behind, invitees' addresses cleared after a week,
-// plans in Stripe's test mode), every email the app sends — sign-in links,
-// invitations, email-change confirmations — visible in a server log with the
-// address it is for, what a person can remove before deleting an account
-// (photos; an answer can only be changed) — both CK-73.4's corrections — real
-// terms coming — and NEVER a sentence that went false (version 1's "Photo
-// upload doesn't exist yet"; version 2's first "Delete them first"); the
-// sign-in checkbox agrees to the test rather
-// than to Terms that do not exist yet — with its mechanism intact (unchecked
-// by default, submit disabled until checked) — and TOS_VERSION is 3: this
-// text's number since CK-83b, version 1 being the CK-26 text, version 2
-// CK-73.3's, and the published terms taking 4
-// (decisions/2026-08-31-private-alpha-scope.md §3, §3.1). Version 3 is
-// version 2 word for word with ONE paragraph added after the photographs
-// paragraph — covers, chosen from a photo or uploaded — pinned below as the
-// whole card, paragraph by paragraph, so a word moved anywhere fails.
+// CK-26 private-alpha notice pins, revised at CK-73.3 for version 2, at
+// CK-83b for version 3 and at CK-100 for version 4. The value under test:
+// /tos carries the load-bearing statements the alpha's condition 4 requires —
+// private test, data not kept, what is stored (photos among it: the three
+// copies and the deleted original, location removed, the bin's 30 days, which
+// photos a person can delete and what happens to one an organiser removes,
+// what deletion leaves behind, invitees' addresses cleared after a week, plans
+// in Stripe's test mode), every email the app sends — sign-in links,
+// invitations, messages about your sign-in email — sent through Resend, with
+// the server's own logs recording that one went out and not who it was for,
+// what a person can remove before deleting an account (photos; an answer can
+// only be changed) — both CK-73.4's corrections — real terms coming — and
+// NEVER a sentence that went false (version 1's "Photo upload doesn't exist
+// yet"; version 2's first "Delete them first"; version 3's "You can delete
+// your own photos at any time" and its server-log paragraph); the sign-in
+// checkbox agrees to the test rather than to Terms that do not exist yet —
+// with its mechanism intact (unchecked by default, submit disabled until
+// checked) — and TOS_VERSION is 4: this text's number since CK-100, version 1
+// being the CK-26 text, version 2 CK-73.3's, version 3 CK-83b's, and the
+// published terms taking 5 (decisions/2026-08-31-private-alpha-scope.md §3,
+// §3.1). Version 4 is version 3 word for word but for two paragraphs — the
+// photos paragraph's third sentence rewritten into three, and the server-log
+// paragraph replaced by the email paragraph — pinned below as the whole card,
+// paragraph by paragraph, so a word moved anywhere fails.
 //
 // THE LESSON THIS FILE CARRIES: from CK-26 to CK-73.3 it pinned "Photo upload
 // doesn't exist yet" — a sentence about something not built yet — and that
@@ -85,20 +89,25 @@ test('the notice says what it is and carries every load-bearing statement', () =
     ),
   ).toBeTruthy()
   expect(screen.getByText(/a passkey if you add one/i)).toBeTruthy()
-  // The console-mode disclosure, in version 2's corrected words. THE PIN MOVED
-  // at CK-73.4, with its reason: as first built, version 2 said sign-in links
-  // alone, and services/email.py's one console line prints EVERY email the app
-  // sends with the address it is for — the sign-in link (api/auth.py), an
-  // invitation (api/invitations.py: a third party's address, supplied by the
-  // inviter), and both email-change messages (api/profile.py). The old regex,
-  // /sign-in links are printed to a server log/, no longer matches because the
-  // list of what is printed grew — which is the correction.
+  // Every email the app sends, and who handles it, in version 4's words. THE
+  // PIN MOVED at CK-100, with its reason: version 3 said every email was
+  // printed to a server log with the address it was for, which goes false the
+  // moment the mode switches to provider. Since CK-100 a real address is sent
+  // through Resend (services/email.py), and in provider mode the adapter's
+  // line names it by a hash prefix alone; the list of what is sent is the
+  // product's — the sign-in link and the invite-only note (api/auth.py), an
+  // invitation (api/invitations.py, api/group_invitations.py) and both
+  // email-change messages (api/profile.py). (Until the switch the mode is
+  // still console: the kickoff names that window, and the switch follows the
+  // checks.)
   expect(
     screen.getByText(
-      /sign-in links, invitations and email-change confirmations are printed to a server log/i,
+      /sign-in links, invitations and messages about your sign-in email — are sent through Resend, an email service, which handles each address and message to deliver it/i,
     ),
   ).toBeTruthy()
-  expect(screen.getByText(/with the email address each one is for/i)).toBeTruthy()
+  expect(
+    screen.getByText(/own server logs record that an email went out, but not who it was for/i),
+  ).toBeTruthy()
   // Real terms and a privacy policy are coming, and they will need accepting.
   expect(screen.getByText(/asked to read and accept them/i)).toBeTruthy()
 })
@@ -114,9 +123,27 @@ test('the notice tells the truth about photographs, deletion and plans', () => {
   ).toBeTruthy()
   // Location removed (every byte of metadata is dropped from the copies).
   expect(screen.getByText(/location and other camera details are removed/i)).toBeTruthy()
-  // Your own photos are yours to delete; the bin's clock is the sweep's
-  // REMOVED_BIN, 30 days, and the sweep is on (check (gt), 2026-10-19).
-  expect(screen.getByText(/delete your own photos at any time/i)).toBeTruthy()
+  // Your own photos are yours to delete where you can still see them; the
+  // bin's clock is the sweep's REMOVED_BIN, 30 days, and the sweep is on
+  // (check (gt), 2026-10-19). THE PIN MOVED at CK-100, with its reason:
+  // version 3's "You can delete your own photos at any time" was false three
+  // ways (the seventh doc audit §18) — an outsider after a turn-off (CK-92), a
+  // member moved to Kept a surprise (CK-77), and a photo an organiser removed,
+  // which is in the gathering's bin, visible to the host and co-hosts alone
+  // (CK-63, CK-66, CK-68) and put back or destroyed by them.
+  expect(
+    screen.getByText(/delete your own photos from any gathering you can still see/i),
+  ).toBeTruthy()
+  expect(
+    screen.getByText(
+      /If the host or a co-host removes one of your photos, only the host and co-hosts can see it from then on: they can put it back within 30 days, and after that it's deleted for good\./i,
+    ),
+  ).toBeTruthy()
+  expect(
+    screen.getByText(
+      /If you can no longer see a gathering, the photos you added stay in it — ask its host if you'd like them removed\./i,
+    ),
+  ).toBeTruthy()
   expect(
     screen.getByText(/a photo sent to a bin is deleted for good 30 days later/i),
   ).toBeTruthy()
@@ -159,7 +186,7 @@ test('the notice tells the truth about photographs, deletion and plans', () => {
   expect(screen.getByText(/keeps a record of which plan you're on, never your card/i)).toBeTruthy()
 })
 
-test("the sentences that went false never render — version 1's photo claim, and version 2's first 'Delete them'", () => {
+test("the sentences that went false never render — version 1's photo claim, version 2's first 'Delete them', and version 3's two", () => {
   // The NEGATION of the CK-26 pin. "Photo upload doesn't exist yet, so no
   // photos are stored" was true on 2026-09-02 and false from CK-36 on; the
   // old pin asserted it present, and nothing failed when it stopped being
@@ -174,6 +201,14 @@ test("the sentences that went false never render — version 1's photo claim, an
   // they could delete their answers, which the product has never let anyone
   // do (CK-27 shipped no RSVP delete, deliberately).
   expect(page).not.toMatch(/Delete them first/i)
+  // And version 3's two, replaced at CK-100 (the whole page, whitespace
+  // folded): "You can delete your own photos at any time", false three ways,
+  // and the server-log paragraph, false from the switch on.
+  const folded = page.replace(/\s+/g, ' ')
+  expect(folded).not.toMatch(/delete your own photos at any time/i)
+  expect(folded).not.toMatch(/printed to a server log/i)
+  expect(folded).not.toMatch(/with the email address each one is for/i)
+  expect(folded).not.toMatch(/That's temporary, and it's told to you here/i)
 })
 
 test('the notice renders the product name from the brand module, never a literal', () => {
@@ -248,24 +283,59 @@ const COVERS_PARAGRAPH = `A group or gathering can also have a cover picture, ch
 
 const VERSION_3 = [...VERSION_2.slice(0, 4), COVERS_PARAGRAPH, ...VERSION_2.slice(4)]
 
+// Version 4's two paragraphs (approved by Steven 2026-11-19, THE WORDS of
+// CK-100), word for word, the product's name from the brand module. The
+// photos paragraph is version 3's with its third sentence rewritten into
+// three; the email paragraph replaces version 3's server-log paragraph.
+const PHOTOS_PARAGRAPH_4 = `Photos you add can be seen by the people in that gathering, with any caption, tags and file name. ${PRODUCT_NAME} keeps three copies of each photo at different sizes and deletes the file you uploaded; location and other camera details are removed from the copies. You can delete your own photos from any gathering you can still see, and a photo sent to a bin is deleted for good 30 days later. If the host or a co-host removes one of your photos, only the host and co-hosts can see it from then on: they can put it back within 30 days, and after that it's deleted for good. If you can no longer see a gathering, the photos you added stay in it — ask its host if you'd like them removed. Deleting your account removes your email address and name, but photos and answers you added stay in their gatherings under "a former member". Delete your photos first if you'd rather they went. Answers can't be deleted, but you can change yours to "Can't make it" and remove anyone you said you were bringing.`
+const EMAIL_PARAGRAPH_4 = `Emails from ${PRODUCT_NAME} — sign-in links, invitations and messages about your sign-in email — are sent through Resend, an email service, which handles each address and message to deliver it. ${PRODUCT_NAME}'s own server logs record that an email went out, but not who it was for.`
+
+const PHOTOS_AT = 3
+const EMAIL_AT = 6
+const VERSION_4 = VERSION_3.map((paragraph, i) =>
+  i === PHOTOS_AT ? PHOTOS_PARAGRAPH_4 : i === EMAIL_AT ? EMAIL_PARAGRAPH_4 : paragraph,
+)
+
 function noticeParagraphs(): string[] {
   return Array.from(document.querySelectorAll('.notice-card p')).map((p) =>
     (p.textContent ?? '').replace(/\s+/g, ' ').trim(),
   )
 }
 
-test("the notice is version 3: version 2's every sentence, unchanged and in order, and the covers paragraph after the photographs", () => {
+test("the notice is version 4: version 3's every paragraph unchanged and in order, but the photos and email paragraphs", () => {
   renderNotice()
-  // The whole card, paragraph by paragraph — the strongest form of "version
-  // 2's sentences all still present": nothing reworded, nothing reordered,
-  // exactly one paragraph added and nowhere else.
-  expect(noticeParagraphs()).toEqual(VERSION_3)
-  for (const paragraph of VERSION_2) {
-    expect(noticeParagraphs()).toContain(paragraph)
+  // The whole card, paragraph by paragraph — nothing reworded, nothing
+  // reordered, exactly two paragraphs replaced and nowhere else. THE PIN
+  // MOVED at CK-100, with its reason: this test read version 3 (version 2
+  // with the covers paragraph) from CK-83b until the notice took 4.
+  expect(noticeParagraphs()).toEqual(VERSION_4)
+  VERSION_3.forEach((paragraph, i) => {
+    if (i === PHOTOS_AT || i === EMAIL_AT) {
+      expect(noticeParagraphs()).not.toContain(paragraph)
+    } else {
+      expect(noticeParagraphs()[i]).toBe(paragraph)
+    }
+  })
+  // The photos paragraph changed in its third sentence alone: its first two
+  // and its last three are version 3's, word for word.
+  const sentences3 = VERSION_3[PHOTOS_AT].split('. ')
+  const sentences4 = PHOTOS_PARAGRAPH_4.split('. ')
+  expect(sentences4.slice(0, 2)).toEqual(sentences3.slice(0, 2))
+  expect(sentences4.slice(-3)).toEqual(sentences3.slice(-3))
+  expect(sentences4).toHaveLength(sentences3.length + 2)
+})
+
+test('the email paragraph, as a literal, and the photos paragraph sentence by sentence', () => {
+  renderNotice()
+  expect(noticeParagraphs()[EMAIL_AT]).toBe(EMAIL_PARAGRAPH_4)
+  const photos = noticeParagraphs()[PHOTOS_AT]
+  for (const sentence of [
+    'You can delete your own photos from any gathering you can still see, and a photo sent to a bin is deleted for good 30 days later.',
+    "If the host or a co-host removes one of your photos, only the host and co-hosts can see it from then on: they can put it back within 30 days, and after that it's deleted for good.",
+    "If you can no longer see a gathering, the photos you added stay in it — ask its host if you'd like them removed.",
+  ]) {
+    expect(photos).toContain(sentence)
   }
-  expect(noticeParagraphs().indexOf(COVERS_PARAGRAPH)).toBe(
-    noticeParagraphs().findIndex((p) => p.startsWith('Photos you add')) + 1,
-  )
 })
 
 test('the covers paragraph, sentence by sentence, as literals', () => {
@@ -294,18 +364,20 @@ test('the covers paragraph, sentence by sentence, as literals', () => {
   expect(text).not.toMatch(/\d+ days/)
 })
 
-test('TOS_VERSION is 3 — this notice; 1 is the CK-26 text, 2 is CK-73.3\'s, the published terms take 4', () => {
+test('TOS_VERSION is 4 — this notice; 1 is the CK-26 text, 2 is CK-73.3\'s, 3 is CK-83b\'s, the published terms take 5', () => {
   // One number means one text, forever. Version 1 is CK-26's notice and the
   // acceptance rows recorded against it (every account created before
   // CK-73.3 — all Steven's household); 2 is CK-73.3's, true about what was
-  // stored until covers; 3 is the text in Tos.tsx today, version 2 with the
-  // covers paragraph (CK-83b); 4 is the published terms', set by the phase
-  // that publishes them. Never renumber an existing version in either
-  // direction — the acceptance records would then name the wrong text, the
-  // exact defect the ToS work exists to close (private-alpha decision record
-  // §3, §3.1). THE PIN MOVED at CK-83b, with its reason: uploaded covers are
-  // a new kind of stored image, so the notice took a new number — with the
-  // text, never without it. The next change to what the product stores, or
-  // to what deletion does, moves this to 4 and the terms to 5.
-  expect(TOS_VERSION).toBe(3)
+  // stored until covers; 3 is CK-83b's, version 2 with the covers paragraph;
+  // 4 is the text in Tos.tsx today (CK-100); 5 is the published terms', set
+  // by the phase that publishes them. Never renumber an existing version in
+  // either direction — the acceptance records would then name the wrong
+  // text, the exact defect the ToS work exists to close (private-alpha
+  // decision record §3, §3.1). THE PIN MOVED at CK-100, with its reason: a
+  // new processor receives every address and message (Resend), and version
+  // 3's photo-deletion sentence was false three ways, so the notice took a
+  // new number — with the text, never without it. The next change to what
+  // the product stores, or to what deletion does, moves this to 5 and the
+  // terms to 6.
+  expect(TOS_VERSION).toBe(4)
 })

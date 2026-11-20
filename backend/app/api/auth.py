@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, field_validator
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,13 +23,16 @@ from app.models import (
     Account,
     AccountKind,
     EmailChangeRequest,
+    GatheringInvitationPending,
+    GroupInvitationPending,
+    InvitationChannel,
     MagicLinkToken,
     Person,
     Session,
     TosAcceptance,
 )
 from app.security import encode_session_jwt, hash_token
-from app.services.email import send_email
+from app.services.email import is_reserved_address, send_email
 from app.services.retention import purge_stale
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -44,14 +47,15 @@ MAX_REQUESTS_PER_EMAIL = 5
 MAX_REQUESTS_PER_IP = 20
 # The ToS version the sign-in form presents today, recorded per account at
 # creation (verify). 1 = the CK-26 private test notice; 2 = the notice as
-# revised at CK-73.3; 3 = version 2 with CK-83b's paragraph on covers, true
-# about what is stored; the published terms take 4. The validator keeps
+# revised at CK-73.3; 3 = version 2 with CK-83b's paragraph on covers; 4 =
+# version 3 with CK-100's photos and email paragraphs, true about what is
+# stored and who handles email; the published terms take 5. The validator keeps
 # accepting every version from 1 up to this one: a browser still on an old
 # bundle showed its user that version's text, and the number it sends is
 # then the TRUE record of what they agreed to. Never renumber an existing
 # version, and never narrow the lower bound
 # (decisions/2026-08-31-private-alpha-scope.md §3, §3.1).
-TOS_VERSION = 3
+TOS_VERSION = 4
 
 # The one and only /auth/request-link success body. Byte-identical whether or
 # not the email is known, and it must NEVER gain a send-status field — failure
@@ -63,7 +67,51 @@ REQUEST_LINK_RESPONSE = {
 
 # Missing, expired, already-consumed, and consent-less tokens are deliberately
 # indistinguishable — one uniform error redirect into the frontend callback.
+# Since CK-100 so is a token for a new address whose invitation has gone.
 _ERROR_FRAGMENT = "error=invalid_link"
+
+# The note an address with neither an account nor a live invitation is sent in
+# place of a link (CK-100, THE WORDS, approved by Steven 2026-11-19). It carries
+# no link and no token. The product's name comes from app/brand.py.
+INVITE_ONLY_SUBJECT = f"{PRODUCT_NAME} is open by invitation"
+INVITE_ONLY_BODY = (
+    f"Someone asked for a {PRODUCT_NAME} sign-in link for this address. "
+    f"{PRODUCT_NAME} is a small private test, open only to people who've been "
+    "invited, and there's no invitation for this address.\n\n"
+    "If you were expecting to join, ask the person who invited you to send the "
+    "invitation to this address. If you didn't ask for this, you can ignore "
+    "this email."
+)
+
+
+def _live_invitation(email: str, now: datetime):
+    """SIGN-UP BY INVITATION (CK-100; the private-alpha record §1, condition
+    3): true when the address holds a LIVE emailed invitation — to a gathering
+    or to a group — and only then. Live is what every acceptance path reads:
+    channel EMAIL, not consumed, not revoked, not past its expiry, matched on
+    the normalized address (both tables store `destination` through
+    normalize_email, as `body.email` and the token row's address are). Every
+    product revocation also forces `expires_at` to now; revoked_at is read
+    here all the same, so the check never rests on that habit. One SQL
+    expression, asked at request-link and again at verify. The group's link
+    is not here: it makes no account — its landing sends a person to sign in
+    first, and a link anyone can forward is not an invitation to an address."""
+    return or_(
+        exists().where(
+            GatheringInvitationPending.channel == InvitationChannel.EMAIL,
+            GatheringInvitationPending.destination == email,
+            GatheringInvitationPending.consumed_at.is_(None),
+            GatheringInvitationPending.revoked_at.is_(None),
+            GatheringInvitationPending.expires_at > now,
+        ),
+        exists().where(
+            GroupInvitationPending.channel == InvitationChannel.EMAIL,
+            GroupInvitationPending.destination == email,
+            GroupInvitationPending.consumed_at.is_(None),
+            GroupInvitationPending.revoked_at.is_(None),
+            GroupInvitationPending.expires_at > now,
+        ),
+    )
 
 
 def _callback_redirect(fragment: str) -> RedirectResponse:
@@ -181,6 +229,22 @@ async def request_link(
         .values(expires_at=now)
     )
 
+    # WHO MAY SIGN IN (CK-100): an address that holds an account signs in as
+    # before; an address with no account is sent a link only if it holds a
+    # live emailed invitation (_live_invitation) or is a reserved test address
+    # (services/email.py::is_reserved_address — one function decides).
+    # Everyone else is sent the invite-only note, never a link. One statement.
+    has_person, invited = (
+        await db.execute(
+            select(exists().where(Person.email == body.email), _live_invitation(body.email, now))
+        )
+    ).one()
+    may_sign_in = has_person or invited or is_reserved_address(body.email)
+
+    # The row is written for EVERY request, a refused one included, so the
+    # rate limits above count refused requests exactly as they count links:
+    # a refused address cannot be asked about faster than a known one. A
+    # refused request's token is never sent, and verify would refuse it.
     raw_token = secrets.token_urlsafe(32)
     db.add(
         MagicLinkToken(
@@ -194,17 +258,23 @@ async def request_link(
     # Commit before the send: the token record exists whether or not delivery works.
     await db.commit()
 
-    link = f"{settings.api_base_url}/auth/verify?token={raw_token}"
-    send_email(
-        to=body.email,
-        subject=f"Your {PRODUCT_NAME} sign-in link",
-        body=(
-            f"Sign in to {PRODUCT_NAME}:\n\n"
-            f"{link}\n\n"
-            "This link expires in 15 minutes and can be used once. "
-            "If you didn't request it, you can ignore this email."
-        ),
-    )
+    if may_sign_in:
+        link = f"{settings.api_base_url}/auth/verify?token={raw_token}"
+        send_email(
+            to=body.email,
+            subject=f"Your {PRODUCT_NAME} sign-in link",
+            body=(
+                f"Sign in to {PRODUCT_NAME}:\n\n"
+                f"{link}\n\n"
+                "This link expires in 15 minutes and can be used once. "
+                "If you didn't request it, you can ignore this email."
+            ),
+        )
+    else:
+        send_email(to=body.email, subject=INVITE_ONLY_SUBJECT, body=INVITE_ONLY_BODY)
+    # The SAME answer in all three cases — an account, an invitation, neither
+    # — and for a reserved address: the response says nothing about which
+    # email went out (the no-enumeration rule above).
     return REQUEST_LINK_RESPONSE
 
 
@@ -238,8 +308,9 @@ async def verify(
     # the second opening's UPDATE wait on the first's row lock and then
     # re-evaluate: the stamp is set, the rowcount is 0, and the answer is the
     # uniform error, as for any used link. A link signs in once. (A return
-    # below without a commit — the pre-CK-6 refusal — rolls this stamp back
-    # with the session, leaving the row exactly as it was.)
+    # below without a commit — the pre-CK-6 refusal, and since CK-100 a new
+    # address whose invitation has gone — rolls this stamp back with the
+    # session, leaving the row exactly as it was.)
     consumed = await db.execute(
         update(MagicLinkToken)
         .where(
@@ -259,6 +330,15 @@ async def verify(
         # Pre-CK-6 token: no consent was collected when it was minted, so no
         # account may be created from it. (Existing people are unaffected —
         # a returning sign-in records no new acceptance.)
+        return _callback_redirect(_ERROR_FRAGMENT)
+
+    if person is None and not (
+        is_reserved_address(email) or await db.scalar(select(_live_invitation(email, now)))
+    ):
+        # SIGN-UP BY INVITATION, decided a second time (CK-100): the
+        # invitation that admitted this address at request-link has been
+        # revoked, has expired, or was accepted since, so no account is made.
+        # The uniform error, and nothing written.
         return _callback_redirect(_ERROR_FRAGMENT)
 
     if person is None:

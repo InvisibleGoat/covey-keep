@@ -117,10 +117,13 @@ export function SignIn() {
             <h2 ref={sentRef} tabIndex={-1}>
               Check your email
             </h2>
-            {/* Mirrors the API's non-enumerating wording — never reveal whether
-                the address was known. */}
-            <p>If that address can receive email, a sign-in link is on its way.</p>
+            {/* Never reveal whether the address was known, or which email went
+                out: since CK-100 an address with neither an account nor an
+                invitation is sent a note, not a link, so the first line says a
+                message is on its way. The same card for every address. */}
+            <p>If that address can receive email, a message from {PRODUCT_NAME} is on its way.</p>
             <p>The link works once and expires in 15 minutes.</p>
+            <p>Not there in a few minutes? Check your spam folder.</p>
             <button
               type="button"
               className="link-button"

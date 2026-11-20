@@ -3,15 +3,18 @@ import { PRODUCT_NAME } from '../brand'
 import { BrandMark } from '../components/AuthArt'
 
 // The private test notice — the text the sign-in checkbox records agreement
-// to, as ToS VERSION 3 (CK-83b): version 2 (CK-73.3) word for word, with one
-// paragraph added after the photographs paragraph, on covers — chosen from a
-// photo or uploaded — because an uploaded cover is a new kind of stored
-// image. Version 1 was CK-26's text; it went false the day the first
-// photograph was stored (CK-36) and stood six weeks. Every version's text
-// lives word for word in decisions/2026-08-31-private-alpha-scope.md §3.1.
-// This is NOT the Terms of Service: the real terms and privacy policy are
-// with counsel and publish later as VERSION 4, and the notice must never
-// share a version number with them (the record's §3).
+// to, as ToS VERSION 4 (CK-100): version 3 (CK-83b) word for word but for two
+// paragraphs — the photos paragraph's third sentence rewritten into three,
+// because "You can delete your own photos at any time" was false three ways,
+// and the server-log paragraph replaced by one on email, because a new
+// processor, Resend, receives every address and message. Version 3 was
+// version 2 (CK-73.3) with a paragraph on covers; version 1 was CK-26's text,
+// which went false the day the first photograph was stored (CK-36) and stood
+// six weeks. Every version's text lives word for word in
+// decisions/2026-08-31-private-alpha-scope.md §3.1. This is NOT the Terms of
+// Service: the real terms and privacy policy are with counsel and publish
+// later as VERSION 5, and the notice must never share a version number with
+// them (the record's §3).
 //
 // THIS PAGE IS A LIVING DESCRIPTION OF WHAT THE PRODUCT STORES. Every phase
 // that stores a new kind of data, or changes what deletion does, amends it
@@ -30,8 +33,8 @@ import { BrandMark } from '../components/AuthArt'
 // The look (CK-81) is the mockup's notice page, screen 19 — its STYLING
 // only: the mark, the heading, the text on one card, the way back. The
 // mockup's text is version 1 and stale (the design handoff §5.3); the
-// words below are version 3 — version 2's, unchanged, and CK-83b's covers
-// paragraph.
+// words below are version 4 — version 3's, with CK-100's photos and email
+// paragraphs.
 export function Tos() {
   return (
     <main className="auth-screen notice-screen">
@@ -62,12 +65,16 @@ export function Tos() {
             Photos you add can be seen by the people in that gathering, with any caption, tags
             and file name. {PRODUCT_NAME} keeps three copies of each photo at different sizes
             and deletes the file you uploaded; location and other camera details are removed
-            from the copies. You can delete your own photos at any time, and a photo sent to a
-            bin is deleted for good 30 days later. Deleting your account removes your email
-            address and name, but photos and answers you added stay in their gatherings under
-            "a former member". Delete your photos first if you'd rather they went. Answers
-            can't be deleted, but you can change yours to "Can't make it" and remove anyone
-            you said you were bringing.
+            from the copies. You can delete your own photos from any gathering you can still
+            see, and a photo sent to a bin is deleted for good 30 days later. If the host or a
+            co-host removes one of your photos, only the host and co-hosts can see it from then
+            on: they can put it back within 30 days, and after that it's deleted for good. If
+            you can no longer see a gathering, the photos you added stay in it — ask its host
+            if you'd like them removed. Deleting your account removes your email address and
+            name, but photos and answers you added stay in their gatherings under "a former
+            member". Delete your photos first if you'd rather they went. Answers can't be
+            deleted, but you can change yours to "Can't make it" and remove anyone you said
+            you were bringing.
           </p>
           <p>
             A group or gathering can also have a cover picture, chosen by the people who run
@@ -87,11 +94,10 @@ export function Tos() {
             on its page; {PRODUCT_NAME} keeps a record of which plan you're on, never your card.
           </p>
           <p>
-            One thing worth knowing: during this test, sign-in links, invitations and
-            email-change confirmations are printed to a server log, with the email address
-            each one is for, and Steven — who runs the server — can see them. That's
-            temporary, and it's told to you here because you should hear it rather than find
-            out.
+            Emails from {PRODUCT_NAME} — sign-in links, invitations and messages about your
+            sign-in email — are sent through Resend, an email service, which handles each
+            address and message to deliver it. {PRODUCT_NAME}'s own server logs record that an
+            email went out, but not who it was for.
           </p>
           <p>
             A real Terms of Service and privacy policy are being written and reviewed. When
