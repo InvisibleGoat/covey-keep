@@ -1,11 +1,14 @@
 # CoveyKeep — Repo Operational Guide
 
-**Version:** 1.128.1
+**Version:** 1.129.0
 **Last Updated:** 2026-11-20
 **Source:** the one-line list of every phase from CK-2 to CK-80 that stood here moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); each phase is named in its own changelog entry, here or there.
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.129.0** (2026-11-20): **CK-100's switch: the deploy sends email through Resend** — at Steven's word of 2026-11-20 (*"Yes, switch"*), once CK-100's checks (pr) to (pv) had passed on the deploy, coveykeep.com was verified in Resend, `EMAIL_API_KEY` was typed into `covey-keep-api`'s dashboard and the smoke script had passed from its Web Shell (the provider's 200, and the message in the inbox with SPF, DKIM and DMARC passing). Rule 1 moved the entry 1.126.0 to `CLAUDE-history.md`, which takes 1.7.0. **The switch is one line**, `render.yaml`'s `EMAIL_MODE: provider`, and its rollback is that line set back to console; the blueprint syncs on every push, so the push puts `covey-keep-api` in provider mode, and a reserved test address still prints in console form and never reaches Resend. **Rewritten to the current state** (rules 2 and 3): the *Email is console mode* bullet, now *Email is provider mode*, the Auth env surface bullet, the *Sign-up by invitation* bullet, the Commands block's smoke-script comment and its map line. **Changed**: `render.yaml` (the value and the three comments above it), `config.py`'s `email_mode` comment (the code default stays console, so a local run and the suite print), `services/email.py`'s docstring, `scripts/verify_email_delivery.py`'s docstring (run again after any change to the key, the sender or the domain's records) and one comment in `routes/tos.test.tsx`. **Tests**: one pin moved, with its reason — `test_email_mode.py`'s blueprint test, now `test_render_yaml_declares_the_two_and_sends_through_the_provider`, red against `HEAD`'s `render.yaml` and green against the switch's; the five files on the email path ran green, 119 passed (70, 22, 16, 7 and 4), and `tos.test.tsx`, 9. No behaviour, route, body, dependency, migration or verifier line changed (head 0037, the verifier at 458). **From the push on, every address but a reserved one is a real send**: a check signs in `@example.com` throwaways alone, and checks (pw) to (pz) are the planning session's runbook, `D:\projects\temp\CK-100-switch-checks-runbook.md`.
+
+  Not pushed. The push redeploys both Render services — the API into provider mode, the worker, which reads no email variable, as it was — and Netlify builds the same frontend; no migration, so no verifier run is owed.
 - **1.128.1** (2026-11-20): **CK-100's fix-up after review: the switch to real email is one commit, never a dashboard edit, and the email sends off the event loop** — at Steven's word of 2026-11-20, relayed by the planning session. Four places in this root and the Hub's Auth router preamble (`reference/backend/api-reference.md` 1.49.1) called the switch to provider mode *a dashboard edit after the checks, never a code change* (or *never a blueprint change*), the opposite of the kickoff's §7: a Blueprint sync can put a dashboard value back to the file's (the lesson of `SWEEP_ENABLED` at CK-59's `(gt)` and CK-73.2), so a switch made in the dashboard alone could fall back to console unseen, printing real addresses and links to the log and making version 4's email paragraph false. Each now says the deploy stays console until the switch, and the switch is one commit — `render.yaml`'s `EMAIL_MODE: provider`, with the *Email is console mode* bullet rewritten and its changelog entry — made after CK-100's checks, the domain verified in Resend, `EMAIL_API_KEY` typed into `covey-keep-api`'s dashboard (never the worker's) and the smoke script passed, its rollback the same line reversed: `config.py`'s `email_mode` comment, `services/email.py`'s docstring, `render.yaml`'s comment above `EMAIL_MODE` (the value still `console`) and the *Sign-up by invitation* Deploys bullet, rewritten under rule 2. Rule 1 moved the entry 1.125.0 to `CLAUDE-history.md`, which takes 1.6.0. The wording was comments and docs alone (`928a4f9`): no behaviour, no `render.yaml` value and no test changed, since no test reads these words; the four test files on the email path ran green, 115 passed (70, 16, 7 and 22).
 
   **The sends off the event loop** — the fix-up's second item, at Steven's answer of 2026-11-20 (*"Yes, add it"*), relayed by the planning session. In provider mode `_send_via_provider`'s blocking `urlopen` (a 10 s timeout) ran on the event loop under every emailing route — request-link's two sends, the gathering and group invitation creates, and the email change's two — so once the switch is made each send would have stalled every other request on that worker for as long as Resend took. **`send_email` is a coroutine**: its provider path awaits `asyncio.to_thread(_send_via_provider, …)`, console mode and a reserved address print inline, and every caller awaits it, so a route still answers after the send is attempted, in the same order, with the same 202, bodies and lines — no fire-and-forget and no `BackgroundTasks`; the smoke script runs the same coroutine through `asyncio.run`. **Unchanged**: `send_email` never raises, the 10 s timeout, what either mode prints, `is_reserved_address`'s routing and `build_provider_request`; no dependency, setting, route or body. **Changed**: `services/email.py`, `api/auth.py`, `api/profile.py`, `api/invitations.py`, `api/group_invitations.py` and `scripts/verify_email_delivery.py`; the *Sign-up by invitation* Deploys bullet gains its sentence and the map its `email.py` line. **Tests**: new `tests/test_email_off_the_loop.py` (4) — the loop free while a held provider send waits behind a request-link, the call in a worker thread with its 10 s timeout, console and reserved sends inline, and every `send_email(` call under `app/` awaited (an AST scan, so no comment or string can pass for one, and each of the four emailing routers found) — red first, all four, the first on *the route had answered before the provider did*; three tests in `test_email_mode.py` and the stand-in adapter in `test_group_gatherings.py` moved to await, each with its reason. **6 mutations, each compiling and caught by a named test**: the thread removed, two callers' awaits dropped, the smoke script not running the coroutine, the thread's coroutine returned unawaited, and console's line printed from a thread. **934 backend tests** (930 before; 4 new).
@@ -39,8 +42,7 @@
   **THE SECOND SWEEP** (Steven, 2026-11-19, relayed by the planning session): two controls the first never measured, because its selector held no `<input>` but a radio's or a checkbox's in a label — the queue's photo checkbox (`input.media-select`, 18 by 18) and the Photos upload's file chooser (`input#media-files`, 32 tall) — and eight new scenes of a gathering's Photos (All, the queue and a selection, the Removed view, a file chosen, uploading, an upload failed, an intent refused), every input type now in the selector: **8706 control-instances, 936 short — new ground only the chooser (138) and the checkbox (36)**; every other text, email, search, date, select and file input reaches 44. **The fix**: each input alone in a label with no words, its box the input's, the label's `::after` the touch area (a press on a label reaches its input, and *Add photos* still names the chooser): the checkbox's label takes the checkbox labels' rule, its 2px margin moved onto it; the chooser's is a flex column in the form's type, its `::after` beneath the chooser so the chooser's button keeps its hover. **Steven's ruling of 2026-11-19, option 1, "7px more room"**: the checkbox's label has 7px beneath it, so in the queue view alone the thumbnail and everything below it in a waiting row sit 7px lower and the checkbox's square meets the thumbnail's edge, as the radio rows meet. **Measured after**, light and dark identical: **762 short (−174)**, neither label short anywhere; the boxes of 117 scenes at 320, 375 and 1440, **29,033 identical, 270 changed in the 6 queue-view scenes alone** (228 at or below the first thumbnail moved 7, 14 or 21px, 42 rows and lists grown taller), **90 new boxes, the labels, none gone**; the ring on each input in both themes at 375 and 1440, the label drawing nothing; the touch journey at 375, **the chooser 8 of 8** and a real tap opening it, **the checkbox 7 of 8** (the bottom-right corner to the thumbnail, an exact meet: the square's foot is the thumbnail's top, 392.156) and a real tap ticking it.
 
   Not pushed. Netlify alone deploys this commit's frontend; it touches nothing under `backend/`, both Render services stay Live on `493f2e6`, and no verifier run is owed. Report: `D:\projects\temp\CK-99-report.md`.
-- **1.126.0** (2026-11-17): **The changelog keeps its newest four entries, and four rules keep this file small** — the seventh doc audit's fix batch 5, its condensing proposal's code-root half, at Steven's go of 2026-11-17, relayed by the planning session (Hub `covey-keep/audits/2026-11-17-doc-audit.md` §24). **Move A**: the 38 changelog entries 1.122.0 down to 1.85.0 (2026-11-14 back to 2026-10-27, Phases CK-78 to CK-96) moved VERBATIM to `CLAUDE-history.md`, which takes 1.3.0, and a one-line pointer stands in their place above 1.88.0's; proved against `git show HEAD:` at `34267cb` by CK-53's six conditions (removed 258,052 bytes = moved 258,276 − the pointer 224). The cut follows the first rule below, adopted in this commit, so this entry, 1.125.0, 1.124.0 and 1.123.0 stay, and two more entries moved than the record's dry run at 1.124.0 counted. The kept lines that cite a moved entry by number keep it — the Source line, the older pointer and the CK-74.2 Gotcha name 1.88.0, the 1.125.0 entry 1.101.0 and the first Gotcha 1.110.0 — each entry found in `CLAUDE-history.md`. **Keeping this file small**, a new section after the changelog: the changelog's newest four, a Deploys bullet rewritten and never amended, a map line saying what its file is now, and the `npm run test` comment a list of areas. The map's 51 phase-naming lines and the comment's 39 paragraphs are counted there and left as they are, because condensing them is authoring Steven has not asked for; `WORKING-ON-NOW.md`'s three rules are in the docs-root `CLAUDE.md` 1.151.0. **This file and `CLAUDE-history.md` alone: no code, no test, no migration, head 0037, the verifier at 458.** Netlify builds this commit from the same frontend as `265c449`; fix batch 4 (`34267cb`, the commit before this one) touched four comments under `backend/`, so the push that carries it redeploys both Render services, comments alone, and no verifier run is owed. 585,379 → 331,306 bytes.
-- *The 41 changelog entries that stood here — versions **1.125.0 down to 1.85.0** (2026-11-17 back to 2026-10-27), Phases CK-78 to CK-98 and the seventh doc audit's first fix batch — moved VERBATIM to `CLAUDE-history.md`, 1.122.0 to 1.85.0 at 1.126.0, 1.123.0 at 1.127.0, 1.124.0 at 1.128.0 and 1.125.0 at 1.128.1; nothing in them was rewritten.*
+- *The 42 changelog entries that stood here — versions **1.126.0 down to 1.85.0** (2026-11-17 back to 2026-10-27), Phases CK-78 to CK-98 and the seventh doc audit's first and fifth fix batches — moved VERBATIM to `CLAUDE-history.md`, 1.122.0 to 1.85.0 at 1.126.0, 1.123.0 at 1.127.0, 1.124.0 at 1.128.0, 1.125.0 at 1.128.1 and 1.126.0 at 1.129.0; nothing in them was rewritten.*
 - *The 87 changelog entries that stood here — versions **1.84.0 down to 1.0.0** (2026-10-25 back to 2026-08-17) — moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); nothing in them was rewritten.*
 
 ---
@@ -617,7 +619,8 @@ python scripts/verify_r2_credentials.py   # proves the R2 credential split again
 python scripts/verify_email_delivery.py   # sends ONE message, no link, through the email
                                  # adapter to an inbox you type; with EMAIL_MODE=provider
                                  # for that command alone, from the API's Web Shell,
-                                 # before the switch (see below); prints nothing secret
+                                 # after a key, sender or DNS change (see below);
+                                 # prints nothing secret
 python -m app.worker             # the ingest worker (CK-35; processing since CK-36):
                                  # poll forever — Render's start command; reads
                                  # WorkerSettings (six vars; the two R2_WORKER_*
@@ -733,8 +736,8 @@ is Steven's call, not a session's: `.env` is his file.
   automatically; a failing migration aborts the deploy.
 - Backend CORS origins come from `ALLOWED_ORIGINS` (comma-separated), set in
   `render.yaml`; code default is `http://localhost:5173`.
-- Auth env surface (CK-5): `APP_BASE_URL` / `API_BASE_URL` / `EMAIL_MODE=console`
-  are literal values in `render.yaml`; **`SESSION_SECRET` is `sync: false`** —
+- Auth env surface (CK-5): `APP_BASE_URL` / `API_BASE_URL` / `EMAIL_MODE=provider`
+  (the email bullet below) are literal values in `render.yaml`; **`SESSION_SECRET` is `sync: false`** —
   the blueprint declares the slot, the Render dashboard holds the value (Render
   never populates a `sync: false` var added after the service exists). The app
   crashes on boot without it, by design.
@@ -2697,22 +2700,15 @@ is Steven's call, not a session's: `.env` is his file.
   whenever it is set; each refusal naming the variable and never the value;
   the key shape-unchecked, because Resend's documentation states no prefix.
   **`render.yaml`** declares `EMAIL_FROM` (`hello@coveykeep.com`, a plain
-  value) and `EMAIL_API_KEY` (`sync: false`, set in `covey-keep-api`'s
-  dashboard before the switch, never on the worker; console mode boots
-  without it) and keeps `EMAIL_MODE=console`: the deploy stays console
-  until the switch. **The switch is one commit** — `render.yaml`'s
-  `EMAIL_MODE: provider`, with the *Email is console mode* bullet below
-  rewritten to the current state and its changelog entry — made only once
-  CK-100's checks have passed, coveykeep.com is verified in Resend,
-  `EMAIL_API_KEY` is typed into `covey-keep-api`'s dashboard (never the
-  worker's) and the smoke script has passed. **A commit, never a dashboard
-  edit**, because a Blueprint sync can put a dashboard value back to the
-  file's; **its rollback is the same line reversed.** The smoke script,
+  value), `EMAIL_API_KEY` (`sync: false`, held in `covey-keep-api`'s
+  dashboard, never on the worker) and `EMAIL_MODE: provider`, the switch
+  (the email bullet below). The smoke script,
   `python scripts/verify_email_delivery.py`, runs from the API's Web Shell
   with `EMAIL_MODE=provider` for that one command: one message with no
   link to an inbox the operator types, the adapter's status line and PASS
-  or FAIL,
-  nothing secret printed, no database touched. **The private test notice is
+  or FAIL, nothing secret printed, no database touched — run before the
+  switch, and again after any change to the key, the sender or the
+  domain's records. **The private test notice is
   version 4** — version 3 with its photos paragraph's third sentence
   rewritten into three and its server-log paragraph replaced by one saying
   emails are sent through Resend — and the published terms take 5; the
@@ -2733,10 +2729,22 @@ is Steven's call, not a session's: `.env` is his file.
   never extended. Decision records: docs root
   `decisions/2026-08-20-browser-session-storage.md`,
   `decisions/2026-08-20-sign-in-ergonomics.md` §2.
-- Email is **console mode**: magic links print to the Render service logs; no
-  provider, no real sends. The flip to real delivery is its own later phase
-  (family transactional-email standard v1.0.0) — never flip `EMAIL_MODE` as a
-  side effect of another change.
+- Email is **provider mode** since CK-100's switch (2026-11-20): every email
+  goes through Resend from `hello@coveykeep.com` (coveykeep.com verified in
+  Resend, with SPF and DKIM and a DMARC record at `p=none`), and the API's log
+  names a real recipient by a hash prefix alone. A **reserved test address**
+  (`is_reserved_address`, the *Sign-up by invitation* bullet above) still
+  prints in console form, link and all, and never reaches Resend — so a
+  check signs in `@example.com` throwaways from the log, and any other
+  address a check types is a real send. The mode is `render.yaml`'s
+  `EMAIL_MODE`, changed by a commit and never a dashboard edit, because the
+  blueprint syncs on every push and puts a dashboard value back to the
+  file's; never change it as a side effect of another change. **The
+  rollback is that line set back to `console`**, which prints every
+  message, real addresses and links included, to the log and makes the
+  private test notice's version 4 false — a rollback that outlasts an
+  incident owes the notice a new version. Console stays the code default,
+  so a local run and the suite print.
 - **Verifying a deployed migration (CK-13.1):** a green deploy proves `alembic
   upgrade head` *ran*, not what shape it left — and a backfill only has real
   rows to act on in the deployed DB, which is exactly what local tests never
@@ -3117,7 +3125,7 @@ covey-keep/            # the code root (this repo)
 │   │       └── 0037_outside_invitations.py # the outside-invitation setting on gatherings and its two CHECKs, gathering_invitations.from_outside, gathering_outside_alert_dismissals (CK-92)
 │   ├── scripts/             # operator scripts, run from backend/
 │   │   ├── verify_schema.py         # the read-only shape and data verifier: head 0037, 458 assertions; run after every migration that reaches Render
-│   │   ├── verify_email_delivery.py # sends one message, no link, to an inbox the operator types; run from the Render Web Shell before the switch
+│   │   ├── verify_email_delivery.py # sends one message, no link, to an inbox the operator types; run from the Render Web Shell after a key or DNS change
 │   │   └── verify_r2_credentials.py # proves the R2 credential split against live R2 (one generated object); run from the Render Web Shell
 │   └── tests/               # the pytest + httpx ASGI suite; needs the dev DB container up
 │       ├── conftest.py                   # sets the environment before app.config loads; drops, recreates and migrates covey_keep_test each run

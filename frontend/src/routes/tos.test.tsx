@@ -97,9 +97,8 @@ test('the notice says what it is and carries every load-bearing statement', () =
   // line names it by a hash prefix alone; the list of what is sent is the
   // product's — the sign-in link and the invite-only note (api/auth.py), an
   // invitation (api/invitations.py, api/group_invitations.py) and both
-  // email-change messages (api/profile.py). (Until the switch the mode is
-  // still console: the kickoff names that window, and the switch follows the
-  // checks.)
+  // email-change messages (api/profile.py). (The deploy runs provider since
+  // CK-100's switch, the one commit that followed the checks.)
   expect(
     screen.getByText(
       /sign-in links, invitations and messages about your sign-in email — are sent through Resend, an email service, which handles each address and message to deliver it/i,

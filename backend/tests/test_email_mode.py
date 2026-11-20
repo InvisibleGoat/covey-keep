@@ -335,11 +335,17 @@ def test_the_worker_reads_none_of_it():
     assert not any("email" in name for name in WorkerSettings.model_fields)
 
 
-def test_render_yaml_declares_the_two_and_keeps_console():
+def test_render_yaml_declares_the_two_and_sends_through_the_provider():
+    # THE PIN MOVED at CK-100's switch, with its reason: the switch is ONE
+    # COMMIT setting this line to provider, made after the checks, the domain
+    # verified in Resend, the key in covey-keep-api's dashboard and the smoke
+    # script passed. Until then it pinned console. A commit, because a
+    # Blueprint sync puts a dashboard value back to the file's; the code
+    # default stays console (test_console_mode_boots_with_neither_variable).
     blueprint = yaml.safe_load((REPO_ROOT / "render.yaml").read_text(encoding="utf-8"))
     services = {service["name"]: service for service in blueprint["services"]}
     api = {var["key"]: var for var in services["covey-keep-api"]["envVars"]}
-    assert api["EMAIL_MODE"] == {"key": "EMAIL_MODE", "value": "console"}
+    assert api["EMAIL_MODE"] == {"key": "EMAIL_MODE", "value": "provider"}
     assert api["EMAIL_FROM"] == {"key": "EMAIL_FROM", "value": FROM}
     assert api["EMAIL_API_KEY"] == {"key": "EMAIL_API_KEY", "sync": False}
     worker = [var["key"] for var in services["covey-keep-worker"]["envVars"]]

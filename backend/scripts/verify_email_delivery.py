@@ -1,8 +1,7 @@
-"""Prove real email leaves through Resend before the switch (CK-100; THE
-DESIGN §5).
+"""Prove real email leaves through Resend (CK-100; THE DESIGN §5).
 
-The deploy runs console mode: every email prints to the service log. Before
-EMAIL_MODE is switched to provider on covey-keep-api, this script sends ONE
+Run before CK-100's switch, and again after any change to the key, the
+sending address or the domain's records: this script sends ONE
 message through the application's own adapter (app/services/email.py's
 send_email, so the request the product makes is what gets tested: the
 endpoint, the User-Agent Cloudflare insists on, the bare EMAIL_FROM behind the
@@ -14,7 +13,8 @@ names the recipient by a hash prefix alone, and PASS or FAIL: never the key,
 never the recipient, never the message. The script touches no database.
 
 Run it where the key already lives, so it never leaves Render, with provider
-mode set for that one command alone (the service itself stays console):
+mode set for that one command (the service runs provider since the switch,
+and the prefix keeps the command working if it is ever set back):
 
     Render dashboard -> covey-keep-api -> Shell
     cd ~/project/src/backend && EMAIL_MODE=provider python scripts/verify_email_delivery.py

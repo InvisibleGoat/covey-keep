@@ -3,16 +3,16 @@ standard v1.0.0; Sale Hopper's `app/emailer.py` is the worked example).
 
 Modes, selected by EMAIL_MODE:
 
-- ``console`` (the default, and what the deploy runs until the switch): the
-  full message — magic link included — prints to stdout, i.e. the service
-  logs. Console mode must never be the deployed mode once real users exist.
+- ``console`` (the default, what a local run and the suite use): the full
+  message — magic link included — prints to stdout, i.e. the service logs.
+  Console mode must never be the deployed mode once real users exist.
 - ``provider``: a plain-stdlib HTTP POST to the provider API (Resend) — no SDK,
   no requests, no new dependency. Since CK-100 its settings are boot-checked
   (``app/config.py``: the mode exactly one of the two, the key and the sender
-  required in provider mode). The switch itself is ONE COMMIT setting
-  render.yaml's EMAIL_MODE to provider, made after CK-100's checks (§7) — a
-  commit, because a Blueprint sync can put a dashboard value back to the
-  file's — and its rollback is the same line reversed.
+  required in provider mode). The deploy runs it since CK-100's switch, ONE
+  COMMIT setting render.yaml's EMAIL_MODE to provider — a commit, because a
+  Blueprint sync can put a dashboard value back to the file's — and its
+  rollback is that line set back to console.
 
 A RESERVED TEST ADDRESS — at example.com, example.net or example.org, or under
 the ``example``, ``test``, ``invalid`` or ``localhost`` top-level names (RFC

@@ -45,27 +45,28 @@ services:
         value: develop--covey-keep.netlify.app
       - key: WEBAUTHN_ORIGIN
         value: https://develop--covey-keep.netlify.app
-      # Console mode prints every email, magic links included, to the service
-      # logs. It stays console until the switch, which is ONE COMMIT changing
-      # this line to provider (CK-100, §7): made after the checks, coveykeep.com
+      # Provider mode sends every email through Resend. A reserved test
+      # address (example.com and the rest, app/services/email.py) still prints
+      # in console form, link and all, and never reaches Resend. Provider since
+      # CK-100's switch, ONE COMMIT made after the checks, with coveykeep.com
       # verified in Resend, EMAIL_API_KEY typed into THIS service's dashboard
       # (never the worker's) and the smoke script passed. A commit and never a
       # dashboard edit, because a Blueprint sync can put a dashboard value back
-      # to this file's; its rollback is the same line reversed. The API refuses
-      # to boot on any other spelling, and in provider mode without
+      # to this file's; its rollback is this line set back to console. The API
+      # refuses to boot on any other spelling, and in provider mode without
       # EMAIL_API_KEY and EMAIL_FROM (app/config.py).
       - key: EMAIL_MODE
-        value: console
+        value: provider
       # The sending address, bare: the display name rides in from app/brand.py.
       # Read only in provider mode; in console mode it must still be a bare
-      # address (CK-100). coveykeep.com is verified in Resend before the switch.
+      # address (CK-100). coveykeep.com is verified in Resend.
       - key: EMAIL_FROM
         value: hello@coveykeep.com
       # Resend's API key. Slot only: like SESSION_SECRET below, Render never
       # populates a sync:false var added after the service exists, so the key
-      # is hand-set in THIS service's dashboard before the switch, and never on
-      # the worker. Empty is fine in console mode; provider mode refuses to
-      # boot without it.
+      # is hand-set in THIS service's dashboard, and never on the worker.
+      # Provider mode refuses to boot without it; console mode boots with it
+      # empty.
       - key: EMAIL_API_KEY
         sync: false
       # Slot only — Render never populates a sync:false var added after the
