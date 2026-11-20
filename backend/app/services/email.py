@@ -9,8 +9,10 @@ Modes, selected by EMAIL_MODE:
 - ``provider``: a plain-stdlib HTTP POST to the provider API (Resend) — no SDK,
   no requests, no new dependency. Since CK-100 its settings are boot-checked
   (``app/config.py``: the mode exactly one of the two, the key and the sender
-  required in provider mode); the switch itself is a dashboard edit after the
-  checks, never a code change (CK-100, §7).
+  required in provider mode). The switch itself is ONE COMMIT setting
+  render.yaml's EMAIL_MODE to provider, made after CK-100's checks (§7) — a
+  commit, because a Blueprint sync can put a dashboard value back to the
+  file's — and its rollback is the same line reversed.
 
 A RESERVED TEST ADDRESS — at example.com, example.net or example.org, or under
 the ``example``, ``test``, ``invalid`` or ``localhost`` top-level names (RFC

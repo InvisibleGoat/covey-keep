@@ -227,9 +227,12 @@ class Settings(BaseSettings):
 
     # Email delivery mode: "console" prints the full message to the service
     # logs; "provider" sends through Resend. Exactly one of the two, checked at
-    # boot (CK-100; the validators below). The switch to provider is a
-    # dashboard edit after the checks, never a code change, and the deploy
-    # stays console until then (render.yaml says so).
+    # boot (CK-100; the validators below). The deploy stays console until the
+    # switch, which is ONE COMMIT setting render.yaml's EMAIL_MODE to provider
+    # (CK-100, §7), made after the checks, the domain verified in Resend, the
+    # key in covey-keep-api's dashboard and the smoke script passed — a commit,
+    # because a Blueprint sync can put a dashboard value back to the file's.
+    # Its rollback is the same line reversed.
     email_mode: str = "console"
     # Provider-mode values: REQUIRED in provider mode and refused at boot
     # without them, naming the variable (CK-100); empty is meaningful in

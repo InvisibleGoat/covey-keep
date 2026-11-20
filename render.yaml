@@ -46,10 +46,14 @@ services:
       - key: WEBAUTHN_ORIGIN
         value: https://develop--covey-keep.netlify.app
       # Console mode prints every email, magic links included, to the service
-      # logs. It stays console here: the switch to provider is a dashboard edit
-      # on this service after the checks, never a blueprint change (CK-100,
-      # §7). The API refuses to boot on any other spelling, and in provider
-      # mode without EMAIL_API_KEY and EMAIL_FROM (app/config.py).
+      # logs. It stays console until the switch, which is ONE COMMIT changing
+      # this line to provider (CK-100, §7): made after the checks, coveykeep.com
+      # verified in Resend, EMAIL_API_KEY typed into THIS service's dashboard
+      # (never the worker's) and the smoke script passed. A commit and never a
+      # dashboard edit, because a Blueprint sync can put a dashboard value back
+      # to this file's; its rollback is the same line reversed. The API refuses
+      # to boot on any other spelling, and in provider mode without
+      # EMAIL_API_KEY and EMAIL_FROM (app/config.py).
       - key: EMAIL_MODE
         value: console
       # The sending address, bare: the display name rides in from app/brand.py.

@@ -1,11 +1,12 @@
 # CoveyKeep — Repo Operational Guide
 
-**Version:** 1.128.0
+**Version:** 1.128.1
 **Last Updated:** 2026-11-20
 **Source:** the one-line list of every phase from CK-2 to CK-80 that stood here moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); each phase is named in its own changelog entry, here or there.
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.128.1** (2026-11-20): **CK-100's fix-up after review: the switch to real email is one commit, never a dashboard edit** — at Steven's word of 2026-11-20, relayed by the planning session. Four places in this root and the Hub's Auth router preamble (`reference/backend/api-reference.md` 1.49.1) called the switch to provider mode *a dashboard edit after the checks, never a code change* (or *never a blueprint change*), the opposite of the kickoff's §7: a Blueprint sync can put a dashboard value back to the file's (the lesson of `SWEEP_ENABLED` at CK-59's `(gt)` and CK-73.2), so a switch made in the dashboard alone could fall back to console unseen, printing real addresses and links to the log and making version 4's email paragraph false. Each now says the deploy stays console until the switch, and the switch is one commit — `render.yaml`'s `EMAIL_MODE: provider`, with the *Email is console mode* bullet rewritten and its changelog entry — made after CK-100's checks, the domain verified in Resend, `EMAIL_API_KEY` typed into `covey-keep-api`'s dashboard (never the worker's) and the smoke script passed, its rollback the same line reversed: `config.py`'s `email_mode` comment, `services/email.py`'s docstring, `render.yaml`'s comment above `EMAIL_MODE` (the value still `console`) and the *Sign-up by invitation* Deploys bullet, rewritten under rule 2. Rule 1 moved the entry 1.125.0 to `CLAUDE-history.md`, which takes 1.6.0. **Comments and docs alone**: no behaviour, no `render.yaml` value and no test changed, since no test reads these words; the four test files on the email path ran green, 115 passed (70, 16, 7 and 22). Not pushed; it rides the push that carries `61d768e`, and its two backend comments change nothing the API runs.
 - **1.128.0** (2026-11-20): Phase CK-100 — **Sign-up by invitation, reserved test addresses in the log, a guarded email mode, and the private test notice's version 4** — real email made ready to switch on, and not switched, at Steven's approval of 2026-11-19, with Q1–Q4 each answered as recommended and THE WORDS approved as drafted (`decisions/2026-08-31-private-alpha-scope.md` 1.6.0 — §1's AMENDED banner, condition 3 enforced by code, and §3.1's version 4; `reference/backend/api-reference.md` 1.49.0 — the Auth router). Rule 1 moved the entry 1.124.0 to `CLAUDE-history.md`, which takes 1.5.0. **Backend, the notice and the sign-in card:**
   - **changed:** `api/auth.py`, `services/email.py`, `config.py`, `.env.example` and `render.yaml` (`EMAIL_FROM` and `EMAIL_API_KEY` declared on `covey-keep-api`, `EMAIL_MODE` still `console`), `routes/Tos.tsx`, `lib/api.ts` and `routes/SignIn.tsx`; **new:** `scripts/verify_email_delivery.py`;
   - **tests:** new `tests/test_sign_up_by_invitation.py`, `tests/test_email_mode.py`, `tests/test_verify_email_delivery.py` and `routes/sign-in-card.test.tsx`, one new test in each of `tests/test_auth.py` and `routes/tos.test.tsx`; three pins moved in `test_auth.py` and five in `tos.test.tsx`, each with its reason;
@@ -35,8 +36,7 @@
 
   Not pushed. Netlify alone deploys this commit's frontend; it touches nothing under `backend/`, both Render services stay Live on `493f2e6`, and no verifier run is owed. Report: `D:\projects\temp\CK-99-report.md`.
 - **1.126.0** (2026-11-17): **The changelog keeps its newest four entries, and four rules keep this file small** — the seventh doc audit's fix batch 5, its condensing proposal's code-root half, at Steven's go of 2026-11-17, relayed by the planning session (Hub `covey-keep/audits/2026-11-17-doc-audit.md` §24). **Move A**: the 38 changelog entries 1.122.0 down to 1.85.0 (2026-11-14 back to 2026-10-27, Phases CK-78 to CK-96) moved VERBATIM to `CLAUDE-history.md`, which takes 1.3.0, and a one-line pointer stands in their place above 1.88.0's; proved against `git show HEAD:` at `34267cb` by CK-53's six conditions (removed 258,052 bytes = moved 258,276 − the pointer 224). The cut follows the first rule below, adopted in this commit, so this entry, 1.125.0, 1.124.0 and 1.123.0 stay, and two more entries moved than the record's dry run at 1.124.0 counted. The kept lines that cite a moved entry by number keep it — the Source line, the older pointer and the CK-74.2 Gotcha name 1.88.0, the 1.125.0 entry 1.101.0 and the first Gotcha 1.110.0 — each entry found in `CLAUDE-history.md`. **Keeping this file small**, a new section after the changelog: the changelog's newest four, a Deploys bullet rewritten and never amended, a map line saying what its file is now, and the `npm run test` comment a list of areas. The map's 51 phase-naming lines and the comment's 39 paragraphs are counted there and left as they are, because condensing them is authoring Steven has not asked for; `WORKING-ON-NOW.md`'s three rules are in the docs-root `CLAUDE.md` 1.151.0. **This file and `CLAUDE-history.md` alone: no code, no test, no migration, head 0037, the verifier at 458.** Netlify builds this commit from the same frontend as `265c449`; fix batch 4 (`34267cb`, the commit before this one) touched four comments under `backend/`, so the push that carries it redeploys both Render services, comments alone, and no verifier run is owed. 585,379 → 331,306 bytes.
-- **1.125.0** (2026-11-17): **The seventh doc audit's first fix batch: four code spans that ended in a backslash, and four stale lines** — at Steven's go of 2026-11-17, relayed by the planning session (Hub `audits/2026-11-17-doc-audit.md` §13, §21 item 9, fix batch 1). **The spans**: the CK-87.2 entry's harness folder (1.101.0), whose closing backslash the Hub viewer read as escaping the backtick, so the span ran on and the rest of the entry's bold paired wrongly (36 stray bold markers, the render check's one failure), and the Canonical docs pointer's three folders, latent until a bold marker followed them; each now ends without the backslash, naming the same folder. **The stale lines**: the Commands comment on the notice's tests says `TOS_VERSION` is pinned at 3 since CK-83b, where it said `TOS_VERSION === 2`; the frame's comment says the bottom bar has four tabs since CK-91, where it said three and no Calendar; the CK-44 bullet's premise for the switch names a group's gathering, which inherits open at the household template since CK-76, beside the groupless one; and the CK-80 bullet's *Not built* names calendar feeds and alerts, the calendar itself being CK-90's and CK-91's. **This file alone: no code, no test, no migration, head 0037, the verifier at 458**; Netlify builds this commit from the same frontend as `265c449`, and both Render services stay on `c5587d3`.
-- *The 40 changelog entries that stood here — versions **1.124.0 down to 1.85.0** (2026-11-16 back to 2026-10-27), Phases CK-78 to CK-98 — moved VERBATIM to `CLAUDE-history.md`, 1.122.0 to 1.85.0 at 1.126.0, 1.123.0 at 1.127.0 and 1.124.0 at 1.128.0; nothing in them was rewritten.*
+- *The 41 changelog entries that stood here — versions **1.125.0 down to 1.85.0** (2026-11-17 back to 2026-10-27), Phases CK-78 to CK-98 and the seventh doc audit's first fix batch — moved VERBATIM to `CLAUDE-history.md`, 1.122.0 to 1.85.0 at 1.126.0, 1.123.0 at 1.127.0, 1.124.0 at 1.128.0 and 1.125.0 at 1.128.1; nothing in them was rewritten.*
 - *The 87 changelog entries that stood here — versions **1.84.0 down to 1.0.0** (2026-10-25 back to 2026-08-17) — moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); nothing in them was rewritten.*
 
 ---
@@ -2691,12 +2691,20 @@ is Steven's call, not a session's: `.env` is his file.
   the key shape-unchecked, because Resend's documentation states no prefix.
   **`render.yaml`** declares `EMAIL_FROM` (`hello@coveykeep.com`, a plain
   value) and `EMAIL_API_KEY` (`sync: false`, set in `covey-keep-api`'s
-  dashboard before the switch, never on the worker) and keeps
-  `EMAIL_MODE=console`. **The switch is a dashboard edit after the checks,
-  never a code change**, and before it `python
-  scripts/verify_email_delivery.py` runs from the API's Web Shell with
-  `EMAIL_MODE=provider` for that one command: one message with no link to
-  an inbox the operator types, the adapter's status line and PASS or FAIL,
+  dashboard before the switch, never on the worker; console mode boots
+  without it) and keeps `EMAIL_MODE=console`: the deploy stays console
+  until the switch. **The switch is one commit** — `render.yaml`'s
+  `EMAIL_MODE: provider`, with the *Email is console mode* bullet below
+  rewritten to the current state and its changelog entry — made only once
+  CK-100's checks have passed, coveykeep.com is verified in Resend,
+  `EMAIL_API_KEY` is typed into `covey-keep-api`'s dashboard (never the
+  worker's) and the smoke script has passed. **A commit, never a dashboard
+  edit**, because a Blueprint sync can put a dashboard value back to the
+  file's; **its rollback is the same line reversed.** The smoke script,
+  `python scripts/verify_email_delivery.py`, runs from the API's Web Shell
+  with `EMAIL_MODE=provider` for that one command: one message with no
+  link to an inbox the operator types, the adapter's status line and PASS
+  or FAIL,
   nothing secret printed, no database touched. **The private test notice is
   version 4** — version 3 with its photos paragraph's third sentence
   rewritten into three and its server-log paragraph replaced by one saying
