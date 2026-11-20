@@ -138,7 +138,11 @@ def test_the_token_is_derived_from_the_id_and_the_secret_and_verifies_or_does_no
     # every one None — and none raises.
     assert parse_group_link_token(token, "secret-two") is None
     assert parse_group_link_token(f"{uuid4()}.{mac_part}", "secret-one") is None
-    tampered = mac_part[:-1] + ("A" if mac_part[-1] != "A" else "B")
+    # Tamper a middle character: each carries six bits of the MAC. The last
+    # carries four and two zero padding bits, so A → B there (a MAC ending in
+    # A, one run in sixteen) decodes to the same bytes and still verifies.
+    mid = len(mac_part) // 2
+    tampered = mac_part[:mid] + ("A" if mac_part[mid] != "A" else "B") + mac_part[mid + 1 :]
     assert parse_group_link_token(f"{id_part}.{tampered}", "secret-one") is None
     for garbage in ("", "x", f"{id_part}.", f"{id_part}", "not-a-uuid.abc", f"{id_part}.{mac_part}.extra", "..", "a.b.c"):
         assert parse_group_link_token(garbage, "secret-one") is None, garbage
