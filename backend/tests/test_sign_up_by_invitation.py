@@ -325,12 +325,17 @@ async def test_an_invitation_consumed_by_someone_else_does_not_admit(
 ):
     """The invitation went to AUNT; its link was opened by someone else, who
     accepted it — consumed. AUNT's sign-in link, asked for while it was live,
-    makes nobody; and a request now gets the note."""
+    makes nobody; and a request now gets the note.
+
+    MOVED at CK-101: someone else accepting is now the CONFIRMED acceptance
+    (`confirm_other_address`) — unconfirmed, the link only asks and spends
+    nothing, which is not the case this test is about."""
     headers, gathering_id = await _host_and_gathering(client, capsys)
     token = await _invite_to_gathering(client, capsys, headers, gathering_id, AUNT)
     link = await _link(client, capsys, AUNT)
     other = await _signed_in_headers(client, capsys, "other@example.com")
-    await _accept_gathering_invitation(client, other, token)
+    accepted = await _accept_gathering_invitation(client, other, token, confirm=True)
+    assert accepted["status"] == "accepted"
     before = await _counts(db_session_factory)
     assert (await _verify(client, link)) == ERROR_REDIRECT
     assert await _counts(db_session_factory) == before

@@ -1943,13 +1943,21 @@ body.viewer-open {
 
 /* The actions under the card (the mockup's .gactions): New gathering, the
    primary pill, and People, the quiet one — and on a gathering's page since
-   CK-87, Add photos and Edit gathering. */
+   CK-87, Add photos and Edit gathering. And since CK-101 the invitation
+   step's two quiet pills, Accept as {name} and Sign out and use the invited
+   address, neither leading. */
+.invitation-step-actions,
 .group-actions,
 .gathering-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.625rem;
   margin: 0 0 1.5rem;
+}
+
+/* The step's words are centred, so its two pills are too when they wrap. */
+.invitation-step-actions {
+  justify-content: center;
 }
 
 .group-actions .btn .ico,

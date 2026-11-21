@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { BrandMark, Quail, SignInPrints } from '../components/AuthArt'
+import { InvitationStep } from '../components/InvitationStep'
 import { useFocusRequest } from '../components/useFocusRequest'
-import { apiFetch, authFetch } from '../lib/api'
+import { apiFetch } from '../lib/api'
 import {
+  acceptInvitation,
   clearInvitationToken,
   readInvitationToken,
   storeInvitationToken,
@@ -18,9 +20,10 @@ import { parkReturnPath } from '../lib/returnPath'
 // not reach server logs or Referer). Deliberately NOT behind RequireAuth: a
 // signed-out invitee must see what they were invited to and where to sign in.
 //
-// Signed in: the token is redeemed immediately (opening the link IS the
-// intent — the CK-9 email-change precedent) and success navigates straight
-// to the gathering. Signed out: an unauthenticated preview renders the
+// Signed in: opening sends the acceptance (the CK-9 email-change
+// precedent), the server accepts it when the invitation was sent to the
+// signed-in account's own address, and success navigates straight to the
+// gathering. Signed out: an unauthenticated preview renders the
 // invitation's state — dead tokens get their DISTINGUISHED screens before
 // anyone is pushed through a pointless sign-in — and a valid one parks the
 // token (lib/invitations.ts) so it survives the magic-link round trip;
@@ -31,6 +34,18 @@ import { parkReturnPath } from '../lib/returnPath'
 // preview signed out, the acceptance signed in. Focus lands on the new
 // screen's <h1>, or on the new Try again where it fails again; a landing
 // that navigates needs nothing.
+//
+// Since CK-101, when the invitation was sent to another address the server
+// writes nothing and answers `other_address`, and this draws THE STEP
+// (components/InvitationStep.tsx), focus on its <h1>: Accept as {name} sends
+// the acceptance again with `confirm_other_address`, and lands as above or,
+// failing, keeps the step with the house line beneath it and focus back on
+// the button; Sign out and use the invited address ends the session and
+// leaves the parked token where it is. The call runs once per auth state, as
+// the group landing's does, so the sign-out runs the landing again signed
+// out — the preview — with focus on its screen's <h1>. An `other_address`
+// with no title, like any answer this screen does not know, reads as
+// `invalid`.
 
 type ScreenState =
   | { status: 'working' }
@@ -40,25 +55,34 @@ type ScreenState =
   | { status: 'used' }
   | { status: 'revoked' }
   | { status: 'signInNeeded'; title: string | null }
+  | { status: 'otherAddress'; title: string }
   | { status: 'failed' }
 
 export function InvitationAccept() {
-  const { status: authStatus } = useAuth()
+  const { status: authStatus, person, signOut } = useAuth()
   const navigate = useNavigate()
   const [token, setToken] = useState<string | null>(null)
   const [fragmentConsumed, setFragmentConsumed] = useState(false)
   const [screen, setScreen] = useState<ScreenState>({ status: 'working' })
-  // The accept/preview call fires exactly once (StrictMode re-runs effects);
-  // accepting is idempotent server-side, but one call is still the contract.
-  // A Try again is a new attempt, the call made once more (CK-97).
-  const started = useRef<number | null>(null)
+  // The accept/preview call fires exactly once per auth state (StrictMode
+  // re-runs effects); accepting is idempotent server-side, but one call is
+  // still the contract. A Try again is a new attempt, the call made once
+  // more (CK-97); a sign-out from THE STEP is a new auth state, so the
+  // preview follows it (CK-101 — until then the call ran once per attempt,
+  // whatever the auth state).
+  const startedFor = useRef<string | null>(null)
   const [attempt, setAttempt] = useState(0)
   const retryOwed = useRef(false)
   const alive = useRef(true)
   const mainRef = useRef<HTMLElement>(null)
   const headingRef = useRef<HTMLHeadingElement>(null)
   const tryAgainRef = useRef<HTMLButtonElement>(null)
+  const acceptRef = useRef<HTMLButtonElement>(null)
   const requestFocus = useFocusRequest(mainRef)
+  // THE STEP's press (CK-101): busy while Accept as is out, and whether the
+  // last one failed — the house line beneath the buttons.
+  const [stepBusy, setStepBusy] = useState(false)
+  const [stepFailed, setStepFailed] = useState(false)
 
   useEffect(() => {
     alive.current = true
@@ -82,12 +106,13 @@ export function InvitationAccept() {
   }, [])
 
   useEffect(() => {
-    if (!fragmentConsumed || authStatus === 'loading' || started.current === attempt) return
+    const key = `${authStatus}:${attempt}`
+    if (!fragmentConsumed || authStatus === 'loading' || startedFor.current === key) return
     if (token === null) {
       setScreen({ status: 'missing' })
       return
     }
-    started.current = attempt
+    startedFor.current = key
     const owed = retryOwed.current
     retryOwed.current = false
     // Where a retry's answer lands: the new screen's heading, or the new
@@ -100,17 +125,13 @@ export function InvitationAccept() {
     async function act(resolved: string) {
       try {
         if (authStatus === 'signedIn') {
-          const response = await authFetch('/invitations/accept', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: resolved }),
-          })
+          const outcome = await acceptInvitation(resolved)
           if (!alive.current) return
-          if (!response.ok) {
+          if (!outcome.ok) {
             show({ status: 'failed' })
             return
           }
-          const result = (await response.json()) as AcceptResult
+          const result = outcome.result
           if (
             (result.status === 'accepted' || result.status === 'already_accepted') &&
             result.gathering_id
@@ -120,10 +141,18 @@ export function InvitationAccept() {
             navigate(`/gatherings/${result.gathering_id}`, { replace: true })
             return
           }
+          if (result.status === 'other_address' && result.gathering_title) {
+            // Nothing was written or spent: the token stays parked for either
+            // answer, and focus goes to the step's heading, never a button.
+            setStepFailed(false)
+            setScreen({ status: 'otherAddress', title: result.gathering_title })
+            requestFocus(headingRef)
+            return
+          }
           // A dead token is spent for good — unpark it so the callback stops
           // routing back here.
           clearInvitationToken()
-          show({ status: result.status as Exclude<AcceptResult['status'], 'accepted' | 'already_accepted'> })
+          show({ status: deadScreen(result.status) })
         } else {
           const response = await apiFetch('/invitations/preview', {
             method: 'POST',
@@ -155,6 +184,40 @@ export function InvitationAccept() {
     void act(token)
   }, [fragmentConsumed, token, authStatus, attempt, navigate, requestFocus])
 
+  // Accept as {name}: the acceptance again, confirmed. A landing navigates;
+  // a dead token is spent and draws its screen; a failure keeps the step.
+  async function acceptAnyway() {
+    if (token === null) return
+    setStepFailed(false)
+    setStepBusy(true)
+    const outcome = await acceptInvitation(token, true)
+    if (!alive.current) return
+    setStepBusy(false)
+    if (!outcome.ok) {
+      setStepFailed(true)
+      requestFocus(acceptRef)
+      return
+    }
+    const result = outcome.result
+    if ((result.status === 'accepted' || result.status === 'already_accepted') && result.gathering_id) {
+      clearInvitationToken()
+      navigate(`/gatherings/${result.gathering_id}`, { replace: true })
+      return
+    }
+    clearInvitationToken()
+    setScreen({ status: deadScreen(result.status) })
+    requestFocus(headingRef)
+  }
+
+  // Sign out and use the invited address: the session ends and the parked
+  // token stays, so the landing runs again signed out — the preview — and
+  // its screen's heading takes focus.
+  async function signOutForInvited() {
+    retryOwed.current = true
+    setScreen({ status: 'working' })
+    await signOut()
+  }
+
   function tryAgain() {
     retryOwed.current = true
     setScreen({ status: 'working' })
@@ -172,6 +235,23 @@ export function InvitationAccept() {
           <Quail />
           <p>Checking your invitation…</p>
         </div>
+      </main>
+    )
+  }
+
+  if (screen.status === 'otherAddress') {
+    return (
+      <main className="auth-screen" ref={mainRef}>
+        <InvitationStep
+          invitationTo={`"${screen.title}"`}
+          person={person}
+          busy={stepBusy}
+          failed={stepFailed}
+          headingRef={headingRef}
+          acceptRef={acceptRef}
+          onAccept={() => void acceptAnyway()}
+          onSignOut={() => void signOutForInvited()}
+        />
       </main>
     )
   }
@@ -250,4 +330,10 @@ export function InvitationAccept() {
       </p>
     </main>
   )
+}
+
+// A dead or unknown answer's screen: the three dead tokens by name, anything
+// else — an answer this screen does not know included — `invalid`.
+function deadScreen(status: AcceptResult['status']): 'expired' | 'used' | 'revoked' | 'invalid' {
+  return status === 'expired' || status === 'used' || status === 'revoked' ? status : 'invalid'
 }

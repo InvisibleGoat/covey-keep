@@ -301,14 +301,21 @@ async function preview<S>(path: string, token: string): Promise<PreviewOutcome<S
   }
 }
 
-export type FlowOutcome<S> = { ok: true; status: S; groupId: string | null } | Refusal
+// `groupName` is present only on an answer that names the group — the
+// acceptance's `other_address` since CK-101 — and absent from every other.
+export type FlowOutcome<S> = { ok: true; status: S; groupId: string | null; groupName?: string } | Refusal
 
-async function flow<S>(path: string, token: string): Promise<FlowOutcome<S>> {
-  const response = await call(path, postJson({ token }))
+async function flow<S>(path: string, body: Record<string, unknown>): Promise<FlowOutcome<S>> {
+  const response = await call(path, postJson(body))
   if (response === null) return { ok: false, code: 'unreachable' }
   if (response.ok) {
-    const body = (await response.json()) as { status: S; group_id: string | null }
-    return { ok: true, status: body.status, groupId: body.group_id ?? null }
+    const answer = (await response.json()) as { status: S; group_id: string | null; group_name?: unknown }
+    return {
+      ok: true,
+      status: answer.status,
+      groupId: answer.group_id ?? null,
+      ...(typeof answer.group_name === 'string' ? { groupName: answer.group_name } : {}),
+    }
   }
   return refusal(response)
 }
@@ -323,19 +330,29 @@ export function previewLink(token: string): Promise<PreviewOutcome<LinkStatus>> 
 export function joinThroughLink(
   token: string,
 ): Promise<FlowOutcome<'requested' | 'pending' | 'already_member' | Exclude<LinkStatus, 'valid'>>> {
-  return flow('/group-links/join', token)
+  return flow('/group-links/join', { token })
 }
 
 export function previewGroupInvitation(token: string): Promise<PreviewOutcome<GroupInvitationStatus>> {
   return preview('/group-invitations/preview', token)
 }
 
-// Accepting: `accepted` | `already_accepted` (both with the group id) | a
-// dead token's status (`expired`, `used`, `revoked`, `invalid`).
+// Accepting: `accepted` | `already_accepted` (both with the group id) |
+// `other_address` (since CK-101: sent to another address than the signed-in
+// account's, nothing written, the group's name in `groupName`) | a dead
+// token's status (`expired`, `used`, `revoked`, `invalid`). Opening sends
+// exactly `{"token"}`, as before; only Accept as {name} on the step sends
+// `{"token", "confirm_other_address": true}`.
 export function acceptGroupInvitation(
   token: string,
-): Promise<FlowOutcome<'accepted' | 'already_accepted' | Exclude<GroupInvitationStatus, 'valid'>>> {
-  return flow('/group-invitations/accept', token)
+  confirmOtherAddress = false,
+): Promise<
+  FlowOutcome<'accepted' | 'already_accepted' | 'other_address' | Exclude<GroupInvitationStatus, 'valid'>>
+> {
+  return flow(
+    '/group-invitations/accept',
+    confirmOtherAddress ? { token, confirm_other_address: true } : { token },
+  )
 }
 
 // --- the parked tokens (CK-25's shape) -----------------------------------------------

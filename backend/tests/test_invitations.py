@@ -65,10 +65,13 @@ async def _invite_token(client, capsys, headers, gathering_id: str, destination:
     return match.group(1)
 
 
-async def _accept(client, headers, token: str) -> dict:
-    response = await client.post(
-        "/invitations/accept", json={"token": token}, headers=headers
-    )
+async def _accept(client, headers, token: str, *, confirm: bool = False) -> dict:
+    # `confirm` sends `confirm_other_address: true` (CK-101): the second
+    # asking, after an invitation sent to another address answered
+    # `other_address`. Without it the body is `{"token"}` exactly, as opening
+    # the link sends.
+    body = {"token": token, "confirm_other_address": True} if confirm else {"token": token}
+    response = await client.post("/invitations/accept", json=body, headers=headers)
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -430,20 +433,49 @@ async def test_accept_as_existing_person_widens_reads_and_nothing_else(
 
 async def test_token_is_the_credential_not_the_address(client, capsys):
     # The CK-9 email-change precedent: whoever holds the link may accept under
-    # whatever account they sign in with — acceptance is deliberately not
-    # bound to the invited address (the invitee may own several, and an SMS
-    # destination has no address at all). Control of the destination inbox is
-    # how they got the token; the token is the proof.
+    # whatever account they sign in with — acceptance is not bound to the
+    # invited address (the invitee may own several). Control of the
+    # destination inbox is how they got the token; the token is the proof.
+    # MOVED at CK-101 (the rule it pins is the one amended: the joining
+    # record §3, AMENDED): under another address the acceptance now asks
+    # first, so this pins the CONFIRMED acceptance — `confirm_other_address`
+    # true still accepts under any account. The sibling below pins the step.
+    headers_admin = await _signed_in_headers(client, capsys, "sender@example.com")
+    created = await _create(client, headers_admin)
+    token = await _invite_token(client, capsys, headers_admin, created["id"], "personal@example.com")
+
+    other_headers = await _signed_in_headers(client, capsys, "work@example.com")
+    result = await _accept(client, other_headers, token, confirm=True)
+    assert result["status"] == "accepted"
+    assert (
+        await client.get(f"/gatherings/{created['id']}", headers=other_headers)
+    ).status_code == 200
+
+
+async def test_under_another_address_the_token_asks_before_it_is_spent(
+    client, capsys, db_session_factory
+):
+    # CK-101, the sibling of the pin above: the same link opened under
+    # another account WITHOUT the confirmation writes nothing and answers
+    # `other_address` with the title alone — the token unspent, no row, the
+    # gathering still hidden from that account — and the invited address can
+    # still accept it.
     headers_admin = await _signed_in_headers(client, capsys, "sender@example.com")
     created = await _create(client, headers_admin)
     token = await _invite_token(client, capsys, headers_admin, created["id"], "personal@example.com")
 
     other_headers = await _signed_in_headers(client, capsys, "work@example.com")
     result = await _accept(client, other_headers, token)
-    assert result["status"] == "accepted"
+    assert result == {"status": "other_address", "gathering_id": None, "gathering_title": "August potluck"}
+    async with db_session_factory() as db:
+        assert (await db.scalar(select(func.count()).select_from(GatheringInvitation))) == 0
+        assert (await db.scalar(select(GatheringInvitationPending.consumed_at))) is None
     assert (
         await client.get(f"/gatherings/{created['id']}", headers=other_headers)
-    ).status_code == 200
+    ).status_code == 404
+
+    personal = await _signed_in_headers(client, capsys, "personal@example.com")
+    assert (await _accept(client, personal, token))["status"] == "accepted"
 
 
 async def test_accept_is_idempotent_and_dead_tokens_are_distinguished(
@@ -509,6 +541,10 @@ async def test_second_invitation_for_the_same_person_does_not_500(
     # (gathering, person). Someone invited twice — two addresses they own —
     # accepts both links; the second lands on already_accepted, never an
     # IntegrityError-turned-500.
+    # MOVED at CK-101 (Steven's Q3): the work link opened under the home
+    # account is an invitation sent to another address, and the caller is
+    # already in — so, unconfirmed, it lands on already_accepted and spends
+    # NOTHING; confirmed, it lands the same and consumes its row, as before.
     headers_admin = await _signed_in_headers(client, capsys, "planner@example.com")
     created = await _create(client, headers_admin)
     token_home = await _invite_token(client, capsys, headers_admin, created["id"], "home@example.com")
@@ -517,6 +553,17 @@ async def test_second_invitation_for_the_same_person_does_not_500(
     headers_guest = await _signed_in_headers(client, capsys, "home@example.com")
     assert (await _accept(client, headers_guest, token_home))["status"] == "accepted"
     result = await _accept(client, headers_guest, token_work)
+    assert result == {"status": "already_accepted", "gathering_id": created["id"]}
+    async with db_session_factory() as db:
+        work = (
+            await db.execute(
+                select(GatheringInvitationPending).where(
+                    GatheringInvitationPending.token_hash == hash_token(token_work)
+                )
+            )
+        ).scalars().one()
+        assert work.consumed_at is None
+    result = await _accept(client, headers_guest, token_work, confirm=True)
     assert result == {"status": "already_accepted", "gathering_id": created["id"]}
     async with db_session_factory() as db:
         assert (

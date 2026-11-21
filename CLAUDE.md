@@ -1,11 +1,23 @@
 # CoveyKeep — Repo Operational Guide
 
-**Version:** 1.129.0
+**Version:** 1.130.0
 **Last Updated:** 2026-11-20
 **Source:** the one-line list of every phase from CK-2 to CK-80 that stood here moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); each phase is named in its own changelog entry, here or there.
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.130.0** (2026-11-20): Phase CK-101 — **An invitation asks before another account accepts it** — FINDING 1 of CK-100's switch checks, made a phase at Steven's approval of 2026-11-20 (*"Yes, approve"*), with Q1–Q4 each answered as recommended: the invited address never shown, neither button leading (both quiet pills, *Accept as {name}* first), someone already in landing with `already_accepted` and nothing spent, and THE WORDS built word for word (`decisions/2026-10-23-joining-a-group-and-co-admins.md` 1.10.0 — §3's AMENDED banner; `reference/backend/api-reference.md` 1.51.0 — both acceptances; `reference/frontend/components.md` 1.60.0 — the Joining on the surface convention's step). Rule 1 moved the entry 1.127.0 to `CLAUDE-history.md`, which takes 1.8.0. **Backend and the two landings; no migration:**
+  - **changed:** `api/invitations.py` (`AcceptBody`, `sent_to_caller`), `api/group_invitations.py`, `lib/invitations.ts` (`acceptInvitation`), `lib/groupJoining.ts`, `routes/InvitationAccept.tsx`, `routes/GroupInvitationAccept.tsx` and `App.css` (`.invitation-step-actions` joins the actions rule, ahead of its pinned selectors, and centres its wrapped pills); **new:** `components/InvitationStep.tsx`;
+  - **tests:** new `tests/test_invitation_other_address.py` (33) and `routes/invitation-other-address.test.tsx` (16), one new test in `tests/test_invitations.py`; three pins moved, each with its reason — two in `test_invitations.py` and one in `test_sign_up_by_invitation.py`, the third found by a probe over the whole suite and not named by the kickoff;
+  - **untouched:** `TokenBody` and both previews, the group's link and its landing, the dead-token screens' words, every other answer's keys, every model, no migration (head stays 0037), the verifier at 458, no log line, neither lock and no dependency, `render.yaml`, `netlify.toml`, `WORKING-ON-NOW.md` and the docs-root `CLAUDE.md`.
+
+  **968 backend tests** (934 before): **34 new**, three pins moved; **1591 frontend tests in 85 files** (1575 in 84): **16 new**, none moved. Red first against the unchanged code, 23 of the 33 backend tests failed and 12 of the 16 frontend; each that passed asserts what holds before by design (a match accepting on opening, the dead statuses first, the previews and the link refusing the field, an unknown answer). Build and lint are clean (`index-BkYeHrxG.js`, `index-DMa1ZCD9.css`, 958.00 KiB precache, 11 entries). **23 mutations, each compiling and caught by a named test.** Node 22.13.0 ran; `.nvmrc` names 22.23.4, unchanged. One code commit; in the Hub, one.
+
+  **THE BUILD**: after the dead statuses and before anything is written or locked, an EMAIL row not sent to the caller (`normalize_email` of the caller's address against the stored destination, exact) and not confirmed answers `already_accepted` where the caller is already in — the token not consumed — and otherwise `other_address` with the group's name or the gathering's title alone and a null id: no token spent, no row, no place moved, no lock, never the destination. `confirm_other_address`, a strict boolean, accepts as before. The landings draw the step — the signed-in account named, never the invited address; **Accept as {name}** confirms; **Sign out and use the invited address** keeps the parked token, so the landing runs again signed out into the preview; focus on the step's `<h1>`. The gathering landing now runs once per auth state, as the group landing does, so a 401 mid-accept lands on the preview there too.
+
+  **THE LOCAL RUN** in console mode against the dev DB (`D:\projects\temp\CK-101-harness`; the shots in `D:\projects\temp\CK-101-screenshots`), reserved addresses alone: a group invited one address while a second account was signed in: opening it drew the step — at 375 in light and dark, and at 1440 — the network showing a body of the token alone answered with `other_address`, no destination anywhere on the page, the account still outside the group and the invitation still pending; **Sign out and use the invited address** reached the signed-out preview and *Sign in to accept*, and the invited address signed in and landed in the group; a second invitation and **Accept as Bea Tester** landed the signed-in account in the group, the invitation spent; the same both ways on a standalone gathering; an invitation to the signed-in account's own address accepted on opening with no step; focus on the step's `<h1>` every time; every throwaway deleted. The step's two pills are centred when they wrap (`.invitation-step-actions`' own rule), seen at 375 and added before the last run. An earlier run, whose script went on with the session the sign-out had revoked, left three pending invitations from its deleted host to reserved addresses, which expire within the week.
+
+  Not pushed. The push redeploys Netlify and both Render services — the API's code changed, the worker's did not; no migration, so no verifier run is owed. In the deploy window a new bundle on the old API accepts on opening, as before, and an old bundle on the new API reads `other_address` as a dead link with nothing written. Report: `D:\projects\temp\CK-101-report.md`.
 - **1.129.0** (2026-11-20): **CK-100's switch: the deploy sends email through Resend** — at Steven's word of 2026-11-20 (*"Yes, switch"*), once CK-100's checks (pr) to (pv) had passed on the deploy, coveykeep.com was verified in Resend, `EMAIL_API_KEY` was typed into `covey-keep-api`'s dashboard and the smoke script had passed from its Web Shell (the provider's 200, and the message in the inbox with SPF, DKIM and DMARC passing). Rule 1 moved the entry 1.126.0 to `CLAUDE-history.md`, which takes 1.7.0. **The switch is one line**, `render.yaml`'s `EMAIL_MODE: provider`, and its rollback is that line set back to console; the blueprint syncs on every push, so the push puts `covey-keep-api` in provider mode, and a reserved test address still prints in console form and never reaches Resend. **Rewritten to the current state** (rules 2 and 3): the *Email is console mode* bullet, now *Email is provider mode*, the Auth env surface bullet, the *Sign-up by invitation* bullet, the Commands block's smoke-script comment and its map line. **Changed**: `render.yaml` (the value and the three comments above it), `config.py`'s `email_mode` comment (the code default stays console, so a local run and the suite print), `services/email.py`'s docstring, `scripts/verify_email_delivery.py`'s docstring (run again after any change to the key, the sender or the domain's records) and one comment in `routes/tos.test.tsx`. **Tests**: one pin moved, with its reason — `test_email_mode.py`'s blueprint test, now `test_render_yaml_declares_the_two_and_sends_through_the_provider`, red against `HEAD`'s `render.yaml` and green against the switch's; the five files on the email path ran green, 119 passed (70, 22, 16, 7 and 4), and `tos.test.tsx`, 9. No behaviour, route, body, dependency, migration or verifier line changed (head 0037, the verifier at 458). **From the push on, every address but a reserved one is a real send**: a check signs in `@example.com` throwaways alone, and checks (pw) to (pz) are the planning session's runbook, `D:\projects\temp\CK-100-switch-checks-runbook.md`.
 
   Not pushed. The push redeploys both Render services — the API into provider mode, the worker, which reads no email variable, as it was — and Netlify builds the same frontend; no migration, so no verifier run is owed.
@@ -26,23 +38,7 @@
   **THE LOCAL RUN** in console mode against the dev DB (`D:\projects\temp\CK-100-harness`; the shots in `D:\projects\temp\CK-100-screenshots`): an address with no invitation asked three times — at 375 in light and dark, and at 1440 — the card's three lines each time and one note in the log, with no link; a reserved address signed up with no invitation; invited from a group, the same address saw a byte-identical card, got a link, signed up and landed on the group's page with the invitation accepted; `/tos` read version 4; the throwaway accounts deleted.
 
   Not pushed. The push redeploys Netlify and both Render services — the API's code changed, the worker's did not; no migration, so no verifier run is owed. Netlify usually goes live first, so a sign-in from the new bundle before the API redeploys is a 422 for those minutes. `EMAIL_API_KEY` is a new `sync: false` slot, empty until Steven types it, and console mode boots without it. Report: `D:\projects\temp\CK-100-report.md`.
-- **1.127.0** (2026-11-19): Phase CK-99 — **Every control is 44 to the touch, Add another date on Starts, Who it's for at 1440, and the possessive** — made a phase at Steven's approval of 2026-11-19, with Q1–Q3 each answered as recommended and his rulings that day on step 1's asks: Who it's for's and the RSVP block's rows drawn 44 tall (A, B), the view switch's row gap 4px and a photo's acts 8px apart (E, F), and *Map* (44 by 36.75 as ruled; 36.5 as built, its foot capped at 4.5px), the notice link inside the sign-in checkbox's label (20 tall) and the calendar's days at 320 (38.3 wide) accepted under 44 (C, D, G); rider 2 a grid of columns at least 18rem wide, 12px apart, the hints full width and the form's card unchanged (`reference/frontend/components.md` 1.59.0 — the Styling convention's touch-area rule, Who it's for's columns and rows, the Focus table's Add another date row, the settled cover line). Rule 1 moved the entry 1.123.0 to `CLAUDE-history.md`, which takes 1.4.0. **Frontend only:**
-  - **changed:** `App.css` (one block at its end, the touch area, and the view switch's gap), `routes/GatheringNew.tsx`, `routes/GatheringDetail.tsx`, `components/GatheringMedia.tsx` and `lib/covers.ts`; **new:** `lib/possessive.ts`;
-  - **tests:** new `styles/touch-area.test.ts`, `lib/possessive.test.ts` and `routes/add-another-date.test.tsx` (on `test-support/world96.ts`) and `routes/touch-labels.test.tsx` (on `test-support/photos.ts`), one new test in `routes/gathering-in-group.test.tsx`, and two pins moved, in `lib/covers.test.ts` and `routes/covers.test.tsx`;
-  - **untouched:** `styles/tokens.css`, `styles/base.css`, `index.html`, `vite.config.ts`, every hook; nothing under `backend/`, no migration (head stays 0037), the verifier at 458, neither lock, `render.yaml`, `netlify.toml`; no token, dependency or environment variable added; no route, read, request or body field changed; no word but the possessive; `disabled` stays.
-
-  **1570 frontend tests in 83 files** (1518 in 79 before): **52 new**, two pins moved. Red first against the unchanged code, 45 of the 52 failed and both moved pins; each of the seven that passed asserts what holds before by design (the two names that take *'s*, a person elsewhere keeping their place, `.varrow` and `.rail-item` already positioned, no colour named, no checkbox label outside the queue view). The full suite ran alone, 1570 passed. Build and lint are clean (`index-C5w_B0Q7.js`, `index-oPA4a89x.css`, 954.55 KiB precache, 11 entries; `index-DOwO3c4E.js` is the harness's bundle). **62 mutations, each caught by a named test**: one was first planted in a form that broke compilation, which counts as nothing, and was rewritten to compile and caught. Node 22.13.0 ran; `.nvmrc` names 22.23.4, unchanged. One code commit; in the Hub, `c204e8c` and a second commit for the second sweep.
-
-  **MEASURED FIRST** in headless Chrome against the stand-in, at 320, 375, 390, 768, 1180 and 1440 on 29 scenes: every visible, enabled control scrolled to the middle and `elementFromPoint` asked at the corners and edge midpoints of the 44-by-44 square about its centre, 0.5px inside its edge — **2490 control-instances short, 86 distinct controls**, CONTEXT's seven among them, and every pair whose squares would overlap (A to G).
-
-  **THE BUILD**: the control a positioned box (a `:where()` list, so a control already positioned keeps its own) and a transparent `::after` reaching `min(0px, calc(50% - 22px))` out on each side — at least 44 about the centre, its own box where it is drawn larger — naming no colour, the focus ring on the control; a day's sides capped at 1px and Map's foot at 4.5px, so neither passes a midpoint, and the notice link lifted over its label. The radio rows 44 tall with no gap between them; Who it's for's member boxes in `.places-grid`, `repeat(auto-fill, minmax(min(18rem, 100%), 1fr))`, 12px apart (one column at 375 and 900, two at 1180, three at 1440); `.media-view`'s row gap 4px and a photo's stacked acts 2px further apart. **Add another date** on the new date's *Starts* (a group's form too: it is `GatheringNew`); the group's settled cover line through `possessive` — *The Lees' cover is set.*
-
-  **Measured after** (`D:\projects\temp\CK-99-screenshots`; the harness `D:\projects\temp\CK-99-harness`): light and dark identical, 6009 control-instances, **634 short of the strict probe — 72 the accepted C, D and G; 561 exact meets at a midpoint**, where no two squares overlap (the pairs list holds none in the page but the days and Map) and the browser's pixel snapping gives up to 0.75px of the shared edge to the lower control; **and 1 a section's name link wrapped onto three lines at 320**, whose last line ends short of the square's corner, as before. The boxes of 93 scenes at 320, 375 and 1440: **19,850 identical, 3,292 moved in 43 scenes** — inside Who it's for (the grid and its rows), the RSVP rows, the view switch, a photo's acts, or below them — **one new box, the grid's wrapper, none gone**. The ring on the control (the brand, the crumb, a link-button, a radio, Map) at 375 and 1440 in both themes, the `::after` drawing nothing; a touch journey at 375 (`Input.dispatchTouchEvent`, a 0.5px radius): the crumb 8 of 8, RSVP and who's coming and a radio row 5 of 8 (the bottom three to the row below, exact meets), Map 5 of 8 (capped, accepted); no `X-Amz` in 98 scenes, every photo a `blob:` URL.
-
-  **THE SECOND SWEEP** (Steven, 2026-11-19, relayed by the planning session): two controls the first never measured, because its selector held no `<input>` but a radio's or a checkbox's in a label — the queue's photo checkbox (`input.media-select`, 18 by 18) and the Photos upload's file chooser (`input#media-files`, 32 tall) — and eight new scenes of a gathering's Photos (All, the queue and a selection, the Removed view, a file chosen, uploading, an upload failed, an intent refused), every input type now in the selector: **8706 control-instances, 936 short — new ground only the chooser (138) and the checkbox (36)**; every other text, email, search, date, select and file input reaches 44. **The fix**: each input alone in a label with no words, its box the input's, the label's `::after` the touch area (a press on a label reaches its input, and *Add photos* still names the chooser): the checkbox's label takes the checkbox labels' rule, its 2px margin moved onto it; the chooser's is a flex column in the form's type, its `::after` beneath the chooser so the chooser's button keeps its hover. **Steven's ruling of 2026-11-19, option 1, "7px more room"**: the checkbox's label has 7px beneath it, so in the queue view alone the thumbnail and everything below it in a waiting row sit 7px lower and the checkbox's square meets the thumbnail's edge, as the radio rows meet. **Measured after**, light and dark identical: **762 short (−174)**, neither label short anywhere; the boxes of 117 scenes at 320, 375 and 1440, **29,033 identical, 270 changed in the 6 queue-view scenes alone** (228 at or below the first thumbnail moved 7, 14 or 21px, 42 rows and lists grown taller), **90 new boxes, the labels, none gone**; the ring on each input in both themes at 375 and 1440, the label drawing nothing; the touch journey at 375, **the chooser 8 of 8** and a real tap opening it, **the checkbox 7 of 8** (the bottom-right corner to the thumbnail, an exact meet: the square's foot is the thumbnail's top, 392.156) and a real tap ticking it.
-
-  Not pushed. Netlify alone deploys this commit's frontend; it touches nothing under `backend/`, both Render services stay Live on `493f2e6`, and no verifier run is owed. Report: `D:\projects\temp\CK-99-report.md`.
-- *The 42 changelog entries that stood here — versions **1.126.0 down to 1.85.0** (2026-11-17 back to 2026-10-27), Phases CK-78 to CK-98 and the seventh doc audit's first and fifth fix batches — moved VERBATIM to `CLAUDE-history.md`, 1.122.0 to 1.85.0 at 1.126.0, 1.123.0 at 1.127.0, 1.124.0 at 1.128.0, 1.125.0 at 1.128.1 and 1.126.0 at 1.129.0; nothing in them was rewritten.*
+- *The 43 changelog entries that stood here — versions **1.127.0 down to 1.85.0** (2026-11-19 back to 2026-10-27), Phases CK-78 to CK-99 and the seventh doc audit's first and fifth fix batches — moved VERBATIM to `CLAUDE-history.md`, 1.122.0 to 1.85.0 at 1.126.0, 1.123.0 at 1.127.0, 1.124.0 at 1.128.0, 1.125.0 at 1.128.1, 1.126.0 at 1.129.0 and 1.127.0 at 1.130.0; nothing in them was rewritten.*
 - *The 87 changelog entries that stood here — versions **1.84.0 down to 1.0.0** (2026-10-25 back to 2026-08-17) — moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); nothing in them was rewritten.*
 
 ---
@@ -574,6 +570,7 @@ npm run test       # vitest (jsdom) — brand pins (CK-14) + gathering surface (
                    #   on keeping their place)
                    # + the touch area (CK-99: every named control's ::after 44 by 44, positioned, no colour; two inputs' wordless labels; the rows, the columns, the gaps; Add another date; the possessive)
                    # + sign-up by invitation (CK-100: the sent card's three lines, the same for any address; the notice's version 4 paragraph by paragraph; TOS_VERSION 4)
+                   # + an invitation sent to another address (CK-101: the step on both landings, its words, Accept as and its confirmation, Sign out keeping the token, focus)
 ```
 
 ### Dev database (repo root)
@@ -1762,7 +1759,9 @@ is Steven's call, not a session's: `.env` is his file.
   **`/groups/invitations/accept`** are landings outside `RequireAuth`: the
   fragment consumed and parked across the sign-in round trip, the preview
   first; **asking to join is a press, never an opening** (Steven), while an
-  emailed invitation **accepts on opening** (CK-25). **The sign-in return**
+  emailed invitation **accepts on opening when it was sent to the signed-in
+  account's own address**, and otherwise asks (the CK-101 bullet below).
+  **The sign-in return**
   (`lib/returnPath.ts`): `RequireAuth` parks the path and query — never the
   fragment — of a gated page opened signed out, and `AuthCallback` lands
   there after the magic link; a sign-out or a 401 that ends a session parks
@@ -2719,6 +2718,45 @@ is Steven's call, not a session's: `.env` is his file.
   and adds *Not there in a few minutes? Check your spam folder.* No route,
   field, migration, dependency or verifier assertion changed. Detail:
   `reference/backend/api-reference.md` 1.49.0, the Auth router.
+- An invitation asks when the address differs (CK-101; backend and the two
+  invitation landings; no migration): **an emailed invitation — a group's,
+  a standalone gathering's or a group's gathering's — opened by a signed-in
+  account it was not sent to writes nothing and asks**
+  (`decisions/2026-10-23-joining-a-group-and-co-admins.md` §3, AMENDED;
+  FINDING 1 of CK-100's switch checks; Steven's approval of 2026-11-20).
+  **`POST /invitations/accept` and `POST /group-invitations/accept`** take
+  `AcceptBody` — the token and `confirm_other_address`, a strict boolean,
+  false by default; `TokenBody` is unchanged, so the two previews and the
+  group's link refuse the field. **Sent to the caller**
+  (`api/invitations.py::sent_to_caller`, one copy) is an EMAIL row whose
+  stored destination equals the caller's address normalized by
+  `normalize_email`, exact. After the dead statuses, which answer first as
+  before, and before anything is written or locked: not sent to the caller
+  and not confirmed answers `already_accepted` where the caller is already
+  in — a member, or holding an invitation row — with the token NOT consumed,
+  and otherwise `{"status": "other_address", "group_id": null,
+  "group_name"}` or `{"status": "other_address", "gathering_id": null,
+  "gathering_title"}`: no token spent, no row, no place moved, no lock, and
+  **never the destination**. Confirmed, it accepts exactly as before, a
+  group's gathering through `_accept_into_group_gathering` unchanged. Every
+  other answer keeps its keys. **The landings** draw the step
+  (`components/InvitationStep.tsx`): the signed-in account's own name and
+  address, never the invited one; **Accept as {name}** sends the token again
+  with the confirmation; **Sign out and use the invited address** ends the
+  session and leaves the parked token, so the landing runs again signed out
+  — the preview, then Sign in to accept; both quiet pills; focus on the
+  step's `<h1>`, never a button; a failed Accept keeps the step with the
+  house line beneath it and focus back on the button. The gathering landing
+  runs once per auth state, as the group landing does. **The deploy
+  window**: a new bundle with the old API never sees `other_address` and
+  accepts on opening, as before, for those minutes; an old bundle with the
+  new API reads `other_address` as *That invitation link didn't work* and
+  clears its parked token — the server wrote nothing, so opening the email
+  again on the new bundle works, and the update notice offers the reload.
+  Nothing stored, no log line, no route, the verifier at 458. Detail:
+  `reference/backend/api-reference.md` 1.51.0 (both acceptances),
+  `reference/frontend/components.md` 1.60.0 (the Joining on the surface
+  convention's step).
 - Browser session (CK-6, lifetime CK-9): `/auth/verify` 302s to
   `${APP_BASE_URL}/auth/callback#token=<jwt>` — the JWT rides the URL
   **fragment**, never the query string; the frontend stores it in
@@ -2876,6 +2914,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── pagePlace.ts          # the context a page reads about its own visit: isReturn, shownAll, rememberShownAll; outside the frame every page is a new visit
 │       │   ├── CalendarView.tsx      # the calendar, one component for the tab, a group's calendar and Your gatherings' Calendar view: one read per shown month of CK-90's route alone, in the profile's zone; the month card (a button per day, one tab stop, the arrows), covers on a phone and chips from 640px, the day's list with each row's answer chip or photo count; every move replaces ?day=, never a history entry; Nothing on this day. only once the answer lands; Try again landing on the day's heading or the new Try again (CK-96)
 │       │   ├── OutsideInvitations.tsx # inviting people outside the group: the card (its switch never moved before the server answers; the turn-on step always, the turn-off step only when the preview names someone or something pending; the page's email form and Waiting on handed in) and the alert (Got it posts the dismissal once); after a failed change focus goes back where it can be tried again, and no move takes focus from outside the card or the alert (CK-93.1), on the shared hook since CK-94; reads only what the page hands it — the body decides
+│       │   ├── InvitationStep.tsx    # the step on both invitation landings: an invitation sent to another address — the signed-in account named, Accept as {name}, Sign out and use the invited address
 │       │   ├── InviteByEmail.tsx     # CK-25's email form and Waiting on, one copy for a standalone gathering's Invitations section and the outside card; Waiting on's list carries `.address-list`; the page holds the state and the handlers, and the field's and the button's refs (fieldRef, submitRef: where focus goes after an answer, CK-94); since CK-96 a failed Revoke's line beneath that row's Revoke, an alert, and each Revoke a ref
 │       │   ├── useFocusRequest.ts    # THE ONE FOCUS MECHANISM after an answer (CK-94, lifted from CK-93.1's card): requestFocus(target), the request held in state and spent after the render that draws its target, and only from the body or inside the act's section (mayTakeFocus); firstFieldWithError, useRefMap
 │       │   ├── useFocusRequest.test.tsx # the hook: state spent once after the render that draws its target, the container rule, the same target twice, a function target and container read when spent
@@ -2891,7 +2930,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── url.ts                # safeHttpUrl: the render guard for user-controlled URLs, http and https only
 │       │   ├── url.test.ts           # the guard against the backend validator's hostile set
 │       │   ├── accountDeleted.ts     # ACCOUNT_DELETED_SIGNAL: the one-shot navigation state that lets /account-deleted end the session
-│       │   ├── invitations.ts        # gathering-invitation types and the token parked across the sign-in round trip; from_outside on an accepted entry (CK-93); REVOKE_REFUSED, a refused Revoke's house line (CK-96)
+│       │   ├── invitations.ts        # gathering-invitation types, acceptInvitation (with or without confirm_other_address), the parked token; REVOKE_REFUSED, the house line
 │       │   ├── gatherings.ts         # gathering types and labels; roleFlags and viewOf, the one reads of the role and the view; isComingUp, the one rule the list, the menu and a group page's strip read, the list's sections and card lines, in pieces (each date and time kept whole); sectionCountPieces, a section's count line on a group's page; caller_response on a date; the outside-invitation body fields, optional
 │       │   ├── gatherings.test.ts    # roleFlags and viewOf gate closed on anything unknown; the coming-up rule, the sections and the card lines
 │       │   ├── outsideInvitations.ts # inviting people outside the group: outsideFlags, the one read of the three body fields, failing closed; the PUT, the preview and the dismissal answering codes; turnOffNeedsStep; every line, the approved words as written
@@ -2908,7 +2947,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── covers.ts             # covers: the one-fetch read into a blob: URL, the cache, the change signal, set, clear, upload, every approved line
 │       │   ├── covers.test.ts        # the read, the cache, the session clearing, the upload's exact calls, the codes, the words as literals
 │       │   ├── groups.test.ts        # the flags, every call's codes, the copy
-│       │   ├── groupJoining.ts       # joining's calls, parked tokens and copy; the link's URL lives in share's closure and nowhere else
+│       │   ├── groupJoining.ts       # joining's calls (an invitation's acceptance with or without confirm_other_address), parked tokens and copy; the link's URL lives in share's closure alone
 │       │   ├── groupJoining.test.ts  # no property holds the URL; the device is called inside the click
 │       │   ├── returnPath.ts         # the sign-in return: a same-origin relative path, never a fragment, fresh for 30 minutes
 │       │   ├── returnPath.test.ts    # every hostile path refused at park and at take
@@ -2943,8 +2982,8 @@ covey-keep/            # the code root (this repo)
 │       │   ├── GroupPeople.tsx              # `/groups/:id/people`: the crumb, People, Members and their acts, requests to join, invite people (the Pending invitations list carrying `.address-list`), rename, leave — moved from the group's page unchanged; after every act's answer focus where the Focus after an answer convention's table says, each step a group labelled by its sentence, never its destructive button (CK-94); since CK-96 its four Try agains landing on their headings or the new Try again, and a failed Revoke's line on its row
 │       │   ├── GroupGatheringNew.tsx        # `/groups/:id/gatherings/new`: reads the group and its members, then GatheringNew with inGroup; Try again landing on the form's <h1> or the new Try again (CK-96)
 │       │   ├── GroupJoin.tsx                # `/groups/join`, signed in or out: the link's landing; asking to join is a press, never an opening; after an answer focus on Ask to join or the new screen's <h1>, Try again landing on the screen's <h1> (CK-96)
-│       │   ├── GroupInvitationAccept.tsx    # `/groups/invitations/accept`: an emailed group invitation's landing; opening accepts; since CK-97 a failed check's line an alert with Try again, landing on the new screen's <h1>
-│       │   ├── InvitationAccept.tsx         # `/invitations/accept`, signed in or out: a gathering invitation's landing; accepts when signed in; since CK-97 a failed check's line an alert with Try again, landing on the new screen's <h1>
+│       │   ├── GroupInvitationAccept.tsx    # `/groups/invitations/accept`: an emailed group invitation's landing; opening accepts when sent to the caller, else the step; Try again
+│       │   ├── InvitationAccept.tsx         # `/invitations/accept`: a gathering invitation's landing, once per auth state; opening accepts when sent to the caller, else the step; Try again
 │       │   ├── Settings.tsx                 # `/settings`: profile, Your plan, sign-in email, passkeys, deleting the account (whose 204 only navigates); both forms on the one mapper; after an answer focus on the field, the button pressed, the pending sentence or the email field (CK-94); its error lines alerts and Saved. a status
 │       │   ├── Plan.tsx                     # `/plan`: the current plan, usage, the other plans, Checkout's return wait; after an answer focus on the button pressed, Manage your plan once the plan read lands, the <h1> or the new Try again, Back to settings kept the same element through the wait (CK-96); since CK-97 a refused already_subscribed's line beneath the Upgrade pressed, an alert, moving beneath Manage your plan — no alert, Manage described by it — once the read shows a plan held
 │       │   ├── Tos.tsx                      # `/tos`: the private test notice, version 4 — a living description of what is stored (the Gotcha)
@@ -2981,6 +3020,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── group-people.test.tsx        # the People page by role: members, requests, invites, rename, leave — the group page's pins moved — the crumb, the order; a step found by its sentence (CK-94)
 │       │   ├── group-photos.test.tsx        # a group's photos in sections through the real route table: the head, the order, the join, the two heads, the count line, the preview, lazy mints, See all, the viewer's set and its refusals, viewing only, the history, the states, two groups, the reads
 │       │   ├── groups.test.tsx              # the Groups tab before Gatherings, the featured card and More groups, starting a group
+│       │   ├── invitation-other-address.test.tsx # the step on both landings through the real route table: its words, Accept as, a failed Accept, Sign out, focus, a match, an unknown answer
 │       │   ├── invitations.test.tsx         # a gathering invitation's landing and the host's invite form
 │       │   ├── lists.test.tsx               # Your gatherings' sections, Show all, the switch beneath the head with Cards pressed, the menu agreeing with the page, the page column's routes, the lists' styles
 │       │   ├── media-bin.test.tsx           # your own photographs: Send to bin, Put back, Delete permanently; a step found by its sentence (CK-95)
@@ -3036,14 +3076,14 @@ covey-keep/            # the code root (this repo)
 │   │   │   ├── profile.py           # /me: profile, email change, delete (anonymization, never cascade; Stripe first)
 │   │   │   ├── passkeys.py          # /me/passkeys enrolment and usernameless /auth/passkey sign-in
 │   │   │   ├── gatherings.py        # gatherings and occurrences, the two read tiers, caller_role and caller_view, each date's caller_response (one statement), places; the outside-invitation setting (the gathering's row lock first; a turn-off deletes the outsiders' rows and revokes the pending), the detail's three fields, the alert's dismissal; is_host, may_administer, may_change_outside_invitations
-│   │   │   ├── invitations.py       # gathering invitations: create, list, revoke, preview, accept; members_only on a group's gathering while its outside invitations are off (read under the row lock); an acceptance there writes from_outside from the acceptor's membership row
+│   │   │   ├── invitations.py       # gathering invitations: create, list, revoke, preview, accept (asking first when sent to another address: sent_to_caller, AcceptBody); members_only while off
 │   │   │   ├── rsvps.py             # an occurrence's RSVP: the upsert with named companions and the filtered list, the invited tier alone; no delete, by design
 │   │   │   ├── media.py             # uploads, reads, words, review, bins, dismiss; a group's photos in sections (one statement); _visible_media the one audience; never imports services/ingest.py
 │   │   │   ├── co_hosts.py          # co-hosts: the host makes and removes them, a co-host steps down, the organisers read the list; a group's gathering's co-host a member (not_a_member)
 │   │   │   ├── covers.py            # covers: set, clear and upload (the organisers), confirm and read an upload (the uploader alone), the cover URL (the subject's read audience); the photograph FOR SHARE, then the subject's lock; no logger
 │   │   │   ├── groups.py            # groups: create, read, rename, members, co-admins, leave, remove, hand over; all on the person spine
 │   │   │   ├── group_links.py       # the group's link (derived, never stored), joining through it, approving and declining requests
-│   │   │   ├── group_invitations.py # emailed group invitations; acceptance admits directly
+│   │   │   ├── group_invitations.py # emailed group invitations; acceptance admits directly, asking first when sent to another address
 │   │   │   ├── calendar.py          # the calendar: every date in a range of every gathering the caller hosts, co-hosts or is invited to, and one group's; the invited tier exactly; one statement; published_count through _visible_media, never photo_count; no logger
 │   │   │   └── billing.py           # GET /billing, checkout, portal, the Stripe webhook; never imports stripe itself
 │   │   ├── services/        # logic the routers and the worker share
@@ -3158,6 +3198,7 @@ covey-keep/            # the code root (this repo)
 │       ├── test_group_media.py           # a group's photos in sections: by seat, published alone, the count and the eight, the order, the items, one statement
 │       ├── test_group_membership.py      # members, co-admins, leave, remove, hand over, succession
 │       ├── test_groups.py                # create, read and rename a group
+│       ├── test_invitation_other_address.py # an invitation sent to another address: the asking, the confirmation, already in, the dead statuses first, the bodies, no lock
 │       ├── test_invitations.py           # gathering invitations and acceptance through the session
 │       ├── test_keeper_shape.py          # the keeper columns, the CHECK, resolve_keeper
 │       ├── test_keeping.py               # keep, unkeep, derived grace, the memorial exemption, usage

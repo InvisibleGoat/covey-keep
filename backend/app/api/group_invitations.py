@@ -18,8 +18,15 @@ MEMBERSHIP for the real person, in one transaction, and closes any open
 join request by the same person as `approved` with no deciding person
 (the acceptance decided it).
 
-The token is the credential, the CK-9 email-change precedent: whoever holds
-the link may accept under any account they sign in with.
+The token is the credential, the CK-9 email-change precedent — and since
+CK-101 an acceptance under another address asks first
+(decisions/2026-10-23-joining-a-group-and-co-admins.md §3, AMENDED): an
+invitation opened by a signed-in account whose address is not the one it was
+sent to writes nothing — no token consumed, no membership, no join request
+decided — and answers `other_address` with the group's name alone, never the
+destination, until the same token comes back with `confirm_other_address:
+true` (`AcceptBody` and `sent_to_caller`, api/invitations.py's). A member
+already lands with `already_accepted` and nothing is spent.
 
 Rate limiting rides the request_link pattern: pending rows ARE the tally,
 counted by created_at over auth.RATE_WINDOW per group and per inviter —
@@ -78,8 +85,10 @@ from app.api.invitations import (
     MAX_INVITATIONS_PER_GATHERING,
     MAX_INVITATIONS_PER_INVITER,
     SMS_UNAVAILABLE_MESSAGE,
+    AcceptBody,
     TokenBody,
     _withdrawn_meanwhile,
+    sent_to_caller,
 )
 from app.brand import PRODUCT_NAME
 from app.config import settings
@@ -381,7 +390,7 @@ async def preview_group_invitation(body: TokenBody, db: AsyncSession = Depends(g
 
 @router.post("/group-invitations/accept")
 async def accept_group_invitation(
-    body: TokenBody,
+    body: AcceptBody,
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -393,7 +402,14 @@ async def accept_group_invitation(
     `accepted` | `already_accepted` (already a member; the group id either
     way) | `expired` | `used` (consumed by someone else) | `revoked` |
     `invalid`. Idempotent: re-accepting yields `already_accepted`, never a
-    500 — the memberships UNIQUE is checked first and backstopped."""
+    500 — the memberships UNIQUE is checked first and backstopped.
+
+    Since CK-101 one more status, `other_address`: an invitation the
+    caller's address does not match, with no `confirm_other_address`, writes
+    nothing and answers `{"status": "other_address", "group_id": null,
+    "group_name"}` — never the destination — or `already_accepted` where the
+    caller is already a member. The check runs after the dead statuses and
+    before anything is written."""
     now = datetime.now(timezone.utc)
     status, row = await _resolve_token(db, body.token, now)
 
@@ -408,6 +424,16 @@ async def accept_group_invitation(
     # and reading an expired object on an async session raises
     # MissingGreenlet, its id included. The backstop reads these alone.
     pending_id, group_id, person_id = row.id, row.group_id, ctx.person.id
+
+    # THE ASKING (CK-101): sent to another address and not confirmed — write
+    # nothing, spend nothing, and say so.
+    if not body.confirm_other_address and not sent_to_caller(row, ctx.person.email):
+        if await _is_member(db, group_id, person_id):
+            return {"status": "already_accepted", "group_id": str(group_id)}
+        name = await db.scalar(select(Group.name).where(Group.id == group_id))
+        if name is None:
+            return {"status": "invalid", "group_id": None}
+        return {"status": "other_address", "group_id": None, "group_name": name}
 
     row.consumed_at = now
     member = await _is_member(db, group_id, person_id)

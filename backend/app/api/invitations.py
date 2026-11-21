@@ -14,10 +14,20 @@ post-session; the invitation token never mints a session (whether it should
 to text — is a real question that belongs to the guest-claim phase, recorded
 in the api-reference, not answered here).
 
-The token is the credential, the CK-9 email-change precedent: whoever holds
-the link may accept under any account they sign in with — acceptance is
-deliberately NOT bound to the invited address (the invitee may sign in under
-a different address they own, and an SMS destination has no address at all).
+The token is the credential, the CK-9 email-change precedent — and since
+CK-101 an acceptance under another address asks first
+(decisions/2026-10-23-joining-a-group-and-co-admins.md §3, AMENDED): the
+invitee may sign in under a different address they own, so acceptance is not
+bound to the invited address, but an emailed invitation opened by a
+signed-in account whose address is not the one it was sent to writes nothing
+— no token consumed, no row, no lock — and answers `other_address` with the
+gathering's title alone, never the destination, until the same token comes
+back with `confirm_other_address: true` (`AcceptBody`; `sent_to_caller`, the
+one comparison, on the normalized address both sides store). Someone already
+in — holding an invitation row on the gathering — lands with
+`already_accepted` and nothing is spent. The dead statuses answer before the
+check, as they always have, and an SMS destination has no address to
+compare.
 
 Rate limiting rides the request_link pattern: pending rows ARE the tally,
 counted by created_at over auth.RATE_WINDOW per gathering and per inviter —
@@ -81,7 +91,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, StrictBool, field_validator
 from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -195,6 +205,28 @@ class TokenBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     token: str
+
+
+class AcceptBody(TokenBody):
+    """The two acceptances' body (CK-101): the token, and the confirmation an
+    acceptance under another address needs — a strict boolean, so `"true"`,
+    `1` or `null` is a 422, never a yes. `extra="forbid"` is inherited; the
+    previews and the group's link keep `TokenBody`, which refuses the field."""
+
+    confirm_other_address: StrictBool = False
+
+
+def sent_to_caller(row, caller_email: Optional[str]) -> bool:
+    """Whether an invitation was sent to the signed-in account's own address
+    (CK-101): an EMAIL row whose stored destination — normalized at create —
+    is the caller's address normalized the same way. Anything else is not:
+    an SMS row, an account with no address, an address the rule refuses."""
+    if row.channel is not InvitationChannel.EMAIL or caller_email is None:
+        return False
+    try:
+        return normalize_email(caller_email) == row.destination
+    except ValueError:
+        return False
 
 
 def _pending_body(row: GatheringInvitationPending) -> dict:
@@ -508,7 +540,7 @@ async def preview_invitation(
 
 @router.post("/invitations/accept")
 async def accept_invitation(
-    body: TokenBody,
+    body: AcceptBody,
     ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -523,7 +555,15 @@ async def accept_invitation(
     — because expired-and-friends are results the screen renders, not errors
     (the CK-9 /email-change precedent). Idempotent: re-accepting yields
     already_accepted with the gathering id, never a 500 — the partial unique
-    index on (gathering, person) is checked first and backstopped."""
+    index on (gathering, person) is checked first and backstopped.
+
+    Since CK-101 one more status, `other_address`: an emailed invitation the
+    caller's address does not match, with no `confirm_other_address`, writes
+    nothing and answers `{"status": "other_address", "gathering_id": null,
+    "gathering_title"}` — never the destination — or `already_accepted` where
+    the caller already holds an invitation row on the gathering. The check
+    runs after the dead statuses and before anything is written or locked,
+    the group's-gathering path included."""
     now = datetime.now(timezone.utc)
     status, row = await _resolve_token(db, body.token, now)
 
@@ -549,6 +589,16 @@ async def accept_invitation(
     # The backstop below reads these and nothing loaded.
     pending_id, gathering_id, person_id = row.id, row.gathering_id, ctx.person.id
     invited_by_person_id = row.invited_by_person_id
+
+    # THE ASKING (CK-101): sent to another address and not confirmed — write
+    # nothing, spend nothing, lock nothing, and say so.
+    if not body.confirm_other_address and not sent_to_caller(row, ctx.person.email):
+        if await _holds_invitation_row(db, gathering_id, person_id):
+            return {"status": "already_accepted", "gathering_id": str(gathering_id)}
+        title = await db.scalar(select(Gathering.title).where(Gathering.id == gathering_id))
+        if title is None:
+            return {"status": "invalid", "gathering_id": None}
+        return {"status": "other_address", "gathering_id": None, "gathering_title": title}
 
     group_id = await db.scalar(
         select(Gathering.owning_group_id).where(Gathering.id == gathering_id)

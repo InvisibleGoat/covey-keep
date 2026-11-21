@@ -1,6 +1,7 @@
 // Invitation API types and the pending-token handoff (CK-25). Shapes mirror
 // backend/app/api/invitations.py's response bodies exactly — see
 // reference/backend/api-reference.md, Invitations router.
+import { authFetch } from './api'
 
 export interface PendingInvitation {
   id: string
@@ -35,8 +36,34 @@ export interface InvitationPreview {
 }
 
 export interface AcceptResult {
-  status: 'accepted' | 'already_accepted' | Exclude<InvitationStatus, 'valid'>
+  // `other_address` since CK-101: the invitation was sent to another address
+  // than the signed-in account's, nothing was written, and the landing asks
+  // (THE STEP). It carries the gathering's title, never the destination.
+  status: 'accepted' | 'already_accepted' | 'other_address' | Exclude<InvitationStatus, 'valid'>
   gathering_id: string | null
+  gathering_title?: string | null
+}
+
+// The acceptance (CK-25), and since CK-101 its second asking: opening sends
+// exactly `{"token"}`, as before, so a deploy window's old API answers as it
+// always has; only Accept as {name} on the step sends the confirmation,
+// `{"token", "confirm_other_address": true}`. A thrown fetch or a non-2xx is
+// `{ ok: false }` — the landing decides what that draws.
+export async function acceptInvitation(
+  token: string,
+  confirmOtherAddress = false,
+): Promise<{ ok: true; result: AcceptResult } | { ok: false }> {
+  try {
+    const response = await authFetch('/invitations/accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(confirmOtherAddress ? { token, confirm_other_address: true } : { token }),
+    })
+    if (!response.ok) return { ok: false }
+    return { ok: true, result: (await response.json()) as AcceptResult }
+  } catch {
+    return { ok: false }
+  }
 }
 
 // The invitation token must survive the sign-in round trip: an invitee with
