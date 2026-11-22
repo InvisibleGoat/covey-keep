@@ -33,6 +33,7 @@ from app.models import (
     RSVP,
     RSVPResponse,
 )
+from app.models.enums import PostKind
 from tests.test_auth import _sign_in
 
 NOW = datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc)
@@ -165,6 +166,8 @@ async def test_season_is_structurally_identical_to_a_one_off(db_session_factory)
                 Post(
                     gathering_id=gathering.id,
                     guest_name="guest",
+                    # A post names its kind since CK-102 (0038, NOT NULL).
+                    kind=PostKind.MESSAGE,
                     body="hello",
                     publication_state=PublicationState.LIVE,
                 )
@@ -293,6 +296,10 @@ async def test_media_and_post_may_carry_an_occurrence_label(db_session_factory):
                 gathering_id=gathering.id,
                 occurrence_id=occ.id,
                 guest_name="guest",
+                # A post names its kind since CK-102 (0038, NOT NULL); the
+                # schema still allows a date label — the verifier's line, not
+                # a CHECK, keeps a message from naming one (P7).
+                kind=PostKind.MESSAGE,
                 body="about the second night",
                 publication_state=PublicationState.LIVE,
             )
@@ -364,9 +371,11 @@ async def test_events_and_event_series_no_longer_exist(db_session_factory):
                 )
             )
         ]
+        # THE PIN MOVED at CK-102, with its reason: 0038 added 'group_media',
+        # the type a group's chat container is made with, by ADD VALUE.
         assert labels == [
             "potluck", "hosted", "hosted_with_help", "simple", "wedding",
-            "season", "memorial", "church_gathering",
+            "season", "memorial", "church_gathering", "group_media",
         ]
 
 

@@ -39,6 +39,17 @@ neither. The worker owns when it runs (app/worker.py: from an idle poll
 only, on an interval, and ONLY when `WorkerSettings.sweep_enabled` is
 on — it ships OFF).
 
+THE MESSAGE SWEEP (`sweep_expired_messages`, CK-102; the chat record §6,
+Q2) is the chat's: a message removed from a chat is HELD for the people who
+run the place until `removed_at + REMOVED_BIN` — the same constant the
+chat's read compares, so the two clocks meet at one instant — and then this
+DELETES it, in ONE statement. One statement where the photo sweep goes row
+by row, because that sweep decrements counters and queues destroy jobs and
+this has neither: a held message is a row and nothing else, so a DELETE
+whose WHERE re-reads the window at its own instant is the whole of it, and
+two workers running it at once delete each row once. It runs in the photo
+sweep's pass, under the same switch.
+
 DATA-HANDLING: this module names no person and reads no word. The one
 statement it carries marks a `ready` photograph — photographs of
 children among them — for destruction and uncounts it. A mark is one a
@@ -56,10 +67,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Gathering, Media, MediaDerivative, MediaStatus, PublicationState
+from app.models import Gathering, Media, MediaDerivative, MediaStatus, Post, PublicationState
 from app.services.covers import clear_covers_of
 from app.services.retention import REMOVED_BIN
 
@@ -251,3 +262,25 @@ async def sweep_expired_bin(db: AsyncSession, now: datetime, *, limit: int) -> i
             marked += 1
         await db.commit()
     return marked
+
+
+async def sweep_expired_messages(db: AsyncSession, now: datetime) -> int:
+    """Delete every held message whose hold has ended — `removed` and
+    `removed_at` at or before `now - REMOVED_BIN` — in one statement, and
+    commit; returns how many. At exactly `removed_at + REMOVED_BIN` the
+    chat's read already shows it to nobody (api/chat.py compares the same
+    constant), so nothing is deleted while anyone can see it, and nothing
+    sits invisible past its window longer than a sweep interval. A line the
+    chat wrote itself is never removed, so is never here. Nothing logged;
+    the worker logs the count."""
+    cutoff = now - REMOVED_BIN
+    deleted = await db.execute(
+        delete(Post)
+        .where(
+            Post.publication_state == PublicationState.REMOVED,
+            Post.removed_at <= cutoff,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+    return deleted.rowcount

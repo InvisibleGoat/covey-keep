@@ -29,6 +29,13 @@ class GatheringType(str, Enum):
     SEASON = "season"
     MEMORIAL = "memorial"
     CHURCH_GATHERING = "church_gathering"
+    # A group's container (CK-102, migration 0038; group-chat-and-media §4,
+    # the chat record's P1-P5): one per group, made by
+    # services/group_chat.py's helper alone, holding the group's chat and
+    # nothing else - no host, no date, no invitation or place row - so no
+    # way into a gathering but the chat's ever opens on it. POST /gatherings
+    # refuses it. Added by ADD VALUE, so a migration never names it.
+    GROUP_MEDIA = "group_media"
 
 
 class InvitationChannel(str, Enum):
@@ -176,6 +183,19 @@ class MediaLayer(str, Enum):
     THUMBNAIL = "thumbnail"
 
 
+class PostKind(str, Enum):
+    """What a post in a chat is (CK-102, migration 0038; the chat record
+    §9, §14): a person's MESSAGE, or a line the chat writes itself - JOINED
+    when someone joins a group (both ways in), OUTSIDE_INVITATIONS_ON / _OFF
+    when a group's gathering's setting changes. A line carries no body (the
+    CHECK) and can never be removed (Q3a)."""
+
+    MESSAGE = "message"
+    JOINED = "joined"
+    OUTSIDE_INVITATIONS_ON = "outside_invitations_on"
+    OUTSIDE_INVITATIONS_OFF = "outside_invitations_off"
+
+
 class PublicationState(str, Enum):
     PENDING = "pending"
     LIVE = "live"
@@ -269,6 +289,7 @@ MEDIA_STATUS = db_enum(MediaStatus, "media_status")
 MEDIA_LAYER = db_enum(MediaLayer, "media_layer")
 MEDIA_FAILURE_REASON = db_enum(MediaFailureReason, "media_failure_reason")
 PUBLICATION_STATE = db_enum(PublicationState, "publication_state")
+POST_KIND = db_enum(PostKind, "post_kind")
 BILLING_PROVIDER = db_enum(BillingProvider, "billing_provider")
 BILLING_PLAN = db_enum(BillingPlan, "billing_plan")
 JOIN_REQUEST_OUTCOME = db_enum(JoinRequestOutcome, "join_request_outcome")

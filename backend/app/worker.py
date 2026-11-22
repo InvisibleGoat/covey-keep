@@ -56,7 +56,10 @@ rule keeps a credential out of this process, and is untouched), and
 buys an off-switch for the first automatic destruction path in the
 product, reachable from the dashboard without a code deploy. One INFO
 line per pass that marked anything, carrying the count and nothing
-else; a pass that marked nothing logs nothing.
+else; a pass that marked nothing logs nothing. SINCE CK-102 THE SAME PASS
+DELETES THE CHAT'S HELD MESSAGES past `removed_at + REMOVED_BIN`
+(services/destruction.py::sweep_expired_messages, one statement), under the
+same switch, with its own try and its own count line.
 
 AND SINCE CK-83b A SECOND LADDER: UPLOADED COVERS. A cover picture an
 organiser uploads for a gathering or a group is a `cover_images` row — its
@@ -593,6 +596,30 @@ async def _sweep(session_factory: async_sessionmaker[AsyncSession]) -> int:
     return marked
 
 
+async def _sweep_messages(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    """The message sweep (CK-102; the chat record §6, Q2), in the same pass
+    as the bin sweep and under the same switch: every held message past
+    `removed_at + REMOVED_BIN` deleted in one statement. Its own try, so a
+    failure here is logged and the photo sweep and the loop go on. One INFO
+    line when anything was deleted, carrying the count and nothing else —
+    no id, no word, no name, no chat — and silence when nothing was."""
+    try:
+        async with session_factory() as db:
+            deleted = await destruction.sweep_expired_messages(db, datetime.now(timezone.utc))
+    except _NOT_READY_ERRORS as exc:
+        log.warning(
+            "message sweep failed (%s): the database is unreachable or the schema is not "
+            "migrated yet; retrying after the sweep interval",
+            exc.__class__.__name__,
+        )
+        return
+    except Exception:  # noqa: BLE001 — the loop's rule: nothing kills the worker
+        log.exception("message sweep raised unexpectedly; the worker keeps polling")
+        return
+    if deleted:
+        log.info("message sweep: %d held message(s) deleted; their 30 days have passed", deleted)
+
+
 async def run(
     session_factory: async_sessionmaker[AsyncSession],
     client: WorkerClient,
@@ -619,7 +646,8 @@ async def run(
     — the seventh worker variable, defaulting to False at every layer. When
     on: from an IDLE poll and never between drains, once per SWEEP_INTERVAL
     on `clock` (monotonic; injectable for the same reason `sleep` is), the
-    first pass at the first idle poll after boot. A pass that marked
+    first pass at the first idle poll after boot; each pass deletes the
+    chat's held messages past their window first (CK-102). A pass that marked
     anything is followed by another poll, not a sleep, so the marks it
     made are drained at once — which also means `--once` with the switch
     on sweeps, drains the destructions, and exits at the next idle: the
@@ -651,6 +679,10 @@ async def run(
             # Stamped before the pass, so a slow or failed pass waits the
             # whole interval rather than running again on the next idle poll.
             last_sweep = clock()
+            # The held messages first (CK-102): one statement, no jobs, its
+            # own try — so the photo sweep's drain below never skips it and a
+            # failure in it never stops the photo sweep.
+            await _sweep_messages(session_factory)
             if await _sweep(session_factory) > 0:
                 continue  # the marks are claimable now: drain them before sleeping
         if once:

@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0037"
+EXPECTED_REVISION = "0038"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -3177,6 +3177,167 @@ async def verify(conn, ck: Checks) -> None:
     else:
         ck.check(False, "billing integrity", "billing_customers or subscriptions missing")
 
+    print("\n-- the chat: posts' kind, the hold and the group's container (0038, CK-102) --")
+    # THE SHAPE (the chat record §14; database-schema decision 54). A post
+    # has a KIND since 0038 — a message, a join line or a setting line — and
+    # a body exactly when it is a message (the two CHECKs), 1 to 4,000
+    # characters. A removed post carries when and by whom (the third CHECK,
+    # and the remover's FK with no delete rule: people rows are never
+    # deleted). The date's FK sets NULL, closing 0016's recorded defect. The
+    # reading index leads with gathering_id, so the single-column index went.
+    assert_columns(
+        ck,
+        columns,
+        "posts",
+        not_null=("kind",),
+        nullable=("body", "removed_by_person_id"),
+    )
+    post_kind = await enum_labels(conn, "post_kind")
+    ck.check(
+        post_kind == ["message", "joined", "outside_invitations_on", "outside_invitations_off"],
+        "post_kind's labels are message, joined, outside_invitations_on, outside_invitations_off",
+        f"found {post_kind!r}",
+    )
+    remover_fk = await fk_rule(conn, "fk_posts_removed_by_person_id")
+    ck.check(
+        remover_fk is not None and remover_fk[0] == "people",
+        "posts.removed_by_person_id references people",
+        f"found {remover_fk!r}",
+    )
+    ck.check(
+        remover_fk is not None and remover_fk[1] == "a",
+        "posts.removed_by_person_id has no delete rule (nothing cascades from a person)",
+        f"found {remover_fk!r}",
+    )
+    date_fk = await fk_rule(conn, "fk_posts_occurrence_id")
+    ck.check(
+        date_fk is not None and date_fk[0] == "occurrences" and date_fk[1] == "n",
+        "posts.occurrence_id's FK sets NULL when its date is deleted",
+        f"found {date_fk!r}",
+    )
+    for name in ("ck_posts_body_iff_message", "ck_posts_body_length", "ck_posts_removed_iff_removed"):
+        ck.check(name in check_constraints, f"CHECK {name} exists", "constraint missing")
+    for name, shape in (
+        ("ix_posts_gathering_id_created_at_id", "(gathering_id, created_at, id)"),
+        ("ix_posts_author_person_id_created_at", "(author_person_id, created_at)"),
+    ):
+        index = await index_shape(conn, name)
+        ck.check(
+            index is not None and index[0] == "posts" and index[1].endswith(shape),
+            f"index {name} is on posts {shape}",
+            f"found {index!r}",
+        )
+    ck.check(
+        await index_shape(conn, "ix_posts_gathering_id") is None,
+        "the single-column ix_posts_gathering_id is gone (the reading index leads with gathering_id)",
+        "index still present",
+    )
+    # The container's type. Added by `ADD VALUE` at 0038, so nothing in that
+    # migration names it (the CK-71 Gotcha), and every comparison below with
+    # it is `::text`: a database without the label reads zero, never fails.
+    gathering_type = await enum_labels(conn, "gathering_type")
+    ck.check("group_media" in gathering_type, "gathering_type carries 'group_media'", "label missing")
+
+    # THE CONTAINER (the record's P1-P5): one per group, made by
+    # services/group_chat.py's helper under the group's row lock, and holding
+    # nothing but its group — no host, no date, no invitation or place row,
+    # no co-host, no cover, no outside setting — so no way into a gathering
+    # but the chat's ever opens on it. No index or CHECK can name the label,
+    # so these lines are the backstop beside the lock.
+    container = "gathering_type::text = 'group_media'"
+    if {"gatherings", "occurrences", "gathering_invitations", "gathering_invitations_pending",
+            "gathering_member_places", "gathering_co_hosts"} <= tables:
+        orphaned = await scalar(
+            conn, f"SELECT count(*) FROM gatherings WHERE {container} AND owning_group_id IS NULL"
+        )
+        ck.check(orphaned == 0, "every group_media gathering belongs to a group", f"{orphaned} without a group")
+        doubled = await scalar(
+            conn,
+            f"SELECT count(*) FROM (SELECT owning_group_id FROM gatherings WHERE {container} "
+            "AND owning_group_id IS NOT NULL GROUP BY owning_group_id HAVING count(*) > 1) d",
+        )
+        ck.check(doubled == 0, "no group holds more than one group_media gathering", f"{doubled} group(s) with two or more")
+        hosted = await scalar(
+            conn, f"SELECT count(*) FROM gatherings WHERE {container} AND host_account_id IS NOT NULL"
+        )
+        ck.check(hosted == 0, "no group_media gathering has a host", f"{hosted} with a host")
+        dated = await scalar(
+            conn,
+            f"SELECT count(*) FROM gatherings g WHERE {container} "
+            "AND EXISTS (SELECT 1 FROM occurrences o WHERE o.gathering_id = g.id)",
+        )
+        ck.check(dated == 0, "no group_media gathering has a date", f"{dated} with a date")
+        with_rows = await scalar(
+            conn,
+            f"SELECT count(*) FROM gatherings g WHERE {container} AND ("
+            "EXISTS (SELECT 1 FROM gathering_invitations i WHERE i.gathering_id = g.id) "
+            "OR EXISTS (SELECT 1 FROM gathering_invitations_pending p WHERE p.gathering_id = g.id) "
+            "OR EXISTS (SELECT 1 FROM gathering_member_places m WHERE m.gathering_id = g.id) "
+            "OR EXISTS (SELECT 1 FROM gathering_co_hosts c WHERE c.gathering_id = g.id))",
+        )
+        ck.check(
+            with_rows == 0,
+            "no group_media gathering has an invitation, a pending invitation, a place row or a co-host",
+            f"{with_rows} with one",
+        )
+        dressed = await scalar(
+            conn,
+            f"SELECT count(*) FROM gatherings WHERE {container} AND (cover_media_id IS NOT NULL "
+            "OR cover_image_id IS NOT NULL OR outside_invitations_since IS NOT NULL)",
+        )
+        ck.check(dressed == 0, "no group_media gathering has a cover or an outside setting", f"{dressed} with one")
+    else:
+        ck.check(False, "group container integrity", "gatherings or a table hanging on it missing")
+
+    # THE POSTS. An author and no guest name, no date, never pending, and a
+    # removed one carries when and by whom — verifier lines, not CHECKs, so a
+    # guest post or a reviewed one in a later phase needs no migration (P7).
+    # A join line sits in its group's container; a setting line on a group's
+    # gathering, never the container.
+    posts_columns = columns.get("posts", {})
+    if "posts" in tables and {"kind", "removed_by_person_id"} <= set(posts_columns):
+        anonymous = await scalar(
+            conn, "SELECT count(*) FROM posts WHERE author_person_id IS NULL OR guest_name IS NOT NULL"
+        )
+        ck.check(anonymous == 0, "every post has an author and no guest name", f"{anonymous} post(s) without")
+        dated_posts = await scalar(conn, "SELECT count(*) FROM posts WHERE occurrence_id IS NOT NULL")
+        ck.check(dated_posts == 0, "no post names a date", f"{dated_posts} post(s) naming one")
+        waiting = await scalar(
+            conn, "SELECT count(*) FROM posts WHERE publication_state::text NOT IN ('live', 'removed')"
+        )
+        ck.check(waiting == 0, "every post is live or removed, never pending", f"{waiting} post(s) otherwise")
+        unheld = await scalar(
+            conn,
+            "SELECT count(*) FROM posts WHERE "
+            "(publication_state::text = 'removed' AND (removed_at IS NULL OR removed_by_person_id IS NULL)) "
+            "OR (publication_state::text <> 'removed' AND (removed_at IS NOT NULL OR removed_by_person_id IS NOT NULL))",
+        )
+        ck.check(
+            unheld == 0,
+            "every removed post carries when and by whom, and no live post does",
+            f"{unheld} post(s) otherwise",
+        )
+        stray_joins = await scalar(
+            conn,
+            "SELECT count(*) FROM posts p WHERE p.kind::text = 'joined' AND NOT EXISTS ("
+            "SELECT 1 FROM gatherings g WHERE g.id = p.gathering_id "
+            "AND g.gathering_type::text = 'group_media' AND g.owning_group_id IS NOT NULL)",
+        )
+        ck.check(stray_joins == 0, "every join line sits in its group's container", f"{stray_joins} elsewhere")
+        stray_settings = await scalar(
+            conn,
+            "SELECT count(*) FROM posts p WHERE p.kind::text IN ('outside_invitations_on', 'outside_invitations_off') "
+            "AND NOT EXISTS (SELECT 1 FROM gatherings g WHERE g.id = p.gathering_id "
+            "AND g.owning_group_id IS NOT NULL AND g.gathering_type::text <> 'group_media')",
+        )
+        ck.check(
+            stray_settings == 0,
+            "every setting line sits on a group's gathering, never the container",
+            f"{stray_settings} elsewhere",
+        )
+    else:
+        ck.check(False, "chat integrity", "posts.kind or posts.removed_by_person_id missing")
+
     # --- Informational -----------------------------------------------------
     print("\n-- row counts (informational, not assertions) --")
     # `media` joins the list at CK-34, the phase that first writes it: a
@@ -3210,6 +3371,12 @@ async def verify(conn, ck: Checks) -> None:
         # reaped — a dismissal is a person's choice, kept (not in
         # EPHEMERAL_TABLES).
         "gathering_outside_alert_dismissals",
+        # `posts` joins at CK-102 (0038), the phase that first writes it (the
+        # table has stood since 0001 with no writer): messages and the lines
+        # the chat writes itself — zero on the deploy until a throwaway
+        # writes one. A held message is deleted by the sweep at its window,
+        # so the count can fall; never a failure.
+        "posts",
         "billing_customers",
         "subscriptions",
     ):

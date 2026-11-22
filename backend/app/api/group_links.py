@@ -81,6 +81,7 @@ from app.api.invitations import INVITATION_TTL, TokenBody, _withdrawn_meanwhile
 from app.config import settings
 from app.models import Group, GroupJoinRequest, GroupLink, JoinRequestOutcome, Membership, Person
 from app.security import group_link_token, parse_group_link_token
+from app.services.group_chat import write_join_line
 from app.services.groups import invite_newcomer_to_upcoming_gatherings
 from app.services.retention import purge_stale
 
@@ -388,6 +389,7 @@ async def _decide(
     # and reading an expired object on an async session raises
     # MissingGreenlet, its id included.
     decider_id, group_pk = ctx.person.id, group.id
+    decider_account = ctx.person.account_id
     now = datetime.now(timezone.utc)
 
     async def decide() -> int:
@@ -416,6 +418,14 @@ async def _decide(
                 )
             )
             if member is None:
+                # THE JOIN LINE (CK-102; the chat record §9), BEFORE the
+                # membership's INSERT: it takes the group's row lock if the
+                # container must be made, and an INSERT referencing the
+                # group first would hold the KEY SHARE that lock waits on
+                # (services/group_chat.py). Same transaction, so it shares
+                # the membership's instant and the person who joined sees
+                # it; rolled back with it by the backstop below.
+                await write_join_line(db, group_pk, person_id, decider_account)
                 db.add(Membership(group_id=group_pk, person_id=person_id))
                 # THE NEWCOMER'S PLACES (CK-76; the 2026-10-04 record §9): a
                 # row on each of the group's UPCOMING gatherings they hold

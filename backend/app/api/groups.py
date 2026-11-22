@@ -125,6 +125,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, get_auth_context, get_db
+from app.services.group_chat import container_for
 from app.models import (
     CapabilityProfile,
     Group,
@@ -538,6 +539,11 @@ async def create_group(
     )
     db.add(group)
     await db.flush()
+    # The group's chat container (CK-102; the chat record P4), in this same
+    # transaction, so every new group is born with its chat. No join line:
+    # none is written at a group's creation (Q3b) — the creator's window
+    # opens at their membership's instant, the same `now()`.
+    await container_for(db, group.id, ctx.person.account_id)
     # Creator = admin + first member together. household_id, sub_group_id
     # and role_id deliberately NULL (the module docstring says why); the
     # single commit below is what makes the whole birth atomic.

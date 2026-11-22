@@ -1,11 +1,23 @@
 # CoveyKeep — Repo Operational Guide
 
-**Version:** 1.130.0
-**Last Updated:** 2026-11-20
+**Version:** 1.131.0
+**Last Updated:** 2026-11-22
 **Source:** the one-line list of every phase from CK-2 to CK-80 that stood here moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); each phase is named in its own changelog entry, here or there.
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.131.0** (2026-11-22): Phase CK-102 — **Messages in a group's chat and a gathering's, the 30-day hold, and the private test notice's version 5** — the chat record's phase 1, made a phase at Steven's approval of 2026-11-21 (*"Yes, approve"*), with Q1–Q4 each answered as recommended: the seven held-message readings of the record's §6 confirmed (Q1), the worker's sweep destroying a held message (Q2), a line the chat writes itself never removable (Q3a), no join line at a group's creation and none for anyone already in (Q3b), the people who run a place reading a held message in place, marked (Q3c), and THE WORDS built word for word (Q4) (`decisions/2026-11-21-the-chat-who-reads-it-and-what-it-keeps.md` 1.1.0 — banners on §6, §9, §14, §15, §16 and §18; `decisions/2026-08-31-private-alpha-scope.md` 1.7.0 — §3.1's version 5; `reference/backend/api-reference.md` 1.52.0 — the Chat router; `reference/backend/database-schema.md` 2.44.0 — migration 0038 and decision 54; `reference/backend/media-pipeline.md` 1.35.0, `reference/strategy/covey-keep-roadmap.md` 1.30.0 and `reference/architecture/consent-and-compliance.md` 2.8.0). Rule 1 moved the entry 1.128.0 to `CLAUDE-history.md`, which takes 1.9.0. **Backend, migration 0038 and the notice:**
+  - **changed:** `main.py` (the sixteenth router), `models/enums.py` (`PostKind`, `GatheringType.GROUP_MEDIA`), `models/post.py`, `api/auth.py` (`TOS_VERSION` 5), `api/gatherings.py` (`group_media` refused; the setting line), `api/groups.py` (the container at creation), `api/group_invitations.py` and `api/group_links.py` (the join line), `services/destruction.py` (`sweep_expired_messages`), `worker.py` (the message sweep in the sweep's pass), `scripts/verify_schema.py`, `lib/api.ts` (`TOS_VERSION` 5) and `routes/Tos.tsx`; **new:** migration `0038_the_chat_posts_kind_and_the_group_media_label.py`, `api/chat.py` and `services/group_chat.py`;
+  - **tests:** new `tests/test_chat.py` (34), `tests/test_chat_container.py` (11), `tests/test_chat_schema.py` (4) and `tests/test_chat_sweep.py` (6), and one new test in each of `tests/test_auth.py` (version 4 still recorded as 4, the stale bundle) and `routes/tos.test.tsx` (the chat's paragraph sentence by sentence); pins moved, each with its reason: the verifier's count, 458 to 484 (`VERIFIER_TOTAL` and its comments in nine files); the downgraded billing round trips in `test_billing.py` (148 and 145 failed of 409, measured); the head, 0038, in `test_outside_invitations.py` and `test_photo_count.py`; `group_media` among `gathering_type`'s labels and a post's kind in `test_schema_keeper.py`, and a post's kind in `test_account_deletion.py`'s plant; the refused create's count in `test_group_gatherings.py` (the cast's group is born with its container); two in `test_auth.py` (5 records 5, 6 refused); and two in `tos.test.tsx` (version 5 paragraph by paragraph, `TOS_VERSION` 5);
+  - **untouched:** every screen but the notice — the chat's screens are a later phase — `render.yaml`, `netlify.toml`, neither lock and no dependency, no environment variable, nothing in a dashboard, at Stripe or at Resend, `WORKING-ON-NOW.md` and the docs-root `CLAUDE.md`.
+
+  **1024 backend tests** (968 before): **56 new**, the pins above moved; **1592 frontend tests in 85 files** (1591): **1 new**. Red first against the unchanged code, 54 of the 55 tests in the four new backend files failed — the one that passed, `POST /gatherings` refusing `group_media`, holds before by design, the type not yet a label — and 4 of `tos.test.tsx`'s 10. Build and lint are clean (`index-7tLTVRwT.js`, `index-DMa1ZCD9.css`, 959.04 KiB precache, 11 entries). **22 mutations, each compiling and caught by a named test** (19 backend, 3 frontend). Node 22.13.0 ran; `.nvmrc` names 22.23.4, unchanged. One code commit; in the Hub, one.
+
+  **THE BUILD**: migration 0038 gives `posts` its first writer — `post_kind` and `posts.kind`, words on a message alone (1 to 4,000 characters), `removed_by_person_id`, `occurrence_id`'s `SET NULL` and the reading index — and adds `group_media` by `ADD VALUE`, named by nothing else in it. **A group's chat lives in its container**, one `group_media` gathering a group with no host, date, invitation, place, cover or setting, made with the group and otherwise by `container_for` under the group's row lock — in an admission before the membership's INSERT — so no other route reaches it, and `POST /gatherings` refuses the type. **The Chat router**: a group's chat read by its members from the instant their membership began, a gathering's by its invited tier; newest first by `(created_at, id)`, a poll from `since` reaching back ten seconds (200 at most, then `truncated`), sending (30 a minute, then 429 `too_many_messages`), and `POST /messages/{id}/remove` for the writer and the people who run the place, a guarded UPDATE. A removed message leaves every other read at once and is held, in place and marked, for the people who run the place inside their own window until `removed_at + REMOVED_BIN`; the worker's sweep then deletes it in one statement. The join line on both ways in, the setting line on each change of the outside setting, neither removable; nothing logged.
+
+  **THE LOCAL RUN** in console mode against the dev DB (`D:\projects\temp\CK-102-harness`; the shots in `D:\projects\temp\CK-102-screenshots`), reserved addresses alone and every write declared in the journey's header: a throwaway's new group had its container and no join line; a second throwaway, invited, read nothing before accepting (404), then their own join line and nothing sent before it; messages both ways, the words trimmed; the admin removed one — gone from the member's read, named in their poll, held and marked for the admin — and the member deleted their own (held, `by_writer`); a join line's removal refused, `not_a_message`; `POST /gatherings` with `group_media` a 422; on a group's gathering with outside invitations on, the setting line drawn for the member and not for the outsider, whose group chat was a 404; one held message moved back 31 days by a declared UPDATE, out of every read, and `python -m app.worker --once` with the switch on logged `message sweep: 1 held message(s) deleted; their 30 days have passed`, the other kept; the verifier on the dev DB 484 of 484; `/tos` read version 5 at 375 in light and dark and at 1440; the three throwaways deleted, their group and gathering kept with their posts under *a former member*.
+
+  Not pushed. The push redeploys Netlify and both Render services — the API, whose pre-deploy step runs 0038, and the worker, which now runs the message sweep; **a migration, so the verifier is owed on the deploy: head 0038, 484 assertions.** The deploy window is the CK-102 Deploys bullet's. Report: `D:\projects\temp\CK-102-report.md`.
 - **1.130.0** (2026-11-20): Phase CK-101 — **An invitation asks before another account accepts it** — FINDING 1 of CK-100's switch checks, made a phase at Steven's approval of 2026-11-20 (*"Yes, approve"*), with Q1–Q4 each answered as recommended: the invited address never shown, neither button leading (both quiet pills, *Accept as {name}* first), someone already in landing with `already_accepted` and nothing spent, and THE WORDS built word for word (`decisions/2026-10-23-joining-a-group-and-co-admins.md` 1.10.0 — §3's AMENDED banner; `reference/backend/api-reference.md` 1.51.0 — both acceptances; `reference/frontend/components.md` 1.60.0 — the Joining on the surface convention's step). Rule 1 moved the entry 1.127.0 to `CLAUDE-history.md`, which takes 1.8.0. **Backend and the two landings; no migration:**
   - **changed:** `api/invitations.py` (`AcceptBody`, `sent_to_caller`), `api/group_invitations.py`, `lib/invitations.ts` (`acceptInvitation`), `lib/groupJoining.ts`, `routes/InvitationAccept.tsx`, `routes/GroupInvitationAccept.tsx` and `App.css` (`.invitation-step-actions` joins the actions rule, ahead of its pinned selectors, and centres its wrapped pills); **new:** `components/InvitationStep.tsx`;
   - **tests:** new `tests/test_invitation_other_address.py` (33) and `routes/invitation-other-address.test.tsx` (16), one new test in `tests/test_invitations.py`; three pins moved, each with its reason — two in `test_invitations.py` and one in `test_sign_up_by_invitation.py`, the third found by a probe over the whole suite and not named by the kickoff;
@@ -26,19 +38,7 @@
   **The sends off the event loop** — the fix-up's second item, at Steven's answer of 2026-11-20 (*"Yes, add it"*), relayed by the planning session. In provider mode `_send_via_provider`'s blocking `urlopen` (a 10 s timeout) ran on the event loop under every emailing route — request-link's two sends, the gathering and group invitation creates, and the email change's two — so once the switch is made each send would have stalled every other request on that worker for as long as Resend took. **`send_email` is a coroutine**: its provider path awaits `asyncio.to_thread(_send_via_provider, …)`, console mode and a reserved address print inline, and every caller awaits it, so a route still answers after the send is attempted, in the same order, with the same 202, bodies and lines — no fire-and-forget and no `BackgroundTasks`; the smoke script runs the same coroutine through `asyncio.run`. **Unchanged**: `send_email` never raises, the 10 s timeout, what either mode prints, `is_reserved_address`'s routing and `build_provider_request`; no dependency, setting, route or body. **Changed**: `services/email.py`, `api/auth.py`, `api/profile.py`, `api/invitations.py`, `api/group_invitations.py` and `scripts/verify_email_delivery.py`; the *Sign-up by invitation* Deploys bullet gains its sentence and the map its `email.py` line. **Tests**: new `tests/test_email_off_the_loop.py` (4) — the loop free while a held provider send waits behind a request-link, the call in a worker thread with its 10 s timeout, console and reserved sends inline, and every `send_email(` call under `app/` awaited (an AST scan, so no comment or string can pass for one, and each of the four emailing routers found) — red first, all four, the first on *the route had answered before the provider did*; three tests in `test_email_mode.py` and the stand-in adapter in `test_group_gatherings.py` moved to await, each with its reason. **6 mutations, each compiling and caught by a named test**: the thread removed, two callers' awaits dropped, the smoke script not running the coroutine, the thread's coroutine returned unawaited, and console's line printed from a thread. **934 backend tests** (930 before; 4 new).
 
   Not pushed; both commits ride the push that carries `61d768e`, which redeploys the API as it already did — no migration, so no verifier run is owed.
-- **1.128.0** (2026-11-20): Phase CK-100 — **Sign-up by invitation, reserved test addresses in the log, a guarded email mode, and the private test notice's version 4** — real email made ready to switch on, and not switched, at Steven's approval of 2026-11-19, with Q1–Q4 each answered as recommended and THE WORDS approved as drafted (`decisions/2026-08-31-private-alpha-scope.md` 1.6.0 — §1's AMENDED banner, condition 3 enforced by code, and §3.1's version 4; `reference/backend/api-reference.md` 1.49.0 — the Auth router). Rule 1 moved the entry 1.124.0 to `CLAUDE-history.md`, which takes 1.5.0. **Backend, the notice and the sign-in card:**
-  - **changed:** `api/auth.py`, `services/email.py`, `config.py`, `.env.example` and `render.yaml` (`EMAIL_FROM` and `EMAIL_API_KEY` declared on `covey-keep-api`, `EMAIL_MODE` still `console`), `routes/Tos.tsx`, `lib/api.ts` and `routes/SignIn.tsx`; **new:** `scripts/verify_email_delivery.py`;
-  - **tests:** new `tests/test_sign_up_by_invitation.py`, `tests/test_email_mode.py`, `tests/test_verify_email_delivery.py` and `routes/sign-in-card.test.tsx`, one new test in each of `tests/test_auth.py` and `routes/tos.test.tsx`; three pins moved in `test_auth.py` and five in `tos.test.tsx`, each with its reason;
-  - **untouched:** the worker, its settings and `render.yaml`'s worker block; every model, no migration (head stays 0037), the verifier at 458; neither lock and no dependency (stdlib `urllib`); `netlify.toml`; no route, field, status or body changed — the 202's body byte-identical, and no send-status field; the validator's lower bound; `WORKING-ON-NOW.md` and the docs-root `CLAUDE.md`.
-
-  **930 backend tests** (836 before): **94 new**, three pins moved; **1575 frontend tests in 84 files** (1570 in 83): **5 new**, five pins moved. Red first against the unchanged code (`is_reserved_address` an inert stub, the script a stub), 64 of the 114 backend tests in the four files failed and 8 of the 13 frontend tests in the two; each that passed asserts what holds before by design (open sign-up still admitting the invited and the known, the addresses that are not reserved, console booting, the provider lines already hash prefixes, the brand and the checkbox). Build and lint are clean (`index-D7mxy8zV.js`, `index-oPA4a89x.css`, 954.91 KiB precache, 11 entries). **46 mutations, each compiling and caught by a named test**: two survived the first run — the domain read after the first `@`, and the router deciding reserved names itself — and two tests were strengthened (a quoted local part holding an `@`; the scan matching `example.com` anywhere in the application), after which both were caught. Node 22.13.0 ran; `.nvmrc` names 22.23.4, unchanged. One code commit; in the Hub, one.
-
-  **THE BUILD**: `request-link` asks, in one statement, whether the address holds an account and whether it holds a live emailed invitation (`_live_invitation`: either pending table, channel EMAIL, not consumed, not revoked, not expired); the link goes to an account, an invitation or a reserved address, anyone else the invite-only note with no link; the token row is written in every case, so the rate limits count a refused request; `verify` asks again before it makes a person, its refusal the uniform error with the consume rolled back. **`is_reserved_address`** (`services/email.py`) is the one function: the domain after the last `@`, exactly or beneath example.com, .net, .org and the `example`, `test`, `invalid` and `localhost` names; a reserved address prints in console form in either mode and never reaches the provider. **The boot check**: the mode exactly `console` or `provider`, provider mode needing `EMAIL_API_KEY` and a bare `EMAIL_FROM`, each refusal naming the variable alone. The notice's version 4, `TOS_VERSION` 4 on both sides, and the card's three lines.
-
-  **THE LOCAL RUN** in console mode against the dev DB (`D:\projects\temp\CK-100-harness`; the shots in `D:\projects\temp\CK-100-screenshots`): an address with no invitation asked three times — at 375 in light and dark, and at 1440 — the card's three lines each time and one note in the log, with no link; a reserved address signed up with no invitation; invited from a group, the same address saw a byte-identical card, got a link, signed up and landed on the group's page with the invitation accepted; `/tos` read version 4; the throwaway accounts deleted.
-
-  Not pushed. The push redeploys Netlify and both Render services — the API's code changed, the worker's did not; no migration, so no verifier run is owed. Netlify usually goes live first, so a sign-in from the new bundle before the API redeploys is a 422 for those minutes. `EMAIL_API_KEY` is a new `sync: false` slot, empty until Steven types it, and console mode boots without it. Report: `D:\projects\temp\CK-100-report.md`.
-- *The 43 changelog entries that stood here — versions **1.127.0 down to 1.85.0** (2026-11-19 back to 2026-10-27), Phases CK-78 to CK-99 and the seventh doc audit's first and fifth fix batches — moved VERBATIM to `CLAUDE-history.md`, 1.122.0 to 1.85.0 at 1.126.0, 1.123.0 at 1.127.0, 1.124.0 at 1.128.0, 1.125.0 at 1.128.1, 1.126.0 at 1.129.0 and 1.127.0 at 1.130.0; nothing in them was rewritten.*
+- *The 44 changelog entries that stood here — versions **1.128.0 down to 1.85.0** (2026-11-20 back to 2026-10-27), Phases CK-78 to CK-100 and the seventh doc audit's first and fifth fix batches — moved VERBATIM to `CLAUDE-history.md`, 1.122.0 to 1.85.0 at 1.126.0, 1.123.0 at 1.127.0, 1.124.0 at 1.128.0, 1.125.0 at 1.128.1, 1.126.0 at 1.129.0, 1.127.0 at 1.130.0 and 1.128.0 at 1.131.0; nothing in them was rewritten.*
 - *The 87 changelog entries that stood here — versions **1.84.0 down to 1.0.0** (2026-10-25 back to 2026-08-17) — moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); nothing in them was rewritten.*
 
 ---
@@ -127,7 +127,7 @@ npm run test       # vitest (jsdom) — brand pins (CK-14) + gathering surface (
                    #   invitees' addresses cleared after a week, test-mode
                    #   plans — the NEGATION of version 1's photo sentence over
                    #   the whole rendered page, the brand rule on the source,
-                   #   the checkbox mechanism, TOS_VERSION, 4 since CK-100)
+                   #   the checkbox mechanism, TOS_VERSION, 5 since CK-102)
                    # + your plan (CK-74: every state as literals — free, paid
                    #   and renewing with the day in the profile zone, paid and
                    #   ending with both sentences, a change scheduled, the
@@ -244,7 +244,7 @@ npm run test       # vitest (jsdom) — brand pins (CK-14) + gathering surface (
                    #   by paragraph — version 2's every sentence unchanged and
                    #   in order, the covers paragraph after the photographs —
                    #   the paragraph sentence by sentence, TOS_VERSION === 3,
-                   #   4 since CK-100)
+                   #   5 since CK-102)
                    # + covers on the surface (CK-84: the cover component — null
                    #   and absent the empty cover, a set cover fetched once at
                    #   its variant's layer into a blob: URL with alt="", the
@@ -569,8 +569,9 @@ npm run test       # vitest (jsdom) — brand pins (CK-14) + gathering surface (
                    #   a tag; Add tag on the cleared field; a person who moved
                    #   on keeping their place)
                    # + the touch area (CK-99: every named control's ::after 44 by 44, positioned, no colour; two inputs' wordless labels; the rows, the columns, the gaps; Add another date; the possessive)
-                   # + sign-up by invitation (CK-100: the sent card's three lines, the same for any address; the notice's version 4 paragraph by paragraph; TOS_VERSION 4)
+                   # + sign-up by invitation (CK-100: the sent card's three lines, the same for any address; the notice paragraph by paragraph and TOS_VERSION, 5 since CK-102)
                    # + an invitation sent to another address (CK-101: the step on both landings, its words, Accept as and its confirmation, Sign out keeping the token, focus)
+                   # + the notice's version 5 (CK-102: version 4's every paragraph unchanged and the chat's after the covers, sentence by sentence; TOS_VERSION 5)
 ```
 
 ### Dev database (repo root)
@@ -676,6 +677,7 @@ python -m app.worker --once      # drain what is claimable now, then exit
                                  # uploaded covers (services/cover_ingest.py), one
                                  # job of each ladder per pass; --once exits when
                                  # both are idle. Its lines say `cover image <id>`.
+                                 # Since CK-102 each sweep pass first DELETES the chat's held messages past REMOVED_BIN, in one statement.
 python tests/fixtures/media/make_fixtures.py   # regenerate the GPS-bearing test
                                  # fixtures (synthetic pixels, a public landmark)
 ```
@@ -1073,8 +1075,9 @@ is Steven's call, not a session's: `.env` is his file.
   goes NULL where there is none; their co-admin rows and open join requests
   are deleted; **their memberships are kept**, attributed to the anonymized
   row; and the account lapse NULLs `groups.keeper_account_id` wherever
-  their account kept a group. Not built: sub-groups, the home group's
-  default (rung 2), archiving, the group thread.
+  their account kept a group. **Each group has a chat** — `POST /groups`
+  makes its container in the same transaction (the CK-102 bullet below).
+  Not built: sub-groups, the home group's default (rung 2), archiving.
 - The ingest worker (CK-35): a **second Render service, `covey-keep-worker`**,
   off the same push and the same database — **with NO `preDeployCommand`,
   ever**. Only the web service runs `alembic upgrade head`; two migration
@@ -1255,7 +1258,14 @@ is Steven's call, not a session's: `.env` is his file.
   across both ladders) and twenty bounds that at ≈11 s; a pass that marked
   anything is drained before the loop sleeps, so `--once` with the switch
   on is the operator's sweep from a shell. One INFO line per pass that
-  marked anything — the count, nothing else; silence otherwise. **The
+  marked anything — the count, nothing else; silence otherwise. **Each
+  pass first deletes the chat's held messages** (`sweep_expired_messages`,
+  CK-102): every `removed` post whose `removed_at` is at or past
+  `now − REMOVED_BIN` — the constant the chat's read compares, so those
+  two clocks meet at one instant too — in ONE DELETE, because a held
+  message has no bytes, counter or job to go row by row for; its own try,
+  and its own line, `message sweep: N held message(s) deleted; their 30
+  days have passed`, the count alone. **The
   module boundary is the caller set**: `destruction.py` holds what the API
   and the worker both call and never imports `ingest`, `processing`,
   `storage` or botocore (the Gotcha below); `handle_destroying` stays in
@@ -1795,8 +1805,8 @@ is Steven's call, not a session's: `.env` is his file.
   management alone, because every emailed invitation to a group's gathering
   is the 409 `members_only` while its outside invitations are off (the
   default; the backend since CK-92, the bullet below). **Nobody is told their place**: no
-  notification, email or message exists. Not built: the group chat,
-  calendar feeds and alerts (the calendar is CK-90's and CK-91's), the
+  notification, email or message exists. Not built: the group chat's
+  screens (its messages are CK-102's), calendar feeds and alerts (the calendar is CK-90's and CK-91's), the
   history setting, profile pictures; sharing outside the
   group, its setting, the line at the top (§6) and the alert are CK-92's
   backend and CK-93's screens (their bullets below). Detail:
@@ -1974,8 +1984,8 @@ is Steven's call, not a session's: `.env` is his file.
   order is the photograph, then the subject, then cover images** (the
   Gotcha below). Deleting the uploader's account leaves the cover (Steven,
   2026-11-01). **The private test notice carries one paragraph on
-  covers**, added at its version 3; it is version 4 since CK-100 (the
-  sign-up bullet below), and the published terms take 5. The surface is
+  covers**, added at its version 3; it is version 5 since CK-102 (the
+  chat bullet below), and the published terms take 6. The surface is
   CK-84's (the next bullet). Detail: `reference/backend/api-reference.md` (the Covers
   router), `reference/backend/database-schema.md` (migration 0036; decision
   52), `reference/backend/media-pipeline.md` §5.18.
@@ -2487,8 +2497,9 @@ is Steven's call, not a session's: `.env` is his file.
   (the alert for Got it). **Every list that shows an invited address
   carries `.address-list`**, which wraps a long one inside its card: the
   outside card's and a standalone gathering's *Waiting on*, and the People
-  page's Pending invitations. Not built: a line in the conversation when
-  the setting changes (there is no chat) and notifications. The words the
+  page's Pending invitations. Not built: the line in the conversation when
+  the setting changes drawn on screen (written since CK-102, the chat
+  bullet below) and notifications. The words the
   kickoff added beside the approved ones are approved as written (Steven,
   2026-11-12; the decision record 1.8.0, §11 item 8). Since CK-94 the card
   and the alert run on the shared focus hook (the next bullet). Detail:
@@ -2707,10 +2718,11 @@ is Steven's call, not a session's: `.env` is his file.
   link to an inbox the operator types, the adapter's status line and PASS
   or FAIL, nothing secret printed, no database touched — run before the
   switch, and again after any change to the key, the sender or the
-  domain's records. **The private test notice is
+  domain's records. **The private test notice took
   version 4** — version 3 with its photos paragraph's third sentence
   rewritten into three and its server-log paragraph replaced by one saying
-  emails are sent through Resend — and the published terms take 5; the
+  emails are sent through Resend — and is version 5 since CK-102 (the chat
+  bullet below), the published terms 6; the
   validator still reads `1 <= value <= TOS_VERSION`. **The deploy window**:
   Netlify usually goes live before Render, so a sign-in requested from the
   new bundle (sending 4) before the API has redeployed is a 422 for those
@@ -2757,6 +2769,64 @@ is Steven's call, not a session's: `.env` is his file.
   `reference/backend/api-reference.md` 1.51.0 (both acceptances),
   `reference/frontend/components.md` 1.60.0 (the Joining on the surface
   convention's step).
+- Messages in the chat (CK-102; migration 0038; backend and the notice):
+  **a group and a gathering each have a chat — messages, a 30-day hold for
+  the people who run the place, and two lines the chat writes itself — and
+  its screens are not built**
+  (`decisions/2026-11-21-the-chat-who-reads-it-and-what-it-keeps.md` §2–§9,
+  §14 phase 1; Steven's approval of 2026-11-21, Q1–Q4 each as recommended).
+  **Migration 0038** gives `posts` its first writer: `posts.kind`
+  (`message`, `joined`, `outside_invitations_on`, `outside_invitations_off`),
+  a body on a message alone, 1 to 4,000 characters, `removed_by_person_id`,
+  `occurrence_id`'s `SET NULL` and `ix_posts_gathering_id_created_at_id`;
+  and `gathering_type` gains `group_media` by `ADD VALUE`, named by nothing
+  else in the migration (the CK-71 Gotcha). **A group's chat lives in its
+  CONTAINER**: one `group_media` gathering a group, with no host, date,
+  invitation, place, cover or outside setting, so no route but the chat's
+  reaches it; `POST /groups` makes it in the group's transaction, and
+  `services/group_chat.py::container_for` otherwise makes it under the
+  group's row lock — in an admission BEFORE the membership's INSERT, whose
+  key-share lock on the group that row lock would wait on; `POST /gatherings`
+  refuses the type at its field. **The Chat router, the sixteenth**
+  (`api/chat.py`): `GET` and `POST /groups/{id}/chat` for the group's
+  members, each reading from the instant their membership began and only
+  while it lasts — leaving ends it, coming back is a new window, and the
+  admin's seat alone opens nothing; `GET` and `POST /gatherings/{id}/chat`
+  for the invited tier (`_gathering_for_invited`), an outsider included,
+  whenever invited; newest first by `(created_at, id)` with an opaque
+  `before` cursor; a poll from `since` reaching back `CHAT_LOOKBACK` (10 s),
+  so a message whose transaction began before the last read is still
+  caught, at most 200 and then `truncated`; sending trimmed, 30 a minute,
+  then 429 `too_many_messages`; and **`POST /messages/{id}/remove`** for the
+  writer and the people who run the place — a group's admin and co-admins,
+  a gathering's host and co-hosts — a guarded UPDATE whose rowcount decides,
+  so two removes at once give one 204 and one 409 `already_removed`, and a
+  line is 409 `not_a_message` (Q3a). **The hold**: a removed message leaves
+  every other read at once, named in their poll's `removed`, and stays in
+  place, marked with when, by whom and whether its writer deleted it, for
+  the people who run the place inside their own window until
+  `removed_at + REMOVED_BIN` (30 days); the worker's sweep deletes it then
+  (the sweep bullet above). **The join line** is written on both ways in,
+  at the membership's instant in its transaction — never at a group's
+  creation or for anyone already in (Q3b); **the setting line** on each
+  change of a gathering's outside invitations, drawn for the group's
+  members alone. No logger in the router, and no word, name or chat's id in
+  any record; deleting an account keeps every post under *a former member*.
+  **The private test notice is version 5** — version 4 with one paragraph
+  on the chat after the covers paragraph — and the published terms take 6;
+  `TOS_VERSION` is 5 on both sides, the validator still
+  `1 <= value <= TOS_VERSION`. **The deploy window**: Netlify usually goes
+  live before Render, so a sign-in requested from the new bundle (sending
+  5) before the API has redeployed is a 422 for those minutes; the old
+  instance serving during the pre-deploy names no post and never reads the
+  new label; and a migration means the verifier is owed on the deploy
+  (head 0038, 484). Not built: the chat's screens, reactions, the unread
+  mark and typing (the notice's version 6), the *Added N photos* cards,
+  photos posted straight to the group, replies, the history switch,
+  editing, alerts, search, an archived group's chat and export. Detail:
+  `reference/backend/api-reference.md` 1.52.0, the Chat router;
+  `reference/backend/database-schema.md` 2.44.0, migration 0038 and
+  decision 54.
 - Browser session (CK-6, lifetime CK-9): `/auth/verify` 302s to
   `${APP_BASE_URL}/auth/callback#token=<jwt>` — the JWT rides the URL
   **fragment**, never the query string; the frontend stores it in
@@ -2780,7 +2850,8 @@ is Steven's call, not a session's: `.env` is his file.
   file's; never change it as a side effect of another change. **The
   rollback is that line set back to `console`**, which prints every
   message, real addresses and links included, to the log and makes the
-  private test notice's version 4 false — a rollback that outlasts an
+  private test notice's version 5 false (its email paragraph is version
+  4's) — a rollback that outlasts an
   incident owes the notice a new version. Console stays the code default,
   so a local run and the suite print.
 - **Verifying a deployed migration (CK-13.1):** a green deploy proves `alembic
@@ -2827,7 +2898,7 @@ is Steven's call, not a session's: `.env` is his file.
 - ⚠️ **A navigation in React Router 7 is a transition; an auth or session change made in the same handler is urgent and renders first, so a guarded route can redirect before the navigation lands — never clear a session in the same tick as navigating away from a guarded route.** `useNavigate()` ends in `MemoryRouter`'s / `BrowserRouter`'s location update, which both wrap in `React.startTransition` (unless `useTransitions === false`), so the new location is low-priority work; `clearToken()` notifies `lib/session.ts`'s listeners and `AuthProvider`'s subscriber calls `setStatus('signedOut')`, an urgent update. React renders the urgent update alone first — the route still the old one — so `RequireAuth` on that route sees signed-out, renders `<Navigate to="/" replace />`, and that navigation supersedes the pending one. From CK-8 to CK-76.1 `Settings.tsx::handleDelete` did exactly this — `navigate('/account-deleted')` then `clearToken()`, with a comment promising one batched render — and a person deleting their account landed on the sign-in form at `/` with no explanation (CK-76's observation 1, six samples; CK-75's checks had seen it and could not tell why). The lockfile has carried `react-router` 7.18.2 and React 19.2.8 since CK-6, so the batching was never real: nothing drove the deletion through the real route table with `RequireAuth` until `routes/account-deleted.test.tsx`, whose red run read `/`, the sign-in form and `signedOut`. Three rules. **(1)** A handler on a guarded route that must end the session navigates and does nothing else; the destination — an unguarded route — ends the session once it has rendered, on a one-shot signal carried in the navigation's state (`ACCOUNT_DELETED_SIGNAL`, `lib/accountDeleted.ts`), and spends the signal by replacing the entry's state, so a reload, Back or a later visit finds none; a direct visit to the destination never signs anyone out. **(2)** A signal in navigation state rides the history entry, which outlives the session it ends: it carries no id, no email and no token, ever (pinned as the exact object and by a source scan). **(3)** A test of a flow that crosses a guard renders the REAL route table with the REAL `AuthProvider` over the real session store — a component rendered alone under a fake context value cannot see the ordering, which is how `routes/settings.test.tsx`'s three stayed green beside the defect — and `useTransitions={false}` on the router is not the fix: it would make every navigation urgent to win one race. The same holds for `authFetch`'s 401 rule: a 401 arriving while a guarded route is on screen clears the token urgently and bounces, so the window between a deletion's 204 and the clear must hold no request (the test's server answers 401 to everything after the deletion, and the log holds nothing after `POST /me/delete`). (CK-76.1.)
 - ⚠️ **A catch-all route that navigates destroys the address it caught — a fragment-carried token included — so it renders and never redirects; and a backend that mints a URL into a route not yet built says only that the route doesn't exist yet, never where the link lands.** From CK-6 to CK-75.1 `App.tsx`'s last route was `<Route path="*" element={<Navigate to="/" replace />} />`: any address the running bundle had no route for was replaced with `/` — path, query and fragment — and `/` sent a signed-in person on to `/home`. Two faces of one line: a route the deploy did not have yet (CK-75's `/groups/invitations/accept#token=…`, which check `(jo)` watched lose its token on a CURRENT bundle, 2026-10-23) and a route a stale bundle did not have yet (`/plan` typed into an open tab at CK-74's checks showed Welcome until the update notice was taken). Since CK-75.1 the catch-all renders `routes/PageNotAvailable.tsx`, which never navigates, never reads the address, asks the one service-worker owner (`components/AppUpdateProvider.tsx`) for an update once on mount, and offers Reload when a newer version has taken control — the reload loads the same address, fragment intact, and the newer bundle routes it. Three rules. **(1)** The catch-all renders; nothing in it may navigate — no `Navigate`, no `navigate()`, no `window.location` assignment — and nothing in it may read, store, log or show the address (pinned by a source scan with comments stripped; the one `window.location` use is `.reload`). **(2)** A router docstring, a kickoff or a record that mints a URL into a route the frontend has not built says only that the route does not exist yet — never *lands on the not-found screen*, never *the `/plan` precedent*: CK-75's kickoff put that claim in two docstrings and three Hub documents, and the app had no such screen. **(3)** The service worker has ONE owner: `useRegisterSW` is called in `AppUpdateProvider.tsx` and nowhere else (pinned by a glob over every source file), `injectRegister` stays `null`, and a new reader of the update state goes through `useAppUpdate()`. Under tests the plugin's virtual module is aliased to an inert stub (`src/test-support/pwaRegister.ts`) in `vitest.config.ts`, because Vite's import analysis refuses an unresolvable import before any `vi.mock()` can intercept it — mock the id, never import the stub. (CK-75.1.)
 - ⚠️ **Checkout's Link is not a payment method the `allowed_payment_method_types` filter governs — and a Stripe parameter's documentation says what a session ACCEPTS, not what Checkout SHOWS.** CK-74.1 sent `allowed_payment_method_types: ["card"]` to turn Stripe Link off, on the strength of the SDK's own words: the key is *a filter on the dynamically computed set of eligible payment methods*, `link` is among its literals, so leaving `link` out would leave Link out. Check `(jh)` on the deploy (2026-10-22) measured otherwise: the filter worked as a filter — Cash App Pay, Klarna and Amazon Pay were gone — and Link stayed whole: the pre-ticked *Save my information with Link for faster checkout* box, the phone-number field beneath it, *By paying, you agree to Link's Terms and Privacy.* and the Link button in the wallet row. Link is a WALLET with a setting of its own — `wallet_options: {"link": {"display": "never"}}` (`SessionCreateParamsWalletOptionsLink.display`, *Specifies whether Checkout should display Link as a payment option*, `auto` or `never`) — which `checkout_url` sends since CK-74.2 beside the filter, the filter now standing as Steven's decision of 2026-10-22 in its own right. Three rules. **(1)** A Checkout change is not done until someone has LOOKED at the sandbox's Checkout page on a fresh throwaway: a probe against the installed SDK proves a parameter exists and what it accepts, never what the hosted page renders. `(jk)` was that look for this one, and it passed on 2026-10-22 — Link gone from Checkout, and *Bank* with it — so the fallback it held ready, the Dashboard's Link switch, was never needed. **(2)** Do not read a payment-method list's literals as the set of things Checkout can show: wallets ride other methods or carry settings of their own — Apple Pay and Google Pay ride `card` and appear in neither list, and Link appears in the `allowed_` list and is governed by `wallet_options` anyway. **(3)** A record that says a surface is off because the code sends a parameter is a claim about the code until a check confirms it on the deploy. CK-74.1's banner, §13 item 7 and DATA-HANDLING said Link was off from the day they were written while the deploy offered it to anyone who pressed Upgrade; CK-74.2 says so beside each of them under new banners rather than rewriting them, and the 1.76.0 entry (in `CLAUDE-history.md` since 1.88.0) stands as written. (CK-74.2.)
-- ⚠️ **`/tos` is a living description of what the product stores, and a phase that stores a new kind of data, or changes what deletion does, owes it a NEW version — the pin on a sentence about something not built yet is what kept this one false for six weeks.** `routes/Tos.tsx` is the text the sign-in checkbox records agreement to, by number alone: `TOS_VERSION` on both sides, written into `tos_acceptances` by `api/auth.py::verify` at account creation, and nothing re-asks. From CK-36 (2026-09-09) to CK-73.3 (2026-10-19) it said *"Photo upload doesn't exist yet, so no photos are stored"* while photographs, captions, tags, companions' names, groups, invitees' addresses and passkeys arrived — nine phases stored a new kind of data about a person and none opened the page — and `routes/tos.test.tsx` PINNED the sentence present, so the suite was green the whole time: a test on a claim about what is NOT built passes until the thing is built and then goes on passing, because nothing fails when a negative stops being true. Four rules. **(1)** A phase that stores a new kind of data about a person, or changes what deleting an account leaves behind, amends `Tos.tsx` as a new version: `TOS_VERSION` +1 on both sides, the published terms' number moving up with it, the new text recorded word for word in `decisions/2026-08-31-private-alpha-scope.md` §3.1 beside every earlier one, the tests moved with it. Since CK-100 — a new processor, Resend, receiving every address and message, and version 3's photo-deletion sentence false three ways — **the notice is version 4 and the published terms take 5**. **(2)** Never rewrite the text under an existing number once any account has accepted it — one number means one text, and an acceptance row that names a number must name what its person read — and never narrow the validator's lower bound (`1 <= value <= TOS_VERSION`): a browser still on the old bundle sends the number of the text it showed, and that is the true record. Before the first acceptance a version's text may still change; after it, a change is the next number. **(3)** Pin what the product DOES, and the negation of what the page no longer says — never a sentence about something not built. The version 1 pin stood because the kickoff that built the first photograph had no reason to open a test about a notice; this Gotcha is here so the next one does. (CK-73.3.) **(4)** A sentence that tells a person what they can DO is checked against what the product lets them do — the frontend's own rule, never offer a control the API would refuse, applied to prose. Version 2 as approved said *"Delete them first if you'd rather they went"* of photos AND answers, and no answer can be deleted (CK-27 shipped no RSVP delete, deliberately — an answer can only be changed to *Can't make it*, which clears its companions); its server-log sentence named sign-in links where console mode prints every email the app sends with its address, an invitee's among them. Both were corrected at CK-73.4 under the same number, before any account had accepted version 2 — nothing had been pushed, the case rule (2) allows — and the `no` label the new sentence quotes is read from `lib/rsvps.ts` in the test, so the words and the button cannot drift apart unnoticed. (CK-73.4.)
+- ⚠️ **`/tos` is a living description of what the product stores, and a phase that stores a new kind of data, or changes what deletion does, owes it a NEW version — the pin on a sentence about something not built yet is what kept this one false for six weeks.** `routes/Tos.tsx` is the text the sign-in checkbox records agreement to, by number alone: `TOS_VERSION` on both sides, written into `tos_acceptances` by `api/auth.py::verify` at account creation, and nothing re-asks. From CK-36 (2026-09-09) to CK-73.3 (2026-10-19) it said *"Photo upload doesn't exist yet, so no photos are stored"* while photographs, captions, tags, companions' names, groups, invitees' addresses and passkeys arrived — nine phases stored a new kind of data about a person and none opened the page — and `routes/tos.test.tsx` PINNED the sentence present, so the suite was green the whole time: a test on a claim about what is NOT built passes until the thing is built and then goes on passing, because nothing fails when a negative stops being true. Four rules. **(1)** A phase that stores a new kind of data about a person, or changes what deleting an account leaves behind, amends `Tos.tsx` as a new version: `TOS_VERSION` +1 on both sides, the published terms' number moving up with it, the new text recorded word for word in `decisions/2026-08-31-private-alpha-scope.md` §3.1 beside every earlier one, the tests moved with it. Since CK-100 — a new processor, Resend, receiving every address and message, and version 3's photo-deletion sentence false three ways — the notice took version 4, and since CK-102 — the chat, what people say to each other — **the notice is version 5 and the published terms take 6**. **(2)** Never rewrite the text under an existing number once any account has accepted it — one number means one text, and an acceptance row that names a number must name what its person read — and never narrow the validator's lower bound (`1 <= value <= TOS_VERSION`): a browser still on the old bundle sends the number of the text it showed, and that is the true record. Before the first acceptance a version's text may still change; after it, a change is the next number. **(3)** Pin what the product DOES, and the negation of what the page no longer says — never a sentence about something not built. The version 1 pin stood because the kickoff that built the first photograph had no reason to open a test about a notice; this Gotcha is here so the next one does. (CK-73.3.) **(4)** A sentence that tells a person what they can DO is checked against what the product lets them do — the frontend's own rule, never offer a control the API would refuse, applied to prose. Version 2 as approved said *"Delete them first if you'd rather they went"* of photos AND answers, and no answer can be deleted (CK-27 shipped no RSVP delete, deliberately — an answer can only be changed to *Can't make it*, which clears its companions); its server-log sentence named sign-in links where console mode prints every email the app sends with its address, an invitee's among them. Both were corrected at CK-73.4 under the same number, before any account had accepted version 2 — nothing had been pushed, the case rule (2) allows — and the `no` label the new sentence quotes is read from `lib/rsvps.ts` in the test, so the words and the button cannot drift apart unnoticed. (CK-73.4.)
 - ⚠️ **The API process configures ONLY the `covey-keep` logger namespace, never the root, and keeps `propagate` True — and until CK-73.1 it configured nothing, so every INFO line the API ever wrote was dropped.** The worker calls `logging.basicConfig(level=INFO, stream=sys.stdout)` in its own entry point (`app/worker.py::main`), which configures the ROOT; the web service has no entry point of its own — uvicorn imports `app.main` — and nothing in it ever configured logging, so Python's root sat at WARNING with no handler, every INFO record from `covey-keep.billing` (and from any other app logger) was dropped before it reached a stream, and WARNING/ERROR lines surfaced only through Python's last-resort handler on stderr. CK-73's check (iq) looked for the webhook's INFO line in Render's log and found uvicorn's access lines alone — the first time anyone had looked for an API INFO line at all. Since CK-73.1 `app/logging_setup.py::configure_logging`, called once at `app.main`'s import, sets the **`covey-keep` namespace** to INFO with ONE marked handler to stdout in the worker's format, idempotent (a reimport or uvicorn's reloader finds the mark and adds nothing). Two rules bind whoever touches it: **(1) never the root** — a root `basicConfig(level=INFO)` makes every library's INFO line visible too, and the `stripe` and `botocore` INFO lines carry request URLs, which is why storage.py and services/billing.py pin those loggers and why only our own namespace is turned on; **(2) never `propagate = False`** — the suite's `caplog` captures at the root, and CK-73's never-log pins ("no URL, no email, no payload in any log record, with the root at DEBUG") read `caplog.records`, so a namespace that stopped propagating would make every one of them pass VACUOUSLY over an empty list; in production the root has no handler (uvicorn configures only `uvicorn.*`, with `disable_existing_loggers: False`), so nothing is written twice. Two consequences: the worker must never import `logging_setup` (a namespace handler beside its root handler would write every worker line twice — its import graph does not load `app.main`, pinned since CK-59 and re-asserted at CK-73.1), and **turning a line on is a data-handling act** — every INFO-or-above call the web import graph reaches was enumerated at CK-73.1 (nine, all on `covey-keep.billing`, ids and plan names only), and a new logger under the namespace is visible on the deploy the moment it is written. (CK-73.1.)
 - ⚠️ **A `StripeObject` is NOT a dict in stripe-python 16 — `.get()` and `.items` raise, and subscript is the one spelling.** The SDK's objects no longer subclass `dict`: at 16.0.0 `sub.get("customer")` raises `AttributeError: 'get' is a dict method, but a Subscription is not a dict`, and `sub.items` is refused the same way — so is any field whose name is a dict method's. Read a field as `sub["items"]` / `sub["customer"]` (a missing field is a `KeyError`) or by attribute where the name is safe (`sub.status`, `sub.id`); `services/billing.py::_field` is the one helper, and it is why `sync_subscription` never spells `.get`. Found by the first probe against the installed SDK, before any test ran — and the trap for a TEST is the mirror image: a stub that hands the upsert a plain `dict` passes where the real object fails, which is why every subscription a test hands it is built with the SDK's own `construct_from`, in the pinned API version's shape. (CK-73.)
 - ⚠️ **The lock is universal and must stay so — compile it with `uv pip compile --universal`, never with `pip freeze` or a platform-specific `pip-compile` on Windows, which drops `uvloop` from the Linux deploy.** `uvicorn[standard]` requires `uvloop` only where `sys_platform != 'win32'` (and not on cygwin or PyPy — read from the installed `uvicorn-0.53.0` METADATA), and `pytest` requires `colorama` only ON Windows; a resolve performed on this machine without `--universal` would omit the first and include the second with no marker, and Render would then build without the event loop uvicorn is deployed with — a lock that passes every local check and changes the production runtime. Since CK-72 `requirements.txt` carries environment markers (`uvloop==0.23.0 ; … sys_platform != 'win32'`, `cffi` and `pycparser` excluded on PyPy) so ONE file serves the Linux deploy and the Windows dev machine, and `tests/test_requirements_lock.py` fails if `uvloop` leaves the lock or loses its marker. Two companions: `uv` keeps the versions already in a lock, so a recompile after editing `requirements.in` moves nothing else — a version move is `--upgrade-package <name>`, deliberately, and its own reviewed change — and `requirements.txt` is never edited by hand (the header says how it was made; the test checks the shape of every line). The regeneration commands are in the Commands block. (CK-72.)
@@ -2920,7 +2991,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── useFocusRequest.test.tsx # the hook: state spent once after the render that draws its target, the container rule, the same target twice, a function target and container read when spent
 │       │   └── PhotoViewer.tsx       # the photo viewer: a modal dialog portalled into the body, the rest inert; the bar, the web layer with the arrows fixed on the stage, the words and acts, the strip; full screen, zoom, gestures, keys; at most three web layers held; acts and total optional (a group's page passes no acts, and a total until the list lands); TagList and LazyThumbnail (minted as it nears the viewport); Retry's answer on Full screen or the new Retry, while that photo is on screen (CK-95)
 │       ├── lib/           # API types, calls, copy and helpers, one module per subject
-│       │   ├── api.ts                # API_URL, apiFetch, authFetch (a 401 clears the session); TOS_VERSION = 4, never renumbered
+│       │   ├── api.ts                # API_URL, apiFetch, authFetch (a 401 clears the session); TOS_VERSION = 5, never renumbered
 │       │   ├── session.ts            # the session token in localStorage
 │       │   ├── timezone.ts           # IANA zone helpers: zone names, never offsets
 │       │   ├── datetime.ts           # wall clock ↔ instant in an explicit IANA zone (the profile zone); formatDay, formatWeekdayDay, formatTime, formatDayWithYear, badgeParts; formatInstantRange, When's line with its weekday
@@ -2986,7 +3057,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── InvitationAccept.tsx         # `/invitations/accept`: a gathering invitation's landing, once per auth state; opening accepts when sent to the caller, else the step; Try again
 │       │   ├── Settings.tsx                 # `/settings`: profile, Your plan, sign-in email, passkeys, deleting the account (whose 204 only navigates); both forms on the one mapper; after an answer focus on the field, the button pressed, the pending sentence or the email field (CK-94); its error lines alerts and Saved. a status
 │       │   ├── Plan.tsx                     # `/plan`: the current plan, usage, the other plans, Checkout's return wait; after an answer focus on the button pressed, Manage your plan once the plan read lands, the <h1> or the new Try again, Back to settings kept the same element through the wait (CK-96); since CK-97 a refused already_subscribed's line beneath the Upgrade pressed, an alert, moving beneath Manage your plan — no alert, Manage described by it — once the read shows a plan held
-│       │   ├── Tos.tsx                      # `/tos`: the private test notice, version 4 — a living description of what is stored (the Gotcha)
+│       │   ├── Tos.tsx                      # `/tos`: the private test notice, version 5 — a living description of what is stored (the Gotcha)
 │       │   ├── EmailChangeResult.tsx        # `/email-change`: an email-change confirmation's outcome
 │       │   ├── AccountDeleted.tsx           # `/account-deleted`: ends the session once rendered, on the deletion's one-shot signal alone
 │       │   ├── PageNotAvailable.tsx         # `*`: keeps the address, reads nothing from it, offers Reload when a newer version waits
@@ -3062,9 +3133,9 @@ covey-keep/            # the code root (this repo)
 │   ├── requirements-dev.txt # GENERATED: the dev lock; never edited — compile it from requirements-dev.in
 │   ├── app/                 # the FastAPI application and the ingest worker
 │   │   ├── __init__.py      # __version__, carried in the outbound email User-Agent
-│   │   ├── main.py          # the FastAPI app: CORS, GET /health, the 15 routers, configure_logging() at import
+│   │   ├── main.py          # the FastAPI app: CORS, GET /health, the 16 routers, configure_logging() at import
 │   │   ├── logging_setup.py # the API's logging: the covey-keep namespace at INFO to stdout; never the root, propagate kept True (the Gotcha)
-│   │   ├── worker.py        # the worker (python -m app.worker [--once]): WorkerSettings only; claims, processes, destroys, sweeps when on; uploaded covers too, one job of each ladder per pass
+│   │   ├── worker.py        # the worker (python -m app.worker [--once]): WorkerSettings only; claims, processes, destroys; when on, sweeps the bin and the held messages; covers, a ladder each
 │   │   ├── brand.py         # PRODUCT_NAME and FROM_DISPLAY_NAME — the only backend home for user-visible brand strings
 │   │   ├── config.py        # Settings (the API's) and WorkerSettings (six required + SWEEP_ENABLED); key shapes and the email mode checked at boot
 │   │   ├── db.py            # the async engine and session factory (expire_on_commit=False)
@@ -3085,14 +3156,16 @@ covey-keep/            # the code root (this repo)
 │   │   │   ├── group_links.py       # the group's link (derived, never stored), joining through it, approving and declining requests
 │   │   │   ├── group_invitations.py # emailed group invitations; acceptance admits directly, asking first when sent to another address
 │   │   │   ├── calendar.py          # the calendar: every date in a range of every gathering the caller hosts, co-hosts or is invited to, and one group's; the invited tier exactly; one statement; published_count through _visible_media, never photo_count; no logger
+│   │   │   ├── chat.py              # the chat: a group's for its members from their joining, a gathering's for its invited tier; read, poll, send, remove and the hold; no logger
 │   │   │   └── billing.py           # GET /billing, checkout, portal, the Stripe webhook; never imports stripe itself
 │   │   ├── services/        # logic the routers and the worker share
 │   │   │   ├── __init__.py    # empty package marker
 │   │   │   ├── billing.py     # THE one module that imports stripe: sessions, fetch-and-upsert, close_customer; stripe logger at WARNING
 │   │   │   ├── cover_ingest.py # worker-only: the uploaded-cover ladder — claim, render, ready makes it the cover under the subject's lock, destruction; never imported by the API
 │   │   │   ├── covers.py      # clear_covers_of (a photograph cover); lock_subject, supersede_uploads, retire_cover_image (the latest act wins); the models and sqlalchemy only
-│   │   │   ├── destruction.py # mark_for_destruction (which clears covers) and sweep_expired_bin; must never import ingest, processing, storage or botocore
+│   │   │   ├── destruction.py # mark_for_destruction (which clears covers), sweep_expired_bin, sweep_expired_messages; never imports ingest, processing, storage or botocore
 │   │   │   ├── email.py       # the two-mode email adapter, a coroutine; the provider's call in a worker thread; is_reserved_address: a reserved address prints
+│   │   │   ├── group_chat.py  # a group's chat container (get-or-create under the group's row lock), the join line, the setting line; models and sqlalchemy only
 │   │   │   ├── groups.py      # the person-spine group writes: the deletion leg's succession, a group gathering's invitation and place rows; joining clears from_outside
 │   │   │   ├── ingest.py      # worker-only: the claim service, the publish transaction, the destruction ladder
 │   │   │   ├── keeping.py     # resolve_keeper, keep/unkeep, the quota in photographs, the paid entitlement; never imports stripe
@@ -3103,7 +3176,7 @@ covey-keep/            # the code root (this repo)
 │   │   └── models/          # SQLAlchemy models, one module per cluster
 │   │       ├── __init__.py     # imports every model, so Base.metadata is whole for alembic
 │   │       ├── base.py         # Base, the naming convention, the uuid and created_at helpers, db_enum
-│   │       ├── enums.py        # every enum and its PostgreSQL type
+│   │       ├── enums.py        # every enum and its PostgreSQL type; post_kind, and gathering_type's group_media, a group's chat container
 │   │       ├── account.py      # Account: the supertype every person and organization points at
 │   │       ├── auth.py         # magic-link tokens, sessions, email-change requests, WebAuthn credentials and challenges, ToS acceptances
 │   │       ├── household.py    # Household and Person
@@ -3119,9 +3192,9 @@ covey-keep/            # the code root (this repo)
 │   │       ├── consent.py      # ConsentRecord
 │   │       ├── attendance.py   # AttendanceRecord: who was actually there
 │   │       ├── items.py        # ItemSlot and ItemClaim: what to bring to a date
-│   │       ├── post.py         # Post: discussion on a gathering
+│   │       ├── post.py         # Post: a message in a chat or a line the chat writes itself (kind); words on a message alone; a removed one's when and by whom
 │   │       └── next_step.py    # the next-step suggestion tables
-│   ├── alembic/             # migrations; head 0037, applied by the API's pre-deploy step alone
+│   ├── alembic/             # migrations; head 0038, applied by the API's pre-deploy step alone
 │   │   ├── README         # Alembic's stock note
 │   │   ├── env.py         # the async env; fileConfig keeps app loggers enabled; no include_object hook
 │   │   ├── script.py.mako # a new migration's template
@@ -3162,9 +3235,10 @@ covey-keep/            # the code root (this repo)
 │   │       ├── 0034_member_places_invitees_chosen_and_the_backup_column_dropped.py # gathering_member_places, invitees_chosen (CK-77)
 │   │       ├── 0035_covers_from_photographs.py # the cover pointer on gatherings and groups, its CHECKs and partial indexes (CK-83a)
 │   │       ├── 0036_uploaded_covers.py # cover_images, cover_image_id on gatherings and groups, the cover CHECK widened (CK-83b)
-│   │       └── 0037_outside_invitations.py # the outside-invitation setting on gatherings and its two CHECKs, gathering_invitations.from_outside, gathering_outside_alert_dismissals (CK-92)
+│   │       ├── 0037_outside_invitations.py # the outside-invitation setting on gatherings and its two CHECKs, gathering_invitations.from_outside, gathering_outside_alert_dismissals (CK-92)
+│   │       └── 0038_the_chat_posts_kind_and_the_group_media_label.py # posts.kind, words on a message alone, the remover and the hold's CHECKs, the reading index; gathering_type's group_media (CK-102)
 │   ├── scripts/             # operator scripts, run from backend/
-│   │   ├── verify_schema.py         # the read-only shape and data verifier: head 0037, 458 assertions; run after every migration that reaches Render
+│   │   ├── verify_schema.py         # the read-only shape and data verifier: head 0038, 484 assertions; run after every migration that reaches Render
 │   │   ├── verify_email_delivery.py # sends one message, no link, to an inbox the operator types; run from the Render Web Shell after a key or DNS change
 │   │   └── verify_r2_credentials.py # proves the R2 credential split against live R2 (one generated object); run from the Render Web Shell
 │   └── tests/               # the pytest + httpx ASGI suite; needs the dev DB container up
@@ -3182,6 +3256,10 @@ covey-keep/            # the code root (this repo)
 │       ├── test_brand.py                 # brand strings built from app/brand.py
 │       ├── test_calendar.py              # the calendar: the invited tier by seat, the group route's 404 first, the half-open range and its refusals, the caller's own answer, position and date_count, the photo count against the charge, the body against the detail and the list, one statement
 │       ├── test_caller_response.py       # the caller's own answer on each date of a gathering body, in one statement
+│       ├── test_chat.py                  # the chat: who reads each kind and from when, sending, the poll and its lookback, removing and the hold by seat, the lines, the limit
+│       ├── test_chat_container.py        # the group's chat container: made with the group or on first use, one under a race, refused by POST /gatherings, reached by no other route
+│       ├── test_chat_schema.py           # migration 0038's round trip and its INFO line; the verifier's chat lines, each red on its plant
+│       ├── test_chat_sweep.py            # the message sweep: at its window and not a second short, one statement, under the switch, its line, a failure contained
 │       ├── test_co_hosts.py              # every delegable and reserved check by seat; the co-host endpoints
 │       ├── test_cover_images.py          # uploaded covers: routes by seat, the latest act wins, the worker's ladder, the races both orders, the verifier's lines
 │       ├── test_covers.py                # covers: setting and reading by seat, every refusal in order, clearing, the bodies, the race both orders

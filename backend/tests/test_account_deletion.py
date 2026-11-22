@@ -17,7 +17,7 @@ from app.models import (
     Session,
     TosAcceptance,
 )
-from app.models.enums import GatheringType, GroupType, PublicationState
+from app.models.enums import GatheringType, GroupType, PostKind, PublicationState
 from app.services.keeping import keep
 from tests.test_auth import _capture_link, _sign_in
 
@@ -190,6 +190,9 @@ async def test_contributions_survive_deletion(client, capsys, db_session_factory
             Post(
                 gathering_id=gathering.id,
                 author_person_id=person_id,
+                # A post names its kind since CK-102 (0038, NOT NULL): the
+                # pin moved with its reason, the plant unchanged otherwise.
+                kind=PostKind.MESSAGE,
                 body="What a day!",
                 publication_state=PublicationState.LIVE,
             )

@@ -3,7 +3,12 @@ import { PRODUCT_NAME } from '../brand'
 import { BrandMark } from '../components/AuthArt'
 
 // The private test notice — the text the sign-in checkbox records agreement
-// to, as ToS VERSION 4 (CK-100): version 3 (CK-83b) word for word but for two
+// to, as ToS VERSION 5 (CK-102): version 4 word for word with one paragraph
+// added after the covers paragraph, on the chat — who reads a message, what
+// is stored with it, deleting and removing, the 30-day hold, leaving a group
+// and deleting an account — because a chat stores a new kind of data about
+// a person: their messages, with their name and the time. Version 4 (CK-100)
+// was version 3 (CK-83b) word for word but for two
 // paragraphs — the photos paragraph's third sentence rewritten into three,
 // because "You can delete your own photos at any time" was false three ways,
 // and the server-log paragraph replaced by one on email, because a new
@@ -13,7 +18,7 @@ import { BrandMark } from '../components/AuthArt'
 // six weeks. Every version's text lives word for word in
 // decisions/2026-08-31-private-alpha-scope.md §3.1. This is NOT the Terms of
 // Service: the real terms and privacy policy are with counsel and publish
-// later as VERSION 5, and the notice must never share a version number with
+// later as VERSION 6, and the notice must never share a version number with
 // them (the record's §3).
 //
 // THIS PAGE IS A LIVING DESCRIPTION OF WHAT THE PRODUCT STORES. Every phase
@@ -33,8 +38,7 @@ import { BrandMark } from '../components/AuthArt'
 // The look (CK-81) is the mockup's notice page, screen 19 — its STYLING
 // only: the mark, the heading, the text on one card, the way back. The
 // mockup's text is version 1 and stale (the design handoff §5.3); the
-// words below are version 4 — version 3's, with CK-100's photos and email
-// paragraphs.
+// words below are version 5 — version 4's, with CK-102's chat paragraph.
 export function Tos() {
   return (
     <main className="auth-screen notice-screen">
@@ -87,6 +91,21 @@ export function Tos() {
             other camera details removed. An uploaded cover isn't one of the photos. It stays
             until one of them changes or removes it, which deletes it — even if the person who
             uploaded it has deleted their account.
+          </p>
+          <p>
+            Groups and gatherings each have a chat. A message you send in a group's chat can be
+            read by the people who were in the group when you sent it; people who join later see
+            the chat from when they joined, and a line in the chat says when someone joins. A
+            message in a gathering's chat can be read by its host, its co-hosts and everyone
+            invited to it, whenever they were invited, including people invited from outside its
+            group. {PRODUCT_NAME} stores each message with your name and the time you sent it. You
+            can delete your own messages, and the people who run a group or gathering can remove
+            other people's messages in it. A deleted or removed message leaves the chat at once;
+            the people who run that group or gathering can still see it for 30 days, and then it
+            is gone for good. If you leave a group you can no longer read its chat, and your
+            messages stay in it. Deleting your account removes your name, but your messages stay
+            in their chats under "a former member". Delete the ones you can still read first, if
+            you'd rather they went.
           </p>
           <p>
             {PRODUCT_NAME} may show paid plans during the test. They run in Stripe's test mode:

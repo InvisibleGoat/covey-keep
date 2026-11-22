@@ -116,8 +116,8 @@ INDEX = "ix_gatherings_owning_group_id"
 # three data lines) less the one retired (CK-75's backup-NULL line, replaced
 # by the 0009 block's is-gone line); 385 since CK-83a's twenty-four (the six
 # cover columns' shapes on gatherings and groups, their FKs, CHECKs and
-# partial indexes, and four data lines); 438 since CK-83b's fifty-three — cover_images' shape (the table, its eighteen columns' nullability, the PK, three FKs with their delete rules, the two enum types, two CHECKs, two partial indexes), each subject's cover_image_id (nullability, FK and delete rule, partial index, the widened CHECK's definition), and eleven data lines; 458 since CK-92's twenty — the outside-invitation setting's two columns, its FK and delete rule, its two CHECKs, `from_outside`'s NOT NULL, type and default, the dismissals table, its three NOT NULLs, its key, its two FKs' targets and delete rules, and two data lines — the members-only line narrowed in place.
-VERIFIER_TOTAL = 458
+# partial indexes, and four data lines); 438 since CK-83b's fifty-three — cover_images' shape (the table, its eighteen columns' nullability, the PK, three FKs with their delete rules, the two enum types, two CHECKs, two partial indexes), each subject's cover_image_id (nullability, FK and delete rule, partial index, the widened CHECK's definition), and eleven data lines; 458 since CK-92's twenty — the outside-invitation setting's two columns, its FK and delete rule, its two CHECKs, `from_outside`'s NOT NULL, type and default, the dismissals table, its three NOT NULLs, its key, its two FKs' targets and delete rules, and two data lines — the members-only line narrowed in place; 484 since CK-102's twenty-six — posts' kind, body and remover, their three CHECKs, the date FK, the two indexes and the single one gone, the post_kind and group_media labels, and twelve data lines on the container and the posts.
+VERIFIER_TOTAL = 484
 
 
 def _now() -> datetime:
@@ -398,7 +398,12 @@ async def test_a_gathering_in_a_group_of_a_refused_type_is_a_field_level_422_at_
     assert error["msg"] == gatherings_api.GROUP_GATHERING_TYPE_GATE_MESSAGE
     assert "rung 2" in error["msg"] and "HOUSEHOLD" in error["msg"]
     async with db_session_factory() as db:
-        assert await db.scalar(text("SELECT count(*) FROM gatherings")) == 0
+        # THE PIN MOVED at CK-102: the cast's household group is born with its
+        # chat container (a `group_media` gathering, POST /groups), so every
+        # gathering is no longer zero; what the refused create could have
+        # written is any OTHER gathering, and there is none.
+        assert await db.scalar(text("SELECT count(*) FROM gatherings WHERE gathering_type::text <> 'group_media'")) == 0
+        assert await db.scalar(text("SELECT count(*) FROM gatherings WHERE owning_group_id = :g"), {"g": team_id}) == 0
         # Undo the plant: the verifier's "every group is of its profile's
         # type" would hold, but a TEAM group must not outlive this test.
         await db.execute(text("DELETE FROM memberships WHERE group_id = :g"), {"g": team_id})

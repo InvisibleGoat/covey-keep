@@ -1,5 +1,6 @@
 // CK-26 private-alpha notice pins, revised at CK-73.3 for version 2, at
-// CK-83b for version 3 and at CK-100 for version 4. The value under test:
+// CK-83b for version 3, at CK-100 for version 4 and at CK-102 for version 5
+// (the chat's paragraph, after the covers paragraph). The value under test:
 // /tos carries the load-bearing statements the alpha's condition 4 requires —
 // private test, data not kept, what is stored (photos among it: the three
 // copies and the deleted original, location removed, the bin's 30 days, which
@@ -15,13 +16,16 @@
 // your own photos at any time" and its server-log paragraph); the sign-in
 // checkbox agrees to the test rather than to Terms that do not exist yet —
 // with its mechanism intact (unchecked by default, submit disabled until
-// checked) — and TOS_VERSION is 4: this text's number since CK-100, version 1
-// being the CK-26 text, version 2 CK-73.3's, version 3 CK-83b's, and the
-// published terms taking 5 (decisions/2026-08-31-private-alpha-scope.md §3,
-// §3.1). Version 4 is version 3 word for word but for two paragraphs — the
-// photos paragraph's third sentence rewritten into three, and the server-log
-// paragraph replaced by the email paragraph — pinned below as the whole card,
-// paragraph by paragraph, so a word moved anywhere fails.
+// checked) — and TOS_VERSION is 5: this text's number since CK-102, version 1
+// being the CK-26 text, version 2 CK-73.3's, version 3 CK-83b's, version 4
+// CK-100's, and the published terms taking 6
+// (decisions/2026-08-31-private-alpha-scope.md §3, §3.1). Version 4 is
+// version 3 word for word but for two paragraphs — the photos paragraph's
+// third sentence rewritten into three, and the server-log paragraph replaced
+// by the email paragraph — and version 5 is version 4 word for word with one
+// paragraph added, on the chat, after the covers paragraph; both are pinned
+// below as the whole card, paragraph by paragraph, so a word moved anywhere
+// fails.
 //
 // THE LESSON THIS FILE CARRIES: from CK-26 to CK-73.3 it pinned "Photo upload
 // doesn't exist yet" — a sentence about something not built yet — and that
@@ -153,7 +157,12 @@ test('the notice tells the truth about photographs, deletion and plans', () => {
   expect(
     screen.getByText(/removes your email address and name, but photos and answers you added stay/i),
   ).toBeTruthy()
-  expect(screen.getByText(/under [“"]a former member[”"]/i)).toBeTruthy()
+  // THE PIN MOVED at CK-102, with its reason: version 5's chat paragraph
+  // says "a former member" too, so the bare phrase matches two paragraphs;
+  // the pin now names the deletion paragraph's own sentence around it.
+  expect(
+    screen.getByText(/answers you added stay[^.]*under [“"]a former member[”"]/i),
+  ).toBeTruthy()
   // What a person can remove before deleting their account, said truthfully
   // (CK-73.4; version 2 as first built said "Delete them first", them being
   // photos AND answers): photos, yes — Send to bin and Delete permanently
@@ -301,32 +310,69 @@ function noticeParagraphs(): string[] {
   )
 }
 
-test("the notice is version 4: version 3's every paragraph unchanged and in order, but the photos and email paragraphs", () => {
+// Version 5's one new paragraph (approved by Steven 2026-11-21, THE WORDS of
+// CK-102), word for word, after the covers paragraph and before the plans
+// paragraph. Each sentence was checked against the product (the /tos
+// Gotcha's rule (4)): a group's chat is read from the reader's membership's
+// instant on (api/chat.py's group_chat_window), and a join line is written by
+// both ways in (none at a group's creation — Q3b); a gathering's chat is
+// the invited tier's, an outsider included (_gathering_for_invited); each
+// message is stored with its author and its instant (posts); the writer
+// deletes their own and the organisers remove others' (POST
+// /messages/{id}/remove), a line the chat wrote itself never (Q3a); a
+// removed message is held for the organisers alone until removed_at +
+// REMOVED_BIN and then deleted by the sweep (Q1, Q2); leaving ends reading
+// and keeps the messages; account deletion leaves them under "a former
+// member"; and a person who left and came back cannot reach their old
+// messages, so the last sentence says "the ones you can still read".
+const CHAT_PARAGRAPH = `Groups and gatherings each have a chat. A message you send in a group's chat can be read by the people who were in the group when you sent it; people who join later see the chat from when they joined, and a line in the chat says when someone joins. A message in a gathering's chat can be read by its host, its co-hosts and everyone invited to it, whenever they were invited, including people invited from outside its group. ${PRODUCT_NAME} stores each message with your name and the time you sent it. You can delete your own messages, and the people who run a group or gathering can remove other people's messages in it. A deleted or removed message leaves the chat at once; the people who run that group or gathering can still see it for 30 days, and then it is gone for good. If you leave a group you can no longer read its chat, and your messages stay in it. Deleting your account removes your name, but your messages stay in their chats under "a former member". Delete the ones you can still read first, if you'd rather they went.`
+
+const COVERS_AT = 4
+const CHAT_AT = COVERS_AT + 1
+const VERSION_5 = [...VERSION_4.slice(0, CHAT_AT), CHAT_PARAGRAPH, ...VERSION_4.slice(CHAT_AT)]
+
+test("the notice is version 5: version 4's every paragraph unchanged and in order, and the chat's paragraph after the covers paragraph", () => {
   renderNotice()
-  // The whole card, paragraph by paragraph — nothing reworded, nothing
-  // reordered, exactly two paragraphs replaced and nowhere else. THE PIN
-  // MOVED at CK-100, with its reason: this test read version 3 (version 2
-  // with the covers paragraph) from CK-83b until the notice took 4.
-  expect(noticeParagraphs()).toEqual(VERSION_4)
-  VERSION_3.forEach((paragraph, i) => {
-    if (i === PHOTOS_AT || i === EMAIL_AT) {
-      expect(noticeParagraphs()).not.toContain(paragraph)
-    } else {
-      expect(noticeParagraphs()[i]).toBe(paragraph)
-    }
-  })
-  // The photos paragraph changed in its third sentence alone: its first two
-  // and its last three are version 3's, word for word.
-  const sentences3 = VERSION_3[PHOTOS_AT].split('. ')
-  const sentences4 = PHOTOS_PARAGRAPH_4.split('. ')
-  expect(sentences4.slice(0, 2)).toEqual(sentences3.slice(0, 2))
-  expect(sentences4.slice(-3)).toEqual(sentences3.slice(-3))
-  expect(sentences4).toHaveLength(sentences3.length + 2)
+  // The whole card, paragraph by paragraph. THE PIN MOVED at CK-102, with its
+  // reason: this test read version 4 from CK-100 until the notice took 5,
+  // because the chat stores a new kind of data about a person — their
+  // messages, with their name and the time (the /tos Gotcha's rule (1)).
+  expect(noticeParagraphs()).toEqual(VERSION_5)
+  // Version 4's paragraphs, every one unchanged and in its order around it.
+  expect(noticeParagraphs().filter((_, i) => i !== CHAT_AT)).toEqual(VERSION_4)
+  // After the covers paragraph, before the plans paragraph.
+  expect(noticeParagraphs()[CHAT_AT - 1]).toBe(COVERS_PARAGRAPH)
+  expect(noticeParagraphs()[CHAT_AT + 1]).toMatch(/may show paid plans during the test/)
+})
+
+test("the chat's paragraph, sentence by sentence, as literals", () => {
+  renderNotice()
+  const chat = noticeParagraphs()[CHAT_AT]
+  const sentences = [
+    'Groups and gatherings each have a chat.',
+    "A message you send in a group's chat can be read by the people who were in the group when you sent it; people who join later see the chat from when they joined, and a line in the chat says when someone joins.",
+    "A message in a gathering's chat can be read by its host, its co-hosts and everyone invited to it, whenever they were invited, including people invited from outside its group.",
+    `${PRODUCT_NAME} stores each message with your name and the time you sent it.`,
+    "You can delete your own messages, and the people who run a group or gathering can remove other people's messages in it.",
+    'A deleted or removed message leaves the chat at once; the people who run that group or gathering can still see it for 30 days, and then it is gone for good.',
+    'If you leave a group you can no longer read its chat, and your messages stay in it.',
+    'Deleting your account removes your name, but your messages stay in their chats under "a former member".',
+    "Delete the ones you can still read first, if you'd rather they went.",
+  ]
+  expect(sentences.join(' ')).toBe(chat)
+  for (const sentence of sentences) {
+    expect(chat).toContain(sentence)
+  }
+  // And none of the record's draft wordings it replaced (the kickoff's four
+  // changes, each checked against what the product does).
+  expect(chat).not.toMatch(/when each person joined/)
+  expect(chat).not.toMatch(/can remove any message/)
+  expect(chat).not.toMatch(/Delete them first/)
 })
 
 test('the email paragraph, as a literal, and the photos paragraph sentence by sentence', () => {
   renderNotice()
-  expect(noticeParagraphs()[EMAIL_AT]).toBe(EMAIL_PARAGRAPH_4)
+  expect(noticeParagraphs()[VERSION_5.indexOf(EMAIL_PARAGRAPH_4)]).toBe(EMAIL_PARAGRAPH_4)
   const photos = noticeParagraphs()[PHOTOS_AT]
   for (const sentence of [
     'You can delete your own photos from any gathering you can still see, and a photo sent to a bin is deleted for good 30 days later.',
@@ -335,6 +381,14 @@ test('the email paragraph, as a literal, and the photos paragraph sentence by se
   ]) {
     expect(photos).toContain(sentence)
   }
+  // Version 4's two paragraphs against version 3 still hold inside version 5:
+  // the photos paragraph changed in its third sentence alone.
+  const sentences3 = VERSION_3[PHOTOS_AT].split('. ')
+  const sentences4 = PHOTOS_PARAGRAPH_4.split('. ')
+  expect(sentences4.slice(0, 2)).toEqual(sentences3.slice(0, 2))
+  expect(sentences4.slice(-3)).toEqual(sentences3.slice(-3))
+  expect(sentences4).toHaveLength(sentences3.length + 2)
+  expect(EMAIL_AT).toBe(VERSION_4.indexOf(EMAIL_PARAGRAPH_4))
 })
 
 test('the covers paragraph, sentence by sentence, as literals', () => {
@@ -363,20 +417,20 @@ test('the covers paragraph, sentence by sentence, as literals', () => {
   expect(text).not.toMatch(/\d+ days/)
 })
 
-test('TOS_VERSION is 4 — this notice; 1 is the CK-26 text, 2 is CK-73.3\'s, 3 is CK-83b\'s, the published terms take 5', () => {
+test("TOS_VERSION is 5 — this notice; 1 is the CK-26 text, 2 is CK-73.3's, 3 is CK-83b's, 4 is CK-100's, the published terms take 6", () => {
   // One number means one text, forever. Version 1 is CK-26's notice and the
   // acceptance rows recorded against it (every account created before
   // CK-73.3 — all Steven's household); 2 is CK-73.3's, true about what was
   // stored until covers; 3 is CK-83b's, version 2 with the covers paragraph;
-  // 4 is the text in Tos.tsx today (CK-100); 5 is the published terms', set
-  // by the phase that publishes them. Never renumber an existing version in
-  // either direction — the acceptance records would then name the wrong
-  // text, the exact defect the ToS work exists to close (private-alpha
-  // decision record §3, §3.1). THE PIN MOVED at CK-100, with its reason: a
-  // new processor receives every address and message (Resend), and version
-  // 3's photo-deletion sentence was false three ways, so the notice took a
-  // new number — with the text, never without it. The next change to what
-  // the product stores, or to what deletion does, moves this to 5 and the
-  // terms to 6.
-  expect(TOS_VERSION).toBe(4)
+  // 4 is CK-100's, with Resend and the photos paragraph rewritten; 5 is the
+  // text in Tos.tsx today (CK-102); 6 is the published terms', set by the
+  // phase that publishes them. Never renumber an existing version in either
+  // direction — the acceptance records would then name the wrong text, the
+  // exact defect the ToS work exists to close (private-alpha decision record
+  // §3, §3.1). THE PIN MOVED at CK-102, with its reason: the chat stores each
+  // person's messages with their name and the time, so the notice took a new
+  // number — with the text, never without it. The next change to what the
+  // product stores, or to what deletion does, moves this to 6 and the terms
+  // to 7.
+  expect(TOS_VERSION).toBe(5)
 })

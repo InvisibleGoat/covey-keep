@@ -195,6 +195,7 @@ from app.models import (
     RSVPListVisibility,
 )
 from app.services import publication
+from app.services.group_chat import setting_line
 from app.services.groups import invite_group_members, place_group_members
 # `keep` alone: no keeper read here since CK-77 — keeping lets no one in, and
 # neither `keeps_gathering` nor `resolved_keeper_of` may be imported by a
@@ -418,6 +419,17 @@ class GatheringCreate(BaseModel):
     # the ids.
     invited: Optional[list[UUID]] = None
     left_out: Optional[list[UUID]] = None
+
+    @field_validator("gathering_type")
+    @classmethod
+    def _not_a_container(cls, value: GatheringType) -> GatheringType:
+        # A group's chat container (CK-102; the chat record P5) is made by
+        # services/group_chat.py alone, never by a person: refused here, a
+        # field-level 422 before anything is written. The other validators
+        # read the type from info.data, find none and report nothing more.
+        if value == GatheringType.GROUP_MEDIA:
+            raise ValueError("a group's chat is made with the group, never created as a gathering")
+        return value
 
     @field_validator("title")
     @classmethod
@@ -2301,6 +2313,11 @@ async def put_outside_invitations(
             .values(outside_invitations_since=now, outside_invitations_by_person_id=person_id)
             .execution_options(synchronize_session=False)
         )
+        # THE SETTING LINE (CK-102; the chat record §9): only on an actual
+        # change, in this transaction and under this lock, into this
+        # gathering's chat, its author the person who changed it. Drawn
+        # only for the group's members (api/chat.py).
+        db.add(setting_line(gathering.id, person_id, on=True))
     elif not body.on and since is not None:
         await db.execute(
             delete(GatheringInvitation).where(
@@ -2327,6 +2344,7 @@ async def put_outside_invitations(
             .values(outside_invitations_since=None, outside_invitations_by_person_id=None)
             .execution_options(synchronize_session=False)
         )
+        db.add(setting_line(gathering.id, person_id, on=False))
     # Already as asked, nothing was written; either way the commit lets the
     # lock go — a commit, never a rollback, which would expire `ctx.person`
     # and the gathering this session holds (CK-77.1).

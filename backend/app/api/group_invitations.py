@@ -102,6 +102,7 @@ from app.models import (
 )
 from app.security import hash_token
 from app.services.email import send_email
+from app.services.group_chat import write_join_line
 from app.services.groups import invite_newcomer_to_upcoming_gatherings
 from app.services.retention import purge_stale
 
@@ -424,6 +425,7 @@ async def accept_group_invitation(
     # and reading an expired object on an async session raises
     # MissingGreenlet, its id included. The backstop reads these alone.
     pending_id, group_id, person_id = row.id, row.group_id, ctx.person.id
+    account_id = ctx.person.account_id
 
     # THE ASKING (CK-101): sent to another address and not confirmed — write
     # nothing, spend nothing, and say so.
@@ -444,6 +446,11 @@ async def accept_group_invitation(
         # UNIQUE violation surfaces THERE, not at the commit; a `try` around
         # the commit alone let it escape as a 500.
         if not member:
+            # THE JOIN LINE (CK-102; the chat record §9), BEFORE the
+            # membership's INSERT — the lock order services/group_chat.py
+            # gives — in its transaction, at its instant, and rolled back
+            # with it by the backstop below.
+            await write_join_line(db, group_id, person_id, account_id)
             db.add(Membership(group_id=group_id, person_id=person_id))
             # THE NEWCOMER'S PLACES (CK-76; the 2026-10-04 record §9): a row
             # on each of the group's UPCOMING gatherings they hold none for,
