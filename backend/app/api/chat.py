@@ -40,7 +40,8 @@ checked before the 204 (the CK-77.2 Gotcha) — never read-then-assign.
 
 NO LOGGER, and none may be added: a message's words, its writer's name and a
 chat's id are never logged (the record's §18). A message's words travel in a
-request body, never in an address.
+request body, never in an address; and a database error under a send prints
+none of them, because both engines hide a statement's parameters (app/db.py).
 """
 
 import base64
@@ -50,7 +51,7 @@ from typing import Annotated, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import AwareDatetime, BaseModel, ConfigDict, StringConstraints
+from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, StringConstraints
 from sqlalchemy import and_, func, insert, not_, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -82,10 +83,16 @@ MESSAGES_PER_WINDOW = 30
 MESSAGE_WINDOW = timedelta(seconds=60)
 # A message is 1 to MAX_BODY code points once trimmed — the CHECK's bound.
 MAX_BODY = 4000
+# The earliest instant a read may be asked from, in UTC. Nothing in a chat is
+# older than CoveyKeep, so nothing refused here could have answered; and the
+# poll's reach back (CHAT_LOOKBACK) and the hold's (REMOVED_BIN) both stay
+# inside what a datetime, and the database driver, can hold.
+EARLIEST_INSTANT = datetime(2000, 1, 1, tzinfo=timezone.utc)
 
 SETTING_KINDS = (PostKind.OUTSIDE_INVITATIONS_ON, PostKind.OUTSIDE_INVITATIONS_OFF)
 
 BAD_CURSOR = "that cursor isn't one this chat gave"
+BAD_SINCE = "that isn't an instant this chat can be read from"
 BOTH_CURSORS = "ask for `since` or `before`, not both"
 
 
@@ -105,6 +112,14 @@ def _refusal(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code, detail={"code": code, "message": message})
 
 
+def _no_nul(words: str) -> str:
+    # PostgreSQL's text holds no NUL, so a message with one could never be
+    # kept. Refused, never taken out: the words are the writer's.
+    if "\x00" in words:
+        raise ValueError("a message can't hold a NUL character")
+    return words
+
+
 class MessageBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -112,7 +127,11 @@ class MessageBody(BaseModel):
     # `string_too_short`, over the bound its `string_too_long`, so the
     # screens can say which from the type. `len` counts code points, as
     # PostgreSQL's `char_length` does.
-    body: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_BODY)]
+    body: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_BODY),
+        AfterValidator(_no_nul),
+    ]
 
 
 # --- the doors -------------------------------------------------------------------
@@ -253,6 +272,17 @@ def _cursor_of(created_at: datetime, post_id: UUID) -> str:
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
+def _in_utc(at: datetime) -> Optional[datetime]:
+    """The instant in UTC, or None for one no read can be asked from: before
+    `EARLIEST_INSTANT`, or past what UTC can hold — an offset can carry year
+    9999 into 10000, or year 1 into 0."""
+    try:
+        at = at.astimezone(timezone.utc)
+    except OverflowError:
+        return None
+    return at if at >= EARLIEST_INSTANT else None
+
+
 def _parse_cursor(cursor: str) -> tuple[datetime, UUID]:
     try:
         padded = cursor + "=" * (-len(cursor) % 4)
@@ -262,9 +292,10 @@ def _parse_cursor(cursor: str) -> tuple[datetime, UUID]:
         post_id = UUID(id_text)
     except (binascii.Error, UnicodeError, ValueError):
         raise _field_422("before", BAD_CURSOR, where="query") from None
-    if at.tzinfo is None or at.utcoffset() is None:
+    in_utc = None if at.tzinfo is None else _in_utc(at)
+    if in_utc is None:
         raise _field_422("before", BAD_CURSOR, where="query")
-    return at, post_id
+    return in_utc, post_id
 
 
 async def _read(
@@ -339,6 +370,10 @@ def _read_query(
         raise _field_422("before", BOTH_CURSORS, where="query")
     if before is not None:
         _parse_cursor(before)  # refused before any door is asked
+    if since is not None:
+        since = _in_utc(since)
+        if since is None:
+            raise _field_422("since", BAD_SINCE, where="query")
     return {"before": before, "since": since, "limit": limit}
 
 

@@ -704,7 +704,8 @@ async def run(
 
 
 async def _serve(settings: WorkerSettings, *, once: bool) -> int:
-    engine = create_async_engine(settings.database_url)
+    # hide_parameters: app/db.py's reason — no line carries a statement's parameters.
+    engine = create_async_engine(settings.database_url, hide_parameters=True)
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     client = worker_client(settings)
     stop = asyncio.Event()

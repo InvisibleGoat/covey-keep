@@ -23,14 +23,19 @@ decisions/2026-11-21-the-chat-who-reads-it-and-what-it-keeps.md §2, §3, §6,
   to nobody else at any moment.
 - **The poll** reads `since` minus a lookback, names what left the
   caller's chat, and gives up past 200.
+- **What cannot be kept or read is a 422 at its own field** (CK-102's
+  fix-up): a message that holds a NUL, a `since` or a cursor's instant
+  before `EARLIEST_INSTANT` or past what UTC can hold.
 
 The sweep that destroys a held message at its window is in
 tests/test_chat_sweep.py; the container in tests/test_chat_container.py.
 """
 
+import base64
 import importlib
 import logging
 import re
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -518,6 +523,30 @@ async def test_the_words_are_one_to_four_thousand_code_points_and_nothing_else_i
         assert len(item["body"]) == 4000
 
 
+async def test_a_message_that_holds_a_nul_is_refused_at_its_field_and_nothing_is_written(
+    client, capsys, db_session_factory
+):
+    """PostgreSQL's text holds no NUL, so such a message could never be kept:
+    a 422 at `body` through both doors, and never the words with the NUL
+    taken out. Every other control character is the writer's and is kept."""
+    world = await _world(client, capsys, db_session_factory)
+    cast, gid = world.cast, world.gathering_id
+    await _gread(client, cast.admin, cast.group_id)
+    before = await _posts_count(db_session_factory)
+    for words in ("\x00", "a\x00b", " \x00 ", "at the end\x00", "\x00at the start"):
+        for refused in (
+            await _gsend(client, cast.admin, cast.group_id, words),
+            await _xsend(client, cast.admin, gid, words),
+        ):
+            assert refused.status_code == 422, (words, refused.text)
+            assert [(e["loc"], e["type"]) for e in refused.json()["detail"]] == [(["body", "body"], "value_error")]
+    assert await _posts_count(db_session_factory) == before
+    kept = "one\x01two\ttwo\u2400"
+    item = await _sent(await _gsend(client, cast.admin, cast.group_id, kept))
+    assert item["body"] == kept
+    assert (await _post(db_session_factory, item["id"]))[1] == kept
+
+
 async def test_the_thirty_first_message_in_a_minute_across_every_chat_is_refused(client, capsys, db_session_factory):
     world = await _world(client, capsys, db_session_factory)
     cast, gid = world.cast, world.gathering_id
@@ -761,6 +790,111 @@ async def test_the_first_read_is_the_newest_fifty_oldest_first_and_before_pages_
     assert _bodies(small) == [f"Number {n}" for n in range(54, 61)]
     page = await _answer(await _gread(client, cast.admin, cast.group_id, limit=100))
     assert len(page["items"]) == 60 and page["older"] is None
+
+
+@contextmanager
+def _no_index_walked():
+    """The database picks the plan, and one that walks the reading index hands
+    back rows sharing an instant in the index's own order, asked for or not.
+    With none walked, their order is only what the statement asks for."""
+
+    def off(conn):
+        for kind in ("indexscan", "indexonlyscan", "bitmapscan"):
+            conn.exec_driver_sql(f"SET LOCAL enable_{kind} = off")
+
+    event.listen(engine.sync_engine, "begin", off)
+    try:
+        yield
+    finally:
+        event.remove(engine.sync_engine, "begin", off)
+
+
+async def test_paging_across_messages_sent_at_one_instant_misses_none_and_repeats_none(
+    client, capsys, db_session_factory
+):
+    """Five messages at ONE instant, read two at a time: the pages are the
+    whole read, in its order — the id's, which the rows were written in. A
+    cursor of the instant alone would step over every message that shares it."""
+    cast = await _cast(client, capsys, db_session_factory)
+    await _gread(client, cast.admin, cast.group_id)
+    container = await _container(db_session_factory, cast.group_id)
+    async with db_session_factory() as db:
+        await db.execute(
+            text(
+                "INSERT INTO posts (id, gathering_id, author_person_id, kind, body, publication_state, created_at) "
+                "SELECT ('00000000-0000-4000-8000-00000000000' || n)::uuid, :g, :a, 'message', 'Number ' || n, "
+                "'live', now() + interval '1 minute' FROM generate_series(1, 5) AS n"
+            ),
+            {"g": UUID(container), "a": await _person_id(db_session_factory, ADMIN)},
+        )
+        await db.commit()
+    with _no_index_walked():
+        whole = await _answer(await _gread(client, cast.admin, cast.group_id, limit=100))
+        assert len(whole["items"]) == 5 and whole["older"] is None
+        assert len({item["created_at"] for item in whole["items"]}) == 1
+        assert _bodies(whole) == [f"Number {n}" for n in range(1, 6)]
+        pages, before = [], None
+        for _ in range(4):
+            params = {"limit": 2} if before is None else {"limit": 2, "before": before}
+            page = await _answer(await _gread(client, cast.admin, cast.group_id, **params))
+            pages.append(page["items"])
+            before = page["older"]
+            if before is None:
+                break
+    assert [len(page) for page in pages] == [2, 2, 1]
+    # Each page is oldest first and the pages go back in time, so the whole
+    # read is the pages from the last to the first.
+    assert [item["id"] for page in reversed(pages) for item in page] == [item["id"] for item in whole["items"]]
+
+
+def _forged(at_text: str) -> str:
+    """A cursor in this chat's own shape, its instant chosen by hand."""
+    raw = f"{at_text}|{MISSING}".encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+# Each is an instant with an offset that no read can be asked from: before
+# `EARLIEST_INSTANT`, or one UTC cannot hold.
+EXTREMES = (
+    "0001-01-01T00:00:00+23:59",
+    "9999-12-31T23:59:59-23:59",
+    "0001-01-20T00:00:00+00:00",  # a lookback fits, the hold's window does not
+    "0001-01-01T00:00:00+00:00",
+    "1999-12-31T23:59:59.999999+00:00",
+    "2000-01-01T00:00:00+00:01",  # a minute before the earliest, in UTC
+)
+
+
+async def test_a_since_no_read_can_be_asked_from_is_refused_at_its_field(client, capsys, db_session_factory):
+    world = await _world(client, capsys, db_session_factory)
+    cast, gid = world.cast, world.gathering_id
+    for headers in (cast.admin, cast.member):  # runs the place, and does not
+        for at in EXTREMES:
+            for refused in (
+                await _gread(client, headers, cast.group_id, since=at),
+                await _xread(client, headers, gid, since=at),
+            ):
+                assert refused.status_code == 422, (at, refused.text)
+                (entry,) = refused.json()["detail"]
+                assert (entry["loc"], entry["type"]) == (["query", "since"], "value_error")
+        for at in ("2000-01-01T00:00:00+00:00", "9999-12-31T23:59:59+00:00"):  # the edges are asked
+            polled = await _answer(await _gread(client, headers, cast.group_id, since=at))
+            assert set(polled) == POLL_KEYS
+
+
+async def test_a_forged_cursor_no_read_can_be_asked_from_is_refused_at_its_field(client, capsys, db_session_factory):
+    cast = await _cast(client, capsys, db_session_factory)
+    await _gread(client, cast.member, cast.group_id)
+    for headers in (cast.admin, cast.member):
+        # The last carries no offset: an instant in no zone is none of this chat's.
+        for at in (*EXTREMES, "2026-11-21T10:00:00"):
+            refused = await _gread(client, headers, cast.group_id, before=_forged(at))
+            assert refused.status_code == 422, (at, refused.text)
+            (entry,) = refused.json()["detail"]
+            assert (entry["loc"], entry["msg"]) == (["query", "before"], _chat_api().BAD_CURSOR)
+        for at in ("2000-01-01T00:00:00+00:00", "9999-12-31T23:59:59+00:00"):
+            read = await _answer(await _gread(client, headers, cast.group_id, before=_forged(at)))
+            assert set(read) == READ_KEYS
 
 
 async def test_a_bad_cursor_an_instant_with_no_offset_or_a_bad_limit_is_a_422(client, capsys, db_session_factory):
