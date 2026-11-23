@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.auth import router as auth_router
@@ -20,6 +21,7 @@ from app.api.rsvps import router as rsvps_router
 from app.brand import PRODUCT_NAME
 from app.config import settings
 from app.logging_setup import configure_logging
+from app.refusals import refuse_without_the_value
 
 # The API's own log lines reach stdout from here (CK-73.1): the `covey-keep`
 # namespace at INFO with one handler in the worker's format, the ROOT
@@ -30,6 +32,11 @@ from app.logging_setup import configure_logging
 configure_logging()
 
 app = FastAPI(title=PRODUCT_NAME)
+
+# Every 422 FastAPI answers is written by app/refusals.py, which never repeats
+# the value it refused: FastAPI's own could fail while being written, and the
+# traceback printed the value.
+app.add_exception_handler(RequestValidationError, refuse_without_the_value)
 
 app.include_router(auth_router)
 app.include_router(profile_router)
