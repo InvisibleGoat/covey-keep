@@ -19,6 +19,7 @@ import { AuthContext, type AuthState, type Person } from '../auth/context'
 import { GatheringMedia } from '../components/GatheringMedia'
 import mediaComponentSource from '../components/GatheringMedia.tsx?raw'
 import mediaLibSource from '../lib/media.ts?raw'
+import { withEmptyChat } from '../test-support/chat'
 import { GatheringDetail } from './GatheringDetail'
 
 const person: Person = {
@@ -122,7 +123,7 @@ function stubRoutes(routes: StubRoute[]) {
     if (!route) throw new Error(`no stub for ${method} ${String(url)}`)
     return Promise.resolve(route.response())
   })
-  vi.stubGlobal('fetch', mock)
+  vi.stubGlobal('fetch', withEmptyChat(mock))
   return mock
 }
 

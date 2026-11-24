@@ -20,6 +20,7 @@ import { AuthContext, type AuthState, type Person } from '../auth/context'
 import { clearCoverPictures } from '../lib/covers'
 import { formatDay, formatDayWithYear, wallClockToInstant } from '../lib/datetime'
 import tokensCss from '../styles/tokens.css?raw'
+import { pathOf, withEmptyChat } from '../test-support/chat'
 import { GroupDetail } from './GroupDetail'
 import groupDetailSource from './GroupDetail.tsx?raw'
 
@@ -167,7 +168,7 @@ function stubServer(over: { group?: Responder; gatherings?: Responder } = {}) {
     }
     throw new Error(`no stub for ${method} ${path}`)
   })
-  vi.stubGlobal('fetch', mock)
+  vi.stubGlobal('fetch', withEmptyChat(mock))
   return mock
 }
 
@@ -482,7 +483,10 @@ test('a failed read fails in the strip’s place: the line and Try again, which 
 // and the page's level-2 headings are the strip's label and then the photos'.
 // Everything else it held still holds, and *Posted to the group*, which the
 // mockup draws and this arc does not build, joined it.
-test('none of what moved to the People page — no Members, no requests, no link, no rename, no leave, no role line — and nothing unbuilt: no Add photos, chat, Kept by, pin, faces, Active or Posted to the group', async () => {
+// MOVED AT CK-103, with its reason: the chat is built, so *Open chat*, *Chat* and
+// *Message …* left the list of what is unbuilt, and the card's heading stands
+// first of the page's level-2 ones.
+test('none of what moved to the People page — no Members, no requests, no link, no rename, no leave, no role line — and nothing unbuilt: no Add photos, Kept by, pin, faces, Active or Posted to the group', async () => {
   for (const role of ['admin', 'co_admin', 'member']) {
     stubServer({ group: () => json(200, group({ caller_role: role })), gatherings: () => json(200, { gatherings: STRIP }) })
     const view = renderPage()
@@ -503,14 +507,14 @@ test('none of what moved to the People page — no Members, no requests, no link
       expect(text, `${role}: ${moved}`).not.toContain(moved)
     }
     expect(screen.queryByLabelText('Group name')).toBeNull()
-    expect(text).not.toMatch(/Add photos|Open chat|\bChat\b|Message |Kept by|Offer to keep|Active .* ago|\bPin\b|Unpin|Posted to the group/)
+    expect(text).not.toMatch(/Add photos|Kept by|Offer to keep|Active .* ago|\bPin\b|Unpin|Posted to the group/)
     expect(document.querySelector('.faces, .avatar, .member-initials')).toBeNull()
-    // The page's headings: the name, then the strip's label, then the photos'.
+    // The page's headings: the name, the chat's, the strip's label, the photos'.
     expect(screen.getAllByRole('heading').map((h) => h.textContent)).toEqual(
       expect.arrayContaining(['The Lees', 'Gatherings', 'Photos']),
     )
     await screen.findByText('No photos yet. Photos added to its gatherings show up here.')
-    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Gatherings', 'Photos'])
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Chat', 'Gatherings', 'Photos'])
     expect(text).not.toMatch(FORBIDDEN)
     view.unmount()
     vi.unstubAllGlobals()
@@ -519,14 +523,22 @@ test('none of what moved to the People page — no Members, no requests, no link
 
 // MOVED AT CK-88.1b, with its reason: the photos' one read joined the two; the
 // rule it holds — never the member list, the link or the requests — is the same.
-test('no member read: the page reads the group, its gatherings and its photos and nothing else — never the member list, the link or the requests', async () => {
+// MOVED AT CK-103, with its reason: the card's one read of the chat joined them;
+// it is seen in front of withEmptyChat, which answers it.
+test('no member read: the page reads the group, its gatherings, its photos and its chat once and nothing else — never the member list, the link or the requests', async () => {
   for (const role of ['admin', 'member']) {
-    const mock = stubServer({ group: () => json(200, group({ caller_role: role })), gatherings: () => json(200, { gatherings: STRIP }) })
+    stubServer({ group: () => json(200, group({ caller_role: role })), gatherings: () => json(200, { gatherings: STRIP }) })
+    const asked: string[] = []
+    const answer = globalThis.fetch
+    vi.stubGlobal('fetch', (...args: Parameters<typeof fetch>) => {
+      asked.push(pathOf(args[0]))
+      return answer(...args)
+    })
     const view = renderPage()
     await loaded()
     await strip()
     await screen.findByText('No photos yet. Photos added to its gatherings show up here.')
-    expect(paths(mock).sort()).toEqual(['/groups/g-1', '/groups/g-1/gatherings', '/groups/g-1/media'])
+    expect(asked.sort()).toEqual(['/groups/g-1', '/groups/g-1/chat?limit=20', '/groups/g-1/gatherings', '/groups/g-1/media'])
     view.unmount()
     vi.unstubAllGlobals()
   }
@@ -540,7 +552,8 @@ test('the page’s source asks for no member list and none of the People page’
 
 // MOVED AT CK-91: the group's id was in the two actions' hrefs alone; the
 // Calendar button carries it too, as the group's calendar's query.
-test('nothing identifying in the markup: the group’s id only in the three actions’ hrefs, and no person or account id anywhere', async () => {
+// MOVED AT CK-103: so do the chat card's two links, as the chat's address.
+test('nothing identifying in the markup: the group’s id only in the three actions’ and the chat card’s hrefs, and no person or account id anywhere', async () => {
   stubServer({ gatherings: () => json(200, { gatherings: STRIP }) })
   const view = renderPage()
   await loaded()
@@ -550,6 +563,9 @@ test('nothing identifying in the markup: the group’s id only in the three acti
     expect(markup.split(href)).toHaveLength(2)
     markup = markup.replace(href, '')
   }
+  const toChat = 'href="/groups/g-1/chat"'
+  expect(markup.split(toChat)).toHaveLength(3)
+  markup = markup.replaceAll(toChat, '')
   for (const id of ['g-1', 'person-ada-7777', 'acct-a', 'acct-viewer-0000', 'person-viewer-0000']) {
     expect(markup).not.toContain(id)
   }

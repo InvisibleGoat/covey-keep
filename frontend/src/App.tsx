@@ -7,6 +7,7 @@ import { RequireAuth } from './components/RequireAuth'
 import { AccountDeleted } from './routes/AccountDeleted'
 import { AuthCallback } from './routes/AuthCallback'
 import { Calendar } from './routes/Calendar'
+import { GatheringChat, GroupChat } from './routes/Chat'
 import { EmailChangeResult } from './routes/EmailChangeResult'
 import { GatheringDetail } from './routes/GatheringDetail'
 import { GatheringNew } from './routes/GatheringNew'
@@ -54,10 +55,14 @@ function App() {
           <Route path="/gatherings" element={<Gatherings />} />
           <Route path="/gatherings/new" element={<GatheringNew />} />
           <Route path="/gatherings/:id" element={<GatheringDetail />} />
+          {/* The two chats (CK-103): a page of its own each, with no bar
+              beside it under 900px. */}
+          <Route path="/gatherings/:id/chat" element={<GatheringChat />} />
           {/* Your groups (CK-78, Groups 3a). */}
           <Route path="/groups" element={<Groups />} />
           <Route path="/groups/new" element={<GroupNew />} />
           <Route path="/groups/:id" element={<GroupDetail />} />
+          <Route path="/groups/:id/chat" element={<GroupChat />} />
           {/* A group's People page (CK-86; the merge record §1.3): Members,
               Requests to join, Invite people, rename and Leave, moved from
               the group's page, which reaches it through its People button. */}

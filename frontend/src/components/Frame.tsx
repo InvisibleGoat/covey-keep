@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 import { PRODUCT_NAME } from '../brand'
-import { SECTIONS, sectionOf } from '../lib/frame'
+import { isChatAddress, SECTIONS, sectionOf } from '../lib/frame'
 import { QuailHead } from './AuthArt'
+import { ChatArrivalContext } from './chatArrival'
 import { Icon } from './Icons'
 import { useMenuLayout } from '../lib/menuLayout'
 import { Menu, type MenuPress } from './Menu'
@@ -43,6 +44,13 @@ import { useKeepPlace } from './useKeepPlace'
 // nothing stale. It is read during render and cleared in a layout effect, never
 // during render, and it is never in navigation state: the viewer's entry must
 // be exactly { photoViewer: true }, and a signal in state outlives its press.
+//
+// ON A CHAT'S ADDRESS NEITHER BAR IS DRAWN under 900px (CK-103; the mockup's
+// immersive view): not hidden, absent, as both are from 900px, and the chat's
+// own header carries the way back. A drawer that closes on one has no menu
+// button to return focus to, so the chat is told it owes its <h1> focus
+// (chatArrival.ts), spent once its first read has landed and cleared by the
+// next page change.
 //
 // A page keeps its place (CK-88.2): useKeepPlace owns every navigation's scroll,
 // on whichever of the two scrollers is active, and its context adds no element,
@@ -103,6 +111,9 @@ export function Frame() {
   const side = useRef<HTMLDivElement>(null)
   const column = useRef<HTMLDivElement>(null)
   const wasOpen = useRef(false)
+  const onChat = isChatAddress(location.pathname)
+  const bars = !wide && !onChat
+  const chatArrival = useRef(false)
   const place = useKeepPlace(column, wide)
   const layout = useMenuLayout()
 
@@ -122,7 +133,14 @@ export function Frame() {
     target?.focus({ preventScroll: true })
   }, [location.key, wide])
 
-  // Focus into the drawer on opening; back to the menu button on closing.
+  // What a chat owes belongs to the page it was owed on. A layout effect, so
+  // it runs before the effect below that sets it for the page arrived at.
+  useLayoutEffect(() => {
+    chatArrival.current = false
+  }, [location.key])
+
+  // Focus into the drawer on opening; back to the menu button on closing, or
+  // owed to the chat that has no menu button.
   useEffect(() => {
     if (drawerOpen) {
       wasOpen.current = true
@@ -133,9 +151,17 @@ export function Frame() {
       wasOpen.current = false
       // Not when a press already put focus inside the page — a same-page
       // *Photos* from the drawer has moved it to the group's heading.
-      if (!column.current?.contains(document.activeElement)) menuButton.current?.focus()
+      if (column.current?.contains(document.activeElement)) return
+      if (menuButton.current) menuButton.current.focus()
+      else if (onChat) {
+        chatArrival.current = true
+        // Off the row that was pressed, which waits past the edge now.
+        const active = document.activeElement
+        if (active instanceof HTMLElement && side.current?.contains(active)) active.blur()
+      }
     }
-  }, [drawerOpen])
+    // The address alone moving runs this with nothing owed: wasOpen is false.
+  }, [drawerOpen, onChat])
 
   // Escape closes it, and the page behind does not scroll while it is open.
   useEffect(() => {
@@ -186,7 +212,7 @@ export function Frame() {
       </div>
       {drawerOpen && <div className="frame-scrim" aria-hidden="true" onClick={() => setOpen(false)} />}
       <div ref={column} className="frame-col" inert={drawerOpen}>
-        {!wide && (
+        {bars && (
           <header className="topbar">
             <button
               ref={menuButton}
@@ -206,9 +232,11 @@ export function Frame() {
           </header>
         )}
         <PagePlaceContext.Provider value={place}>
-          <Outlet />
+          <ChatArrivalContext.Provider value={chatArrival}>
+            <Outlet />
+          </ChatArrivalContext.Provider>
         </PagePlaceContext.Provider>
-        {!wide && (
+        {bars && (
           <nav className="tabbar" aria-label="Sections">
             {SECTIONS.map((section) => (
               <Link

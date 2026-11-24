@@ -37,6 +37,14 @@ export function sectionOf(pathname: string): SectionId | null {
   return null
 }
 
+// A chat's address (CK-103): under 900px neither bar is drawn on one, and the
+// chat's own header carries the way back.
+const CHAT_ADDRESS = /^\/(?:groups|gatherings)\/[^/]+\/chat\/?$/
+
+export function isChatAddress(pathname: string): boolean {
+  return CHAT_ADDRESS.test(pathname)
+}
+
 // How many gatherings the menu lists as coming up (the mockup's five).
 export const MENU_UPCOMING_LIMIT = 5
 
@@ -114,8 +122,8 @@ async function listGatherings(): Promise<{ ok: true; gatherings: GatheringListIt
 // the group; the tab's calendar and a group nobody holds show Home's.
 export type Panel = { kind: 'home' } | { kind: 'group'; group: Group; gatheringId: string | null }
 
-const GROUP_ADDRESS = /^\/groups\/([^/]+)(?:\/people|\/gatherings\/new)?\/?$/
-const GATHERING_ADDRESS = /^\/gatherings\/([^/]+)\/?$/
+const GROUP_ADDRESS = /^\/groups\/([^/]+)(?:\/people|\/chat|\/gatherings\/new)?\/?$/
+const GATHERING_ADDRESS = /^\/gatherings\/([^/]+)(?:\/chat)?\/?$/
 const CALENDAR_ADDRESS = /^\/calendar\/?$/
 
 export function panelOf(

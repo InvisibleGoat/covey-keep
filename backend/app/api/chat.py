@@ -256,6 +256,9 @@ def _item(row, ctx: AuthContext) -> dict:
             "at": row.removed_at,
             "by": row.remover_name,
             "by_writer": row.removed_by_person_id == row.author_person_id,
+            # Whether the remover is the caller (CK-103), so the screen says
+            # *You*; it discloses nothing to anyone else.
+            "by_self": row.removed_by_person_id == ctx.person.id,
         }
     return {
         "id": str(row.id),

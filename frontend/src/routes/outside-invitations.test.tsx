@@ -1,6 +1,7 @@
 // CK-93 — inviting people outside the group, on the surface: the card with
 // its switch and two second steps, the email form and *Waiting on* while it
-// is on, the line at the top of Photos, the alert, the Co-hosts section's
+// is on, the line (in the Chat card since CK-103, and at the top of Photos in
+// the photos-only view), the alert, the Co-hosts section's
 // outsider row, and an outsider's page — through the app's REAL route table
 // with the REAL AuthProvider over the real session store (the CK-76.1
 // Gotcha), against a stateful fake server. The values under test:
@@ -24,6 +25,7 @@ import { AuthProvider } from '../auth/AuthContext'
 import { clearCoverPictures } from '../lib/covers'
 import { chooseMenuLayout } from '../lib/menuLayout'
 import { setToken } from '../lib/session'
+import { withEmptyChat } from '../test-support/chat'
 import { gate, pressHeld, settle, type Gate } from '../test-support/focus'
 
 const GROUP = { id: 'grp-lees-1', name: 'The Lees' }
@@ -300,7 +302,7 @@ function stubServer() {
     if (p === `/groups/${GROUP.id}`) return json(200, groupBody())
     return json(404, { detail: 'Not Found' })
   })
-  vi.stubGlobal('fetch', mock)
+  vi.stubGlobal('fetch', withEmptyChat(mock as unknown as typeof fetch))
 }
 
 function stubWidth(wide: boolean) {
@@ -331,6 +333,10 @@ const card = () => screen.getByRole('region', { name: SWITCH })
 const queryCard = () => screen.queryByRole('region', { name: SWITCH })
 const theSwitch = () => screen.getByRole('switch', { name: SWITCH })
 const photos = () => screen.getByRole('region', { name: 'Photos' })
+// MOVED AT CK-103, with its reason: the chat is built, so it carries the line in
+// the full view (the record §6); the photos-only view has no chat, and keeps it
+// at the top of Photos.
+const chat = () => screen.getByRole('region', { name: 'Chat' })
 const before = (a: Element, b: Element) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
 
 beforeEach(() => {
@@ -453,14 +459,14 @@ test('Turn it on: one PUT with exactly {"on": true}, the switch unmoved until it
   const busy = await within(step).findByRole('button', { name: 'Turning it on…' })
   expect((busy as HTMLButtonElement).disabled).toBe(true)
   expect(theSwitch().getAttribute('aria-checked')).toBe('false')
-  expect(photos().querySelector('.gline')?.textContent).toBe(LINE_OFF)
+  expect(chat().querySelector('.gline')?.textContent).toBe(LINE_OFF)
   await act(async () => world.hold.put?.release())
   await waitFor(() => expect(theSwitch().getAttribute('aria-checked')).toBe('true'))
   expect(screen.queryByRole('group', { name: TURN_ON_SENTENCE })).toBeNull()
   await waitFor(() => expect(document.activeElement).toBe(theSwitch()))
   expect(bodiesOf('PUT /gatherings/g-1/outside-invitations')).toEqual(['{"on":true}'])
   // The body replaced the page's — the on line and the form — with no re-read.
-  expect(photos().querySelector('.gline')?.textContent).toBe(LINE_ON)
+  expect(chat().querySelector('.gline')?.textContent).toBe(LINE_ON)
   expect(within(card()).getByLabelText('Email address')).toBeTruthy()
   expect(count('GET /gatherings/g-1')).toBe(1)
 })
@@ -493,7 +499,7 @@ test('no preview is read before a turn-off press; with nobody from outside and n
   expect(order).toEqual(['GET /gatherings/g-1/outside-invitations', 'PUT /gatherings/g-1/outside-invitations'])
   expect(bodiesOf('PUT /gatherings/g-1/outside-invitations')).toEqual(['{"on":false}'])
   expect(screen.queryByRole('group', { name: /will no longer see|stop working/ })).toBeNull()
-  expect(photos().querySelector('.gline')?.textContent).toBe(LINE_OFF)
+  expect(chat().querySelector('.gline')?.textContent).toBe(LINE_OFF)
   await waitFor(() => expect(document.activeElement).toBe(theSwitch()))
 })
 
@@ -711,18 +717,21 @@ test('one roster request per reload with the Co-hosts section open as well', asy
 // ---------------------------------------------------------------------------
 // The line
 
-test('the line at the top of Photos, off and on, for a member', async () => {
+test('the line beneath the Chat card’s heading, off and on, for a member, and no longer in Photos', async () => {
   await open(SEATS.member())
-  const line = photos().querySelector('.sect-head + .gline') as HTMLElement
+  const line = chat().querySelector('.chathead + .gline') as HTMLElement
   expect(line.tagName).toBe('P')
   expect(line.textContent).toBe(LINE_OFF)
+  expect(photos().querySelector('.gline')).toBeNull()
   cleanup()
   await open(detail({ caller_role: null, outside_invitations: { ...ON, may_change: false } }))
-  expect(photos().querySelector('.sect-head + .gline')?.textContent).toBe(LINE_ON)
+  expect(chat().querySelector('.chathead + .gline')?.textContent).toBe(LINE_ON)
+  expect(photos().querySelector('.gline')).toBeNull()
 })
 
-test('the line in the photos-only view too', async () => {
+test('the line at the top of Photos in the photos-only view, which has no chat', async () => {
   await open(memory({ outside_invitations: { ...ON, may_change: false } }))
+  expect(screen.queryByRole('region', { name: 'Chat' })).toBeNull()
   expect(photos().querySelector('.sect-head + .gline')?.textContent).toBe(LINE_ON)
 })
 
@@ -732,7 +741,7 @@ test.each([
   ['a body without the three fields', SEATS.absent],
 ])('no line for %s', async (_name, seat) => {
   await open(seat())
-  expect(photos().querySelector('.gline')).toBeNull()
+  expect(document.querySelector('.gline')).toBeNull()
   expect(document.body.textContent).not.toContain('people outside')
   expect(document.body.textContent).not.toContain('people in The Lees')
 })

@@ -9,6 +9,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AuthContext, type AuthState, type Person } from '../auth/context'
 import { readInvitationToken, storeInvitationToken } from '../lib/invitations'
+import { withEmptyChat } from '../test-support/chat'
 import { GatheringDetail } from './GatheringDetail'
 import { InvitationAccept } from './InvitationAccept'
 
@@ -189,7 +190,7 @@ function stubRoutes(routes: { method: string; path: string; response: () => Resp
     if (!route) throw new Error(`no stub for ${method} ${String(url)}`)
     return Promise.resolve(route.response())
   })
-  vi.stubGlobal('fetch', mock)
+  vi.stubGlobal('fetch', withEmptyChat(mock))
   return mock
 }
 

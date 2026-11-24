@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { ChatPreview } from '../components/ChatPreview'
 import { DateBadge } from '../components/Cover'
 import { FieldError, FormLevelErrors } from '../components/FieldError'
 import { GatheringMedia, type GatheringMediaHandle } from '../components/GatheringMedia'
@@ -15,6 +16,7 @@ import {
   type FocusSource,
 } from '../components/useFocusRequest'
 import { authFetch } from '../lib/api'
+import { CHAT } from '../lib/chat'
 import {
   effectiveZone,
   formatInstantRange,
@@ -753,8 +755,9 @@ async function refusalCode(response: Response): Promise<string> {
 // the switch, its two steps and, while on, for the organisers, the email
 // form and *Waiting on*, moved from the standalone section and shared),
 // after Who it's for in the full view and after Photos in the photos-only
-// view; `caller_in_group` true THE LINE at the top of Photos; `outside_alert`
-// THE ALERT beneath the cover card; and `caller_in_group` exactly false AN
+// view; `caller_in_group` true THE LINE — in the Chat card in the full view,
+// and at the top of Photos in the photos-only view, which has no chat
+// (CK-103); `outside_alert` THE ALERT beneath the cover card; and `caller_in_group` exactly false AN
 // OUTSIDER'S PAGE, which never reaches for the group — its crumb is
 // *Gatherings*, and the Photos section is given no group, so the viewer
 // reads none. A body without the fields renders none of it.
@@ -769,18 +772,19 @@ async function refusalCode(response: Response): Promise<string> {
 // *In memory of {name}*, all over the scrim, with the date badge in the
 // full view while a date is still ahead; THE ACTIONS — Add photos (the
 // invited tier: one press opens the device's picker, GatheringMedia's
-// handle — the Photos section beneath is open on load since CK-88) and Edit
-// gathering (the organisers:
+// handle — the Photos section beneath is open on load since CK-88), Chat
+// (everyone in the full view, CK-103) and Edit gathering (the organisers:
 // today's form, beneath the actions); the prompt to share; WHEN, each date
 // with its time range, its place and map on one line, and its row — the
 // answer chip from the body's `caller_response`, *RSVP and who's coming*,
 // and the organisers' Edit this date and Remove this date — with the remove
-// step and the RSVP block beneath the row; PHOTOS; Who it's for; and the
+// step and the RSVP block beneath the row; THE CHAT CARD (CK-103;
+// components/ChatPreview.tsx); PHOTOS; Who it's for; and the
 // Co-hosts or Invitations section. Every section's behaviour is as it was;
-// this phase arranged them. Not here, because none is built (the merge
-// record §4): *Hosted by*, Chat and the chat preview. Since CK-88 the Photos
-// section carries its heading's count, the grid, *See all* and the photo
-// viewer (GatheringMedia, point 13).
+// this phase arranged them. Not here, because it is not built (the merge
+// record §4): *Hosted by*. Since CK-88 the Photos section carries its
+// heading's count, the grid, *See all* and the photo viewer (GatheringMedia,
+// point 13).
 export function GatheringDetail() {
   const { id } = useParams()
   // A group page's See all lands at `#photos` (CK-88.1b): a fixed string,
@@ -1199,7 +1203,8 @@ export function GatheringDetail() {
   // the viewer reads nothing about the group's seat.
   const outside = outsideFlags(gathering)
   const shownGroup = outside.outsider ? null : gathering.group
-  // THE LINE, for the group's members alone, in both views.
+  // THE LINE, for the group's members alone, in both views: in the Chat card,
+  // or at the top of Photos where there is no chat.
   const lineForGroup =
     outside.inGroup && gathering.group !== null ? groupLine(gathering.group.name, outside.on) : null
 
@@ -1847,9 +1852,9 @@ export function GatheringDetail() {
       {/* THE ACTIONS (CK-87; the mockup's `.gactions`): Add photos for
           everyone who can upload — ONE press opens the device's picker
           (GatheringMedia's handle, called inside the click; the Photos
-          section is open on load since CK-88) — and Edit gathering for the
-          organisers, over
-          today's form beneath this row. No Chat: the chat is not built. */}
+          section is open on load since CK-88) — Chat, for everyone in the full
+          view (CK-103), which is everyone here, and Edit gathering for the
+          organisers, over today's form beneath this row. */}
       {(canUpload || organises) && (
         <div className="gathering-actions">
           {canUpload && (
@@ -1858,6 +1863,10 @@ export function GatheringDetail() {
               Add photos
             </button>
           )}
+          <Link className="btn" to={`/gatherings/${gathering.id}/chat`}>
+            <Icon name="chat" />
+            {CHAT}
+          </Link>
           {organises && (
             <button
               ref={editGatheringButton}
@@ -2339,6 +2348,16 @@ export function GatheringDetail() {
         )}
       </section>
 
+      {/* The way into the gathering's chat, and its newest three (CK-103).
+          A line may name the group to its members alone. */}
+      <ChatPreview
+        place={{ kind: 'gathering', id: gathering.id }}
+        name={gathering.title}
+        group={outside.inGroup && group !== null ? group.name : null}
+        zone={zone}
+        line={lineForGroup}
+      />
+
       {/* Photos (CK-38): renders for everyone in the read audience — the
           list is filtered server-side by the per-state audience rule, so a
           keeper or invitee who uploaded nothing sees an empty list, never a
@@ -2368,7 +2387,6 @@ export function GatheringDetail() {
           onCoverSet={coverSet}
           zone={zone}
           arrivedAtPhotos={arrivedAtPhotos}
-          groupLine={lineForGroup}
         />
       </section>
 

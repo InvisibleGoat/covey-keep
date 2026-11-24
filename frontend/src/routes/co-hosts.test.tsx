@@ -20,6 +20,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AuthContext, type AuthState, type Person } from '../auth/context'
 import { CO_HOST_HINT, removeCoHostSentence, STEP_DOWN_SENTENCE } from '../lib/coHosts'
+import { withEmptyChat } from '../test-support/chat'
 import { GatheringDetail } from './GatheringDetail'
 
 const person: Person = {
@@ -101,7 +102,7 @@ function stubRoutes(routes: StubRoute[]) {
     if (!route) throw new Error(`no stub for ${method} ${String(url)}`)
     return Promise.resolve(route.response(init, String(url)))
   })
-  vi.stubGlobal('fetch', mock)
+  vi.stubGlobal('fetch', withEmptyChat(mock))
   return mock
 }
 

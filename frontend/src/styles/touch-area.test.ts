@@ -96,6 +96,8 @@ const CONTROLS = [
   '.ck-switch', // round ends, 52 by 44
   '.day', // the calendar's days: rounded, 36.3 wide at 320
   '.occurrence-where a', // Map, 30.7 by 20
+  '.act', // a message's Delete or Remove and a held row's Show it (CK-103): 28 tall
+  '.sendbtn', // the chat's Send (CK-103): round, 46
   '.varrow', // the photo viewer's arrows: round
   '.rail-item', // the rail's tiles and its +: round
 ]

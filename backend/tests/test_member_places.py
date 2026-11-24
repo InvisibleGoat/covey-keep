@@ -531,6 +531,11 @@ async def test_invited_shared_with_and_left_out_from_every_surface(client, capsy
     # is the gathering's and stays in the comparison.
     assert host_body["outside_invitations"].pop("may_change") is True
     assert memory_body["outside_invitations"].pop("may_change") is False
+    # MOVED at CK-103: how many are invited is logistics, withheld from the
+    # memory view — null, never 0 — and the full view's number is the one
+    # invited member, the host aside.
+    assert host_body.pop("invited_count") == 1
+    assert memory_body.pop("invited_count") is None
     assert memory_body == host_body  # everything else as the full body
     for listed in (await _gathering_list(client, e_headers), (await _group_list(client, e_headers, cast.group_id)).json()["gatherings"]):
         (item,) = [g for g in listed if g["id"] == gathering_id]

@@ -1,11 +1,26 @@
 # CoveyKeep — Repo Operational Guide
 
-**Version:** 1.131.1
-**Last Updated:** 2026-11-23
+**Version:** 1.132.0
+**Last Updated:** 2026-11-24
 **Source:** the one-line list of every phase from CK-2 to CK-80 that stood here moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); each phase is named in its own changelog entry, here or there.
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.132.0** (2026-11-24): Phase CK-103 — **The chat's screens: reading, sending, deleting and removing, and the ways in** — the chat record's phase 2, made a phase at Steven's approval of 2026-11-24 (*"Yes, start it"*, to *"Start CK-103 with these answers, dropping "for everyone" from the two steps?"*), his answers built as given: a held message is look B, one row with *Show it* (*"I actually like 'B'. Keeps it cleaner"*); the two steps say what a press does and no more (*"Remove the part 'The group's admin and co-admins can still see it for 30 days, and then it's gone for good.'"*); the six readings as recommended, with no photo button in this pair; one phase (*"We can do one phase"*) (`decisions/2026-11-21-the-chat-who-reads-it-and-what-it-keeps.md` 1.2.0 — banners on §6, §10, §14, §15 and §16; `decisions/2026-10-04-a-groups-gathering-stays-in-the-group.md` 1.11.0 — §6's line moved; `decisions/2026-10-31-the-design-and-how-it-is-merged.md` 1.21.0 — §4; `reference/frontend/components.md` 1.61.0 — The chat on the surface; `reference/backend/api-reference.md` 1.53.0 — the two fields; `reference/strategy/covey-keep-roadmap.md` 1.31.0). Rule 1 moved the entry 1.129.0 to `CLAUDE-history.md`, which takes 1.11.0. **Frontend, and two fields on answers that existed; no migration:**
+  - **new:** `lib/chat.ts`, `components/ChatView.tsx`, `ChatEntry.tsx`, `ChatPreview.tsx`, `useChat.ts`, `useChatRows.ts`, `useThreadScroll.ts`, `useVisualViewport.ts` and `chatArrival.ts`, `routes/Chat.tsx`, and `test-support/chat.ts` and `chatWorld.ts`;
+  - **changed:** `App.tsx` (the two routes), `App.css` (the chat's block, two controls in the touch area's), `Frame.tsx` (no bar on a chat; the drawer's row owes the chat's `<h1>` focus), `lib/frame.ts` (`isChatAddress`; a chat's panel), `Menu.tsx` (the *Chat* row; *Cover, chat and photos*), `Icons.tsx`, `lib/gatherings.ts`, `GroupDetail.tsx` and `GatheringDetail.tsx` (the card; the pill; the line into the card), `GatheringMedia.tsx` (comments alone); on the backend `api/gatherings.py` (`_invited_count`, on the detail's body and the setting route's answer alone) and `api/chat.py` (`by_self`);
+  - **tests:** new `tests/test_invited_count.py` (12), `lib/chat.test.ts` (44), `components/useChat.test.tsx` (41), `routes/chat.test.tsx` (85), `routes/focus-chat.test.tsx` (34) and `routes/chat-ways-in.test.tsx` (22); one new test in each of `test_chat.py`, `frame.test.tsx` and `look.test.tsx`, and two controls in `touch-area.test.ts`; pins moved, each with its reason beside it: `test_chat.py` (the `removed` keys), `gathering-page`, `group-detail`, `rail-and-panel`, `outside-invitations` and `frame`, and three the kickoff had not named — `test_member_places.py` (the two views' bodies), `gatherings.test.tsx` (the page's anchors) and `group-detail`'s id in the markup; the stubs of twelve files answer the chat's read empty through one helper (`withEmptyChat`), no assertion changed by it;
+  - **untouched:** the chat's routes, their audience, the hold, the sweep and the notice (version 5), every model, no migration (head stays 0038), the verifier at 484, no log line, `render.yaml`, `netlify.toml`, neither lock and no dependency, no environment variable, `WORKING-ON-NOW.md` and the docs-root `CLAUDE.md`.
+
+  **1059 backend tests** (1046 before): **13 new**; **1824 frontend tests in 90 files** (1592 in 85): **232 new**. Red first against the unchanged code: 14 backend tests (the 13 and the moved pin), 81 of `chat.test.tsx`'s then 82, all 34 of `focus-chat.test.tsx` and 18 of `chat-ways-in.test.tsx`'s then 21 — of the four that passed, three assert what holds before by design and one a stub's own shape; `lib/chat.test.ts` and `useChat.test.tsx` failed whole, their modules not there. **75 mutations, 74 caught by a named test**; the other (the timer alone kept on unmount) changes nothing a person or a server can see, the session being closed. The first whole run of the finished code found one fault, fixed here: pressing *Show earlier messages* within 48px of the newest moved the thread, and the plant that should have caught it had been marked caught by a test that was failing unplanted; both are in the table now. Build and lint clean (`index-DsEy5bJ9.js`, `index-DzVkLmsQ.css`, 992.68 KiB precache, 11 entries; 959.04 before); `alembic check` clean and the verifier on the dev DB 484 of 484.
+
+  **THE BUILD** is the *chat's screens* bullet under Deploys. **THE MEASUREMENTS** in headless Chrome against a stand-in API (`D:\projects\temp\CK-103-harness`; the shots in `D:\projects\temp\CK-103-screenshots`), 184 rows at 320 to 1440 in both themes with no miss at the end: the thread the only scroller with the header and the box still, a keyboard's shorter window, the newest, an arrival while reading, an earlier page within 1px, the extremes, held rows and their touch areas, the update notice over nothing, every control 44 to the touch, the contrasts (5.09 at the lowest, Send's icon) and the focus ring whole. They found two clipped focus rings, fixed here.
+
+  **THE LOCAL RUN** in console mode against the dev DB, reserved addresses alone, every write declared in its script and the report; run twice, each leaving one group and one gathering under *a former member*: words arriving in the other window in 0.1 to 1.9 s; the join line; each step opening on itself and Keep it going back; a held row from each seat, its words out of the page until *Show it*; a co-admin made and unmade, and the setting turned on and off, with the chats open; the outsider's chat, and the not-found screen once they were out; the photos-only member's none of it, no chat request sent; 4,001 characters and the 31st message refused with their words kept; no check while hidden and one 78 ms after the return; nothing of a chat in storage, the console or the API's log.
+
+  **Found and not fixed:** each check is **two** requests and two access lines, because `since` changes the address every time and a preflight is cached by its address; a chat's header, and the menu, keep a count until the page is opened again; a preview does not shorten a long message. The report lists every one.
+
+  Not pushed. The push redeploys Netlify and both Render services — the API's code changed, the worker's did not; no migration, so no verifier run is owed. The deploy window is the bullet's. Report: `D:\projects\temp\CK-103-report.md`.
 - **1.131.1** (2026-11-23): **CK-102's two fix-ups after review: a traceback prints nothing a person wrote in a chat, a refusal never carries the value it refused, and three ways a chat request answered 500 answer 422** — at Steven's answers of 2026-11-22 (*"Yes, fix first"*, to *"Fix the log finding before the push?"*) and 2026-11-23 (*"Yes, fix it too"*, to *"Fix the last log leak before the push too?"*), both relayed by the planning session. Uvicorn logs an escaped exception's traceback, and the reviews proved two ways a message's words were in one: a connection the database drops under a send (SQLAlchemy's exception carries the failed statement's parameters), and a 422 that could not be written (FastAPI's own repeats the refused value, and the traceback of the failure prints it). Rule 1 moved the entry 1.128.1 to `CLAUDE-history.md`, which takes 1.10.0. Fix-up 1 is code `6a71db0`, in the Hub `6ef22e8` (`reference/backend/api-reference.md` 1.52.1 — the Chat router; `decisions/2026-11-21-the-chat-who-reads-it-and-what-it-keeps.md` 1.1.1 and `reference/strategy/covey-keep-roadmap.md` 1.30.1 — doc lines corrected); fix-up 2 is code `b462bce`, in the Hub `05212f7` (`reference/backend/api-reference.md` 1.52.2 — the Chat router's *No logger* paragraph). **Backend, no migration:**
   - **changed:** `db.py` and `worker.py` (`hide_parameters=True` on both engines; nothing else under `app/` builds one), `api/chat.py` (`_no_nul`, `EARLIEST_INSTANT`, `BAD_SINCE`, `_in_utc`) and `main.py` (the handler registered); **new:** `app/refusals.py`;
   - **tests:** new `tests/test_hidden_parameters.py` (4 — a dropped connection staged under a send and under a sign-in request, and every engine under `app/` read from the syntax tree) and `tests/test_refusals.py` (14 — seven bodies FastAPI's own 422 could not write back, through both chat doors; a sign-in request's; an ordinary refusal on five routers, whole; the CORS headers), and four in `tests/test_chat.py` (a NUL; equal instants paged; `since` and a forged cursor at their extremes); no pin moved;
@@ -40,10 +55,7 @@
   **THE LOCAL RUN** in console mode against the dev DB (`D:\projects\temp\CK-101-harness`; the shots in `D:\projects\temp\CK-101-screenshots`), reserved addresses alone: a group invited one address while a second account was signed in: opening it drew the step — at 375 in light and dark, and at 1440 — the network showing a body of the token alone answered with `other_address`, no destination anywhere on the page, the account still outside the group and the invitation still pending; **Sign out and use the invited address** reached the signed-out preview and *Sign in to accept*, and the invited address signed in and landed in the group; a second invitation and **Accept as Bea Tester** landed the signed-in account in the group, the invitation spent; the same both ways on a standalone gathering; an invitation to the signed-in account's own address accepted on opening with no step; focus on the step's `<h1>` every time; every throwaway deleted. The step's two pills are centred when they wrap (`.invitation-step-actions`' own rule), seen at 375 and added before the last run. An earlier run, whose script went on with the session the sign-out had revoked, left three pending invitations from its deleted host to reserved addresses, which expire within the week.
 
   Not pushed. The push redeploys Netlify and both Render services — the API's code changed, the worker's did not; no migration, so no verifier run is owed. In the deploy window a new bundle on the old API accepts on opening, as before, and an old bundle on the new API reads `other_address` as a dead link with nothing written. Report: `D:\projects\temp\CK-101-report.md`.
-- **1.129.0** (2026-11-20): **CK-100's switch: the deploy sends email through Resend** — at Steven's word of 2026-11-20 (*"Yes, switch"*), once CK-100's checks (pr) to (pv) had passed on the deploy, coveykeep.com was verified in Resend, `EMAIL_API_KEY` was typed into `covey-keep-api`'s dashboard and the smoke script had passed from its Web Shell (the provider's 200, and the message in the inbox with SPF, DKIM and DMARC passing). Rule 1 moved the entry 1.126.0 to `CLAUDE-history.md`, which takes 1.7.0. **The switch is one line**, `render.yaml`'s `EMAIL_MODE: provider`, and its rollback is that line set back to console; the blueprint syncs on every push, so the push puts `covey-keep-api` in provider mode, and a reserved test address still prints in console form and never reaches Resend. **Rewritten to the current state** (rules 2 and 3): the *Email is console mode* bullet, now *Email is provider mode*, the Auth env surface bullet, the *Sign-up by invitation* bullet, the Commands block's smoke-script comment and its map line. **Changed**: `render.yaml` (the value and the three comments above it), `config.py`'s `email_mode` comment (the code default stays console, so a local run and the suite print), `services/email.py`'s docstring, `scripts/verify_email_delivery.py`'s docstring (run again after any change to the key, the sender or the domain's records) and one comment in `routes/tos.test.tsx`. **Tests**: one pin moved, with its reason — `test_email_mode.py`'s blueprint test, now `test_render_yaml_declares_the_two_and_sends_through_the_provider`, red against `HEAD`'s `render.yaml` and green against the switch's; the five files on the email path ran green, 119 passed (70, 22, 16, 7 and 4), and `tos.test.tsx`, 9. No behaviour, route, body, dependency, migration or verifier line changed (head 0037, the verifier at 458). **From the push on, every address but a reserved one is a real send**: a check signs in `@example.com` throwaways alone, and checks (pw) to (pz) are the planning session's runbook, `D:\projects\temp\CK-100-switch-checks-runbook.md`.
-
-  Not pushed. The push redeploys both Render services — the API into provider mode, the worker, which reads no email variable, as it was — and Netlify builds the same frontend; no migration, so no verifier run is owed.
-- *The 45 changelog entries that stood here — versions **1.128.1 down to 1.85.0** (2026-11-20 back to 2026-10-27), Phases CK-78 to CK-100 and the seventh doc audit's first and fifth fix batches — moved VERBATIM to `CLAUDE-history.md`, 1.122.0 to 1.85.0 at 1.126.0, 1.123.0 at 1.127.0, 1.124.0 at 1.128.0, 1.125.0 at 1.128.1, 1.126.0 at 1.129.0, 1.127.0 at 1.130.0, 1.128.0 at 1.131.0 and 1.128.1 at 1.131.1; nothing in them was rewritten.*
+- *The 46 changelog entries that stood here — versions **1.129.0 down to 1.85.0** (2026-11-20 back to 2026-10-27), Phases CK-78 to CK-100 and the seventh doc audit's first and fifth fix batches — moved VERBATIM to `CLAUDE-history.md`, 1.122.0 to 1.85.0 at 1.126.0, 1.123.0 at 1.127.0, 1.124.0 at 1.128.0, 1.125.0 at 1.128.1, 1.126.0 at 1.129.0, 1.127.0 at 1.130.0, 1.128.0 at 1.131.0, 1.128.1 at 1.131.1 and 1.129.0 at 1.132.0; nothing in them was rewritten.*
 - *The 87 changelog entries that stood here — versions **1.84.0 down to 1.0.0** (2026-10-25 back to 2026-08-17) — moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); nothing in them was rewritten.*
 
 ---
@@ -308,7 +320,7 @@ npm run test       # vitest (jsdom) — brand pins (CK-14) + gathering surface (
                    #   soonest date still ahead in the profile zone, none
                    #   once every date has started, none in the photos-only
                    #   view; no group line, no Back to your gatherings, no
-                   #   Hosted by, no Chat; Add photos for the invited tier —
+                   #   Hosted by; Add photos for the invited tier —
                    #   ONE press clicking the file input synchronously,
                    #   focus to Upload, Upload through today's calls — and
                    #   Edit gathering for the
@@ -432,7 +444,7 @@ npm run test       # vitest (jsdom) — brand pins (CK-14) + gathering surface (
                    #   through Back and Forward, a gathering in a group that
                    #   group's, a standalone one Home's, a left group's Home's;
                    #   Home's panel's limits and empty headings; a group's panel's
-                   #   back row, cover at the web layer, three chevron rows and
+                   #   back row, cover at the web layer, its chevron rows and
                    #   gatherings in the one rule's order, its words as literals;
                    #   no /members and no group gatherings read; the Home tile, a
                    #   tile and the back row keeping the drawer open and every
@@ -484,7 +496,8 @@ npm run test       # vitest (jsdom) — brand pins (CK-14) + gathering surface (
                    #   sentence and focus, each refusal; the email form and
                    #   Waiting on while on, the 409 members_only re-reading
                    #   the gathering; one roster read per reload; the line
-                   #   at the top of Photos for members in both views; the
+                   #   for members, in the Chat card in the full view and at
+                   #   the top of Photos in the photos-only view; the
                    #   alert, Got it posting once with nothing re-read and
                    #   focus on the <h1>; an outsider's crumb to Gatherings,
                    #   no group read from the viewer, their row with no Make
@@ -577,6 +590,7 @@ npm run test       # vitest (jsdom) — brand pins (CK-14) + gathering surface (
                    # + sign-up by invitation (CK-100: the sent card's three lines, the same for any address; the notice paragraph by paragraph and TOS_VERSION, 5 since CK-102)
                    # + an invitation sent to another address (CK-101: the step on both landings, its words, Accept as and its confirmation, Sign out keeping the token, focus)
                    # + the notice's version 5 (CK-102: version 4's every paragraph unchanged and the chat's after the covers, sentence by sentence; TOS_VERSION 5)
+                   # + the chat's screens (CK-103: the pages, the check and the merge, sending, Delete and Remove, a held message's row, the thread's place, focus, the ways in)
 ```
 
 ### Dev database (repo root)
@@ -1810,11 +1824,11 @@ is Steven's call, not a session's: `.env` is his file.
   management alone, because every emailed invitation to a group's gathering
   is the 409 `members_only` while its outside invitations are off (the
   default; the backend since CK-92, the bullet below). **Nobody is told their place**: no
-  notification, email or message exists. Not built: the group chat's
-  screens (its messages are CK-102's), calendar feeds and alerts (the calendar is CK-90's and CK-91's), the
-  history setting, profile pictures; sharing outside the
-  group, its setting, the line at the top (§6) and the alert are CK-92's
-  backend and CK-93's screens (their bullets below). Detail:
+  notification, email or message exists. Not built: calendar feeds and
+  alerts (the calendar is CK-90's and CK-91's), the history setting, profile
+  pictures; the two chats are CK-102's backend and CK-103's screens, and
+  sharing outside the group, its setting, the line about who can see it (§6)
+  and the alert CK-92's backend and CK-93's screens (their bullets below). Detail:
   `reference/frontend/components.md` 1.32.0, the Gatherings in a group
   convention.
 - The look (CK-81; frontend only): **CoveyKeep's tokens, type and lifted
@@ -1876,7 +1890,8 @@ is Steven's call, not a session's: `.env` is his file.
   `/groups/invitations/accept`, `/tos`, `/email-change`,
   `/account-deleted` and the catch-all. **Below 900px** — the window,
   through `matchMedia`, so the bars are absent on a wide screen rather than
-  hidden — a sticky top bar (the 48px menu button, the quail's head and the
+  hidden, and absent on a chat's two addresses too (the chat's screens,
+  below) — a sticky top bar (the 48px menu button, the quail's head and the
   product name from `brand.ts`), the bottom bar's tabs **Groups, Gatherings,
   Calendar and You** (58px, the current one tinted with `aria-current="page"`;
   Calendar since CK-91, the calendar bullet below), and **the menu as a drawer that is a modal
@@ -2097,15 +2112,16 @@ is Steven's call, not a session's: `.env` is his file.
   640px, the picture growing to hold a name that wraps — with the name, its
   `<h1>`, and *{N} people* over the scrim, and Change cover for the admin
   and co-admins as before; **New gathering** (the primary pill) and
-  **People** (the quiet one), links for every member; then the strip,
+  **People** (the quiet one), links for every member; then the Chat card
+  (the chat's screens, below) and the strip,
   *Gatherings*: the group's gatherings as grid cards 168px wide, scrolling
   sideways, **in Your gatherings' order through the one rule** (coming up
   soonest first, past most recent first, then the photos-only ones), each
   card's one line the line a card's date reads everywhere, the badge on a
   coming-up card alone, a photos-only card with *You can see its photos*
   and no date — **at every width**, because this app's menu has no details
-  panel to list them (Steven). **It reads the group, its gatherings and, since
-  CK-88.1b, its photos — never the member list.** Add photos is left out (posting to a group is not
+  panel to list them (Steven). **It reads the group, its gatherings, its
+  photos and, once for the card, its chat — never the member list.** Add photos is left out (posting to a group is not
   in this arc), so New gathering is the primary. **The People page**
   (`/groups/:id/people`, inside the frame): the crumb back to the group by
   its name, *People*, the count and the role line, then Members, Requests to
@@ -2117,8 +2133,8 @@ is Steven's call, not a session's: `.env` is his file.
   two lists, a group's page and its People page — and a gathering's page
   since CK-87; every other page keeps the centred column. The photos in
   sections are CK-88.1b's (its bullet below). Not built: Add photos and
-  *Posted to the group* (posting to a group), the
-  chat preview, *Kept by*, the pin, member faces, *Active … ago*; the menu's
+  *Posted to the group* (posting to a group),
+  *Kept by*, the pin, member faces, *Active … ago*; the menu's
   People row is CK-89's, in Rail and panel; a gathering's page in the mockup's layout is CK-87's
   (the next bullet). Detail: `reference/frontend/components.md` 1.39.0, the
   group page and its People page convention.
@@ -2151,7 +2167,8 @@ is Steven's call, not a session's: `.env` is his file.
   photos** — the invited tier's — **opens the device's picker in one
   press**: a handle on `GatheringMedia` clicks its file input inside the
   click, before anything is awaited, and Upload sends the chosen files as
-  before. **Edit gathering**, the organisers', opens today's form
+  before. **Chat**, beside it, is a link to the gathering's chat for everyone
+  in the full view. **Edit gathering**, the organisers', opens today's form
   beneath the actions. **When**: each date's line naming its weekday —
   *Sat, Jul 4, 2026, 4:00 PM – 11:00 PM*, a date that crosses midnight
   ending *– Sun, Jul 5, 1:00 AM* (CK-87.1; the mockup's form) — its place
@@ -2159,7 +2176,8 @@ is Steven's call, not a session's: `.env` is his file.
   *Maybe*, *Can't make it*, or *Not answered*), *RSVP and who's coming*
   (the block beneath the row, a second press closing it), and the
   organisers' date controls; **the chip follows a saved answer without the
-  gathering read again**. Photos (open on load since CK-88, the next bullet),
+  gathering read again**. The Chat card (the chat's screens, below), Photos
+  (open on load since CK-88, the next bullet),
   Who it's for and the co-host or invitations section follow, the last two
   unchanged inside. **The photos-only view** keeps its shape — the
   crumb, the cover with no badge, its line, the photos — and still reads no
@@ -2173,7 +2191,7 @@ is Steven's call, not a session's: `.env` is his file.
   version. **A card's date is kept whole** on the two lists and a group
   page's strip — each date and time in a `.nowrap` element, the text
   unchanged — and `lib/gatherings.ts::listItemLine` is removed. Not built:
-  *Hosted by* (not decided), Chat and the chat preview. Detail:
+  *Hosted by* (not decided). Detail:
   `reference/frontend/components.md` 1.41.0, the gathering page convention;
   `reference/backend/api-reference.md` 1.44.0, `GET /gatherings/{id}`.
 - A gathering's photos (CK-88; frontend only): **a grid of the published
@@ -2324,8 +2342,8 @@ is Steven's call, not a session's: `.env` is his file.
   in that group show that group's panel, everything else Home's. **Home's panel**:
   the brand and the sections, *Coming up* in a group, at most four, and *Not in a
   group*. **A group's panel**:
-  the back row, the cover, *Group page*, *Photos*, *Calendar* (since CK-91) and
-  *People* — the menu's People
+  the back row, the cover, *Group page*, *Chat* (since CK-103), *Photos*,
+  *Calendar* (since CK-91) and *People* — the menu's People
   row, whose line is the group's count — and *Gatherings*, whose rows open their
   pages directly; since CK-89.1 there is no facts line beneath the cover, because
   its *{N} people* was the People row's line word for word (Steven, 2026-11-07).
@@ -2346,8 +2364,8 @@ is Steven's call, not a session's: `.env` is his file.
   width in either layout.** **The drawer's 10px is gone**: `:root:has(.tabbar)
   { scrollbar-gutter: stable; }`, so a page does not widen under the open drawer;
   with classic scrollbars below 900 its scrim stops at the gutter, reported. Not
-  built: a gathering's panel, a panel in One list, a *Chat* row (a group's
-  panel has its *Calendar* row since CK-91), pins, *Kept by* and *Active…*, a photo count on a past
+  built: a gathering's panel, a panel in One list, pins, *Kept by* and
+  *Active…*, a photo count on a past
   row, Favorites, a toast, and another tab following a choice before its next load
   or another person's act before the next page change. Detail:
   `reference/frontend/components.md` 1.49.0, the Rail and panel convention.
@@ -2483,9 +2501,10 @@ is Steven's call, not a session's: `.env` is his file.
   section — and a send the server refuses with `members_only` says it was
   turned off meanwhile and re-reads the gathering. **The page reads the
   roster once per reload** for the Co-hosts section and the card. **The
-  line** (the record §6), for the group's members alone, sits at the top of
-  the Photos section in the mockup's tinted `.gline`, until the group chat
-  is built to carry it. **The alert** (§5), beneath the cover card for
+  line** (the record §6), for the group's members alone, is in the
+  gathering's Chat card and at the top of its chat, and in the photos-only
+  view, which has neither, at the top of the Photos section, in the mockup's
+  tinted `.gline`. **The alert** (§5), beneath the cover card for
   whoever the body says `outside_alert`, names the opener — passive when
   their account is gone — and **Got it** posts the dismissal once, which
   the server keeps; nothing is stored on the device. **An outsider's page
@@ -2502,9 +2521,9 @@ is Steven's call, not a session's: `.env` is his file.
   (the alert for Got it). **Every list that shows an invited address
   carries `.address-list`**, which wraps a long one inside its card: the
   outside card's and a standalone gathering's *Waiting on*, and the People
-  page's Pending invitations. Not built: the line in the conversation when
-  the setting changes drawn on screen (written since CK-102, the chat
-  bullet below) and notifications. The words the
+  page's Pending invitations. Not built: notifications; the line in the
+  conversation when the setting changes is the chat's (its bullets below).
+  The words the
   kickoff added beside the approved ones are approved as written (Steven,
   2026-11-12; the decision record 1.8.0, §11 item 8). Since CK-94 the card
   and the alert run on the shared focus hook (the next bullet). Detail:
@@ -2776,8 +2795,8 @@ is Steven's call, not a session's: `.env` is his file.
   convention's step).
 - Messages in the chat (CK-102; migration 0038; backend and the notice):
   **a group and a gathering each have a chat — messages, a 30-day hold for
-  the people who run the place, and two lines the chat writes itself — and
-  its screens are not built**
+  the people who run the place, and two lines the chat writes itself; its
+  screens are the next bullet's**
   (`decisions/2026-11-21-the-chat-who-reads-it-and-what-it-keeps.md` §2–§9,
   §14 phase 1; Steven's approval of 2026-11-21, Q1–Q4 each as recommended).
   **Migration 0038** gives `posts` its first writer: `posts.kind`
@@ -2810,7 +2829,8 @@ is Steven's call, not a session's: `.env` is his file.
   so two removes at once give one 204 and one 409 `already_removed`, and a
   line is 409 `not_a_message` (Q3a). **The hold**: a removed message leaves
   every other read at once, named in their poll's `removed`, and stays in
-  place, marked with when, by whom and whether its writer deleted it, for
+  place, marked with when, by whom, whether its writer deleted it and
+  whether the caller took it out (`by_self`), for
   the people who run the place inside their own window until
   `removed_at + REMOVED_BIN` (30 days); the worker's sweep deletes it then
   (the sweep bullet above). **The join line** is written on both ways in,
@@ -2833,13 +2853,70 @@ is Steven's call, not a session's: `.env` is his file.
   5) before the API has redeployed is a 422 for those minutes; the old
   instance serving during the pre-deploy names no post and never reads the
   new label; and a migration means the verifier is owed on the deploy
-  (head 0038, 484). Not built: the chat's screens, reactions, the unread
+  (head 0038, 484). Not built: reactions, the unread
   mark and typing (the notice's version 6), the *Added N photos* cards,
   photos posted straight to the group, replies, the history switch,
   editing, alerts, search, an archived group's chat and export. Detail:
-  `reference/backend/api-reference.md` 1.52.2, the Chat router;
+  `reference/backend/api-reference.md` 1.53.0, the Chat router;
   `reference/backend/database-schema.md` 2.44.0, migration 0038 and
   decision 54.
+- The chat's screens (CK-103; frontend, and two fields on answers that
+  existed; no migration): **reading, sending, deleting and removing in a
+  group's chat and a gathering's, and the ways in**
+  (`decisions/2026-11-21-the-chat-who-reads-it-and-what-it-keeps.md` §14
+  phase 2; Steven's answers of 2026-11-24 — a held message in look B, and
+  the two steps saying what a press does and no more). **`/groups/:id/chat`
+  and `/gatherings/:id/chat`** (`routes/Chat.tsx`; one screen,
+  `components/ChatView.tsx`) are in the frame's layout route with **neither
+  bar under 900px**; from 900px the menu's column stays. The header (Back,
+  the cover, the name, *{N} people · Chat* or *{N} invited · Chat*), **the
+  thread, the only scroller**, and the box fill what can be seen of the
+  window — under 900px it follows `visualViewport`, so the box sits above a
+  phone's keyboard — and the update notice covers none of them. **The
+  check** (`components/useChat.ts`): 2 s after the last answer, 5 s after
+  one that failed, never two at once, none while the tab is hidden and one
+  at once on its return; `since` is the server's clock and never the
+  device's. **The merge** is one pure function in `lib/chat.ts`: the
+  server's order to the microsecond, an id that left never back, a held
+  message never replaced by a live copy of itself. In the photos-only view
+  the address asks nothing for the chat and is the not-found screen, as a
+  404 on any of its reads or on a send is; a late answer for another place
+  draws nothing. **The notice** at the top is the group's approved line; on
+  a gathering, the line about who can see it for the group's members, read
+  again when a setting line arrives, and *Everyone invited to this
+  gathering can read this chat.* for everyone else. **Sending** keeps the
+  words through every refusal and checks at once where the answer was lost;
+  Enter sends where a mouse and a keyboard are, and is a new line on a
+  phone. **Delete** on your own message and **Remove** on another's where
+  the answer's `may_moderate` is true, each behind a step labelled by its
+  sentence. **A held message is one dashed row in its place — what happened
+  and *Show it* — its words out of the page until the press**, with the
+  time and the days left when shown; the server alone decides who is sent
+  one, and which are shown is the page's own state. **The thread** opens at
+  the newest and stays there within 48px of it; anywhere else nothing moves
+  what is on screen, an earlier page included
+  (`components/useThreadScroll.ts`, by hand). One polite live region says
+  what a check brought from other people. **Nothing of a chat is stored on
+  the device, in an address or in a log**; a link opens only on a press and
+  no preview is fetched. **The ways in**: the **Chat card** on a group's
+  page and on a gathering's in the full view (`components/ChatPreview.tsx`
+  — one read of 20, the newest three live entries, never a held one, no
+  control but a failed read's Try again; a 404 is no card), the **Chat**
+  pill on a gathering's page for everyone in the full view, and the *Chat*
+  row of a group's panel, whose *Group page* row now reads *Cover, chat and
+  photos*; the photos-only view has none of them and reads nothing. **The
+  backend's two fields**: `invited_count` on a gathering's detail and the
+  setting route's answer, and no other body (the people holding an
+  invitation row, not anonymized, the host aside; null in the photos-only
+  view), and `by_self` on a held message. **The deploy window**: a new
+  bundle on the old API reads neither, so for those minutes a gathering's
+  header says *Chat* alone and the row of a message you removed yourself
+  gives your name; an old bundle ignores both. No route, no log line and no
+  migration, so no verifier run is owed. Not built: the second pair's
+  (reactions, the mark for something new, a jump to the newest, typing),
+  the third pair's (*Added N photos* cards, the photo button) and keeping
+  unsent words. Detail: `reference/frontend/components.md` 1.61.0, The chat
+  on the surface convention; `reference/backend/api-reference.md` 1.53.0.
 - Browser session (CK-6, lifetime CK-9): `/auth/verify` 302s to
   `${APP_BASE_URL}/auth/callback#token=<jwt>` — the JWT rides the URL
   **fragment**, never the query string; the frontend stores it in
@@ -2956,14 +3033,14 @@ covey-keep/            # the code root (this repo)
 │   │       └── thanksgiving-print.webp        # a sign-in print (stock, no people), sized to its largest frame at 2×
 │   └── src/               # the application; each test sits beside its subject (*.test.ts, *.test.tsx)
 │       ├── main.tsx       # the entry: StrictMode, BrowserRouter, AuthProvider, App
-│       ├── App.tsx        # the route table inside AppUpdateProvider, with PwaUpdatePrompt; ONE layout route (RequireAuth around Frame) for every signed-in page, `/calendar` among them; `*` renders PageNotAvailable, never a redirect
+│       ├── App.tsx        # the route table in AppUpdateProvider; ONE layout route (RequireAuth around Frame) for every signed-in page, the chats included; `*` is PageNotAvailable
 │       ├── App.css        # the class vocabulary every screen and page reuses, in the look, and the touch area that makes every control 44 to the touch; names no colour
 │       ├── index.css      # the stylesheet entry: styles/tokens.css, then styles/base.css
 │       ├── styles/        # the look (CK-81)
 │       │   ├── tokens.css     # THE ONLY PLACE A COLOUR IS NAMED: the mockup's tokens, a light and a dark block with the same names
 │       │   ├── base.css       # the font face, the page, the grain and the glow, focus, the type, motion
 │       │   ├── touch-area.test.ts # every named control's ::after 44 by 44, positioned, no colour; the midpoint caps; two inputs' labels; the rows, the gaps
-│       │   └── look.test.tsx  # the tokens, one home for colour, honey's one use, the theme attribute and its one module and one script, the menu layout's and the gatherings view's one module each, the calendar's column and marks, every list that shows an invited address wrapping it through `.address-list` and no wrap on `.occurrence-list`, the font, focus and motion, the lockup, the precache
+│       │   └── look.test.tsx  # the tokens, one home for colour, honey, each stored choice's one module, the calendar's and the chat's styles, the font, focus, motion, the precache
 │       ├── vite-env.d.ts  # type references for Vite and vite-plugin-pwa
 │       ├── brand.ts       # PRODUCT_NAME, TAGLINE and MAKER_LINE — the only frontend home for user-visible brand strings
 │       ├── brand.test.tsx # pins the heading, tagline and title to brand.ts
@@ -2977,11 +3054,11 @@ covey-keep/            # the code root (this repo)
 │       │   ├── Cover.tsx             # THE cover component: a 42px thumbnail, a page's cover card at the mockup's measure (wide — a group's page and a gathering's, with a badge on a gathering's; with no cover its empty cover a row in the flow, .cover-lead, beside Change cover), a list's featured card (hero) or grid card (tile), a section's head on a group's page (banner: never the empty cover, minted as it nears the viewport), or a group's panel in Rail and panel (panel: the web layer, the words on their own scrim), or a calendar day's cover (mark: the thumbnail layer, sized by its container); the layer from the variant's one table, the empty cover or the ground; a blob: URL from the cache, never a presigned one; DateBadge; CardLine (a card's date and time kept whole)
 │       │   ├── cover.test.tsx        # the component's states and layers, no presigned URL anywhere, the covers' styles adding no token, the menu through the cache; the wide card's empty cover a row in the flow
 │       │   ├── PageCover.tsx         # a page's cover card (the wide card, and a gathering page's badge) with the <h1> inside; for organisers Change cover over its panel: Upload a picture (followed to ready), Remove cover's step — the card's own — the hint; after an answer focus in the panel: the step on itself, never its Remove cover, a landing on Upload a picture (CK-95)
-│       │   ├── Frame.tsx             # the frame around every signed-in page: the top bar, the bottom bar, the menu as a drawer (a modal dialog) or a column from 900px (304, or 358 in Rail and panel); the drawer's one exception, a press held in a ref and spent in a layout effect, never in navigation state; calls useKeepPlace once and provides pagePlace, adding no element
+│       │   ├── Frame.tsx             # the frame around every signed-in page: the two bars (neither on a chat), the menu as a drawer or a column from 900px; calls useKeepPlace once
 │       │   ├── frame.test.tsx        # the frame through the real route table: which routes carry it, the bars, the drawer as a dialog, the column, Home retired
-│       │   ├── Menu.tsx              # the menu in either layout. One list: the sections, Your groups, Gatherings coming up — each row's cover — the footer, no chevron, pin or panel. Rail and panel: the rail (the Home tile, a tile per group, +) and the panel, read from the address through lib/frame.ts's panelOf — Home's, or a group's with its back row, cover, four chevron rows (Calendar since CK-91) and gatherings. One GatheringRow; re-reads on a page change, a cover change and the menu's signal (lib/frame.ts); reads nothing else; its Try again described by its line, landing on the first list heading drawn or, failing again, the new Try again (CK-96)
+│       │   ├── Menu.tsx              # the menu in either layout: One list, or the rail and a panel read from the address (a group's has five chevron rows); re-reads on its signal
 │       │   ├── menu.test.tsx         # the two lists, at most five coming up, never photos-only, Try again, the re-read on navigation, the footer
-│       │   ├── Icons.tsx             # the mockup's hand-drawn icons (the plus on the New buttons, the crumbs' back, a gathering page's addpic and the photo viewer's prev, next, expand, shrink, zoomIn and zoomOut, and the panel's home and photos, the calendar's calendar and the switch's cards among them), 24px, currentColor, aria-hidden; no icon set
+│       │   ├── Icons.tsx             # the mockup's hand-drawn icons, the chat's bubble and Send's among them, 24px, currentColor, aria-hidden; no icon set
 │       │   ├── appUpdate.ts          # the update-state context and its type
 │       │   ├── useAppUpdate.ts       # useAppUpdate(), every reader's hook
 │       │   ├── PwaUpdatePrompt.tsx   # the update notice (Reload, Not now), a reader of the provider
@@ -2989,7 +3066,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── RequireAuth.tsx       # route guard: signed out goes to `/`; parks path + query (never the hash) as the return only if signedOutSinceLoad
 │       │   ├── FieldError.tsx        # FieldError and FormLevelErrors: the 422 mapper's rendering half, role="alert"
 │       │   ├── PasskeySection.tsx    # Settings' passkey list: add and remove; quiet, never promoted; after an answer focus on Add a passkey, the Remove pressed, or the next Remove (CK-94); its error line an alert; since CK-96 a failed read's line an alert with Try again, landing on Add a passkey
-│       │   ├── GatheringMedia.tsx    # the Photos section, open on load: its heading and count, upload, the rows (a thumbnail that can't be shown keeps its button, Retry beside it), words and search, the host's review, both bins, failed rows; the grid of published photos and See all; the photo viewer's set, its one history entry ({ photoViewer: true }) and the acts it carries (the covers among them); the page's Add photos handle (pickPhotos: the picker in one press); the arrival at #photos (arrivedAtPhotos: read once at mount, one scroll after the first read, none on a return); See all still out on a return; groupLine, the line about who can see a group's gathering, straight after the head (CK-93); after every act's answer focus where the Focus after an answer convention's photo tables say — each step on itself, the viewer's three no longer on their acting button, THE ROW GONE's marker spent by a read begun after the act, the viewer's targets kept to the photo on screen (CK-95); since CK-96 a load the page moved past while its body was read lands nothing and spends nothing, Use as cover and a landed save drop a photo's refusal line, and a tag's 422 lands on that chip's Remove, which its error describes; since CK-97 Decline it waits in its open step, the shared delete step passes the gathering bin's context, the list is drawn only for the view and gathering it was read for (its count too), and no row offers Remove from gathering — the viewer's kept; since CK-98 the review gate and the poll read the list only while it was read for the gathering on screen (`ownItems`, `listGathering`), so a move to another gathering opens no review and schedules no re-read from the last one's rows, the queue's fallback running at once, and in the caption-and-tags editor a chip's Remove lands on the next chip's, else the previous, else Add a tag, and Add tag on the cleared field
+│       │   ├── GatheringMedia.tsx    # the Photos section: count, upload, rows, words, search, review, both bins, the grid, the viewer's set and acts; the line it is handed, if any
 │       │   ├── GroupPhotos.tsx       # a group's photos in sections: its one read joined to the strip's list by gathering_id, the head, a banner or a plain head, the preview, See all, the photo viewer for viewing only; no act and no read of the group's seat; the arrival at #photos from another page or its own, once per key, none on a return; Try again's answer on the heading or the new Try again (CK-95)
 │       │   ├── usePreviewWide.ts     # the preview's width and its 6 and 8; one copy for both pages
 │       │   ├── useViewerEntry.ts     # the viewer's one history entry, exactly { photoViewer: true }: its push, pop and Back effect; one copy for both pages
@@ -2997,6 +3074,15 @@ covey-keep/            # the code root (this repo)
 │       │   ├── useKeepPlace.ts       # THE ONE OWNER OF A NAVIGATION'S SCROLL, called once from Frame: acts only on a pathname change; a return by history or by a link to the page just left, or a new page at the top; the record in a ref alone; a return held until the window (5 s), the person's act, a pathname change or the frame going; focus back to a link pressed from the keyboard
 │       │   ├── pagePlace.ts          # the context a page reads about its own visit: isReturn, shownAll, rememberShownAll; outside the frame every page is a new visit
 │       │   ├── CalendarView.tsx      # the calendar, one component for the tab, a group's calendar and Your gatherings' Calendar view: one read per shown month of CK-90's route alone, in the profile's zone; the month card (a button per day, one tab stop, the arrows), covers on a phone and chips from 640px, the day's list with each row's answer chip or photo count; every move replaces ?day=, never a history entry; Nothing on this day. only once the answer lands; Try again landing on the day's heading or the new Try again (CK-96)
+│       │   ├── ChatView.tsx          # a chat's screen, either kind: the header, the thread (the only scroller), the box; sending, the steps, held rows, focus, the live region
+│       │   ├── ChatEntry.tsx         # what a thread holds: a message and its links, Delete or Remove and its step, a held message's row, a line the chat wrote
+│       │   ├── ChatPreview.tsx       # the Chat card: Open chat, the newest three live entries from one read, the box as a link, empty and failed states; a 404 is no card
+│       │   ├── useChat.ts            # a chat read and kept current: the first read, the check's pace, a send whose answer was lost; one session a place
+│       │   ├── useChat.test.tsx      # the hook on fake timers under StrictMode, every answer given by hand
+│       │   ├── useChatRows.ts        # a chat's elements by message id, for focus and for the thread's place
+│       │   ├── useThreadScroll.ts    # where a thread stands: opens at the newest, stays within 48px of it, and otherwise nothing moves what is on screen
+│       │   ├── useVisualViewport.ts  # the part of the window that can be seen, a phone's keyboard aside
+│       │   ├── chatArrival.ts        # the context that tells a chat its <h1> is owed focus, where the drawer closed on it
 │       │   ├── OutsideInvitations.tsx # inviting people outside the group: the card (its switch never moved before the server answers; the turn-on step always, the turn-off step only when the preview names someone or something pending; the page's email form and Waiting on handed in) and the alert (Got it posts the dismissal once); after a failed change focus goes back where it can be tried again, and no move takes focus from outside the card or the alert (CK-93.1), on the shared hook since CK-94; reads only what the page hands it — the body decides
 │       │   ├── InvitationStep.tsx    # the step on both invitation landings: an invitation sent to another address — the signed-in account named, Accept as {name}, Sign out and use the invited address
 │       │   ├── InviteByEmail.tsx     # CK-25's email form and Waiting on, one copy for a standalone gathering's Invitations section and the outside card; Waiting on's list carries `.address-list`; the page holds the state and the handlers, and the field's and the button's refs (fieldRef, submitRef: where focus goes after an answer, CK-94); since CK-96 a failed Revoke's line beneath that row's Revoke, an alert, and each Revoke a ref
@@ -3015,7 +3101,7 @@ covey-keep/            # the code root (this repo)
 │       │   ├── url.test.ts           # the guard against the backend validator's hostile set
 │       │   ├── accountDeleted.ts     # ACCOUNT_DELETED_SIGNAL: the one-shot navigation state that lets /account-deleted end the session
 │       │   ├── invitations.ts        # gathering-invitation types, acceptInvitation (with or without confirm_other_address), the parked token; REVOKE_REFUSED, the house line
-│       │   ├── gatherings.ts         # gathering types and labels; roleFlags and viewOf, the one reads of the role and the view; isComingUp, the one rule the list, the menu and a group page's strip read, the list's sections and card lines, in pieces (each date and time kept whole); sectionCountPieces, a section's count line on a group's page; caller_response on a date; the outside-invitation body fields, optional
+│       │   ├── gatherings.ts         # gathering types and labels; roleFlags and viewOf, the one reads of the role and the view; isComingUp and the lists' sections; optional fields
 │       │   ├── gatherings.test.ts    # roleFlags and viewOf gate closed on anything unknown; the coming-up rule, the sections and the card lines
 │       │   ├── outsideInvitations.ts # inviting people outside the group: outsideFlags, the one read of the three body fields, failing closed; the PUT, the preview and the dismissal answering codes; turnOffNeedsStep; every line, the approved words as written
 │       │   ├── outsideInvitations.test.ts # the flags fail closed; the turn-off sentence's forms; the calls' codes; every line as a literal
@@ -3035,13 +3121,15 @@ covey-keep/            # the code root (this repo)
 │       │   ├── groupJoining.test.ts  # no property holds the URL; the device is called inside the click
 │       │   ├── returnPath.ts         # the sign-in return: a same-origin relative path, never a fragment, fresh for 30 minutes
 │       │   ├── returnPath.test.ts    # every hostile path refused at park and at take
-│       │   ├── frame.ts              # the four sections (Calendar since CK-91), a page's section, the menu's gatherings coming up (the list's Coming up, its first five) and its two reads; panelOf, the panel from the address and those reads, never a second state; Home's panel's sections and a group's panel's gatherings; a group's calendar's panel from ?group= on /calendar alone; announceMenuChange, the menu's signal after an act that changes what it draws with no page change
+│       │   ├── frame.ts              # the four sections, the menu's two reads, panelOf (a chat's address is its group's panel), isChatAddress, announceMenuChange
 │       │   ├── frame.test.ts         # the sections, sectionOf, at most five coming up and never photos-only; panelOf's table of addresses, the panels' limits and order
 │       │   ├── theme.ts              # THE ONE MODULE that reads or writes the stored theme (covey-keep:theme) or the attribute; light by default
 │       │   ├── theme.test.ts         # exactly dark is dark; storage failures; index.html's pre-paint script, executed
 │       │   ├── menuLayout.ts         # THE ONE MODULE that names the menu layout's key (covey-keep:menu-layout): exactly rail is Rail and panel; a refused choice held for the load; a subscription, so the menu follows You at once
 │       │   ├── calendar.ts           # the calendar's days (strings in the profile's zone, dayOf and dayStart the only bridges), the month's read range, the days a date covers, the selection, every line and word, the read, useCalendarDay (?day= by replace)
 │       │   ├── calendar.test.ts      # the days in a zone forced to differ, across a daylight-saving change and east of UTC; the days a date covers; the selection; every line as literals
+│       │   ├── chat.ts               # the chat's types, calls, merge and every approved line; nothing stored, nothing logged
+│       │   ├── chat.test.ts          # the merge and the server's order, the calls' codes, links, day lines, every line as a literal
 │       │   ├── gatheringsView.ts     # THE ONE MODULE that names Your gatherings' view key (covey-keep:gatherings-view): exactly calendar is the Calendar view; a refused choice held for the load; a subscription
 │       │   ├── gatheringsView.test.ts # exactly calendar is the Calendar view; a throwing read, a write alone throwing; the subscription
 │       │   ├── menuLayout.test.ts    # exactly rail is Rail and panel; a throwing read, a write alone throwing; the subscription
@@ -3059,10 +3147,10 @@ covey-keep/            # the code root (this repo)
 │       │   ├── AuthCallback.tsx             # `/auth/callback`: the session from the fragment, then the sign-in return, a parked invitation or /groups
 │       │   ├── Gatherings.tsx               # `/gatherings`: the featured card, Coming up, Past with Show all (still open on a return), Photos you can see; its empty state, Try again; since CK-91 the switch, Cards or Calendar (stored through lib/gatheringsView.ts), the Calendar view reading the calendar route alone; Try again landing on the <h1> or the new Try again (CK-96)
 │       │   ├── GatheringNew.tsx             # `/gatherings/new`, and with inGroup a group's form with Who it's for; a date added or removed puts focus on a Starts
-│       │   ├── GatheringDetail.tsx          # `/gatherings/:id`: the crumb, the cover, When, RSVP, Photos, Who it's for in columns, the outside card, invitations, co-hosts
+│       │   ├── GatheringDetail.tsx          # `/gatherings/:id`: the crumb, the cover, When, RSVP, the Chat card, Photos, Who it's for, the outside card, invitations, co-hosts
 │       │   ├── Groups.tsx                   # `/groups`: the featured card and More groups, each card's count in people and the role kept whole; Try again landing on the <h1> or the new Try again (CK-96)
 │       │   ├── GroupNew.tsx                 # `/groups/new`: headed New group; one Name field and no type control; a refused create puts focus on the field or Start group (CK-94)
-│       │   ├── GroupDetail.tsx              # `/groups/:id`: the mockup's shape — the wide cover card with the count, New gathering, People and Calendar, the strip of its gatherings, the photos in sections (GroupPhotos); each load tagged with the group's id; never reads the members; Try again on the page and the strip landing on the <h1> or the strip's label, or the new Try again (CK-96)
+│       │   ├── GroupDetail.tsx              # `/groups/:id`: the cover card and its count, the actions, the Chat card, the strip, the photos in sections; never reads the members
 │       │   ├── GroupPeople.tsx              # `/groups/:id/people`: the crumb, People, Members and their acts, requests to join, invite people (the Pending invitations list carrying `.address-list`), rename, leave — moved from the group's page unchanged; after every act's answer focus where the Focus after an answer convention's table says, each step a group labelled by its sentence, never its destructive button (CK-94); since CK-96 its four Try agains landing on their headings or the new Try again, and a failed Revoke's line on its row
 │       │   ├── GroupGatheringNew.tsx        # `/groups/:id/gatherings/new`: reads the group and its members, then GatheringNew with inGroup; Try again landing on the form's <h1> or the new Try again (CK-96)
 │       │   ├── GroupJoin.tsx                # `/groups/join`, signed in or out: the link's landing; asking to join is a press, never an opening; after an answer focus on Ask to join or the new screen's <h1>, Try again landing on the screen's <h1> (CK-96)
@@ -3079,6 +3167,10 @@ covey-keep/            # the code root (this repo)
 │       │   ├── account-deleted.test.tsx     # the deletion through the real route table lands on /account-deleted, then signs out
 │       │   ├── add-another-date.test.tsx    # Add another date on the new date's Starts, on both New gathering forms; a person elsewhere keeping their place
 │       │   ├── calendar.test.tsx            # the calendar through the real route table: the tab, a group's calendar and the Calendar view; the read, the days, the moves and the address, the day's list, the states, the frame's fourth section, the panel's row, the switch
+│       │   ├── Chat.tsx                    # `/groups/:id/chat` and `/gatherings/:id/chat`: ChatView, keyed by its place
+│       │   ├── chat.test.tsx               # both pages through the real route table: what is drawn, sending, Delete and Remove by seat, held rows, the thread, the live region
+│       │   ├── chat-ways-in.test.tsx       # the Chat card on both pages, the pill, the photos-only view's none of it, the panel's row
+│       │   ├── focus-chat.test.tsx         # focus after every act's answer in a chat, a 404 and the drawer's row, a person who moved on keeping their place
 │       │   ├── co-hosts.test.tsx            # the role from caller_role; co-host management from both seats; a step found by its sentence (CK-94)
 │       │   ├── covers.test.tsx              # covers through the pages: the lists, the cards, Change cover by seat, the upload, Remove cover, the viewer's two buttons
 │       │   ├── focus-covers.test.tsx        # focus after an answer on Change cover — Upload a picture's endings, Remove cover's step, Keep it, its refusal and landing — and on a group's photos' Try again, a person who moved on keeping their place
@@ -3131,6 +3223,8 @@ covey-keep/            # the code root (this repo)
 │       │   └── you.test.tsx                 # You's words, Menu layout first and the stored choice, Appearance and the stored theme, the rows, Sign out; no Favorites
 │       └── test-support/  # files only the test suite loads
 │           ├── focus.ts       # gate, settle, dropFocusToBody and pressHeld: a request held on a released promise, and focus dropped to the body by hand as Chrome drops it from a disabled control (jsdom does not)
+│           ├── chat.ts       # withEmptyChat (a chat read answered empty ahead of a stub) and the builders of entries, held ones, pages and checks
+│           ├── chatWorld.ts  # the fake server behind the chat tests, the app around it, stage (hold, refuse or lose a request), the clock stopped
 │           ├── photos.ts      # the fake server behind the photos' focus tests (CK-95): a gathering's photos, their acts, the viewer's layers, the uploads, the covers and a group's page, each answer changing the world as the backend would; photosWorld.answer refuses an act, photosWorld.hold holds it; a second gathering (CK-97), with its own detail and photos and a log of every list read (CK-98)
 │           ├── world96.ts     # the fake server behind CK-96's focus tests: sign-in, the plan, the join landing, the menu, the calendar, the lists, a gathering's and a group's pages, the People page, Settings' passkeys; world96.answer refuses a read or an act, world96.hold holds it, world96.inflight counts what is still in flight; the two invitation pages' preview and accept (CK-97)
 │           ├── pwaRegister.ts # the inert virtual:pwa-register/react the tests resolve to; never imported by app code
@@ -3160,7 +3254,7 @@ covey-keep/            # the code root (this repo)
 │   │   │   ├── auth.py              # /auth: request-link (a link for an account, an invitation or a reserved address), verify (where a person is made), email-change verify, me, logout; mint_session
 │   │   │   ├── profile.py           # /me: profile, email change, delete (anonymization, never cascade; Stripe first)
 │   │   │   ├── passkeys.py          # /me/passkeys enrolment and usernameless /auth/passkey sign-in
-│   │   │   ├── gatherings.py        # gatherings and occurrences, the two read tiers, caller_role and caller_view, each date's caller_response (one statement), places; the outside-invitation setting (the gathering's row lock first; a turn-off deletes the outsiders' rows and revokes the pending), the detail's three fields, the alert's dismissal; is_host, may_administer, may_change_outside_invitations
+│   │   │   ├── gatherings.py        # gatherings and dates, the two read tiers, roles and views, places, the outside setting (its row lock first), invited_count on the detail
 │   │   │   ├── invitations.py       # gathering invitations: create, list, revoke, preview, accept (asking first when sent to another address: sent_to_caller, AcceptBody); members_only while off
 │   │   │   ├── rsvps.py             # an occurrence's RSVP: the upsert with named companions and the filtered list, the invited tier alone; no delete, by design
 │   │   │   ├── media.py             # uploads, reads, words, review, bins, dismiss; a group's photos in sections (one statement); _visible_media the one audience; never imports services/ingest.py
@@ -3293,6 +3387,7 @@ covey-keep/            # the code root (this repo)
 │       ├── test_hidden_parameters.py     # a dropped connection's error prints no words and no address; every engine under app/ hides its parameters
 │       ├── test_invitation_other_address.py # an invitation sent to another address: the asking, the confirmation, already in, the dead statuses first, the bodies, no lock
 │       ├── test_invitations.py           # gathering invitations and acceptance through the session
+│       ├── test_invited_count.py         # invited_count: who it counts, null in the photos-only view, on two answers and no other, one statement
 │       ├── test_keeper_shape.py          # the keeper columns, the CHECK, resolve_keeper
 │       ├── test_keeping.py               # keep, unkeep, derived grace, the memorial exemption, usage
 │       ├── test_media_intents.py         # upload intents, confirm, the quota and ceiling refusals, the intent reap

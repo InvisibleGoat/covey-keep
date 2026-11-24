@@ -36,6 +36,7 @@ import { GatheringMedia } from '../components/GatheringMedia'
 import { formatDayWithYear } from '../lib/datetime'
 import { DELETE_PERMANENTLY_CONFIRMATION } from '../lib/media'
 import tokensCss from '../styles/tokens.css?raw'
+import { withEmptyChat } from '../test-support/chat'
 
 const TITLE = '4th of July at the Lake'
 // A zone forced to differ from the runner's: the photos below were added at
@@ -128,7 +129,7 @@ function stubServer(rows: Row[], over: Record<string, Responder> = {}) {
     }
     throw new Error(`no stub for ${method} ${path}`)
   })
-  vi.stubGlobal('fetch', mock)
+  vi.stubGlobal('fetch', withEmptyChat(mock))
   return mock
 }
 

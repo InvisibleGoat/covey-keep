@@ -4,6 +4,7 @@ import type { Person } from '../auth/context'
 import { useAuth } from '../auth/useAuth'
 import { MAKER_LINE, PRODUCT_NAME } from '../brand'
 import { GROUP_DATES_LINE } from '../lib/calendar'
+import { CHAT, ONLY_MEMBERS } from '../lib/chat'
 import { onCoverChange } from '../lib/covers'
 import { effectiveZone } from '../lib/datetime'
 import {
@@ -40,7 +41,7 @@ import { useFocusRequest } from './useFocusRequest'
 // RAIL AND PANEL (CK-89): a rail of group covers down the side (`.rail`) and
 // beside it a panel (`.panel`) that shows Home's — the brand, the sections,
 // *Coming up*, *Not in a group* — or the chosen group's: a back row, its cover,
-// three rows and its gatherings; the count is the People row's line alone
+// five rows and its gatherings; the count is the People row's line alone
 // (CK-89.1 dropped the facts line that repeated it). WHAT THE PANEL SHOWS IS READ FROM
 // THE ADDRESS AND THE HELD LISTS (lib/frame.ts::panelOf), never from a second
 // state, so Back and Forward always agree with it. A gathering's row opens its
@@ -429,7 +430,22 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
                   <Icon name="home" />
                   <span className="t">
                     <b>Group page</b>
-                    <span>Cover, gatherings and photos</span>
+                    <span>Cover, chat and photos</span>
+                  </span>
+                  <Icon name="chevron" className="chev" />
+                </Link>
+              </li>
+              {/* The group's chat (CK-103; the mockup's `chat` row). */}
+              <li>
+                <Link
+                  className="nrow"
+                  to={`/groups/${panel.group.id}/chat`}
+                  aria-current={pathname === `/groups/${panel.group.id}/chat` ? 'page' : undefined}
+                >
+                  <Icon name="chat" />
+                  <span className="t">
+                    <b>{CHAT}</b>
+                    <span>{ONLY_MEMBERS}</span>
                   </span>
                   <Icon name="chevron" className="chev" />
                 </Link>

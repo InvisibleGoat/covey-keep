@@ -139,6 +139,10 @@ export interface GatheringWithOccurrences extends Gathering {
   outside_invitations?: OutsideInvitationsBody | null
   caller_in_group?: boolean | null
   outside_alert?: boolean | null
+  // How many people are invited, the host aside (CK-103): the chat header's
+  // number. Null in the photos-only view, withheld; absent from an older API,
+  // and then the header says *Chat* alone.
+  invited_count?: number | null
 }
 
 // A GET /gatherings item (CK-20): the gathering plus an occurrence summary.

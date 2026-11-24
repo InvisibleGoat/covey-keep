@@ -150,7 +150,9 @@ const TAB = { groups: 'Groups', gatherings: 'Gatherings', calendar: 'Calendar', 
 // The frame on the right routes.
 // ---------------------------------------------------------------------------
 
-test('every signed-in route carries the frame: one <main>, the bars, the menu, and every navigation landmark labelled', async () => {
+// MOVED AT CK-103, with its reason: every signed-in route but the two chats', whose
+// own header stands in the bars' place (the next test).
+test('every signed-in route but a chat carries the frame: one <main>, the bars, the menu, and every navigation landmark labelled', async () => {
   for (const [address] of SIGNED_IN_ROUTES) {
     renderAppAt(address)
     await screen.findByRole('navigation', { name: 'Sections' })
@@ -164,6 +166,33 @@ test('every signed-in route carries the frame: one <main>, the bars, the menu, a
     for (const nav of document.querySelectorAll('nav')) expect(nav.getAttribute('aria-label'), address).toBeTruthy()
     await settle()
     expect(document.querySelectorAll('main'), address).toHaveLength(1)
+    cleanup()
+    vi.unstubAllGlobals()
+  }
+})
+
+test('the two chats carry the frame and neither bar (CK-103): one <main>, the menu, every navigation landmark labelled, and from 900px the column with its section current', async () => {
+  for (const [address, section] of [
+    ['/groups/g-1/chat', 'Groups'],
+    ['/gatherings/x-1/chat', 'Gatherings'],
+  ]) {
+    renderAppAt(address)
+    await settle()
+    expect(document.querySelector('.frame'), address).toBeTruthy()
+    expect(document.querySelector('.topbar, .tabbar'), address).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Open menu' }), address).toBeNull()
+    expect(screen.queryByRole('navigation', { name: 'Sections' }), address).toBeNull()
+    expect(document.getElementById('frame-menu')?.querySelector('nav[aria-label="Main"]'), address).toBeTruthy()
+    expect(document.querySelectorAll('main'), address).toHaveLength(1)
+    for (const nav of document.querySelectorAll('nav')) expect(nav.getAttribute('aria-label'), address).toBeTruthy()
+    cleanup()
+    vi.unstubAllGlobals()
+    stubWidth(true)
+    renderAppAt(address)
+    await settle()
+    expect(document.querySelector('.topbar, .tabbar'), address).toBeNull()
+    const main = screen.getByRole('navigation', { name: 'Main' })
+    expect(within(main).getByRole('link', { current: 'page' }).textContent, address).toBe(section)
     cleanup()
     vi.unstubAllGlobals()
   }

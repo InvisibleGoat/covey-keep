@@ -7,6 +7,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AuthContext, type AuthState, type Person } from '../auth/context'
 import { wallClockToInstant } from '../lib/datetime'
+import { withEmptyChat } from '../test-support/chat'
 import { GatheringDetail } from './GatheringDetail'
 import { GatheringNew } from './GatheringNew'
 import { Gatherings } from './Gatherings'
@@ -394,7 +395,7 @@ function stubFetchRoutes(routes: StubRoute[]) {
     if (!route) throw new Error(`no stub for ${method} ${String(url)}`)
     return Promise.resolve(route.response())
   })
-  vi.stubGlobal('fetch', mock)
+  vi.stubGlobal('fetch', withEmptyChat(mock))
   return mock
 }
 
@@ -691,7 +692,7 @@ test('a successful save re-renders from the server, not from local form state', 
     }
     throw new Error(`no stub for ${method} ${String(url)}`)
   })
-  vi.stubGlobal('fetch', mock)
+  vi.stubGlobal('fetch', withEmptyChat(mock))
   renderDetail()
   fireEvent.click(await screen.findByRole('button', { name: /edit gathering/i }))
   fireEvent.change(screen.getByLabelText(/^title$/i), { target: { value: 'Sunday Potluck' } })
@@ -765,12 +766,18 @@ test('a stored javascript: map link renders as text with NO anchor element', asy
   await screen.findByText('Test Potluck')
   // The stored value is visible — a silently vanished field is its own bug —
   // but it is text, never a link: assert the ABSENCE of the anchor, not just
-  // the presence of the text (the "Back to your gatherings" router link is
-  // the only anchor on the page).
+  // the presence of the text. MOVED AT CK-103: the crumb was the only anchor
+  // on the page; the chat's three — its pill, Open chat and the box — are
+  // router links beside it.
   expect(screen.getByText('javascript:alert(1)')).toBeTruthy()
   expect(screen.queryByRole('link', { name: 'Map' })).toBeNull()
   const anchors = Array.from(container.querySelectorAll('a'))
-  expect(anchors.map((a) => a.getAttribute('href'))).toEqual(['/gatherings'])
+  expect(anchors.map((a) => a.getAttribute('href'))).toEqual([
+    '/gatherings',
+    '/gatherings/g-1/chat',
+    '/gatherings/g-1/chat',
+    '/gatherings/g-1/chat',
+  ])
 })
 
 test('a valid https map link still renders as a new-tab link', async () => {
@@ -822,7 +829,7 @@ test('blanking a saved location sends an explicit null — and the untouched fie
     }
     throw new Error(`no stub for ${method} ${String(url)}`)
   })
-  vi.stubGlobal('fetch', mock)
+  vi.stubGlobal('fetch', withEmptyChat(mock))
   renderDetail()
   fireEvent.click(await screen.findByRole('button', { name: /edit this date/i }))
   const save = screen.getByRole('button', { name: /^save$/i }) as HTMLButtonElement
@@ -960,7 +967,7 @@ function switchStub(saved: Record<string, unknown>, after: Record<string, unknow
     }
     throw new Error(`no stub for ${method} ${String(url)}`)
   })
-  vi.stubGlobal('fetch', mock)
+  vi.stubGlobal('fetch', withEmptyChat(mock))
   return sent
 }
 

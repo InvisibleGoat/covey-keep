@@ -191,6 +191,47 @@ test("the calendar (CK-91): a phone's day keeps its covers and its count inside 
   expect(marks![1]).toMatch(/justify-content:\s*center\s*;/)
 })
 
+test('the chat (CK-103): its styles name no colour and add no token, and hold the rules jsdom has no layout for', () => {
+  const start = appCss.indexOf('/* ---------- the chat (CK-103')
+  const end = appCss.indexOf('/* ---------- the touch area (CK-99')
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+  const css = stripCss(appCss.slice(start, end))
+  expect(css).not.toMatch(COLOUR_LITERAL)
+  expect(css).not.toMatch(/--[\w-]+\s*:/)
+  const rule = (selector: string) => {
+    const found = css.match(new RegExp(`(?:^|[}\\n])${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`))
+    expect(found, selector).not.toBeNull()
+    return found![1]
+  }
+  // The thread is the one scroller, keeps its scroll to itself, and is
+  // anchored by hand.
+  for (const line of ['overflow-y: auto;', 'overscroll-behavior: contain;', 'overflow-anchor: none;', 'min-height: 0;']) {
+    expect(rule('.thread')).toContain(line)
+  }
+  // A control Tab brings to its edge keeps its whole focus ring (3px, 2px off).
+  expect(rule('.thread')).toContain('scroll-padding-block: 0.75rem;')
+  expect(rule('.chatbar .iconbtn:focus-visible')).toContain('outline-offset: 1px;')
+  // What can be seen of the window, kept by the page; the window's own height without it.
+  expect(rule('.chat')).toContain('height: var(--chat-height, 100dvh);')
+  expect(rule('.chat')).toContain('top: var(--chat-top, 0px);')
+  // Words keep their line breaks and wrap anywhere, in a bubble and shown.
+  expect(rule('.bubble')).toContain('white-space: pre-wrap;')
+  expect(rule('.bubble')).toContain('overflow-wrap: anywhere;')
+  expect(rule('.heldshown p')).toContain('white-space: pre-wrap;')
+  expect(rule('.heldrow')).toContain('overflow-wrap: anywhere;')
+  // A phone doesn't zoom in on the box, and it stops growing at 140px.
+  expect(rule('.composer textarea')).toContain('font-size: 1rem;')
+  expect(rule('.composer textarea')).toContain('max-height: 140px;')
+  // A message's word hides only where the pointer hovers, and shows on focus.
+  expect(css).toMatch(/@media \(hover: hover\) \{\s*\.msg \.act \{\s*opacity: 0;\s*\}\s*\.msg:hover \.act,\s*\.msg:focus-within \.act \{\s*opacity: 1;/)
+  // The update notice is beneath the header, over neither Back nor the box.
+  expect(rule(':root:has(.chat) .update-notice')).toContain('bottom: auto;')
+  // Out of sight and in the page, once in the whole stylesheet.
+  expect(stripCss(appCss).match(/\.visually-hidden \{/g)).toHaveLength(1)
+  expect(rule('.visually-hidden')).not.toContain('display: none')
+})
+
 test('the font: Source Serif 4 self-hosted from a file in the repo, its OFL licence beside it', () => {
   const face = /@font-face\s*\{([^}]*)\}/.exec(baseCss)?.[1] ?? ''
   expect(face).toContain('font-family: "Source Serif 4"')

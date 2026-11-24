@@ -28,6 +28,7 @@ import { AuthContext, type AuthState, type Person } from '../auth/context'
 import { PageCover } from '../components/PageCover'
 import { clearCoverPictures, onCoverChange, type CoverBody } from '../lib/covers'
 import { PICKER_ACCEPT, POLL_INTERVAL_MS } from '../lib/media'
+import { withEmptyChat } from '../test-support/chat'
 import { GatheringDetail } from './GatheringDetail'
 import { Gatherings } from './Gatherings'
 import { GroupDetail } from './GroupDetail'
@@ -185,7 +186,7 @@ function stubServer(routes: Record<string, Responder>) {
     }
     throw new Error(`no stub for ${method} ${path}`)
   })
-  vi.stubGlobal('fetch', mock)
+  vi.stubGlobal('fetch', withEmptyChat(mock))
   return mock
 }
 

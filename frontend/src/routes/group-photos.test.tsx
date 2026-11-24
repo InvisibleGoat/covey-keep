@@ -31,6 +31,7 @@ import { clearCoverPictures } from '../lib/covers'
 import { formatDayWithYear } from '../lib/datetime'
 import { setToken } from '../lib/session'
 import tokensCss from '../styles/tokens.css?raw'
+import { withEmptyChat } from '../test-support/chat'
 
 // A profile zone forced to differ from the runner's. 10:30 UTC on 4 July 2026
 // is already the 5th in Kiritimati (UTC+14), and still the 4th in Honolulu and
@@ -191,7 +192,7 @@ function stubServer(world: World, over: Record<string, Responder> = {}) {
     }
     throw new Error(`no stub for ${method} ${path}`)
   })
-  vi.stubGlobal('fetch', mock)
+  vi.stubGlobal('fetch', withEmptyChat(mock))
   return mock
 }
 

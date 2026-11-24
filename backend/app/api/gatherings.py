@@ -88,7 +88,8 @@ holding a `shared_with` place row, answering which VIEW the caller gets,
 `left_out` row admits nothing. Every body carries `caller_view`, and in the
 memory view `occurrences`, `rsvp_list_visibility`, `next_occurrence` and
 `occurrence_count` are NULL — withheld, never `[]` or 0, which would claim a
-gathering with no dates (the CK-30 precedent). The checks are written
+gathering with no dates (the CK-30 precedent) — and so, on the detail body,
+is `invited_count` (CK-103). The checks are written
 against the host/co-host/invitation/place facts, never "is creator" and
 never the keeper. Non-permitted access is a 404, never a 403: the existence
 of a gathering is not public information. THE LIST IS THE MEMORY TIER'S
@@ -1231,6 +1232,26 @@ async def _outside_fields(
     }
 
 
+async def _invited_count(db: AsyncSession, gathering: Gathering) -> int:
+    """How many people are invited (CK-103): those holding an invitation row,
+    not anonymized, the host's own account aside — one count, one statement.
+    A pending invitation is no row here, a member only shared with or left
+    out holds none, and a row that names a group is nobody's."""
+    return (
+        await db.scalar(
+            select(func.count())
+            .select_from(GatheringInvitation)
+            .join(Person, Person.id == GatheringInvitation.person_id)
+            .where(
+                GatheringInvitation.gathering_id == gathering.id,
+                Person.anonymized_at.is_(None),
+                Person.account_id.is_distinct_from(gathering.host_account_id),
+            )
+        )
+        or 0
+    )
+
+
 async def _detail_body(
     db: AsyncSession, gathering: Gathering, ctx: AuthContext, view: str
 ) -> dict:
@@ -1250,14 +1271,18 @@ async def _detail_body(
         caller_role = await _role_of(db, gathering, ctx)
         # The caller's own answer on each date, in one statement (CK-87).
         responses = await _caller_responses(db, ctx.person.id, [o.id for o in occurrences])
+        # How many people are invited, for the chat's header (CK-103).
+        invited_count = await _invited_count(db, gathering)
     else:
         # Not read at all in the memory view — the body carries the key as
         # null — and a member only shared with is neither host nor co-host;
-        # with no dates there are no answers to read (CK-87).
+        # with no dates there are no answers to read (CK-87). How many are
+        # invited is withheld too, null and never 0 (CK-103).
         occurrences = []
         caller_role = None
         responses = None
-    return _gathering_body(
+        invited_count = None
+    body = _gathering_body(
         gathering,
         occurrences,
         facts=await _home_facts(db, gathering),
@@ -1266,6 +1291,9 @@ async def _detail_body(
         caller_responses=responses,
         outside=await _outside_fields(db, gathering, ctx),
     )
+    # This body's alone — no other gathering body carries it (CK-103).
+    body["invited_count"] = invited_count
+    return body
 
 
 async def _occurrence_for_organiser(

@@ -31,6 +31,7 @@ import { formatInstant } from '../lib/datetime'
 import gatheringsLibSource from '../lib/gatherings.ts?raw'
 import groupsLibSource from '../lib/groups.ts?raw'
 import placesSource from '../lib/places.ts?raw'
+import { withEmptyChat } from '../test-support/chat'
 import { GatheringDetail } from './GatheringDetail'
 import detailSource from './GatheringDetail.tsx?raw'
 import newSource from './GatheringNew.tsx?raw'
@@ -215,7 +216,7 @@ function stubServer(over: Routes = {}) {
     }
     throw new Error(`no stub for ${method} ${path}`)
   })
-  vi.stubGlobal('fetch', mock)
+  vi.stubGlobal('fetch', withEmptyChat(mock))
   return mock
 }
 

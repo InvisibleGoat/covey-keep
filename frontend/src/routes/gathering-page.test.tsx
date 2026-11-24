@@ -6,7 +6,8 @@
 //   <h1>, the type and the decedent line inside it; the date badge on the
 //   soonest date still ahead, in the profile's zone, and never once every
 //   date has started or in the photos-only view; no group line, no *Back to
-//   your gatherings*, no *Hosted by*, no Chat.
+//   your gatherings*, no *Hosted by*, and no Chat in the photos-only view
+//   (CK-103).
 // - THE ACTIONS: Add photos for the invited tier — one press clicks the file
 //   input SYNCHRONOUSLY, the section open on load since CK-88; the chosen files in
 //   the form; focus to Upload; Upload through today's calls — and Edit
@@ -29,6 +30,7 @@ import appCss from '../App.css?raw'
 import { wallClockToInstant } from '../lib/datetime'
 import gatheringsLibSource from '../lib/gatherings.ts?raw'
 import tokensCss from '../styles/tokens.css?raw'
+import { withEmptyChat } from '../test-support/chat'
 import { GatheringDetail } from './GatheringDetail'
 
 // A profile zone guaranteed to differ from the runner's: a date read in the
@@ -150,7 +152,7 @@ function stubServer(routes: Record<string, Responder> = {}) {
     }
     throw new Error(`no stub for ${method} ${path}`)
   })
-  vi.stubGlobal('fetch', mock)
+  vi.stubGlobal('fetch', withEmptyChat(mock))
   return mock
 }
 
@@ -330,7 +332,9 @@ test('no badge once every date has started — a date in progress included — a
   expect(document.querySelector('.cover-date')).toBeNull()
 })
 
-test('no group line, no Back to your gatherings, no Hosted by and no Chat — in either view', async () => {
+// MOVED AT CK-103: no Chat in either view until the chat's screens were built.
+// The full view carries the pill and the card, the photos-only view neither.
+test('no group line, no Back to your gatherings and no Hosted by in either view, and no Chat in the photos-only view', async () => {
   for (const body of [detail({ group: GROUP }), detail(), memoryDetail()]) {
     stubServer({ 'GET /gatherings/g-1': () => json(200, body) })
     const view = renderPage()
@@ -338,9 +342,10 @@ test('no group line, no Back to your gatherings, no Hosted by and no Chat — in
     expect(screen.queryByText(/^In The Lees$/)).toBeNull()
     expect(screen.queryByRole('link', { name: 'Back to your gatherings' })).toBeNull()
     expect(view.container.textContent).not.toMatch(/Hosted by/)
+    const chat = body.caller_view === 'memory' ? 0 : 1
     expect(screen.queryByRole('button', { name: /^chat$/i })).toBeNull()
-    expect(screen.queryByRole('link', { name: /^chat$/i })).toBeNull()
-    expect(screen.queryByRole('heading', { name: /^chat$/i })).toBeNull()
+    expect(screen.queryAllByRole('link', { name: /^chat$/i })).toHaveLength(chat)
+    expect(screen.queryAllByRole('heading', { name: /^chat$/i })).toHaveLength(chat)
     view.unmount()
   }
 })
@@ -712,7 +717,8 @@ test('the photos-only view never shows a date or an answer — even from a body 
   ])
 })
 
-test('the order of the page by seat: the crumb, the cover, the actions, then When, Photos, Who it’s for and the co-host or invitations section', async () => {
+// MOVED AT CK-103: the Chat card stands between When and Photos in the full view.
+test('the order of the page by seat: the crumb, the cover, the actions, then When, Chat, Photos, Who it’s for and the co-host or invitations section', async () => {
   const sections = () =>
     Array.from(document.querySelectorAll('main > *')).map((node) => {
       if (node.classList.contains('crumb')) return 'crumb'
@@ -724,10 +730,10 @@ test('the order of the page by seat: the crumb, the cover, the actions, then Whe
     }).filter((name) => name !== null)
 
   const seats: [Record<string, unknown>, (string | null)[]][] = [
-    [detail(), ['crumb', 'cover', 'actions', 'When', 'Photos', 'Invitations']],
-    [detail({ group: GROUP }), ['crumb', 'cover', 'actions', 'When', 'Photos', "Who it's for", 'Co-hosts']],
-    [detail({ caller_role: 'co_host', group: GROUP }), ['crumb', 'cover', 'actions', 'When', 'Photos', "Who it's for", 'Co-hosts']],
-    [detail({ caller_role: null, group: GROUP }), ['crumb', 'cover', 'actions', 'When', 'Photos']],
+    [detail(), ['crumb', 'cover', 'actions', 'When', 'Chat', 'Photos', 'Invitations']],
+    [detail({ group: GROUP }), ['crumb', 'cover', 'actions', 'When', 'Chat', 'Photos', "Who it's for", 'Co-hosts']],
+    [detail({ caller_role: 'co_host', group: GROUP }), ['crumb', 'cover', 'actions', 'When', 'Chat', 'Photos', "Who it's for", 'Co-hosts']],
+    [detail({ caller_role: null, group: GROUP }), ['crumb', 'cover', 'actions', 'When', 'Chat', 'Photos']],
     [memoryDetail(), ['crumb', 'cover', 'line', 'Photos']],
   ]
   for (const [body, expected] of seats) {
@@ -752,7 +758,7 @@ test('the order of the page by seat: the crumb, the cover, the actions, then Whe
   renderPage()
   await loaded()
   await screen.findByText("Dee Test doesn't know about this gathering yet.")
-  expect(sections()).toEqual(['crumb', 'cover', 'actions', 'Kept a surprise', 'When', 'Photos', "Who it's for", 'Co-hosts'])
+  expect(sections()).toEqual(['crumb', 'cover', 'actions', 'Kept a surprise', 'When', 'Chat', 'Photos', "Who it's for", 'Co-hosts'])
 })
 
 // ---------------------------------------------------------------------------

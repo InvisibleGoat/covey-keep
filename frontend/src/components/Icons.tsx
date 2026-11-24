@@ -29,6 +29,8 @@ export type IconName =
   | 'photos'
   | 'calendar'
   | 'cards'
+  | 'chat'
+  | 'send'
 
 const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
   groups: {
@@ -88,6 +90,17 @@ const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
   plus: { paths: <path d="M12 5v14M5 12h14" />, width: 2 },
   // The People page's crumb back to its group (CK-86; the mockup's `back`).
   back: { paths: <path d="M15 5l-7 7 7 7" />, width: 2 },
+  // The chat and its Send (CK-103; the mockup's `chat` and `send`).
+  chat: { paths: <path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8l-4 3v-3H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" /> },
+  send: {
+    paths: (
+      <>
+        <path d="M4 12l16-8-6 16-2.5-6.5z" />
+        <path d="M11.5 13.5L20 4" />
+      </>
+    ),
+    width: 2,
+  },
   // A gathering page's Add photos (CK-87; the mockup's `addpic`).
   addpic: {
     paths: (

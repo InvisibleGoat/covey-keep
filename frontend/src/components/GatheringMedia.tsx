@@ -415,8 +415,9 @@ interface Props {
   // once, as this section mounts.
   arrivedAtPhotos?: boolean
   // The line about who can see a group's gathering (CK-93; the record §6),
-  // drawn straight after the section's head in both views: the page hands
-  // it to the group's members alone. Absent or null draws nothing.
+  // drawn straight after the section's head: the page hands it to the
+  // group's members alone, and since CK-103 in the photos-only view alone —
+  // the full view's is in its Chat card. Absent or null draws nothing.
   groupLine?: string | null
 }
 
@@ -2499,7 +2500,7 @@ export function GatheringMedia({
       </div>
 
       {/* The line (CK-93; the mockup's .gline): who can see this group's
-          gathering, until the chat is built to carry it (the record §6). */}
+          gathering, where there is no chat to carry it (the record §6). */}
       {groupLine !== null && groupLine !== '' && <p className="gline">{groupLine}</p>}
 
       {/* The view switch — the organisers' (the host's alone until CK-69).

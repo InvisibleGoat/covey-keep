@@ -24,6 +24,9 @@
 //   calendar, `/calendar?group=<id>`. All three are links.
 //   Add photos is left out: posting to a group is not in this arc (Steven,
 //   answer 3), so New gathering is the primary.
+// - THE CHAT CARD (CK-103; components/ChatPreview.tsx): Open chat, the newest
+//   three entries and the box, each a way into the group's chat. Its own read,
+//   in its own place.
 // - THE GATHERINGS STRIP (`.group-strip`; the mockup's `.gstrip`, labelled *Gatherings*): `GET
 //   /groups/{id}/gatherings` on its own key, failing in its own place with
 //   Try again. The order is Your gatherings' sections, through the ONE rule
@@ -48,12 +51,11 @@
 //   only. It reads `GET /groups/{id}/media` itself and joins it to the strip's
 //   list, handed down with its moment and its failure.
 //
-// Not here, because none is built (the merge record §4): the chat preview,
-// *Kept by*, the pin, member faces, *Active … ago*, Add photos and *Posted to
-// the group*.
+// Not here, because none is built (the merge record §4): *Kept by*, the pin,
+// member faces, *Active … ago*, Add photos and *Posted to the group*.
 //
-// THE READS: the group body, its gatherings and its photos — never the member
-// list, which is the People page's. A 404 on the group is the one not-found
+// THE READS: the group body, its gatherings, its photos and its chat's newest
+// page — never the member list, which is the People page's. A 404 on the group is the one not-found
 // screen, byte-identical for a missing id, a group the caller is not in and a
 // path 422; a failed read offers Try again. Both screens are the page's own
 // from before CK-86, word for word. EACH LOAD BELONGS TO A GROUP'S ID
@@ -67,6 +69,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { ChatPreview } from '../components/ChatPreview'
 import { CardLine, Cover, DateBadge } from '../components/Cover'
 import { GroupPhotos } from '../components/GroupPhotos'
 import { Icon } from '../components/Icons'
@@ -269,6 +272,13 @@ export function GroupDetail() {
           Calendar
         </Link>
       </div>
+
+      <ChatPreview
+        place={{ kind: 'group', id: group.id }}
+        name={group.name}
+        group={group.name}
+        zone={zone}
+      />
 
       <section ref={stripSection} className="group-strip" aria-labelledby={stripLabel}>
         <h2 ref={stripHeading} className="strip-label" id={stripLabel} tabIndex={-1}>

@@ -14,6 +14,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AuthContext, type AuthState, type Person } from '../auth/context'
+import { withEmptyChat } from '../test-support/chat'
 import { GatheringDetail } from './GatheringDetail'
 
 // A profile zone guaranteed to differ from the runner's — a conversion bug
@@ -105,7 +106,7 @@ function stubRoutes(routes: StubRoute[]) {
     if (!route) throw new Error(`no stub for ${method} ${String(url)}`)
     return Promise.resolve(route.response())
   })
-  vi.stubGlobal('fetch', mock)
+  vi.stubGlobal('fetch', withEmptyChat(mock))
   return mock
 }
 

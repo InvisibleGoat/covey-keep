@@ -593,7 +593,7 @@ async def test_the_writer_deletes_their_own_and_an_organiser_removes_anothers(cl
     assert held[mine["id"]]["removed"]["by"] == "member" and held[mine["id"]]["removed"]["by_writer"] is True
     assert held[theirs["id"]]["removed"]["by"] == "admin" and held[theirs["id"]]["removed"]["by_writer"] is False
     assert held[by_co_admin["id"]]["removed"]["by"] == "coadmin"
-    assert set(held[theirs["id"]]["removed"]) == {"at", "by", "by_writer"}
+    assert set(held[theirs["id"]]["removed"]) == {"at", "by", "by_writer", "by_self"}
     assert held[theirs["id"]]["body"] == "Something unkind"
 
 
@@ -709,6 +709,37 @@ async def test_a_removed_message_leaves_every_other_read_at_once_and_is_named_in
         assert fresh[message["id"]]["removed"]["by"] == "admin" and fresh[message["id"]]["body"] == "Taken back"
     polled = await _answer(await _gread(client, cast.admin, cast.group_id, since=reads["admin"]["as_of"]))
     assert polled["removed"] == [] and _by_id(polled)[message["id"]]["removed"]["by_writer"] is False
+
+
+async def test_a_held_message_says_whether_the_caller_is_the_one_who_removed_it(client, capsys, db_session_factory):
+    """`removed.by_self` (CK-103): true for the caller whose person removed
+    it, in the read and in the check alike, so the screen says *You* rather
+    than the caller's own name. It is the remover's and nobody else's: the
+    writer of a message someone else removed reads false."""
+    cast = await _cast(client, capsys, db_session_factory)
+    members = await _sent(await _gsend(client, cast.member, cast.group_id, "A member's, removed by the admin"))
+    admins = await _sent(await _gsend(client, cast.admin, cast.group_id, "The admin's, removed by the co-admin"))
+    own = await _sent(await _gsend(client, cast.co_admin, cast.group_id, "The co-admin's, deleted by them"))
+    deleted = await _sent(await _gsend(client, cast.member, cast.group_id, "A member's, deleted by them"))
+    before = {"admin": await _answer(await _gread(client, cast.admin, cast.group_id))}
+    before["co_admin"] = await _answer(await _gread(client, cast.co_admin, cast.group_id))
+    assert (await _remove_message(client, cast.admin, members["id"])).status_code == 204
+    assert (await _remove_message(client, cast.co_admin, admins["id"])).status_code == 204
+    assert (await _remove_message(client, cast.co_admin, own["id"])).status_code == 204
+    assert (await _remove_message(client, cast.member, deleted["id"])).status_code == 204
+
+    expected = {
+        "admin": {members["id"]: True, admins["id"]: False, own["id"]: False, deleted["id"]: False},
+        "co_admin": {members["id"]: False, admins["id"]: True, own["id"]: True, deleted["id"]: False},
+    }
+    for who, headers in (("admin", cast.admin), ("co_admin", cast.co_admin)):
+        read = _by_id(await _answer(await _gread(client, headers, cast.group_id)))
+        polled = _by_id(await _answer(await _gread(client, headers, cast.group_id, since=before[who]["as_of"])))
+        for items in (read, polled):
+            assert {mid: items[mid]["removed"]["by_self"] for mid in expected[who]} == expected[who], who
+    # A live message carries no `removed`, so nothing to say it of.
+    kept = await _sent(await _gsend(client, cast.member, cast.group_id, "Staying"))
+    assert _by_id(await _answer(await _gread(client, cast.admin, cast.group_id)))[kept["id"]]["removed"] is None
 
 
 async def test_a_held_message_in_a_gatherings_chat_is_for_its_host_and_co_hosts(client, capsys, db_session_factory):
