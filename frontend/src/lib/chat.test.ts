@@ -53,6 +53,7 @@ import {
   SHOW_EARLIER,
   SHOW_IT,
   spoken,
+  stillToSend,
   type ChatItem,
   type ChatList,
 } from './chat'
@@ -363,6 +364,38 @@ describe('the calls', () => {
 
   it('checks two seconds after an answer and five after a failure', () => {
     expect([CHAT_POLL_MS, CHAT_RETRY_MS]).toEqual([2000, 5000])
+  })
+})
+
+// What a send that landed leaves in the box (CK-103's fix-up): the box is open
+// while a send waits, so the words that were sent come out of it and nothing
+// else does.
+describe('what is still to send', () => {
+  it.each([
+    // What was in the box when it was sent, unchanged.
+    ['Hello', 'Hello', ''],
+    ['  Hello \n', 'Hello', ''],
+    ['\nHello', 'Hello', ''],
+    // Typed after them.
+    ['Hello and more', 'Hello', 'and more'],
+    ['Hello, and more', 'Hello', ', and more'],
+    ['Hello\nand more', 'Hello', 'and more'],
+    ['  Hello\n\n  and more', 'Hello', 'and more'],
+    ['Helloand more', 'Hello', 'and more'],
+    // A space at the end is one the person has typed and is typing after.
+    ['Hello and ', 'Hello', 'and '],
+    // Only once.
+    ['Hello Hello', 'Hello', 'Hello'],
+    ['Two\nlines\nand a third', 'Two\nlines', 'and a third'],
+    // Rewritten: as the person left it, its own leading space with it.
+    ['Goodbye', 'Hello', 'Goodbye'],
+    ['  Goodbye', 'Hello', '  Goodbye'],
+    ['Oh, Hello', 'Hello', 'Oh, Hello'],
+    ['hello', 'Hello', 'hello'],
+    ['Hell', 'Hello', 'Hell'],
+    ['', 'Hello', ''],
+  ])('%j, with %j sent, leaves %j', (box, sent, left) => {
+    expect(stillToSend(box, sent)).toBe(left)
   })
 })
 

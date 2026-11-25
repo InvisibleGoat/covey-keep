@@ -56,6 +56,7 @@ import {
   sendLine,
   SHOW_EARLIER,
   spoken,
+  stillToSend,
   TRY_AGAIN,
   type ChatItem,
   type ChatPlace,
@@ -507,11 +508,11 @@ function Composer({
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  // A send whose answer was lost, found written by a later check: the words
-  // are still the ones that were sent, because a keystroke lets it go.
+  // A send whose answer was lost, found written by a later check: a keystroke
+  // since its line was drawn would have let it go.
   useEffect(() => {
     if (settled === null) return
-    setWords((was) => (was.trim() === settled.words ? '' : was))
+    setWords((was) => stillToSend(was, settled.words))
     setRefusal(null)
   }, [settled])
 
@@ -519,13 +520,14 @@ function Composer({
     const trimmed = words.trim()
     if (sending || trimmed === '') return
     // Before the control that was pressed goes quiet, and inside the press, so
-    // a phone's keyboard stays up.
+    // a phone's keyboard stays up. The box stays open while the send waits: one
+    // that goes read-only drops the keyboard, and what is typed meanwhile.
     box.current?.focus()
     setSending(true)
     setRefusal(null)
     const result = await send(trimmed)
     setSending(false)
-    if (result.status === 'sent') setWords('')
+    if (result.status === 'sent') setWords((was) => stillToSend(was, trimmed))
     if (result.status === 'refused') setRefusal(result.reason)
   }
 
@@ -553,7 +555,6 @@ function Composer({
           aria-label={messageLabel(name)}
           placeholder={messageLabel(name)}
           aria-describedby={refusal === null ? undefined : refusalId}
-          readOnly={sending}
           value={words}
           onChange={(event) => {
             setWords(event.target.value)

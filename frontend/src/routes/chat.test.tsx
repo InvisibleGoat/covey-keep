@@ -42,7 +42,7 @@ import {
   world,
   ZONE,
 } from '../test-support/chatWorld'
-import { gate } from '../test-support/focus'
+import { gate, settle } from '../test-support/focus'
 
 const GROUP = '/groups/g-1/chat'
 const FINCH = '/groups/g-2/chat'
@@ -428,14 +428,43 @@ describe('earlier messages', () => {
 // --- sending ----------------------------------------------------------------------
 
 describe('sending', () => {
-  test('posts the words, trimmed, waits with them read-only, then clears the box', async () => {
+  // A box that goes read-only, or is disabled, drops a phone's keyboard, and is
+  // not given it back: either is a fault, however short.
+  function watchBox(): string[] {
+    const seen: string[] = []
+    const watch = new MutationObserver((records) => seen.push(...records.map((one) => one.attributeName ?? '')))
+    watch.observe(box(), { attributes: true, attributeFilter: ['readonly', 'disabled'] })
+    return seen
+  }
+
+  // What a person types: only into a box that lets them.
+  function typeMore(words: string) {
+    expect([box().readOnly, box().disabled]).toEqual([false, false])
+    type(words)
+  }
+
+  const bubbles = () => [...thread().querySelectorAll('.bubble')].map(text)
+
+  // Send pressed and its answer held: the words are on their way.
+  async function pressSend(words: string, how: Parameters<typeof stage>[2] = {}) {
+    const hold = gate()
+    stage('POST', /chat$/, { hold, ...how })
+    await openChatAt(GROUP)
+    type(words)
+    fireEvent.click(sendButton())
+    await waitFor(() => expect(sendButton().disabled).toBe(true))
+    return hold
+  }
+
+  test('posts the words, trimmed, in a box that is never read-only and keeps them until they land', async () => {
+    await openChatAt(GROUP)
+    const seen = watchBox()
     const hold = gate()
     stage('POST', /chat$/, { hold })
-    await openChatAt(GROUP)
     type('  Ten o’clock?\n')
     fireEvent.click(sendButton())
     await waitFor(() => expect(sendButton().disabled).toBe(true))
-    expect([box().value, box().readOnly]).toEqual(['  Ten o’clock?\n', true])
+    expect([box().value, box().readOnly, box().disabled]).toEqual(['  Ten o’clock?\n', false, false])
     expect(document.activeElement).toBe(box())
     expect(screen.queryByText('Ten o’clock?', { selector: '.bubble' })).toBeNull()
     await act(async () => hold.release())
@@ -443,6 +472,39 @@ describe('sending', () => {
     expect(asked(/chat$/, 'POST').map((call) => call.body)).toEqual([{ body: 'Ten o’clock?' }])
     expect([box().readOnly, sendButton().disabled]).toEqual([false, false])
     expect(row('Ten o’clock?').classList.contains('me')).toBe(true)
+    expect(document.activeElement).toBe(box())
+    expect(seen).toEqual([])
+  })
+
+  test.each([
+    ['after a space', 'Hello and more', 'and more'],
+    ['on a line of its own', 'Hello\nand more', 'and more'],
+    ['and still being typed', 'Hello and ', 'and '],
+  ])('words typed %s while it waits are what is left in the box', async (_name, now, left) => {
+    const hold = await pressSend('Hello')
+    typeMore(now)
+    expect(box().value).toBe(now)
+    await act(async () => hold.release())
+    await waitFor(() => expect(box().value).toBe(left))
+    expect(bubbles()).toEqual(['Hello'])
+    expect(asked(/chat$/, 'POST').map((call) => call.body)).toEqual([{ body: 'Hello' }])
+    expect(document.activeElement).toBe(box())
+    expect(screen.queryByRole('alert')).toBeNull()
+    // And are the next message.
+    fireEvent.click(sendButton())
+    await waitFor(() => expect(box().value).toBe(''))
+    expect(bubbles()).toEqual(['Hello', left.trim()])
+  })
+
+  test('a box rewritten while it waits is left as the person has it', async () => {
+    const hold = await pressSend('Hello')
+    typeMore('  Something else')
+    await act(async () => hold.release())
+    await waitFor(() => expect(sendButton().disabled).toBe(false))
+    await quiet()
+    expect(box().value).toBe('  Something else')
+    expect(bubbles()).toEqual(['Hello'])
+    expect(asked(/chat$/, 'POST')).toHaveLength(1)
     expect(document.activeElement).toBe(box())
   })
 
@@ -486,6 +548,27 @@ describe('sending', () => {
     expect(box().hasAttribute('aria-describedby')).toBe(false)
   })
 
+  test.each([
+    ['422, too long', { status: 422, body: { detail: [{ type: 'string_too_long', loc: ['body', 'body'] }] } }, 'That message is too long. Shorten it and send again.'],
+    ['422', { status: 422, body: { detail: [{ type: 'value_error', loc: ['body', 'body'] }] } }, 'Something went wrong. Nothing was sent — try again.'],
+    ['429', { status: 429, body: { detail: { code: 'too_many_messages', message: 'x' } } }, "That's a lot of messages in a minute. Wait a moment, then send it again."],
+    ['500', { status: 500 }, 'Something went wrong. Nothing was sent — try again.'],
+    ['answer lost', { network: true }, "Couldn't reach the server. Check your connection and try again."],
+  ])('a refusal (%s) keeps what was typed while it waited too', async (_name, how, line) => {
+    const hold = await pressSend('Hello', how)
+    typeMore('Hello and more')
+    await act(async () => hold.release())
+    const alert = await screen.findByRole('alert')
+    expect(text(alert)).toContain(line)
+    expect(box().value).toBe('Hello and more')
+    expect(bubbles()).toEqual([])
+    expect(document.activeElement).toBe(box())
+    expect(box().getAttribute('aria-describedby')).toBe(alert.id)
+    expect(box().compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    typeMore('Hello and more.')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   test('one that never arrived checks at once, and was sent where the check brings it', async () => {
     stage('POST', /chat$/, { network: true })
     await openChatAt(GROUP)
@@ -525,6 +608,45 @@ describe('sending', () => {
     expect(box().value).toBe('Hello there')
   })
 
+  // Send pressed, its answer lost, and the check that asks whether it was
+  // written held: more is typed meanwhile.
+  async function loseAndTypeMore() {
+    stage('POST', /chat$/, { network: true })
+    await openChatAt(GROUP)
+    const hold = gate()
+    stage('GET', /since=/, { hold })
+    type('Hello')
+    fireEvent.click(sendButton())
+    await waitFor(() => expect(asked(/since=/)).toHaveLength(1))
+    typeMore('Hello and more')
+    return hold
+  }
+
+  test('a keystroke while its check is out does not let a lost one go: the check brings it', async () => {
+    const hold = await loseAndTypeMore()
+    say('group:g-1', mine('m', 0, { body: 'Hello' }))
+    await act(async () => hold.release())
+    await waitFor(() => expect(box().value).toBe('and more'))
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(bubbles()).toEqual(['Hello'])
+    expect(asked(/chat$/, 'POST')).toHaveLength(1)
+    expect(sendButton().disabled).toBe(false)
+    expect(document.activeElement).toBe(box())
+  })
+
+  test('nor one its check does not bring and a later one does', async () => {
+    const hold = await loseAndTypeMore()
+    await act(async () => hold.release())
+    expect(text(await screen.findByRole('alert'))).toContain("Couldn't reach the server. Check your connection and try again.")
+    expect([box().value, bubbles()]).toEqual(['Hello and more', []])
+    say('group:g-1', mine('m', 0, { body: 'Hello' }))
+    await check()
+    expect(box().value).toBe('and more')
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(bubbles()).toEqual(['Hello'])
+    expect(asked(/chat$/, 'POST')).toHaveLength(1)
+  })
+
   const enter = (init: Record<string, unknown> = {}) =>
     fireEvent.keyDown(box(), { key: 'Enter', code: 'Enter', keyCode: 13, ...init })
 
@@ -538,6 +660,22 @@ describe('sending', () => {
     expect(enter()).toBe(false)
     await waitFor(() => expect(box().value).toBe(''))
     expect(asked(/chat$/, 'POST')).toHaveLength(1)
+  })
+
+  test('Enter while it waits sends nothing more and adds no line', async () => {
+    stubScreen({ hover: true })
+    const hold = await pressSend('Hello')
+    typeMore('Hello and more')
+    expect(enter()).toBe(false)
+    await settle()
+    expect([box().value, asked(/chat$/, 'POST').length]).toEqual(['Hello and more', 1])
+    await act(async () => hold.release())
+    await waitFor(() => expect(box().value).toBe('and more'))
+    expect(asked(/chat$/, 'POST').map((call) => call.body)).toEqual([{ body: 'Hello' }])
+    // And once it has landed, Enter sends again.
+    expect(enter()).toBe(false)
+    await waitFor(() => expect(box().value).toBe(''))
+    expect(bubbles()).toEqual(['Hello', 'and more'])
   })
 
   test('Enter is a line on a touch device', async () => {
@@ -715,6 +853,20 @@ describe('deleting and removing', () => {
     expect(screen.queryByRole('group')).toBeNull()
     expect(noButton(/^Remove/)).toBeNull()
     expect(button('Delete your message')).toBeTruthy()
+  })
+
+  test('and the role’s return opens no step that went with it', async () => {
+    both()
+    g1().moderate = true
+    await openChatAt(GROUP)
+    fireEvent.click(button("Remove Leo Brandt's message"))
+    expect(screen.getByRole('group')).toBeTruthy()
+    g1().moderate = false
+    await check()
+    g1().moderate = true
+    await check()
+    expect(button("Remove Leo Brandt's message")).toBeTruthy()
+    expect(screen.queryByRole('group')).toBeNull()
   })
 })
 

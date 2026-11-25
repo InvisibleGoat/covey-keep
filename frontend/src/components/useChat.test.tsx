@@ -641,6 +641,28 @@ describe('sending', () => {
     expect([ids(), chat.settled]).toEqual([['m'], null])
   })
 
+  it('whose answer was lost is not let go while its own check is out', async () => {
+    await openGroup()
+    const sent = await start<SendResult>(() => chat.send('Hello'))
+    await last(/chat$/, 'POST').fail()
+    await act(async () => chat.forgetLost())
+    const newest = chat.newest
+    await last(CHECK).answer(200, chatChanges([mine('m', '15:00:03.000000', 'Hello')]))
+    expect([sent.value, ids(), chat.newest]).toEqual([{ status: 'sent' }, ['m'], newest + 1])
+  })
+
+  it('and is still looked for after a check of its own that did not bring it', async () => {
+    await openGroup()
+    const sent = await start<SendResult>(() => chat.send('Hello'))
+    await last(/chat$/, 'POST').fail()
+    await act(async () => chat.forgetLost())
+    await last(CHECK).answer(200, chatChanges())
+    expect([sent.value, chat.settled]).toEqual([{ status: 'refused', reason: 'unreachable' }, null])
+    await advance(2000)
+    await last(CHECK).answer(200, chatChanges([mine('m', '15:00:03.000000', 'Hello')]))
+    expect([ids(), chat.settled]).toEqual([['m'], { words: 'Hello' }])
+  })
+
   it('whose answer was lost waits for a check that started after it', async () => {
     await openGroup()
     await advance(2000)

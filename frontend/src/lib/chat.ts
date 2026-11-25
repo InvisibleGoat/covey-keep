@@ -317,6 +317,14 @@ function codeOf(detail: unknown): unknown {
   return typeof detail === 'object' && detail !== null ? (detail as { code?: unknown }).code : undefined
 }
 
+// What is in the box once `sent` has landed. The box is open while a send
+// waits, so the words that went come out of it, what was typed after them
+// stays, and a box the person has rewritten is left as they have it.
+export function stillToSend(box: string, sent: string): string {
+  const words = box.trimStart()
+  return words.startsWith(sent) ? words.slice(sent.length).trimStart() : box
+}
+
 // `removed` for a 204, and for the 409 that says someone already had: the same
 // landing. `notFound` for a 404, where the message isn't there to remove.
 export type RemoveOutcome = 'removed' | 'notFound' | 'refused' | 'unreachable'

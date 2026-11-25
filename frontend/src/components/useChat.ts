@@ -393,8 +393,10 @@ export function openChat(place: ChatPlace, publish: (snapshot: ChatSnapshot) => 
     },
     showEarlier: () => void showEarlier(),
     send,
+    // Not while the send is still being asked after: it would end as one that
+    // never arrived though it was written, and be sent twice.
     forgetLost() {
-      lost = null
+      if (lost !== null && !lost.settling) lost = null
     },
     remove,
   }
