@@ -119,8 +119,8 @@ BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # cover_image_id and the widened CHECK's definition, and eleven data lines),
 # so 438; and CK-92 adds twenty (the outside-invitation setting's shape,
 # `from_outside`'s, the dismissals table's, and two data lines; the
-# members-only line narrowed in place), so 458; 484 since CK-102's twenty-six — posts' kind, body and remover, their three CHECKs, the date FK, the two indexes and the single one gone, the post_kind and group_media labels, and twelve data lines on the container and the posts.
-VERIFIER_TOTAL = 484
+# members-only line narrowed in place), so 458; 484 since CK-102's twenty-six — posts' kind, body and remover, their three CHECKs, the date FK, the two indexes and the single one gone, the post_kind and group_media labels, and twelve data lines on the container and the posts; 500 since CK-104's sixteen — post_reaction_kind's labels, the reactions' and the reading positions' shapes, posts' reaction stamp, and seven data lines on the two.
+VERIFIER_TOTAL = 500
 
 LOGISTICS_FIELDS = ("occurrences", "rsvp_list_visibility")
 SUMMARY_FIELDS = ("next_occurrence", "occurrence_count")

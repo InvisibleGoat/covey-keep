@@ -61,6 +61,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # A chat's check is one address every time (its instant rides in
+    # X-Chat-Since), so its preflight can be kept: two hours, the longest
+    # Chrome keeps one.
+    max_age=7200,
 )
 
 

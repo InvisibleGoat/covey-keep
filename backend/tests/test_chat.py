@@ -76,9 +76,11 @@ JOINER = "joiner@example.com"
 PLAIN = "plain@example.com"  # a member who runs nothing
 LATER = "later@example.com"  # joins after the words were written
 
-ITEM_KEYS = {"id", "kind", "created_at", "author", "body", "removed"}
+# THE PINS MOVED at CK-104, with their reason: an item carries its reactions
+# (`[]` on a line and on a held message), and a poll who is typing.
+ITEM_KEYS = {"id", "kind", "created_at", "author", "body", "removed", "reactions"}
 READ_KEYS = {"items", "older", "as_of", "may_moderate"}
-POLL_KEYS = {"items", "removed", "truncated", "as_of", "may_moderate"}
+POLL_KEYS = {"items", "removed", "truncated", "as_of", "may_moderate", "typing"}
 
 
 def _now() -> datetime:

@@ -196,6 +196,7 @@ from app.models import (
     RSVPListVisibility,
 )
 from app.services import publication
+from app.services.chat_reading import end_chat_access
 from app.services.group_chat import setting_line
 from app.services.groups import invite_group_members, place_group_members
 # `keep` alone: no keeper read here since CK-77 — keeping lets no one in, and
@@ -2268,6 +2269,9 @@ async def put_place(
                 GatheringInvitation.person_id == person.id,
             )
         )
+        # The gathering's chat went with the invitation (neither the host nor
+        # a co-host reaches here), and so does what they kept in it.
+        await end_chat_access(db, person.id, gathering.id)
         # Once chosen, chosen: any move away from invited says the host
         # chose, and nothing sets it back.
         gathering.invitees_chosen = True
@@ -2347,12 +2351,18 @@ async def put_outside_invitations(
         # only for the group's members (api/chat.py).
         db.add(setting_line(gathering.id, person_id, on=True))
     elif not body.on and since is not None:
-        await db.execute(
-            delete(GatheringInvitation).where(
+        outsiders = await db.scalars(
+            delete(GatheringInvitation)
+            .where(
                 GatheringInvitation.gathering_id == gathering.id,
                 GatheringInvitation.from_outside.is_(True),
             )
+            .returning(GatheringInvitation.person_id)
         )
+        # The gathering's chat went with each of those rows, and so does what
+        # its person kept in it.
+        for outsider_id in outsiders.all():
+            await end_chat_access(db, outsider_id, gathering.id)
         await db.execute(
             update(GatheringInvitationPending)
             .where(

@@ -50,14 +50,14 @@ MAX_REQUESTS_PER_IP = 20
 # revised at CK-73.3; 3 = version 2 with CK-83b's paragraph on covers; 4 =
 # version 3 with CK-100's photos and email paragraphs, true about what is
 # stored and who handles email; 5 = version 4 with CK-102's paragraph on the
-# chat, which stores a person's messages; the published terms take 6. The
-# validator keeps
-# accepting every version from 1 up to this one: a browser still on an old
-# bundle showed its user that version's text, and the number it sends is
-# then the TRUE record of what they agreed to. Never renumber an existing
-# version, and never narrow the lower bound
-# (decisions/2026-08-31-private-alpha-scope.md §3, §3.1).
-TOS_VERSION = 5
+# chat, which stores a person's messages; 6 = version 5 with CK-104's
+# sentences on reactions, how far a person has read and typing; the
+# published terms take 7. The validator keeps accepting every version from
+# 1 up to this one: a browser still on an old bundle showed its user that
+# version's text, and the number it sends is then the TRUE record of what
+# they agreed to. Never renumber an existing version, and never narrow the
+# lower bound (decisions/2026-08-31-private-alpha-scope.md §3, §3.1).
+TOS_VERSION = 6
 
 # The one and only /auth/request-link success body. Byte-identical whether or
 # not the email is known, and it must NEVER gain a send-status field — failure

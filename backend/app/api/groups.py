@@ -125,6 +125,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, get_auth_context, get_db
+from app.services.chat_reading import end_group_chat_access
 from app.services.group_chat import container_for
 from app.models import (
     CapabilityProfile,
@@ -812,6 +813,8 @@ async def leave_group(
     )
     if membership is not None:
         await db.execute(delete(Membership).where(Membership.id == membership.id))
+        # The chat went with the membership, and so does what they kept in it.
+        await end_group_chat_access(db, ctx.person.id, group.id)
     await db.commit()
 
 
@@ -847,6 +850,8 @@ async def remove_member(
         )
     )
     await db.execute(delete(Membership).where(Membership.id == membership.id))
+    # The chat went with the membership, and so does what they kept in it.
+    await end_group_chat_access(db, person.id, group.id)
     await db.commit()
 
 

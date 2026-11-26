@@ -114,8 +114,8 @@ from tests.test_worker import worker, worker_settings  # noqa: F401 — fixtures
 BACKEND_DIR = pathlib.Path(__file__).resolve().parent.parent
 FIXTURES = BACKEND_DIR / "tests" / "fixtures" / "media"
 # The verifier's total at 0037 (test_covers.py says how it got here): 438 at
-# 0036, 458 since CK-92's twenty, 484 since CK-102's twenty-six — posts' kind, body and remover, their three CHECKs, the date FK, the two indexes and the single one gone, the post_kind and group_media labels, and twelve data lines on the container and the posts.
-VERIFIER_TOTAL = 484
+# 0036, 458 since CK-92's twenty, 484 since CK-102's twenty-six — posts' kind, body and remover, their three CHECKs, the date FK, the two indexes and the single one gone, the post_kind and group_media labels, and twelve data lines on the container and the posts; 500 since CK-104's sixteen — post_reaction_kind's labels, the reactions' and the reading positions' shapes, posts' reaction stamp, and seven data lines on the two.
+VERIFIER_TOTAL = 500
 UPLOAD_KEYS = {"cover_image", "upload"}
 IMAGE_BODY_KEYS = {"id", "status", "failure_reason"}
 

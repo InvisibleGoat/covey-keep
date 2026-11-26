@@ -120,8 +120,8 @@ LEFT = "leftout@example.com"
 # (4), and two data lines (2: a `from_outside` row sits on a group's
 # gathering whose outside invitations are on; its person holds no membership
 # of that group) — and the members-only line is NARROWED in place (one line
-# out, one in), so 458; 484 since CK-102's twenty-six — posts' kind, body and remover, their three CHECKs, the date FK, the two indexes and the single one gone, the post_kind and group_media labels, and twelve data lines on the container and the posts.
-VERIFIER_TOTAL = 484
+# out, one in), so 458; 484 since CK-102's twenty-six — posts' kind, body and remover, their three CHECKs, the date FK, the two indexes and the single one gone, the post_kind and group_media labels, and twelve data lines on the container and the posts; 500 since CK-104's sixteen — post_reaction_kind's labels, the reactions' and the reading positions' shapes, posts' reaction stamp, and seven data lines on the two.
+VERIFIER_TOTAL = 500
 
 THREE_FIELDS = ("outside_invitations", "caller_in_group", "outside_alert")
 SETTING_KEYS = {"on", "since", "by", "may_change"}
@@ -1613,12 +1613,13 @@ async def test_0037_round_trip_with_outsiders_in_place(client, capsys, db_sessio
     }
     # THE PIN MOVED at CK-102, with its reason: the head is 0038 (the chat's
     # migration), so the round trip from head passes down through it to 0036
-    # and back up; 0037's shape is what is checked, unchanged.
-    assert await shape() == ("0038", new_columns, True)
+    # and back up; 0037's shape is what is checked, unchanged — and again at
+    # CK-104, the head being 0039.
+    assert await shape() == ("0039", new_columns, True)
     await _migrate("downgrade", "0036", capsys)
     assert await shape() == ("0036", set(), False)
     await _migrate("upgrade", "head", capsys)
-    assert await shape() == ("0038", new_columns, True)
+    assert await shape() == ("0039", new_columns, True)
     # Nothing backfilled: every gathering off, every row false, no dismissal.
     assert (await _setting(db_session_factory, gid))[:2] == (None, None)
     assert set((await _outside_rows(db_session_factory, gid)).values()) == {False}

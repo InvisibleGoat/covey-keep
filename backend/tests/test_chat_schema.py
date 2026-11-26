@@ -64,9 +64,11 @@ DATA = {
     "setting": "every setting line sits on a group's gathering, never the container",
 }
 NEW_LINES = len(SHAPE) + len(DATA)
-# The verifier stood at 458 at head 0037 (CK-92); these 26 lines take it to
-# 484, the count every verifier pin in the suite reads since CK-102.
-assert VERIFIER_TOTAL == 458 + NEW_LINES == 484
+# The verifier stood at 458 at head 0037 (CK-92); these 26 lines took it to
+# 484 at 0038. THE PIN MOVED at CK-104, with its reason: 0039's sixteen
+# lines (tests/test_chat_0039.py) take the total to 500.
+assert 458 + NEW_LINES == 484
+assert VERIFIER_TOTAL == 458 + NEW_LINES + 16
 
 
 async def _sql(db_session_factory, sql: str, params: dict | None = None) -> None:
@@ -149,9 +151,12 @@ async def test_0038_round_trip_leaves_the_label_and_keeps_what_has_a_body(
     assert (await _accept_group_invitation(client, joiner, token))["status"] == "accepted"
     sent = await client.post(f"/groups/{cast.group_id}/chat", json={"body": "Kept through"}, headers=cast.member)
     assert sent.status_code == 201, sent.text
+    # THE PIN MOVED at CK-104, with its reason: the head is 0039 (reactions and
+    # reading positions), so the round trip from head passes down through it;
+    # 0038's shape is what is checked, unchanged.
     head = await _shape(db_session_factory)
     assert head == {
-        "head": "0038",
+        "head": "0039",
         "columns": {"kind:NO", "body:YES", "removed_by_person_id:YES"},
         "post_kind": 1,
         "label": 1,

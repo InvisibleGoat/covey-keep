@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - operator-facing guidance
     )
 
 # The migration revision this verifier is written against.
-EXPECTED_REVISION = "0038"
+EXPECTED_REVISION = "0039"
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
 
@@ -3338,6 +3338,154 @@ async def verify(conn, ck: Checks) -> None:
     else:
         ck.check(False, "chat integrity", "posts.kind or posts.removed_by_person_id missing")
 
+    # --- Reactions and reading positions (0039, CK-104) ----------------------
+    print("\n-- the chat: reactions and how far each person has read (0039, CK-104) --")
+    # SHAPE. The enum was made by CREATE TYPE, so its labels are its own; the
+    # reaction's three columns are its key, its message's delete takes it, and
+    # its person's never happens. A reading position is A PLACE AND NEVER A
+    # TIME: four columns and no more, so a column saying when it moved fails
+    # here, and no foreign key on the post - a held message is destroyed later
+    # and the place it marked stays good.
+    reaction_kind = await enum_labels(conn, "post_reaction_kind")
+    seven = ["like", "heart", "laugh", "surprise", "sad", "thumbs_up", "celebrate"]
+    ck.check(
+        reaction_kind == seven,
+        "post_reaction_kind's labels are like, heart, laugh, surprise, sad, thumbs_up, celebrate",
+        f"found {reaction_kind!r}",
+    )
+    reaction_pk = await pk_columns(conn, "pk_post_reactions")
+    ck.check(
+        reaction_pk == ["post_id", "person_id", "kind"],
+        "post_reactions is keyed on (post_id, person_id, kind)",
+        f"found {reaction_pk!r}",
+    )
+    message_fk = await fk_rule(conn, "fk_post_reactions_post_id")
+    ck.check(
+        message_fk is not None and message_fk[0] == "posts" and message_fk[1] == "c",
+        "post_reactions.post_id's FK cascades from posts (a message destroyed takes its reactions)",
+        f"found {message_fk!r}",
+    )
+    reactor_fk = await fk_rule(conn, "fk_post_reactions_person_id")
+    ck.check(
+        reactor_fk is not None and reactor_fk[0] == "people" and reactor_fk[1] == "a",
+        "post_reactions.person_id references people with no delete rule",
+        f"found {reactor_fk!r}",
+    )
+    reactor_index = await index_shape(conn, "ix_post_reactions_person_id")
+    ck.check(
+        reactor_index is not None
+        and reactor_index[0] == "post_reactions"
+        and reactor_index[1].endswith("(person_id)"),
+        "index ix_post_reactions_person_id is on post_reactions (person_id)",
+        f"found {reactor_index!r}",
+    )
+    stamp = columns.get("posts", {}).get("reactions_updated_at")
+    ck.check(stamp is True, "posts.reactions_updated_at is nullable", f"found nullable={stamp!r}")
+    position_columns = columns.get("chat_read_positions", {})
+    ck.check(
+        position_columns
+        == {"person_id": False, "gathering_id": False, "through_created_at": False, "through_post_id": False},
+        "chat_read_positions holds person_id, gathering_id, through_created_at and through_post_id, "
+        "each NOT NULL, and nothing else",
+        f"found {position_columns!r}",
+    )
+    position_pk = await pk_columns(conn, "pk_chat_read_positions")
+    ck.check(
+        position_pk == ["person_id", "gathering_id"],
+        "chat_read_positions is keyed on (person_id, gathering_id)",
+        f"found {position_pk!r}",
+    )
+    position_fks = sorted(
+        tuple(row)
+        for row in (
+            await conn.execute(
+                text(
+                    "SELECT c.confrelid::regclass::text, c.confdeltype::text FROM pg_constraint c "
+                    "JOIN pg_class t ON t.oid = c.conrelid "
+                    "WHERE t.relname = 'chat_read_positions' AND c.contype = 'f'"
+                )
+            )
+        ).all()
+    )
+    ck.check(
+        position_fks == [("gatherings", "a"), ("people", "a")],
+        "chat_read_positions references people and gatherings with no delete rule, and never a post",
+        f"found {position_fks!r}",
+    )
+
+    # DATA. A reaction is one person's one sign on one message; a line the
+    # chat wrote takes none; a deleted account leaves none. A position is
+    # held only by someone who can read its chat now: a group's container by
+    # membership, a gathering by its host, a co-host or an invitation row -
+    # every path that ends a person's reading deletes theirs in its own
+    # transaction. A deleted account's memberships and invitations are KEPT,
+    # so the two audience lines cannot see one it left behind: it has its
+    # own. Every comparison is `::text` (the CK-71 Gotcha).
+    if {
+        "post_reactions",
+        "chat_read_positions",
+        "posts",
+        "people",
+        "gatherings",
+        "memberships",
+        "gathering_invitations",
+        "gathering_co_hosts",
+    } <= tables:
+        doubled = await scalar(
+            conn,
+            "SELECT count(*) FROM (SELECT 1 FROM post_reactions "
+            "GROUP BY post_id, person_id, kind HAVING count(*) > 1) d",
+        )
+        ck.check(doubled == 0, "one reaction of a kind per person per message", f"{doubled} doubled")
+        named = ", ".join(f"'{kind}'" for kind in seven)
+        strange = await scalar(conn, f"SELECT count(*) FROM post_reactions WHERE kind::text NOT IN ({named})")
+        ck.check(strange == 0, "every reaction is one of the seven kinds", f"{strange} of another")
+        on_lines = await scalar(
+            conn,
+            "SELECT count(*) FROM post_reactions r JOIN posts p ON p.id = r.post_id WHERE p.kind::text <> 'message'",
+        )
+        ck.check(on_lines == 0, "no reaction is on a line the chat wrote", f"{on_lines} on a line")
+        left_behind = await scalar(
+            conn,
+            "SELECT count(*) FROM post_reactions r JOIN people p ON p.id = r.person_id "
+            "WHERE p.anonymized_at IS NOT NULL",
+        )
+        ck.check(left_behind == 0, "no reaction is a deleted account's", f"{left_behind} left behind")
+        outside_group = await scalar(
+            conn,
+            "SELECT count(*) FROM chat_read_positions c JOIN gatherings g ON g.id = c.gathering_id "
+            "WHERE g.gathering_type::text = 'group_media' AND NOT EXISTS (SELECT 1 FROM memberships m "
+            "WHERE m.group_id = g.owning_group_id AND m.person_id = c.person_id)",
+        )
+        ck.check(
+            outside_group == 0,
+            "no reading position is for a group's chat its person isn't in",
+            f"{outside_group} position(s)",
+        )
+        outside_gathering = await scalar(
+            conn,
+            "SELECT count(*) FROM chat_read_positions c JOIN gatherings g ON g.id = c.gathering_id "
+            "JOIN people p ON p.id = c.person_id WHERE g.gathering_type::text <> 'group_media' "
+            "AND g.host_account_id IS DISTINCT FROM p.account_id "
+            "AND NOT EXISTS (SELECT 1 FROM gathering_invitations i "
+            "WHERE i.gathering_id = g.id AND i.person_id = p.id) "
+            "AND NOT EXISTS (SELECT 1 FROM gathering_co_hosts h "
+            "WHERE h.gathering_id = g.id AND h.account_id = p.account_id)",
+        )
+        ck.check(
+            outside_gathering == 0,
+            "no reading position is for a gathering's chat its person can't read",
+            f"{outside_gathering} position(s)",
+        )
+        kept_places = await scalar(
+            conn,
+            "SELECT count(*) FROM chat_read_positions c JOIN people p ON p.id = c.person_id "
+            "WHERE p.anonymized_at IS NOT NULL",
+        )
+        ck.check(kept_places == 0, "no reading position is a deleted account's", f"{kept_places} left behind")
+    else:
+        ck.check(False, "reactions and reading positions integrity", "a table is missing")
+
     # --- Informational -----------------------------------------------------
     print("\n-- row counts (informational, not assertions) --")
     # `media` joins the list at CK-34, the phase that first writes it: a
@@ -3377,6 +3525,11 @@ async def verify(conn, ck: Checks) -> None:
         # writes one. A held message is deleted by the sweep at its window,
         # so the count can fall; never a failure.
         "posts",
+        # `post_reactions` and `chat_read_positions` join at CK-104 (0039):
+        # zero on the deploy until the chat's next screens write one. Neither
+        # is reaped; each falls with what it hangs on.
+        "post_reactions",
+        "chat_read_positions",
         "billing_customers",
         "subscriptions",
     ):

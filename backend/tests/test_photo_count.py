@@ -169,8 +169,10 @@ BOTH_INDEXES = {"ix_gatherings_keeper_account_id", "ix_groups_keeper_account_id"
 # `from_outside` on `gathering_invitations` and the
 # `gathering_outside_alert_dismissals` table, and touches neither; 0038,
 # CK-102, gives `posts` a kind, its remover and the hold's CHECKs and adds
-# the `group_media` label, and touches neither.)
-HEAD = "0038"
+# the `group_media` label, and touches neither; 0039, CK-104, creates
+# `post_reactions` and `chat_read_positions` and adds
+# `posts.reactions_updated_at`, and touches neither.)
+HEAD = "0039"
 
 
 async def test_0024_round_trip_backfills_the_count_and_the_downgrade_is_genuine(

@@ -122,13 +122,16 @@ from app.models import (
     BillingPlan,
     Gathering,
     GatheringCoHost,
+    GatheringInvitation,
     GatheringType,
     Group,
     Media,
     MediaStatus,
+    Person,
     PublicationState,
     Subscription,
 )
+from app.services.chat_reading import end_chat_access
 
 # Grace policy (keeper record §2.7): when the keeper leaves, 30 days
 # archived-but-recoverable, deletable at 90. Constants in code, thresholds
@@ -514,11 +517,34 @@ async def unkeep(
     if gathering.keeper_account_id != account.id:
         raise LookupError("account does not keep this gathering")
     gathering.keeper_account_id = None
-    if gathering.host_account_id == account.id:
+    relinquished = gathering.host_account_id == account.id
+    if relinquished:
         gathering.host_account_id = None
     if gathering.gathering_type != GatheringType.MEMORIAL:
         gathering.last_keeper_left_at = now
     await db.flush()
+    if relinquished:
+        # Hosting was one way into the gathering's chat (CK-104): without an
+        # invitation or a co-host's row of their own, it was the only one.
+        former_reader = await db.scalar(
+            select(Person.id).where(
+                Person.account_id == account.id,
+                ~exists(
+                    select(GatheringInvitation.id).where(
+                        GatheringInvitation.gathering_id == gathering.id,
+                        GatheringInvitation.person_id == Person.id,
+                    )
+                ),
+                ~exists(
+                    select(GatheringCoHost.gathering_id).where(
+                        GatheringCoHost.gathering_id == gathering.id,
+                        GatheringCoHost.account_id == account.id,
+                    )
+                ),
+            )
+        )
+        if former_reader is not None:
+            await end_chat_access(db, former_reader, gathering.id)
 
 
 # --- The derived facts -----------------------------------------------------------

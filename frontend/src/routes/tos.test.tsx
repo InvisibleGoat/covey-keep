@@ -1,6 +1,8 @@
 // CK-26 private-alpha notice pins, revised at CK-73.3 for version 2, at
-// CK-83b for version 3, at CK-100 for version 4 and at CK-102 for version 5
-// (the chat's paragraph, after the covers paragraph). The value under test:
+// CK-83b for version 3, at CK-100 for version 4, at CK-102 for version 5
+// (the chat's paragraph, after the covers paragraph) and at CK-104 for
+// version 6 (a sentence inside the chat's paragraph, and the paragraph on
+// reactions, reading places and typing after it). The value under test:
 // /tos carries the load-bearing statements the alpha's condition 4 requires —
 // private test, data not kept, what is stored (photos among it: the three
 // copies and the deleted original, location removed, the bin's 30 days, which
@@ -16,16 +18,17 @@
 // your own photos at any time" and its server-log paragraph); the sign-in
 // checkbox agrees to the test rather than to Terms that do not exist yet —
 // with its mechanism intact (unchecked by default, submit disabled until
-// checked) — and TOS_VERSION is 5: this text's number since CK-102, version 1
+// checked) — and TOS_VERSION is 6: this text's number since CK-104, version 1
 // being the CK-26 text, version 2 CK-73.3's, version 3 CK-83b's, version 4
-// CK-100's, and the published terms taking 6
+// CK-100's, version 5 CK-102's, and the published terms taking 7
 // (decisions/2026-08-31-private-alpha-scope.md §3, §3.1). Version 4 is
 // version 3 word for word but for two paragraphs — the photos paragraph's
 // third sentence rewritten into three, and the server-log paragraph replaced
 // by the email paragraph — and version 5 is version 4 word for word with one
-// paragraph added, on the chat, after the covers paragraph; both are pinned
-// below as the whole card, paragraph by paragraph, so a word moved anywhere
-// fails.
+// paragraph added, on the chat, after the covers paragraph; version 6 is
+// version 5 word for word with one sentence added inside that paragraph and
+// one paragraph after it. All are pinned below as the whole card, paragraph
+// by paragraph, so a word moved anywhere fails.
 //
 // THE LESSON THIS FILE CARRIES: from CK-26 to CK-73.3 it pinned "Photo upload
 // doesn't exist yet" — a sentence about something not built yet — and that
@@ -331,18 +334,67 @@ const COVERS_AT = 4
 const CHAT_AT = COVERS_AT + 1
 const VERSION_5 = [...VERSION_4.slice(0, CHAT_AT), CHAT_PARAGRAPH, ...VERSION_4.slice(CHAT_AT)]
 
-test("the notice is version 5: version 4's every paragraph unchanged and in order, and the chat's paragraph after the covers paragraph", () => {
+// Version 6's two additions (approved by Steven 2026-11-25, THE WORDS of
+// CK-104), word for word. One sentence inside the chat's paragraph, after the
+// one on who joins: PUT /gatherings/{id}/outside-invitations writes the line on
+// each change, and only the group's members are ever sent it (api/chat.py).
+// And one paragraph after it, each sentence checked against the product (the
+// /tos Gotcha's rule (4)): a reaction is a row with its person's id, shown by
+// name to everyone who can read the message (GET /messages/{id}/reactions),
+// taken away by the route that leaves it on any live message its person can
+// still read, and deleted with their account (forget_in_every_chat); a reading
+// place is a row of its own person's, in no answer but their own arrival
+// (chat_read_positions holds no time); and a typing signal is a header on the
+// poll, held in memory for six seconds, with nothing of it stored or logged
+// (services/chat_typing.py).
+const JOINED_SENTENCE = 'people who join later see the chat from when they joined, and a line in the chat says when someone joins.'
+const SETTING_SENTENCE =
+  "In a gathering that belongs to a group, a line in its chat says when it is opened or closed to people outside the group; only the group's members see that line."
+const CHAT_PARAGRAPH_6 = CHAT_PARAGRAPH.replace(JOINED_SENTENCE, `${JOINED_SENTENCE} ${SETTING_SENTENCE}`)
+const PRESENCE_SENTENCES = [
+  'Reactions you leave on messages are stored with your name and can be seen by everyone who can read the message; you can take yours away from any message you can still read, and they are deleted if you delete your account.',
+  `${PRODUCT_NAME} also keeps how far you've read in each chat, to show you what is new; nobody else sees that.`,
+  'While you are writing a message, the other people in that chat can see that you are typing; nothing about that is kept.',
+]
+const PRESENCE_AT = CHAT_AT + 1
+const VERSION_6 = [
+  ...VERSION_5.slice(0, CHAT_AT),
+  CHAT_PARAGRAPH_6,
+  PRESENCE_SENTENCES.join(' '),
+  ...VERSION_5.slice(PRESENCE_AT),
+]
+
+test("the notice is version 6: version 5's every paragraph but the chat's unchanged and in order, one sentence inside the chat's, and one paragraph after it", () => {
   renderNotice()
-  // The whole card, paragraph by paragraph. THE PIN MOVED at CK-102, with its
-  // reason: this test read version 4 from CK-100 until the notice took 5,
-  // because the chat stores a new kind of data about a person — their
-  // messages, with their name and the time (the /tos Gotcha's rule (1)).
-  expect(noticeParagraphs()).toEqual(VERSION_5)
-  // Version 4's paragraphs, every one unchanged and in its order around it.
-  expect(noticeParagraphs().filter((_, i) => i !== CHAT_AT)).toEqual(VERSION_4)
+  // The whole card, paragraph by paragraph. THE PIN MOVED at CK-104, with its
+  // reason: this test read version 5 from CK-102 until the notice took 6,
+  // because a chat now keeps how far each person has read and shows others
+  // that a person is typing (the /tos Gotcha's rule (1)), and because the line
+  // CK-102 writes when a gathering opens or closes was never said here.
+  expect(noticeParagraphs()).toEqual(VERSION_6)
+  // Version 4's paragraphs, every one unchanged and in its order around them.
+  expect(noticeParagraphs().filter((_, i) => i !== CHAT_AT && i !== PRESENCE_AT)).toEqual(VERSION_4)
   // After the covers paragraph, before the plans paragraph.
   expect(noticeParagraphs()[CHAT_AT - 1]).toBe(COVERS_PARAGRAPH)
-  expect(noticeParagraphs()[CHAT_AT + 1]).toMatch(/may show paid plans during the test/)
+  expect(noticeParagraphs()[PRESENCE_AT + 1]).toMatch(/may show paid plans during the test/)
+})
+
+test("version 6's sentences, as literals: the line inside the chat's paragraph, and the paragraph after it, sentence by sentence", () => {
+  renderNotice()
+  // The setting line's sentence stands inside the chat's paragraph, straight
+  // after who joins; the rest of that paragraph is version 5's, word for word.
+  expect(CHAT_PARAGRAPH_6).not.toBe(CHAT_PARAGRAPH)
+  const chat = noticeParagraphs()[CHAT_AT]
+  expect(chat).toContain(`${JOINED_SENTENCE} ${SETTING_SENTENCE}`)
+  expect(chat.replace(`${SETTING_SENTENCE} `, '')).toBe(CHAT_PARAGRAPH)
+  // The paragraph after it, and no word of it anywhere else on the card.
+  const presence = noticeParagraphs()[PRESENCE_AT]
+  expect(presence).toBe(PRESENCE_SENTENCES.join(' '))
+  for (const sentence of PRESENCE_SENTENCES) {
+    expect(noticeParagraphs().filter((paragraph) => paragraph.includes(sentence))).toEqual([presence])
+  }
+  // And none of the wording Q4's other answer would have needed.
+  expect(presence).not.toMatch(/about a minute/i)
 })
 
 test("the chat's paragraph, sentence by sentence, as literals", () => {
@@ -351,6 +403,8 @@ test("the chat's paragraph, sentence by sentence, as literals", () => {
   const sentences = [
     'Groups and gatherings each have a chat.',
     "A message you send in a group's chat can be read by the people who were in the group when you sent it; people who join later see the chat from when they joined, and a line in the chat says when someone joins.",
+    // THE PIN MOVED at CK-104, with its reason: version 6 adds this sentence.
+    SETTING_SENTENCE,
     "A message in a gathering's chat can be read by its host, its co-hosts and everyone invited to it, whenever they were invited, including people invited from outside its group.",
     `${PRODUCT_NAME} stores each message with your name and the time you sent it.`,
     "You can delete your own messages, and the people who run a group or gathering can remove other people's messages in it.",
@@ -372,7 +426,7 @@ test("the chat's paragraph, sentence by sentence, as literals", () => {
 
 test('the email paragraph, as a literal, and the photos paragraph sentence by sentence', () => {
   renderNotice()
-  expect(noticeParagraphs()[VERSION_5.indexOf(EMAIL_PARAGRAPH_4)]).toBe(EMAIL_PARAGRAPH_4)
+  expect(noticeParagraphs()[VERSION_6.indexOf(EMAIL_PARAGRAPH_4)]).toBe(EMAIL_PARAGRAPH_4)
   const photos = noticeParagraphs()[PHOTOS_AT]
   for (const sentence of [
     'You can delete your own photos from any gathering you can still see, and a photo sent to a bin is deleted for good 30 days later.',
@@ -381,7 +435,7 @@ test('the email paragraph, as a literal, and the photos paragraph sentence by se
   ]) {
     expect(photos).toContain(sentence)
   }
-  // Version 4's two paragraphs against version 3 still hold inside version 5:
+  // Version 4's two paragraphs against version 3 still hold inside version 6:
   // the photos paragraph changed in its third sentence alone.
   const sentences3 = VERSION_3[PHOTOS_AT].split('. ')
   const sentences4 = PHOTOS_PARAGRAPH_4.split('. ')
@@ -417,20 +471,20 @@ test('the covers paragraph, sentence by sentence, as literals', () => {
   expect(text).not.toMatch(/\d+ days/)
 })
 
-test("TOS_VERSION is 5 — this notice; 1 is the CK-26 text, 2 is CK-73.3's, 3 is CK-83b's, 4 is CK-100's, the published terms take 6", () => {
+test("TOS_VERSION is 6 — this notice; 1 is the CK-26 text, 2 is CK-73.3's, 3 is CK-83b's, 4 is CK-100's, 5 is CK-102's, the published terms take 7", () => {
   // One number means one text, forever. Version 1 is CK-26's notice and the
   // acceptance rows recorded against it (every account created before
   // CK-73.3 — all Steven's household); 2 is CK-73.3's, true about what was
   // stored until covers; 3 is CK-83b's, version 2 with the covers paragraph;
-  // 4 is CK-100's, with Resend and the photos paragraph rewritten; 5 is the
-  // text in Tos.tsx today (CK-102); 6 is the published terms', set by the
-  // phase that publishes them. Never renumber an existing version in either
-  // direction — the acceptance records would then name the wrong text, the
-  // exact defect the ToS work exists to close (private-alpha decision record
-  // §3, §3.1). THE PIN MOVED at CK-102, with its reason: the chat stores each
-  // person's messages with their name and the time, so the notice took a new
-  // number — with the text, never without it. The next change to what the
-  // product stores, or to what deletion does, moves this to 6 and the terms
-  // to 7.
-  expect(TOS_VERSION).toBe(5)
+  // 4 is CK-100's, with Resend and the photos paragraph rewritten; 5 is
+  // CK-102's, with the chat's paragraph; 6 is the text in Tos.tsx today
+  // (CK-104); 7 is the published terms', set by the phase that publishes them.
+  // Never renumber an existing version in either direction — the acceptance
+  // records would then name the wrong text, the exact defect the ToS work
+  // exists to close (private-alpha decision record §3, §3.1). THE PIN MOVED at
+  // CK-104, with its reason: a chat keeps how far each person has read and
+  // shows others that a person is typing, so the notice took a new number —
+  // with the text, never without it. The next change to what the product
+  // stores, or to what deletion does, moves this to 7 and the terms to 8.
+  expect(TOS_VERSION).toBe(6)
 })

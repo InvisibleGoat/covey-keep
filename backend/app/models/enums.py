@@ -196,6 +196,21 @@ class PostKind(str, Enum):
     OUTSIDE_INVITATIONS_OFF = "outside_invitations_off"
 
 
+class PostReactionKind(str, Enum):
+    """What a person can leave on a message (CK-104, migration 0039; the chat
+    record §4, P14): Like, and the mockup's six, under plain names. LIKE is the
+    crested heart and its own kind, beside HEART. The order here is the order
+    every answer lists them in."""
+
+    LIKE = "like"
+    HEART = "heart"
+    LAUGH = "laugh"
+    SURPRISE = "surprise"
+    SAD = "sad"
+    THUMBS_UP = "thumbs_up"
+    CELEBRATE = "celebrate"
+
+
 class PublicationState(str, Enum):
     PENDING = "pending"
     LIVE = "live"
@@ -290,6 +305,7 @@ MEDIA_LAYER = db_enum(MediaLayer, "media_layer")
 MEDIA_FAILURE_REASON = db_enum(MediaFailureReason, "media_failure_reason")
 PUBLICATION_STATE = db_enum(PublicationState, "publication_state")
 POST_KIND = db_enum(PostKind, "post_kind")
+POST_REACTION_KIND = db_enum(PostReactionKind, "post_reaction_kind")
 BILLING_PROVIDER = db_enum(BillingProvider, "billing_provider")
 BILLING_PLAN = db_enum(BillingPlan, "billing_plan")
 JOIN_REQUEST_OUTCOME = db_enum(JoinRequestOutcome, "join_request_outcome")

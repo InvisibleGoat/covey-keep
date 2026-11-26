@@ -55,7 +55,7 @@ from app.models.media import Media, MediaDerivative, MediaTag
 from app.models.membership import Membership
 from app.models.next_step import NextStepAcceptance, NextStepDismissal, NextStepTrigger
 from app.models.organization import Organization
-from app.models.post import Post
+from app.models.post import ChatReadPosition, Post, PostReaction
 from app.models.rsvp import RSVP, RSVPCompanion
 
 __all__ = [
@@ -67,6 +67,7 @@ __all__ = [
     "BillingPlan",
     "BillingProvider",
     "CapabilityProfile",
+    "ChatReadPosition",
     "ConsentRecord",
     "CoverImage",
     "EmailChangeRequest",
@@ -104,6 +105,7 @@ __all__ = [
     "Organization",
     "Person",
     "Post",
+    "PostReaction",
     "PublicationState",
     "RSVP",
     "RSVPCompanion",

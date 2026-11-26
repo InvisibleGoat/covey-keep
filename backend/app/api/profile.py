@@ -26,6 +26,7 @@ from app.models import (
 )
 from app.security import hash_token
 from app.services import billing
+from app.services.chat_reading import forget_in_every_chat
 from app.services.email import send_email
 from app.services.groups import lapse_group_roles
 from app.services.keeping import lapse_kept_statuses
@@ -398,6 +399,12 @@ async def delete_account(
     # the account-spine lapse above — the two are keyed on different ids
     # on purpose.
     await lapse_group_roles(db, person.id)
+    # What the person kept in their chats (CK-104; services/chat_reading.py):
+    # how far they had read in each, and the reactions they left, whose
+    # messages are stamped so an open chat drops them at its next check.
+    # Deleted, not retained: a reaction has no words to keep, and its name
+    # is gone; the messages themselves stay, under *a former member*.
+    await forget_in_every_chat(db, person.id)
     # The billing rows (CK-73): Stripe's customer is already gone (above),
     # so the ids here name nothing and the rows describe nobody — deleted,
     # not retained (no billing row survives an account's deletion;
@@ -409,6 +416,6 @@ async def delete_account(
     )
 
     # One commit = one transaction: anonymization, auth-material deletion,
-    # the kept-status lapse, the group roles' lapse and the billing rows'
-    # deletion land together or not at all.
+    # the kept-status lapse, the group roles' lapse, the chats' places and
+    # reactions and the billing rows' deletion land together or not at all.
     await db.commit()
