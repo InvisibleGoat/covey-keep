@@ -13,7 +13,8 @@ suite migrates from 0001 in one transaction, and such a label is unusable in
 it. The last test reads the migration's own source for one.
 
 The verifier: each new line green on a clean database and red on its plant,
-run the way an operator runs it (the CK-57 shape).
+run the way an operator runs it (the CK-57 shape) — the CK-104 fix-up's one
+among them, no reaction on a message that isn't live.
 """
 
 import ast
@@ -54,15 +55,19 @@ DATA = {
     "one": "one reaction of a kind per person per message",
     "kinds": "every reaction is one of the seven kinds",
     "lines": "no reaction is on a line the chat wrote",
+    "held": "no reaction is on a message that isn't live",
     "gone reactor": "no reaction is a deleted account's",
     "group": "no reading position is for a group's chat its person isn't in",
     "gathering": "no reading position is for a gathering's chat its person can't read",
     "gone reader": "no reading position is a deleted account's",
 }
 NEW_LINES = len(SHAPE) + len(DATA)
-# The verifier stood at 484 at head 0038 (CK-102); these 16 lines take it to
-# 500, the count every verifier pin in the suite reads since CK-104.
-assert VERIFIER_TOTAL == 484 + NEW_LINES == 500
+# The verifier stood at 484 at head 0038 (CK-102); 16 of these lines took it
+# to 500 at CK-104, and THE PIN MOVED at its fix-up, with its reason: a removal
+# takes the message's reactions, and one more data line says no message that
+# isn't live carries one. 501 is the count every verifier pin in the suite
+# reads since.
+assert VERIFIER_TOTAL == 484 + NEW_LINES == 501
 
 
 # --- the round trip -------------------------------------------------------------------
@@ -355,6 +360,14 @@ async def test_the_verifiers_0039_data_lines_pass_and_each_fails_on_its_plant(cl
             ["lines"],
             "INSERT INTO post_reactions (post_id, person_id, kind) VALUES (:j, :member, 'celebrate')",
             "DELETE FROM post_reactions WHERE post_id = :j",
+        ),
+        # The admin's like stays where it is and its message is held: what a
+        # removal before the CK-104 fix-up would have left.
+        (
+            ["held"],
+            "UPDATE posts SET publication_state = 'removed', removed_at = now(), "
+            "removed_by_person_id = author_person_id WHERE id = :m",
+            "UPDATE posts SET publication_state = 'live', removed_at = NULL, removed_by_person_id = NULL WHERE id = :m",
         ),
         # A deleted account's membership and invitations are KEPT, attributed
         # to the anonymized row, so nothing but these two lines sees either.

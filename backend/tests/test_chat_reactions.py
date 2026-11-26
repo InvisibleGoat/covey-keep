@@ -20,6 +20,12 @@ each kind, names only.
 - **Account deletion** takes the person's reactions and stamps the messages
   they were on; leaving a group keeps them; a message the sweep destroys
   takes its reactions with it.
+- **Deleting or removing a message takes every reaction on it**, in the
+  removal's transaction, after its guarded UPDATE has taken (the CK-104
+  fix-up; Steven's approval of 2026-11-26): its person could not take one
+  away from a held message, and nobody sees one there. Staged against a
+  reaction committed just before, and against a reactor's account deletion
+  in both orders.
 
 Migration 0039 and the verifier's lines are in tests/test_chat_0039.py.
 """
@@ -31,7 +37,7 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 import pytest
-from sqlalchemy import event, text
+from sqlalchemy import Delete, Update, event, text
 
 from app.db import engine
 from app.services import destruction
@@ -63,7 +69,7 @@ from tests.test_group_membership import ADMIN, MEMBER, _cast, _leave, _person_id
 from tests.test_groups import MISSING
 from tests.test_member_places import _extra_member
 from tests.test_outside_invitations import INVITEE, OUTSIDER, _let_in, _on, _world
-from tests.test_race_backstops import _select_from, _stage
+from tests.test_race_backstops import _select_from, _sql, _stage
 
 KINDS = ["like", "heart", "laugh", "surprise", "sad", "thumbs_up", "celebrate"]
 LATER = "later@example.com"
@@ -347,8 +353,10 @@ async def test_a_removed_message_is_the_404_for_everyone_the_people_who_run_the_
         refused = await _who(client, headers, message)
         assert (refused.status_code, refused.content) == await _no_such_message(client, headers, "GET")
     for message in (in_group, in_gathering):
-        # What was left on it before is still there, and goes when it does.
-        assert [kind for _, kind in await _rows(db_session_factory, message)] == ["heart"]
+        # THE PIN MOVED at the CK-104 fix-up, with its reason: what was left on
+        # it went with the removal (until then it stayed, and went with the
+        # message at the sweep), and nothing was stamped.
+        assert await _rows(db_session_factory, message) == []
         assert await _stamp(db_session_factory, message) == stamps[message]
     held = _by_id(await _answer(await _gread(client, cast.admin, cast.group_id)))[in_group]
     assert held["removed"] is not None and held["reactions"] == []
@@ -705,6 +713,9 @@ async def test_a_message_the_sweep_destroys_takes_its_reactions_with_it(client, 
     await _reacted(await _react(client, cast.admin, doomed, "heart"))
     await _reacted(await _react(client, cast.admin, kept, "heart"))
     now = _now()
+    # Planted by hand: since the CK-104 fix-up no route leaves a held message
+    # carrying a reaction (a removal takes them), so this is the cascade alone,
+    # the backstop for a row that ever did.
     async with db_session_factory() as db:
         await db.execute(
             text(
@@ -719,6 +730,249 @@ async def test_a_message_the_sweep_destroys_takes_its_reactions_with_it(client, 
         await db.commit()
     assert await _rows(db_session_factory, doomed) == []
     assert len(await _rows(db_session_factory, kept)) == 1
+
+
+# --- a message deleted or removed takes its reactions (the CK-104 fix-up) -----------------
+
+
+def _the_removals_update(statement) -> bool:
+    """The removal's guarded UPDATE, the one statement that takes a message
+    off live (a reaction's stamp sets nothing else on the row)."""
+    if not isinstance(statement, Update):
+        return False
+    sql = _sql(statement)
+    return sql.startswith("UPDATE posts SET ") and "publication_state=" in sql.split(" WHERE ")[0]
+
+
+def _the_deletions_reactions(statement) -> bool:
+    """An account deletion's DELETE of every reaction its person left."""
+    return isinstance(statement, Delete) and _sql(statement).startswith(
+        "DELETE FROM post_reactions WHERE post_reactions.person_id"
+    )
+
+
+async def _reactions_of(db_session_factory, person_id: UUID) -> int:
+    async with db_session_factory() as db:
+        return await db.scalar(text("SELECT count(*) FROM post_reactions WHERE person_id = :p"), {"p": person_id})
+
+
+async def _state_of(db_session_factory, message_id: str) -> str:
+    async with db_session_factory() as db:
+        return await db.scalar(text("SELECT publication_state::text FROM posts WHERE id = :p"), {"p": UUID(message_id)})
+
+
+async def test_deleting_or_removing_a_message_takes_every_reaction_on_it_and_no_other(
+    client, capsys, db_session_factory
+):
+    """The writer's delete and a moderator's removal, in a group's chat and a
+    gathering's: every kind and every person's, the remover's own and the
+    writer's included, go in the removal's own transaction. Other messages
+    keep theirs, nothing is stamped, and who reacted on the held message is
+    still the 404, to the people who run the place too."""
+    world = await _world(client, capsys, db_session_factory)
+    cast, gid = world.cast, world.gathering_id
+    # In the group the member runs nothing; in the gathering the invitee runs
+    # nothing and the co-host runs it with the host.
+    deleted = (await _sent(await _gsend(client, cast.member, cast.group_id, "Mine to delete")))["id"]
+    removed = (await _sent(await _gsend(client, cast.member, cast.group_id, "The admin removes it")))["id"]
+    kept = (await _sent(await _gsend(client, cast.member, cast.group_id, "Kept")))["id"]
+    x_deleted = (await _sent(await _xsend(client, world.invitee, gid, "Mine to delete too")))["id"]
+    x_removed = (await _sent(await _xsend(client, world.invitee, gid, "A co-host removes it")))["id"]
+    x_kept = (await _sent(await _xsend(client, world.invitee, gid, "Kept too")))["id"]
+    in_group = ((cast.admin, ["like", "heart"]), (cast.co_admin, ["heart"]), (cast.member, ["celebrate"]))
+    in_gathering = (
+        (cast.member, ["sad"]),
+        (world.co_host, ["heart", "laugh"]),
+        (world.invitee, ["thumbs_up"]),
+        (cast.admin, ["surprise"]),
+    )
+    for messages, reactors in (((deleted, removed, kept), in_group), ((x_deleted, x_removed, x_kept), in_gathering)):
+        for message in messages:
+            for headers, kinds in reactors:
+                for kind in kinds:
+                    await _reacted(await _react(client, headers, message, kind))
+    every = (deleted, removed, kept, x_deleted, x_removed, x_kept)
+    rows = {m: await _rows(db_session_factory, m) for m in every}
+    assert {kind for m in every for _, kind in rows[m]} == set(KINDS)
+    stamps = {m: await _stamp(db_session_factory, m) for m in every}
+
+    assert (await _remove_message(client, cast.member, deleted)).status_code == 204  # its writer
+    assert (await _remove_message(client, cast.admin, removed)).status_code == 204  # the admin, another's
+    assert (await _remove_message(client, world.invitee, x_deleted)).status_code == 204  # its writer
+    assert (await _remove_message(client, world.co_host, x_removed)).status_code == 204  # a co-host, another's
+
+    for message in (deleted, removed, x_deleted, x_removed):
+        assert await _rows(db_session_factory, message) == [], message
+        assert await _stamp(db_session_factory, message) == stamps[message], message
+    for message in (kept, x_kept):
+        assert await _rows(db_session_factory, message) == rows[message], message
+        assert await _stamp(db_session_factory, message) == stamps[message], message
+    for headers, message in (
+        (cast.admin, deleted),
+        (cast.co_admin, removed),
+        (world.co_host, x_deleted),
+        (cast.member, x_removed),  # the host
+    ):
+        refused = await _who(client, headers, message)
+        assert (refused.status_code, refused.content) == await _no_such_message(client, headers, "GET")
+    items = _by_id(await _answer(await _gread(client, cast.admin, cast.group_id)))
+    assert items[deleted]["removed"] is not None and items[deleted]["reactions"] == []
+    assert items[kept]["reactions"] == [_one("like", 1), _one("heart", 2), _one("celebrate", 1, mine=False)]
+
+
+@pytest.mark.parametrize("when", ["before its update", "while it waits"])
+async def test_a_reaction_committed_just_before_a_removal_goes_with_it(
+    client, capsys, db_session_factory, monkeypatch, when
+):
+    """Staged both ways. Committed by the route after the removal has read
+    the message and before its UPDATE: the removal's DELETE, a statement
+    after the UPDATE, sees it and takes it. Committed while the removal
+    waits on the message's row, which the reaction's own stamp holds: the
+    UPDATE takes the message once the reaction is in, and the DELETE takes
+    the reaction. (One added while the removal holds the row waits on it and
+    finds the message gone: test_a_reaction_during_a_removal_is_the_404….)"""
+    cast = await _cast(client, capsys, db_session_factory)
+    message = (await _sent(await _gsend(client, cast.member, cast.group_id, "Racing")))["id"]
+    await _reacted(await _react(client, cast.co_admin, message, "laugh"))
+    admin_person = await _person_id(db_session_factory, ADMIN)
+    if when == "before its update":
+
+        async def it_reacts() -> None:
+            await _reacted(await _react(client, cast.member, message, "heart"))
+
+        state = _stage(monkeypatch, when=_the_removals_update, competitor=it_reacts, before=True)
+        removed = await _remove_message(client, cast.admin, message)
+        assert state["fired"], "the race was not staged"
+    else:
+        async with db_session_factory() as competitor:
+            await competitor.execute(
+                text("INSERT INTO post_reactions (post_id, person_id, kind) VALUES (:p, :a, 'heart')"),
+                {"p": UUID(message), "a": admin_person},
+            )
+            await competitor.execute(
+                text(
+                    "UPDATE posts SET reactions_updated_at = clock_timestamp() "
+                    "WHERE id = :p AND publication_state = 'live'"
+                ),
+                {"p": UUID(message)},
+            )
+            route = asyncio.create_task(_remove_message(client, cast.admin, message))
+            try:
+                seen = await _until_the_route_waits_or_finishes(db_session_factory, route)
+            finally:
+                await competitor.commit()
+        removed = await route
+        assert seen == "waiting", f"the removal never met the reaction's stamp ({seen})"
+    assert removed.status_code == 204, removed.text
+    assert await _state_of(db_session_factory, message) == "removed"
+    assert await _rows(db_session_factory, message) == []
+
+
+async def _a_message_two_people_reacted_to(client, capsys, db_session_factory):
+    """The member's message, and another, each with a reaction from a member
+    who runs nothing (the account to be deleted) and one from the admin."""
+    cast = await _cast(client, capsys, db_session_factory)
+    plain, _, plain_person = await _extra_member(client, capsys, db_session_factory, cast, PLAIN)
+    message = (await _sent(await _gsend(client, cast.member, cast.group_id, "Racing")))["id"]
+    elsewhere = (await _sent(await _gsend(client, cast.member, cast.group_id, "Elsewhere")))["id"]
+    for headers, kind in ((plain, "heart"), (cast.admin, "laugh")):
+        for m in (message, elsewhere):
+            await _reacted(await _react(client, headers, m, kind))
+    return cast, plain, plain_person, message, elsewhere
+
+
+async def _neither_left_a_row(db_session_factory, plain_person: UUID, message: str, elsewhere: str) -> None:
+    admin_person = await _person_id(db_session_factory, ADMIN)
+    assert await _state_of(db_session_factory, message) == "removed"
+    assert await _rows(db_session_factory, message) == []
+    assert await _rows(db_session_factory, elsewhere) == [(admin_person, "laugh")]
+    assert await _reactions_of(db_session_factory, plain_person) == 0
+
+
+@pytest.mark.parametrize("first", ["the removal", "the deletion"])
+async def test_a_reactors_account_deletion_against_a_removal_in_either_order(
+    client, capsys, db_session_factory, monkeypatch, first
+):
+    """Both routes, staged, with no 500, no deadlock and no row left. The
+    removal (the admin's, of the member's message) has written its UPDATE and
+    not committed as the account of a member who reacted to the message is
+    deleted: the deletion's stamp waits on the removal's row, and then finds
+    the message gone. Or the deletion has written every statement on
+    reactions and not committed as the message is removed: the removal's
+    UPDATE waits on the deletion's stamp, and its DELETE then takes what is
+    left. The deletion's key-share lock never waits on the removal's UPDATE."""
+    cast, plain, plain_person, message, elsewhere = await _a_message_two_people_reacted_to(
+        client, capsys, db_session_factory
+    )
+    other: dict = {}
+
+    async def the_other_route() -> None:
+        if first == "the removal":
+            call = client.post("/me/delete", json=DELETE_BODY, headers=plain)
+        else:
+            call = _remove_message(client, cast.admin, message)
+        other["task"] = asyncio.create_task(call)
+        other["seen"] = await _until_the_route_waits_or_finishes(db_session_factory, other["task"])
+
+    if first == "the removal":
+        state = _stage(monkeypatch, when=_the_removals_update, competitor=the_other_route)
+        call = _remove_message(client, cast.admin, message)
+    else:
+        state = _stage(monkeypatch, when=_the_deletions_reactions, competitor=the_other_route)
+        call = client.post("/me/delete", json=DELETE_BODY, headers=plain)
+    try:
+        try:
+            held = await call
+        except Exception as exc:  # a deadlock's error, escaped: the 500, under ASGITransport
+            pytest.fail(f"the route {first} raised {type(exc).__name__}: {exc}")
+        assert state["fired"], "the race was not staged"
+        assert other["seen"] == "waiting", f"the other route never waited on {first} ({other['seen']})"
+        try:
+            waited = await other["task"]
+        except Exception as exc:
+            pytest.fail(f"the route that waited raised {type(exc).__name__}: {exc}")
+    finally:
+        if "task" in other:
+            await asyncio.gather(other["task"], return_exceptions=True)
+    assert held.status_code == 204, held.text
+    assert waited.status_code == 204, waited.text
+    await _neither_left_a_row(db_session_factory, plain_person, message, elsewhere)
+
+
+async def test_a_deletion_between_a_removals_read_and_its_update_waits_on_nothing(
+    client, capsys, db_session_factory, monkeypatch
+):
+    """The removal takes the message's row before it takes any reaction, as
+    the deletion and a reaction's own stamp do: a reactor's account deletion
+    that lands after the removal has read the message and before its UPDATE
+    waits on nothing of the removal's and is done, and the removal then takes
+    what is left. Were the removal to take the reactions first, the deletion
+    would stamp the message and then wait on a reaction the removal holds,
+    the removal would wait on the stamp, and PostgreSQL would end one."""
+    cast, plain, plain_person, message, elsewhere = await _a_message_two_people_reacted_to(
+        client, capsys, db_session_factory
+    )
+    other: dict = {}
+
+    async def the_deletion() -> None:
+        other["task"] = asyncio.create_task(client.post("/me/delete", json=DELETE_BODY, headers=plain))
+        other["seen"] = await _until_the_route_waits_or_finishes(db_session_factory, other["task"])
+
+    state = _stage(monkeypatch, when=_the_removals_update, competitor=the_deletion, before=True)
+    try:
+        try:
+            removed = await _remove_message(client, cast.admin, message)
+        except Exception as exc:  # a deadlock's error, escaped: the 500, under ASGITransport
+            pytest.fail(f"the removal raised {type(exc).__name__}: {exc} (the deletion: {other.get('seen')})")
+        assert state["fired"], "the race was not staged"
+        assert other["seen"] == "finished", "the deletion waited on something the removal held before its UPDATE"
+        deleted = await other["task"]
+    finally:
+        if "task" in other:
+            await asyncio.gather(other["task"], return_exceptions=True)
+    assert deleted.status_code == 204, deleted.text
+    assert removed.status_code == 204, removed.text
+    await _neither_left_a_row(db_session_factory, plain_person, message, elsewhere)
 
 
 # --- statements, and nothing logged ---------------------------------------------------------

@@ -42,7 +42,9 @@ is still found; the client drops repeats by id. A poll's instant comes as
 every check.
 
 REMOVING is one guarded UPDATE where the row is still `live`, its rowcount
-checked before the 204 (the CK-77.2 Gotcha) — never read-then-assign. A
+checked before the 204 (the CK-77.2 Gotcha) — never read-then-assign — and
+then the DELETE of every reaction on the message, so a held one carries none
+(the CK-104 fix-up). A
 REACTION is one guarded INSERT … SELECT or DELETE against the live message,
 and the message's stamp moves with it, or neither stands. A READING POSITION
 is one upsert that only moves forward, taken under a share lock on the row
@@ -1022,8 +1024,8 @@ async def _runs_its_place(
 
 async def _reactable(db: AsyncSession, ctx: AuthContext, message_id: UUID):
     """A live message the caller can read. A removed one is the 404 for
-    everyone, the people who run the place included; a line the chat wrote
-    takes no reaction."""
+    everyone, the people who run the place included, and carries none: its
+    removal took them. A line the chat wrote takes no reaction."""
     found, _ = await _message_at_the_door(db, ctx, message_id)
     if found.publication_state != PublicationState.LIVE:
         raise _no_such_message()
@@ -1126,7 +1128,16 @@ async def remove_message(
 ) -> None:
     """The writer deletes their own live message in their window; the people
     who run the place remove anyone's in theirs. The remover recorded says
-    which act it was. Everyone else draws the 404."""
+    which act it was. Everyone else draws the 404.
+
+    Every reaction on the message goes in the same transaction, every kind
+    and every person's (the CK-104 fix-up; the chat record §6 as changed):
+    nobody sees a reaction on a held message, and its person could not take
+    one away there. AFTER the guarded UPDATE has taken, so the removal holds
+    the message's row before any reaction's, in the order a reaction's own
+    stamp and an account's deletion take them: a reaction at the same instant
+    waits on the row and finds the message gone, and one committed before is
+    in the DELETE's snapshot."""
     person_id = ctx.person.id
     now = _now()
     found, gathering = await _message_at_the_door(db, ctx, message_id)
@@ -1163,4 +1174,9 @@ async def remove_message(
         if moderator:
             raise already
         raise _no_such_message()
+    await db.execute(
+        delete(PostReaction)
+        .where(PostReaction.post_id == message_id)
+        .execution_options(synchronize_session=False)
+    )
     await db.commit()

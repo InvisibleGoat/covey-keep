@@ -66,9 +66,10 @@ DATA = {
 NEW_LINES = len(SHAPE) + len(DATA)
 # The verifier stood at 458 at head 0037 (CK-92); these 26 lines took it to
 # 484 at 0038. THE PIN MOVED at CK-104, with its reason: 0039's sixteen
-# lines (tests/test_chat_0039.py) take the total to 500.
+# lines (tests/test_chat_0039.py) take the total to 500, and the CK-104
+# fix-up's one more to 501.
 assert 458 + NEW_LINES == 484
-assert VERIFIER_TOTAL == 458 + NEW_LINES + 16
+assert VERIFIER_TOTAL == 458 + NEW_LINES + 17
 
 
 async def _sql(db_session_factory, sql: str, params: dict | None = None) -> None:

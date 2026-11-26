@@ -120,8 +120,8 @@ LEFT = "leftout@example.com"
 # (4), and two data lines (2: a `from_outside` row sits on a group's
 # gathering whose outside invitations are on; its person holds no membership
 # of that group) — and the members-only line is NARROWED in place (one line
-# out, one in), so 458; 484 since CK-102's twenty-six — posts' kind, body and remover, their three CHECKs, the date FK, the two indexes and the single one gone, the post_kind and group_media labels, and twelve data lines on the container and the posts; 500 since CK-104's sixteen — post_reaction_kind's labels, the reactions' and the reading positions' shapes, posts' reaction stamp, and seven data lines on the two.
-VERIFIER_TOTAL = 500
+# out, one in), so 458; 484 since CK-102's twenty-six — posts' kind, body and remover, their three CHECKs, the date FK, the two indexes and the single one gone, the post_kind and group_media labels, and twelve data lines on the container and the posts; 500 since CK-104's sixteen — post_reaction_kind's labels, the reactions' and the reading positions' shapes, posts' reaction stamp, and seven data lines on the two; 501 since the CK-104 fix-up's one data line, no reaction is on a message that isn't live.
+VERIFIER_TOTAL = 501
 
 THREE_FIELDS = ("outside_invitations", "caller_in_group", "outside_alert")
 SETTING_KEYS = {"on", "since", "by", "may_change"}

@@ -1,11 +1,21 @@
 # CoveyKeep — Repo Operational Guide
 
-**Version:** 1.133.0
+**Version:** 1.133.1
 **Last Updated:** 2026-11-26
 **Source:** the one-line list of every phase from CK-2 to CK-80 that stood here moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); each phase is named in its own changelog entry, here or there.
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.133.1** (2026-11-26): **CK-104's fix-up after review: deleting or removing a message takes its reactions** — at Steven's answer of 2026-11-26 (*"Yes, fix first"*, to *"Fix the reactions on a removed message before the push?"*), relayed by the planning session. Version 6 of the notice says a person can take their reactions away *from any message you can still read*; the people who run a place read a held message for 30 days, and `PUT /messages/{id}/reactions` answers a removed message the 404 for everyone, so a reaction of theirs stayed on it with no way off. Now none is left on one; no word of the notice changes, and it stays version 6. Rule 1 moved the entry 1.131.1 to `CLAUDE-history.md`, which takes 1.14.0. One code commit; in the Hub, one (`decisions/2026-11-21-the-chat-who-reads-it-and-what-it-keeps.md` 1.4.0 — §6's reading changed by Steven, banners on §5, §14, §16 and §18, and CK-103's *not pushed* corrected; `reference/backend/api-reference.md` 1.54.1 — the two routes; `reference/backend/database-schema.md` 2.45.1 — the verifier and decision 55; `decisions/2026-08-31-private-alpha-scope.md` 1.8.1 — version 6's preamble; `reference/architecture/consent-and-compliance.md` 2.9.1). **Backend; no route, field, word or migration:**
+  - **changed:** `api/chat.py` (`remove_message` deletes every reaction on the message, after its guarded UPDATE has taken, in its transaction) and `scripts/verify_schema.py` (one data line, *no reaction is on a message that isn't live*);
+  - **tests:** 6 new in `tests/test_chat_reactions.py` — a writer's delete and a moderator's removal in both kinds of chat taking every kind and every person's on that message and no other's; a reaction committed before the removal's UPDATE, and one committed while it waits, staged; an account's deletion against a removal staged in both orders, and between the removal's read and its UPDATE — and a plant in `tests/test_chat_0039.py`; pins moved, each with its reason: a removed message's reactions in `test_chat_reactions.py` (gone with it, where they stayed until the sweep), and the verifier's count, 500 to 501, and its planted tallies, in eleven files;
+  - **untouched:** every route, field, refusal and word, the notice at version 6, migration 0039 (the head stays 0039), the frontend (1857 tests, not run again), `_reactable`, the held-message rules, `WORKING-ON-NOW.md` and the docs-root `CLAUDE.md`.
+
+  **1177 backend tests** (1171 before): **6 new**. Red first against `938edd5`: 32 of the 65 tests the fix-up touches — the 6 new and the moved pin on a reaction left on a removed message, and 25 count pins reading 500 where 501 stands. **10 mutations, each compiling and caught by a named failing test.** The verifier on the dev DB 501 of 501, `alembic check` clean.
+
+  **THE RACES**, staged: a reaction committed before the removal's UPDATE, or while the UPDATE waits on its row, goes with the message; an account's deletion against a removal by someone else, either one first, ends in two 204s and no row; and a deletion between a removal's read and its UPDATE waits on nothing. **The deadlock CK-104 named is not widened**: a probe of the remover deleting their own account, fourteen interleavings on the fix and the thirteen of them `938edd5` can stage, deadlocks at the same one on both — the deletion past its anonymization, then the removal's UPDATE waiting on the person's row — before the new DELETE, which is never reached there. **Found and not fixed**: `forget_in_every_chat`'s `with_for_update(key_share=True)` takes FOR NO KEY UPDATE, not KEY SHARE, so a deletion's lock and a removal's UPDATE wait on each other on the message's row; between two people both take that row before anything else they share, so it adds no cycle, where the fix-up's brief expected the two never to meet.
+
+  Not pushed; it rides the push that carries `938edd5`, which redeploys Netlify and both Render services as it already did; **the verifier owed on the deploy is head 0039, 501 assertions.** Report: `D:\projects\temp\CK-104-fix-up-report.md`.
 - **1.133.0** (2026-11-26): Phase CK-104 — **Reactions, how far each person has read, what is new and typing in the chat: the backend, and the private test notice's version 6** — the chat record's phase 3, made a phase at Steven's approval of 2026-11-25 (*"Yes start it."*, to *"Start CK-104 with the five answers as recommended and the notice's words as written?"*), the answers built as given: other people's messages alone are new (Q1), a chat opens at the first message its person hasn't read, and at the newest the first time (Q2), version 6's words (Q3; its reactions sentence corrected before anything was built, *at any time* becoming *from any message you can still read*, and approved on 2026-11-26 with *"Yes, use the wording you came up with"*), typing in memory alone (Q4), and the record's two typing rows confirmed (Q5); and, on Steven's words of 2026-11-24, what is kept is a place read to and never an opening (`decisions/2026-11-21-the-chat-who-reads-it-and-what-it-keeps.md` 1.3.0 — banners on §4, §5, §8, §11, §14, §15, §16 and §18; `decisions/2026-08-31-private-alpha-scope.md` 1.8.0 — §3.1's version 6; `reference/backend/api-reference.md` 1.54.0 — the Chat router; `reference/backend/database-schema.md` 2.45.0 — migration 0039 and decision 55; `reference/architecture/consent-and-compliance.md` 2.9.0 and `reference/strategy/covey-keep-roadmap.md` 1.32.0). Rule 1 moved the entry 1.131.0 to `CLAUDE-history.md`, which takes 1.13.0. **Backend, migration 0039 and the notice:**
   - **new:** migration `0039_reactions_and_reading_positions.py`, `services/chat_reading.py` and `services/chat_typing.py`;
   - **changed:** `api/chat.py` (five new routes, and the read's `open`, `after`, `X-Chat-Since` and `X-Chat-Typing`), `api/groups.py`, `api/gatherings.py`, `services/keeping.py` (`unkeep`) and `api/profile.py` (a place and a typing entry end with the reading, and with the account), `main.py` (CORS `max_age` 7200), `models/enums.py`, `models/post.py` and `models/__init__.py`, `scripts/verify_schema.py`, `api/auth.py` and `lib/api.ts` (`TOS_VERSION` 6), and `routes/Tos.tsx`;
@@ -46,17 +56,7 @@
   **Found and not fixed:** each check is **two** requests and two access lines, because `since` changes the address every time and a preflight is cached by its address; a chat's header, and the menu, keep a count until the page is opened again; a preview does not shorten a long message. The report lists every one.
 
   Not pushed. The push redeploys Netlify and both Render services — the API's code changed, the worker's did not; no migration, so no verifier run is owed. The deploy window is the bullet's. Report: `D:\projects\temp\CK-103-report.md`.
-- **1.131.1** (2026-11-23): **CK-102's two fix-ups after review: a traceback prints nothing a person wrote in a chat, a refusal never carries the value it refused, and three ways a chat request answered 500 answer 422** — at Steven's answers of 2026-11-22 (*"Yes, fix first"*, to *"Fix the log finding before the push?"*) and 2026-11-23 (*"Yes, fix it too"*, to *"Fix the last log leak before the push too?"*), both relayed by the planning session. Uvicorn logs an escaped exception's traceback, and the reviews proved two ways a message's words were in one: a connection the database drops under a send (SQLAlchemy's exception carries the failed statement's parameters), and a 422 that could not be written (FastAPI's own repeats the refused value, and the traceback of the failure prints it). Rule 1 moved the entry 1.128.1 to `CLAUDE-history.md`, which takes 1.10.0. Fix-up 1 is code `6a71db0`, in the Hub `6ef22e8` (`reference/backend/api-reference.md` 1.52.1 — the Chat router; `decisions/2026-11-21-the-chat-who-reads-it-and-what-it-keeps.md` 1.1.1 and `reference/strategy/covey-keep-roadmap.md` 1.30.1 — doc lines corrected); fix-up 2 is code `b462bce`, in the Hub `05212f7` (`reference/backend/api-reference.md` 1.52.2 — the Chat router's *No logger* paragraph). **Backend, no migration:**
-  - **changed:** `db.py` and `worker.py` (`hide_parameters=True` on both engines; nothing else under `app/` builds one), `api/chat.py` (`_no_nul`, `EARLIEST_INSTANT`, `BAD_SINCE`, `_in_utc`) and `main.py` (the handler registered); **new:** `app/refusals.py`;
-  - **tests:** new `tests/test_hidden_parameters.py` (4 — a dropped connection staged under a send and under a sign-in request, and every engine under `app/` read from the syntax tree) and `tests/test_refusals.py` (14 — seven bodies FastAPI's own 422 could not write back, through both chat doors; a sign-in request's; an ordinary refusal on five routers, whole; the CORS headers), and four in `tests/test_chat.py` (a NUL; equal instants paged; `since` and a forged cursor at their extremes); no pin moved;
-  - **untouched:** migration 0038, the notice, every screen, `render.yaml`, neither lock, `WORKING-ON-NOW.md` and the docs-root `CLAUDE.md`.
-
-  **1046 backend tests** (1024 before): **22 new**, 8 and 14. Red first against the unchanged code, 20 of the 22 failed, each on its own rule; the two that passed, paging across equal `created_at` and the 400 for a JSON body that is not UTF-8, hold before by design. **39 mutations, 21 and 18, each compiling and caught by a named test.** `alembic check` clean and the verifier on the dev DB 484 of 484 at fix-up 1; fix-up 2 changes no model.
-
-  **THE BUILD**: a message holding a NUL is a 422 at `body`, the words never altered; a `since`, or a cursor's instant, before `EARLIEST_INSTANT` (2000-01-01 in UTC) or past what UTC can hold is a 422 at its own field, and both are read in UTC. **Every 422 FastAPI answers, on every route, is written by `app/refusals.py`**: each entry's `type`, `loc`, `msg` and, where pydantic gives one, `ctx`, and nothing else, cut to those before the encoder walks them, written in ASCII and logged nowhere. The CK-102 bullet names both of 0038's indexes. **Found and not fixed**, a phase of its own: asyncpg's `DETAIL` prints an address on five staged races; and a NUL, a lone surrogate or an extreme instant is a 500 on other routes, a lone surrogate printing up to 40 characters through asyncpg's `DataError`. The two reports list each.
-
-  Not pushed; both ride the push that carries `e3ccd90`, which redeploys the API and the worker as it already did — the verifier owed on the deploy is CK-102's, head 0038, 484. Reports: `D:\projects\temp\CK-102-fix-up-report.md` and `D:\projects\temp\CK-102-fix-up-2-report.md`.
-- *The 48 changelog entries that stood here — versions **1.131.0 down to 1.85.0** (2026-11-22 back to 2026-10-27), Phases CK-78 to CK-102 and the seventh doc audit's first and fifth fix batches — moved VERBATIM to `CLAUDE-history.md`, 1.122.0 to 1.85.0 at 1.126.0, 1.123.0 at 1.127.0, 1.124.0 at 1.128.0, 1.125.0 at 1.128.1, 1.126.0 at 1.129.0, 1.127.0 at 1.130.0, 1.128.0 at 1.131.0, 1.128.1 at 1.131.1, 1.129.0 at 1.132.0, 1.130.0 at 1.132.1 and 1.131.0 at 1.133.0; nothing in them was rewritten.*
+- *The 49 changelog entries that stood here — versions **1.131.1 down to 1.85.0** (2026-11-23 back to 2026-10-27), Phases CK-78 to CK-102 and the seventh doc audit's first and fifth fix batches — moved VERBATIM to `CLAUDE-history.md`, 1.122.0 to 1.85.0 at 1.126.0, 1.123.0 at 1.127.0, 1.124.0 at 1.128.0, 1.125.0 at 1.128.1, 1.126.0 at 1.129.0, 1.127.0 at 1.130.0, 1.128.0 at 1.131.0, 1.128.1 at 1.131.1, 1.129.0 at 1.132.0, 1.130.0 at 1.132.1, 1.131.0 at 1.133.0 and 1.131.1 at 1.133.1; nothing in them was rewritten.*
 - *The 87 changelog entries that stood here — versions **1.84.0 down to 1.0.0** (2026-10-25 back to 2026-08-17) — moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); nothing in them was rewritten.*
 
 ---
@@ -2936,7 +2936,9 @@ is Steven's call, not a session's: `.env` is his file.
   the body and so in no address) leaves or takes back one of the caller's own
   on a live message they can read, idempotent both ways, one guarded statement
   with the message's stamp in the same transaction; `GET` names who left each
-  kind; a line is 409 `not_a_message`, a removed message the 404 for everyone.
+  kind; a line is 409 `not_a_message`, a removed message the 404 for everyone,
+  and none is left on one: deleting or removing a message deletes every
+  reaction on it in its transaction, after its guarded UPDATE has taken.
   Every item carries `reactions`, by kind, the count — **null in a memorial's
   chat** — and whether the caller's is there, read in the item's own
   statement; a poll returns a message whose reactions changed. **Reading**:
@@ -2976,11 +2978,11 @@ is Steven's call, not a session's: `.env` is his file.
   (sending 6) before the API has redeployed is a 422 for those minutes; the
   old instance serving during the pre-deploy names neither table nor the new
   column; an old bundle ignores every new field; and a migration means the
-  verifier is owed on the deploy (head 0039, 500). Not built: the screens for
+  verifier is owed on the deploy (head 0039, 501). Not built: the screens for
   all of it (the reaction picker and chips, the *New messages* line, the dot,
   the typing line, sending either header), replies, and "seen by", which stays
-  out. Detail: `reference/backend/api-reference.md` 1.54.0, the Chat router;
-  `reference/backend/database-schema.md` 2.45.0, migration 0039 and decision
+  out. Detail: `reference/backend/api-reference.md` 1.54.1, the Chat router;
+  `reference/backend/database-schema.md` 2.45.1, migration 0039 and decision
   55.
 - Browser session (CK-6, lifetime CK-9): `/auth/verify` 302s to
   `${APP_BASE_URL}/auth/callback#token=<jwt>` — the JWT rides the URL
@@ -3414,7 +3416,7 @@ covey-keep/            # the code root (this repo)
 │   │       ├── 0038_the_chat_posts_kind_and_the_group_media_label.py # posts.kind, words on a message alone, the remover and the hold's CHECKs, the reading index; gathering_type's group_media (CK-102)
 │   │       └── 0039_reactions_and_reading_positions.py # post_reactions and its enum, posts.reactions_updated_at, chat_read_positions (CK-104)
 │   ├── scripts/             # operator scripts, run from backend/
-│   │   ├── verify_schema.py         # the read-only shape and data verifier: head 0039, 500 assertions; run after every migration that reaches Render
+│   │   ├── verify_schema.py         # the read-only shape and data verifier: head 0039, 501 assertions; run after every migration that reaches Render
 │   │   ├── verify_email_delivery.py # sends one message, no link, to an inbox the operator types; run from the Render Web Shell after a key or DNS change
 │   │   └── verify_r2_credentials.py # proves the R2 credential split against live R2 (one generated object); run from the Render Web Shell
 │   └── tests/               # the pytest + httpx ASGI suite; needs the dev DB container up
@@ -3433,9 +3435,9 @@ covey-keep/            # the code root (this repo)
 │       ├── test_calendar.py              # the calendar: the invited tier by seat, the group route's 404 first, the half-open range and its refusals, the caller's own answer, position and date_count, the photo count against the charge, the body against the detail and the list, one statement
 │       ├── test_caller_response.py       # the caller's own answer on each date of a gathering body, in one statement
 │       ├── test_chat.py                  # the chat: who reads each kind and from when, sending, the poll and its lookback, removing and the hold by seat, the lines, the limit
-│       ├── test_chat_0039.py             # migration 0039's round trip and its INFO line; the verifier's nine shape lines and seven data lines, each red on its plant
+│       ├── test_chat_0039.py             # migration 0039's round trip and its INFO line; the verifier's nine shape lines and eight data lines, each red on its plant
 │       ├── test_chat_container.py        # the group's chat container: made with the group or on first use, one under a race, refused by POST /gatherings, reached by no other route
-│       ├── test_chat_reactions.py        # reactions: the seven kinds, who may and may not, idempotent, the item's and the poll's, a memorial's, a deleted account's
+│       ├── test_chat_reactions.py        # reactions: the seven kinds, who may and may not, idempotent, the item's and the poll's, a memorial's; a removal and a deleted account taking them
 │       ├── test_chat_reading.py          # how far a person has read: the mark, open and after, what counts, chats/new by seat, every path that ends a reading
 │       ├── test_chat_schema.py           # migration 0038's round trip and its INFO line; the verifier's chat lines, each red on its plant
 │       ├── test_chat_sweep.py            # the message sweep: at its window and not a second short, one statement, under the switch, its line, a failure contained

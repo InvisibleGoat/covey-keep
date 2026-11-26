@@ -965,7 +965,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
     `gatherings.owning_group_id`, no pending invitation on a group gathering,
     every group gathering under a HOUSEHOLD group; and 361 since CK-77's
     twenty-three less the backup-NULL line it retired; and 385 since
-    CK-83a's twenty-four — the six cover columns' shapes on gatherings and groups — nullability, the two FKs each with no delete rule, cover_set_at's type, the CHECKs and the partial indexes — and four data lines); and 438 since CK-83b's fifty-three — cover_images' shape (the table, its eighteen columns' nullability, the PK, three FKs with their delete rules, the two enum types, two CHECKs, two partial indexes), each subject's cover_image_id (nullability, FK and delete rule, partial index, the widened CHECK's definition), and eleven data lines; 458 since CK-92's twenty — the outside-invitation setting's two columns, its FK and delete rule, its two CHECKs, `from_outside`'s NOT NULL, type and default, the dismissals table, its three NOT NULLs, its key, its two FKs' targets and delete rules, and two data lines — the members-only line narrowed in place; 484 since CK-102's twenty-six — posts' kind, body and remover, their three CHECKs, the date FK, the two indexes and the single one gone, the post_kind and group_media labels, and twelve data lines on the container and the posts; 500 since CK-104's sixteen — post_reaction_kind's labels, the reactions' and the reading positions' shapes, posts' reaction stamp, and seven data lines on the two.
+    CK-83a's twenty-four — the six cover columns' shapes on gatherings and groups — nullability, the two FKs each with no delete rule, cover_set_at's type, the CHECKs and the partial indexes — and four data lines); and 438 since CK-83b's fifty-three — cover_images' shape (the table, its eighteen columns' nullability, the PK, three FKs with their delete rules, the two enum types, two CHECKs, two partial indexes), each subject's cover_image_id (nullability, FK and delete rule, partial index, the widened CHECK's definition), and eleven data lines; 458 since CK-92's twenty — the outside-invitation setting's two columns, its FK and delete rule, its two CHECKs, `from_outside`'s NOT NULL, type and default, the dismissals table, its three NOT NULLs, its key, its two FKs' targets and delete rules, and two data lines — the members-only line narrowed in place; 484 since CK-102's twenty-six — posts' kind, body and remover, their three CHECKs, the date FK, the two indexes and the single one gone, the post_kind and group_media labels, and twelve data lines on the container and the posts; 500 since CK-104's sixteen — post_reaction_kind's labels, the reactions' and the reading positions' shapes, posts' reaction stamp, and seven data lines on the two; 501 since the CK-104 fix-up's one data line, no reaction is on a message that isn't live.
     A PLANT IS NOT
     EVIDENCE UNTIL SOMETHING
     INDEPENDENT OF THE ASSERTION CONFIRMS THE ROW EXISTS (CK-56's lesson)."""
@@ -975,7 +975,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
         host_account = (await _account_for(db, HOST)).id
 
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (500, 0, 0), out
+    assert (passed, failed, code) == (501, 0, 0), out
     for line in (
         "table gathering_co_hosts exists",
         "gathering_co_hosts primary key is (gathering_id, account_id)",
@@ -1003,7 +1003,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
         )
         assert planted == 1, "the plant did not land"
     passed, failed, code, out = _verifier()
-    assert (passed, failed, code) == (499, 1, 1), out
+    assert (passed, failed, code) == (500, 1, 1), out
     assert f"FAIL  {exclusive}" in out and "1 co-host row(s) naming the gathering's host" in out
 
     async with db_session_factory() as db:
@@ -1012,7 +1012,7 @@ async def test_the_verifier_asserts_the_relations_shape_and_that_no_co_host_is_t
             {"g": UUID(cast.gathering_id), "a": host_account},
         )
         await db.commit()
-    assert _verifier()[:3] == (500, 0, 0)
+    assert _verifier()[:3] == (501, 0, 0)
 
 
 async def test_co_host_management_logs_nothing_at_debug(client, capsys, db_session_factory, caplog):

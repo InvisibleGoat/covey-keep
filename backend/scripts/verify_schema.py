@@ -3414,7 +3414,8 @@ async def verify(conn, ck: Checks) -> None:
     )
 
     # DATA. A reaction is one person's one sign on one message; a line the
-    # chat wrote takes none; a deleted account leaves none. A position is
+    # chat wrote takes none, nor a held message; a deleted account leaves
+    # none. A position is
     # held only by someone who can read its chat now: a group's container by
     # membership, a gathering by its host, a co-host or an invitation row -
     # every path that ends a person's reading deletes theirs in its own
@@ -3445,6 +3446,14 @@ async def verify(conn, ck: Checks) -> None:
             "SELECT count(*) FROM post_reactions r JOIN posts p ON p.id = r.post_id WHERE p.kind::text <> 'message'",
         )
         ck.check(on_lines == 0, "no reaction is on a line the chat wrote", f"{on_lines} on a line")
+        # A removal takes the message's reactions in its own transaction (the
+        # CK-104 fix-up), so a held message carries none.
+        on_held = await scalar(
+            conn,
+            "SELECT count(*) FROM post_reactions r JOIN posts p ON p.id = r.post_id "
+            "WHERE p.publication_state::text <> 'live'",
+        )
+        ck.check(on_held == 0, "no reaction is on a message that isn't live", f"{on_held} on a held message")
         left_behind = await scalar(
             conn,
             "SELECT count(*) FROM post_reactions r JOIN people p ON p.id = r.person_id "
