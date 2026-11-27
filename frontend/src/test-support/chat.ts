@@ -21,13 +21,28 @@ export function isChatRead(input: unknown, init?: { method?: string }): boolean 
   return (init?.method ?? 'GET') === 'GET' && CHAT_READ.test(pathOf(input))
 }
 
+// Since CK-105 the frame's menu reads GET /chats/new for the dot beside its
+// own reads; this answers it with nothing new, so what the stub behind it
+// records is still what it recorded before.
+const CHATS_NEW = /^\/chats\/new$/
+
+export function isChatsNewRead(input: unknown, init?: { method?: string }): boolean {
+  return (init?.method ?? 'GET') === 'GET' && CHATS_NEW.test(pathOf(input))
+}
+
 export function withEmptyChat<A extends unknown[]>(
   stub: (...args: A) => Promise<Response>,
 ): (...args: A) => Promise<Response> {
   return (...args: A) => {
-    if (!isChatRead(args[0], args[1] as { method?: string } | undefined)) return stub(...args)
+    const init = args[1] as { method?: string } | undefined
+    const body = isChatRead(args[0], init)
+      ? chatPage([])
+      : isChatsNewRead(args[0], init)
+        ? { groups: [], gatherings: [] }
+        : null
+    if (body === null) return stub(...args)
     return Promise.resolve(
-      new Response(JSON.stringify(chatPage([])), {
+      new Response(JSON.stringify(body), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }),

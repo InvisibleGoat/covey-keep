@@ -18,6 +18,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import App from '../App'
 import { AuthContext, type AuthState, type Person } from '../auth/context'
+import { withEmptyChat } from '../test-support/chat'
 import groupsLibSource from '../lib/groups.ts?raw'
 import { GroupNew } from './GroupNew'
 import groupNewSource from './GroupNew.tsx?raw'
@@ -95,9 +96,15 @@ function renderList() {
 // Home, and the route table.
 // ---------------------------------------------------------------------------
 
+// MOVED AT CK-105, with its reason: the stub answered a group page's chat read
+// (CK-103's card) with the group's own body, which has no items. The menu's
+// GET /chats/new moved when that read lands, and the card then drew it after
+// the heading was found, an unhandled TypeError in the run; the chat's reads
+// are answered empty now, as twelve files' are since CK-103, and the stub
+// records what it recorded before. No assertion changed.
 function renderAppAt(address: string, auth: AuthState, respond: (url: string) => Response) {
   const fetchStub = vi.fn((url: string) => Promise.resolve(respond(String(url))))
-  vi.stubGlobal('fetch', fetchStub)
+  vi.stubGlobal('fetch', withEmptyChat(fetchStub))
   render(
     <MemoryRouter initialEntries={[address]}>
       <AuthContext.Provider value={auth}>

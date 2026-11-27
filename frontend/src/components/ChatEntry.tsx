@@ -1,5 +1,8 @@
 // What a chat draws (CK-103; THE DESIGN §5, §7, §8): a message, a line the chat
-// wrote itself, a held message's row and the step beneath a message. The chat's
+// wrote itself, a held message's row and the step beneath a message; since
+// CK-105 a live message's reactions — its chips, React, and the panel React
+// opens, the picker and Who reacted. A line, a held row, a message the server
+// sent no reactions for and a Chat card's entry carry none of them. The chat's
 // screen and the cards on the two pages draw a message through one copy
 // (MessageParts), so a card and the chat never disagree about one.
 //
@@ -10,9 +13,11 @@
 //
 // A HELD MESSAGE'S WORDS ARE NOT IN THE PAGE UNTIL THE PRESS: the row draws
 // them only while it is shown, and nothing else here draws one at all.
-import { memo, useId, useLayoutEffect, type ReactNode, type RefObject } from 'react'
+import { memo, useId, useLayoutEffect, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 import {
   atStart,
+  chipLabel,
+  CHOOSE_A_REACTION,
   DELETE,
   DELETE_SENTENCE,
   DELETE_YOUR_MESSAGE,
@@ -22,16 +27,27 @@ import {
   isFormerMember,
   KEEP_IT,
   linkPieces,
+  REACTION_EMOJI,
+  REACTION_KINDS,
+  reactionName,
+  reactionsOf,
+  reactLabel,
   REMOVE,
   removeLabel,
   removeSentence,
   SHOW_IT,
+  WHO_FAILED,
+  WHO_REACTED,
+  whoNames,
   YOU,
   type Act,
   type ChatItem,
+  type ReactionKind,
+  type WhoReacted,
 } from '../lib/chat'
 import { formatTime } from '../lib/datetime'
 import { initials } from '../lib/groups'
+import { Icon, LikeMark } from './Icons'
 import type { ChatRows } from './useChatRows'
 
 export function Words({ words }: { words: string }) {
@@ -89,12 +105,41 @@ export function MessageParts({
   )
 }
 
+// Who reacted, as the panel holds it: being read, failed, or the answer.
+export type WhoState = 'loading' | 'failed' | WhoReacted
+
+// A press on a chip or a picker button.
+export type ReactPress = (id: string, kind: ReactionKind, on: boolean, from: 'chip' | 'picker') => void
+
+// A kind's mark: the Like mark, or the device's own emoji. Decorative inside a
+// control its name says; an image named by its kind where it stands alone.
+function ReactionMark({ kind, named = false }: { kind: ReactionKind; named?: boolean }) {
+  if (kind === 'like') return <LikeMark label={named ? reactionName(kind) : undefined} />
+  return named ? (
+    <span className="e" role="img" aria-label={reactionName(kind)}>
+      {REACTION_EMOJI[kind]}
+    </span>
+  ) : (
+    <span className="e" aria-hidden="true">
+      {REACTION_EMOJI[kind]}
+    </span>
+  )
+}
+
 export const ChatMessage = memo(function ChatMessage({
   item,
   zone,
   act,
   rows,
   onAct,
+  open = false,
+  busy = false,
+  line = null,
+  who,
+  me = null,
+  onReactOpen,
+  onReact,
+  onPanelKey,
   children,
 }: {
   item: ChatItem
@@ -102,27 +147,116 @@ export const ChatMessage = memo(function ChatMessage({
   act: Act | null
   rows: ChatRows
   onAct: (id: string) => void
+  // The panel beneath this message is open.
+  open?: boolean
+  // A press on one of its reactions is waiting.
+  busy?: boolean
+  // What the last press that failed left beneath the chips.
+  line?: string | null
+  who?: WhoState
+  // The caller's own display name, taken once out of the names of a kind
+  // that is theirs.
+  me?: string | null
+  onReactOpen?: (id: string) => void
+  onReact?: ReactPress
+  onPanelKey?: (id: string, event: KeyboardEvent) => void
   children?: ReactNode
 }) {
+  const reactions = reactionsOf(item)
+  const reacts = reactions !== null && onReactOpen !== undefined && onReact !== undefined
+  const mine = (kind: ReactionKind) => reactions?.some((one) => one.kind === kind && one.mine) ?? false
+  const whoRows = typeof who === 'object' ? who.reactions.filter((one) => one.names.length > 0) : []
   return (
     <MessageParts
       item={item}
       time={formatTime(item.created_at, zone)}
       rowRef={rows.row.ref(item.id)}
       act={
-        act !== null && (
-          <button
-            ref={rows.word.ref(item.id)}
-            type="button"
-            className="act"
-            aria-label={act === 'delete' ? DELETE_YOUR_MESSAGE : removeLabel(item.author.display_name)}
-            onClick={() => onAct(item.id)}
-          >
-            {act === 'delete' ? DELETE : REMOVE}
-          </button>
-        )
+        <>
+          {reacts && (
+            <button
+              ref={rows.react.ref(item.id)}
+              type="button"
+              className="rxadd"
+              aria-label={reactLabel(item.author)}
+              aria-expanded={open}
+              data-rx={item.id}
+              disabled={busy}
+              onClick={() => onReactOpen(item.id)}
+            >
+              <Icon name="smile" />
+            </button>
+          )}
+          {act !== null && (
+            <button
+              ref={rows.word.ref(item.id)}
+              type="button"
+              className="act"
+              aria-label={act === 'delete' ? DELETE_YOUR_MESSAGE : removeLabel(item.author.display_name)}
+              onClick={() => onAct(item.id)}
+            >
+              {act === 'delete' ? DELETE : REMOVE}
+            </button>
+          )}
+        </>
       }
     >
+      {reacts && open && (
+        <div className="rxpanel" data-rx={item.id} onKeyDown={(event) => onPanelKey?.(item.id, event)}>
+          <div className="picker" role="group" aria-label={CHOOSE_A_REACTION}>
+            {REACTION_KINDS.map((kind) => (
+              <button
+                key={kind}
+                ref={rows.pick.ref(`${item.id}:${kind}`)}
+                type="button"
+                className={mine(kind) ? 'mine' : undefined}
+                aria-label={reactionName(kind)}
+                aria-pressed={mine(kind)}
+                disabled={busy}
+                onClick={() => onReact(item.id, kind, !mine(kind), 'picker')}
+              >
+                <ReactionMark kind={kind} />
+              </button>
+            ))}
+          </div>
+          {who === 'failed' && <p className="who-failed">{WHO_FAILED}</p>}
+          {whoRows.length > 0 && (
+            <div className="who">
+              <b>{WHO_REACTED}</b>
+              {whoRows.map(({ kind, names }) => (
+                <div key={kind}>
+                  <ReactionMark kind={kind} named />
+                  {whoNames(names, mine(kind), me)}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {reacts && reactions.length > 0 && (
+        <div className="rx" data-rx={item.id}>
+          {reactions.map(({ kind, count, mine: theirs }) => (
+            <button
+              key={kind}
+              ref={rows.chip.ref(`${item.id}:${kind}`)}
+              type="button"
+              className={theirs ? 'rxchip mine' : 'rxchip'}
+              aria-label={chipLabel(kind, count)}
+              aria-pressed={theirs}
+              disabled={busy}
+              onClick={() => onReact(item.id, kind, !theirs, 'chip')}
+            >
+              <ReactionMark kind={kind} />
+              {count}
+            </button>
+          ))}
+        </div>
+      )}
+      {reacts && line !== null && (
+        <p className="form-error rxline" role="alert">
+          {line}
+        </p>
+      )}
       {children}
     </MessageParts>
   )

@@ -31,8 +31,10 @@ import {
   type ChatPage,
   type ChatPlace,
 } from '../lib/chat'
+import { isNew, useChatsNew } from '../lib/chatsNew'
 import { ChatLine, MessageParts } from './ChatEntry'
 import { Icon } from './Icons'
+import { NewMark, NewWords } from './NewDot'
 import { useFocusRequest } from './useFocusRequest'
 
 type Read = { place: string; answer: ChatAnswer<ChatPage>; at: number }
@@ -63,6 +65,7 @@ export function ChatPreview({
 }) {
   const headingId = useId()
   const { kind, id } = place
+  const lit = useChatsNew()
   const key = placeKey(place)
   const [read, setRead] = useState<Read | null>(null)
   const [attempt, setAttempt] = useState(0)
@@ -98,12 +101,20 @@ export function ChatPreview({
 
   const to = kind === 'group' ? `/groups/${id}/chat` : `/gatherings/${id}/chat`
   const entries = current?.answer.status === 'ok' ? newest(current.answer.value.items, group) : null
+  const fresh = isNew(lit, place)
 
   return (
     <section ref={section} className="auth-card chatprev" aria-labelledby={headingId}>
       <div className="chathead">
         <h2 ref={heading} id={headingId} tabIndex={-1}>
           {CHAT}
+          {/* The dot (CK-105): read from the store, which the menu asks. */}
+          {fresh && (
+            <>
+              <NewWords />
+              <NewMark />
+            </>
+          )}
         </h2>
         <Link className="btn btn-small" to={to}>
           {OPEN_CHAT}

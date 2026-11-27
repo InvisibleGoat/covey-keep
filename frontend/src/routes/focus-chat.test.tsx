@@ -22,6 +22,8 @@ import {
   sendButton,
   stage,
   startWorld,
+  stubGeometry,
+  stubObservers,
   stubScreen,
   takeOut,
   thread,
@@ -176,10 +178,17 @@ describe('Delete and Remove', () => {
     await openChatAt(GROUP)
     const step = await openStep("Remove Leo Brandt's message")
     takeOut('group:g-1', 'theirs', { by: 'Kelly Brandt', by_self: false })
-    stage('POST', /remove$/, { status: 409, body: { detail: { code: 'already_removed' } } })
+    // MOVED AT CK-105, with its reason: the answer was not held, so under load
+    // it and the check it asks for could land inside pressAndWait's wait,
+    // before its drop of focus to the body, which then took focus off the
+    // landed Show it (seen with a blur listener); held now, as the file's
+    // other tests hold theirs, and a waitFor in place of a fixed 30 ms sleep
+    // before what must happen (the Gotcha's rule 3).
+    const hold = gate()
+    stage('POST', /remove$/, { hold, status: 409, body: { detail: { code: 'already_removed' } } })
     await pressAndWait(within(step).getByRole('button', { name: 'Remove' }), /remove$/, 'POST')
-    await settle()
-    expect((active() as HTMLElement).closest('.heldrow')!.textContent).toContain('Kelly Brandt removed')
+    await release(hold)
+    await waitFor(() => expect((active() as HTMLElement).closest('.heldrow')?.textContent).toContain('Kelly Brandt removed'))
   })
 
   test('a 404: the thread', async () => {
@@ -322,7 +331,8 @@ describe('Show earlier messages', () => {
 
 describe('Try again', () => {
   async function openFailed() {
-    stage('GET', /^\/groups\/g-1\/chat$/, { status: 500 })
+    // MOVED AT CK-105, with its reason: the first read is `?open=true` (THE DESIGN §1).
+    stage('GET', /^\/groups\/g-1\/chat\?open=true$/, { status: 500 })
     renderApp(GROUP)
     await screen.findByRole('heading', { name: 'Something went wrong' })
     await quiet()
@@ -332,7 +342,8 @@ describe('Try again', () => {
   test('landing: the h1', async () => {
     const again = await openFailed()
     const hold = gate()
-    stage('GET', /^\/groups\/g-1\/chat$/, { hold })
+    // MOVED AT CK-105, with its reason: the first read is `?open=true` (THE DESIGN §1).
+    stage('GET', /^\/groups\/g-1\/chat\?open=true$/, { hold })
     await pressHeld(again, hold)
     expect(heading().textContent).toBe('The Lees')
     expect(active()).toBe(heading())
@@ -341,7 +352,8 @@ describe('Try again', () => {
   test('failing again: the new Try again', async () => {
     const again = await openFailed()
     const hold = gate()
-    stage('GET', /^\/groups\/g-1\/chat$/, { hold, status: 500 })
+    // MOVED AT CK-105, with its reason: the first read is `?open=true` (THE DESIGN §1).
+    stage('GET', /^\/groups\/g-1\/chat\?open=true$/, { hold, status: 500 })
     await pressHeld(again, hold)
     expect(button('Try again')).not.toBe(again)
     expect(active()).toBe(button('Try again'))
@@ -350,7 +362,8 @@ describe('Try again', () => {
   test('landing on no chat: the not-found h1', async () => {
     const again = await openFailed()
     const hold = gate()
-    stage('GET', /^\/groups\/g-1\/chat$/, { hold, status: 404 })
+    // MOVED AT CK-105, with its reason: the first read is `?open=true` (THE DESIGN §1).
+    stage('GET', /^\/groups\/g-1\/chat\?open=true$/, { hold, status: 404 })
     await pressHeld(again, hold)
     expect(heading().textContent).toBe('Nothing here')
     expect(active()).toBe(heading())
@@ -468,7 +481,8 @@ describe('the drawer’s Chat row', () => {
   test('closes the drawer on the chat’s h1, once the chat has landed', async () => {
     const chat = await openDrawer()
     const hold = gate()
-    stage('GET', /^\/groups\/g-1\/chat$/, { hold, always: true })
+    // MOVED AT CK-105, with its reason: the first read is `?open=true` (THE DESIGN §1).
+    stage('GET', /^\/groups\/g-1\/chat\?open=true$/, { hold, always: true })
     chat.focus()
     fireEvent.click(chat)
     await screen.findByText('Loading…', { selector: 'main p' })
@@ -483,7 +497,8 @@ describe('the drawer’s Chat row', () => {
 
   test('landing on a chat that could not be read: its h1', async () => {
     const chat = await openDrawer()
-    stage('GET', /^\/groups\/g-1\/chat$/, { status: 500, always: true })
+    // MOVED AT CK-105, with its reason: the first read is `?open=true` (THE DESIGN §1).
+    stage('GET', /^\/groups\/g-1\/chat\?open=true$/, { status: 500, always: true })
     chat.focus()
     fireEvent.click(chat)
     await screen.findByRole('heading', { name: 'Something went wrong' })
@@ -510,5 +525,192 @@ describe('the drawer’s Chat row', () => {
     fireEvent.click(people)
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     await waitFor(() => expect(active()).toBe(screen.getByRole('button', { name: 'Open menu' })))
+  })
+})
+
+// --- the second pair (CK-105; THE DESIGN §12's new rows) --------------------------------------
+
+describe('reactions', () => {
+  const theirsRow = () => row('The words of theirs')
+  const react = () => within(theirsRow()).getByRole<HTMLButtonElement>('button', { name: /^React to / })
+  const pickerButton = (name: string) =>
+    within(within(theirsRow()).getByRole('group', { name: 'Choose a reaction' })).getByRole<HTMLButtonElement>('button', {
+      name,
+    })
+  const chip = (name: string | RegExp) => within(theirsRow()).getByRole<HTMLButtonElement>('button', { name })
+
+  beforeEach(() => {
+    g1().items = [
+      said('theirs', 6, {
+        reactions: [
+          { kind: 'like', count: 2, mine: true },
+          { kind: 'heart', count: 1, mine: false },
+        ],
+      }),
+      mine('own', 5, { reactions: [] }),
+    ]
+  })
+
+  test('React opens on the picker’s first button, and React again goes back to React', async () => {
+    await openChatAt(GROUP)
+    react().focus()
+    fireEvent.click(react())
+    await waitFor(() => expect(active()).toBe(pickerButton('Like')))
+    fireEvent.click(react())
+    await waitFor(() => expect(active()).toBe(react()))
+  })
+
+  test('a picker button: landing, React; failing, the button, the picker still open', async () => {
+    await openChatAt(GROUP)
+    fireEvent.click(react())
+    let hold = gate()
+    stage('PUT', /reactions$/, { hold })
+    await pressAndWait(pickerButton('Heart'), /reactions$/, 'PUT')
+    await release(hold)
+    expect(active()).toBe(react())
+    fireEvent.click(react())
+    hold = gate()
+    stage('PUT', /reactions$/, { hold, status: 500 })
+    await pressAndWait(pickerButton('Laughing'), /reactions$/, 'PUT')
+    await release(hold)
+    expect(active()).toBe(pickerButton('Laughing'))
+  })
+
+  test('a chip: landing, the same kind’s chip, or React where it went; failing, the chip', async () => {
+    await openChatAt(GROUP)
+    let hold = gate()
+    stage('PUT', /reactions$/, { hold })
+    await pressAndWait(chip('Heart, 1'), /reactions$/, 'PUT')
+    await release(hold)
+    expect(active()).toBe(chip('Heart, 2'))
+    hold = gate()
+    stage('PUT', /reactions$/, { hold, network: true })
+    await pressAndWait(chip('Like, 2'), /reactions$/, 'PUT')
+    await release(hold)
+    expect(active()).toBe(chip('Like, 2'))
+    // The caller's alone on that kind: taken back, its chip goes.
+    const alone = said('theirs', 6, { reactions: [{ kind: 'sad', count: 1, mine: true }] })
+    g1().items[0] = alone
+    g1().changes.push(alone)
+    delete world.tables.theirs
+    await check()
+    hold = gate()
+    stage('PUT', /reactions$/, { hold })
+    await pressAndWait(chip('Sad, 1'), /reactions$/, 'PUT')
+    await release(hold)
+    expect(active()).toBe(react())
+  })
+
+  test('a 404: React where the message stays, the thread where it has gone', async () => {
+    await openChatAt(GROUP)
+    let hold = gate()
+    stage('PUT', /reactions$/, { hold, status: 404 })
+    await pressAndWait(chip('Heart, 1'), /reactions$/, 'PUT')
+    await release(hold)
+    await quiet()
+    expect(active()).toBe(react())
+    takeOut('group:g-1', 'theirs')
+    hold = gate()
+    stage('PUT', /reactions$/, { hold, status: 404 })
+    await pressAndWait(chip('Heart, 1'), /reactions$/, 'PUT')
+    await release(hold)
+    await quiet()
+    expect(screen.queryByText('The words of theirs')).toBeNull()
+    expect(active()).toBe(thread())
+  })
+
+  test('a person who moved on keeps their place, landing and failing', async () => {
+    await openChatAt(GROUP)
+    for (const how of [{}, { status: 500 }]) {
+      const hold = gate()
+      stage('PUT', /reactions$/, { hold, ...how })
+      await pressAndWait(chip(/^Heart/), /reactions$/, 'PUT', back())
+      await release(hold)
+      expect(active()).toBe(back())
+    }
+  })
+})
+
+describe('the button to the newest', () => {
+  const jump = () => screen.getByRole<HTMLButtonElement>('button', { name: /^Go to the newest message/ })
+
+  beforeEach(() => {
+    g1().page = 5
+    g1().items = Array.from({ length: 12 }, (_, n) => said(`a${n}`, 60 - n))
+    g1().firstUnread = 'a3'
+  })
+
+  test('landing: the thread', async () => {
+    await openChatAt(GROUP)
+    const hold = gate()
+    stage('GET', /^\/groups\/g-1\/chat$/, { hold })
+    await pressAndWait(jump(), /^\/groups\/g-1\/chat$/, 'GET')
+    await release(hold)
+    expect(active()).toBe(thread())
+  })
+
+  test('failing: the button', async () => {
+    await openChatAt(GROUP)
+    const hold = gate()
+    stage('GET', /^\/groups\/g-1\/chat$/, { hold, status: 500 })
+    await pressAndWait(jump(), /^\/groups\/g-1\/chat$/, 'GET')
+    await release(hold)
+    expect(active()).toBe(jump())
+  })
+
+  test('a person who moved on keeps their place', async () => {
+    await openChatAt(GROUP)
+    const hold = gate()
+    stage('GET', /^\/groups\/g-1\/chat$/, { hold })
+    await pressAndWait(jump(), /^\/groups\/g-1\/chat$/, 'GET', back())
+    await release(hold)
+    expect(active()).toBe(back())
+  })
+})
+
+describe('Try again on newer messages', () => {
+  const failedLine = "Newer messages couldn't be loaded just now."
+  const tryAgain = () =>
+    within(screen.getByText(failedLine).closest('[role="status"]') as HTMLElement).getByRole<HTMLButtonElement>('button', {
+      name: 'Try again',
+    })
+
+  beforeEach(() => {
+    g1().page = 5
+    g1().items = Array.from({ length: 12 }, (_, n) => said(`a${n}`, 60 - n))
+    g1().firstUnread = 'a3'
+    stubGeometry()
+    stubObservers()
+    stage('GET', /after=/, { status: 500 })
+  })
+
+  test('landing: the first newer entry’s row', async () => {
+    await openChatAt(GROUP)
+    await screen.findByText(failedLine)
+    const hold = gate()
+    stage('GET', /after=/, { hold })
+    await pressAndWait(tryAgain(), /after=/, 'GET')
+    await release(hold)
+    expect(active()).toBe(row('The words of a5'))
+  })
+
+  test('failing again: the new Try again', async () => {
+    await openChatAt(GROUP)
+    await screen.findByText(failedLine)
+    const hold = gate()
+    stage('GET', /after=/, { hold, status: 500 })
+    await pressAndWait(tryAgain(), /after=/, 'GET')
+    await release(hold)
+    expect(active()).toBe(tryAgain())
+  })
+
+  test('a person who moved on keeps their place', async () => {
+    await openChatAt(GROUP)
+    await screen.findByText(failedLine)
+    const hold = gate()
+    stage('GET', /after=/, { hold })
+    await pressAndWait(tryAgain(), /after=/, 'GET', back())
+    await release(hold)
+    expect(active()).toBe(back())
   })
 })

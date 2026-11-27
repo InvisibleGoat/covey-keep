@@ -434,11 +434,13 @@ test('a failed read: Home\'s brand, sections and foot with the failed line and T
   expect(panel().querySelector('.dcover h2')?.textContent).toBe('The Lees')
 })
 
-test('the menu reads /groups and /gatherings and nothing else — never a group\'s gatherings or members', async () => {
+// MOVED AT CK-105, with its reason: the menu asks GET /chats/new with its two lists (THE DESIGN §8),
+// one read that names nobody; the name says so.
+test('the menu reads /groups, /gatherings and /chats/new and nothing else — never a group\'s gatherings or members', async () => {
   stubWidth(true)
   renderAt('/you')
   await settle()
-  expect(reads().filter((p) => p !== '/billing').sort()).toEqual(['/gatherings', '/groups', '/groups/g-1/cover/url?layer=thumbnail'])
+  expect(reads().filter((p) => p !== '/billing').sort()).toEqual(['/chats/new', '/gatherings', '/groups', '/groups/g-1/cover/url?layer=thumbnail'])
   expect(reads().some((p) => /\/members|\/groups\/[^/]+\/gatherings/.test(p))).toBe(false)
 })
 

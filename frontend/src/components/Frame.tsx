@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 import { PRODUCT_NAME } from '../brand'
+import { startChatsNew } from '../lib/chatsNew'
 import { isChatAddress, SECTIONS, sectionOf } from '../lib/frame'
 import { QuailHead } from './AuthArt'
 import { ChatArrivalContext } from './chatArrival'
@@ -94,6 +95,9 @@ export function Frame() {
   // drawer. A layout effect on the key clears it, below. Never in navigation
   // state: the viewer's entry is exactly { photoViewer: true }.
   const pressed = useRef<MenuPress | null>(null)
+  // The dot's pace for the frame's life (CK-105): GET /chats/new every minute
+  // from its last answer while the tab is visible, and at once on its return.
+  useEffect(() => startChatsNew(), [])
   const onPress = useCallback((press: MenuPress) => {
     pressed.current = press
   }, [])

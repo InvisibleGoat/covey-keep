@@ -98,6 +98,10 @@ const CONTROLS = [
   '.occurrence-where a', // Map, 30.7 by 20
   '.act', // a message's Delete or Remove and a held row's Show it (CK-103): 28 tall
   '.sendbtn', // the chat's Send (CK-103): round, 46
+  '.rxadd', // a message's React (CK-105): 32 by 28
+  '.rxchip', // a reaction's chip (CK-105): 30 tall, at least 44 wide
+  '.picker button', // the picker's seven (CK-105): round, 42
+  '.jump', // the button to the newest (CK-105): round, 44
   '.varrow', // the photo viewer's arrows: round
   '.rail-item', // the rail's tiles and its +: round
 ]
@@ -200,4 +204,22 @@ test("the queue's checkbox label hugs it, its margin moved onto the label, and 7
   expect(label['margin-top']).toBe('2px')
   expect(label['margin-bottom']).toBe('7px')
   expect(declared('.media-select-touch > .media-select').margin).toBe('0')
+})
+
+// CK-105: a chip is at least 44 wide as drawn; rows of chips that wrap stand
+// 14px apart and the last 2px above its message's foot, so a chip's touch area
+// (7px out) and the next message's React or word (8px out) meet at the
+// midpoints; and the newer messages' Try again is a small pill, whose touch
+// area is the .btn-small rule's.
+test('the chips: 44 wide, their rows 14px apart, 2px above the foot; the newer Try again a small pill', async () => {
+  expect(declared('.rxchip')['min-width']).toBe('44px')
+  expect(declared('.rxchip')['min-height']).toBe('30px')
+  expect(declared('.rx').gap).toBe('14px 4px')
+  expect(declared('.rx').margin).toBe('5px 0 2px')
+  expect(declared('.picker').gap).toBe('2px')
+  expect(declared('.picker button').width).toBe('42px')
+  expect(declared('.jump').width).toBe('44px')
+  expect(declared('.jump').height).toBe('44px')
+  const view = (await import('../components/ChatView.tsx?raw')).default
+  expect(view).toMatch(/className="chat-later"[\s\S]*?className="btn btn-small"[\s\S]*?\{TRY_AGAIN\}/)
 })

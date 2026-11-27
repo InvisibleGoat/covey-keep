@@ -799,7 +799,8 @@ test("A GROUP'S CALENDAR from the group page's Calendar button: the group's next
   // New gathering opens the group's form.
   expect(within(page()).getByRole('link', { name: 'New gathering' }).getAttribute('href')).toBe('/groups/g-1/gatherings/new')
   // The group, then its gatherings (no day), then one calendar read for the opening month.
-  expect(reads().filter((path) => !['/groups', '/gatherings'].includes(path))).toEqual([
+  // MOVED AT CK-105, with its reason: the menu asks GET /chats/new with its two lists (THE DESIGN §8), no read of this page's.
+  expect(reads().filter((path) => !['/groups', '/gatherings', '/chats/new'].includes(path))).toEqual([
     '/groups/g-1',
     '/groups/g-1/gatherings',
     `/groups/g-1/calendar?${DEC}`,
@@ -895,7 +896,8 @@ test("THE NOT-FOUND SCREEN for a 404 on the group's read or on its calendar read
   renderApp(['/calendar?group=..%2Fmembers'])
   await screen.findByRole('heading', { level: 1, name: 'Nothing here' })
   expect(page().outerHTML).toBe(groupPage)
-  expect(reads().filter((path) => !['/auth/me', '/groups', '/gatherings'].includes(path))).toEqual([])
+  // MOVED AT CK-105, with its reason: the menu asks GET /chats/new with its two lists (THE DESIGN §8), no read of this page's.
+  expect(reads().filter((path) => !['/auth/me', '/groups', '/gatherings', '/chats/new'].includes(path))).toEqual([])
 })
 
 // ---------------------------------------------------------------------------

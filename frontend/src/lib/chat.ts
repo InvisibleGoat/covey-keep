@@ -52,12 +52,37 @@ export interface ChatItem {
   author: { display_name: string; is_self: boolean }
   body: string | null
   removed: HeldBody | null
+  // CK-104: a live message's reactions by kind, in the server's order; the
+  // count null in a memorial's chat. Absent from a line, a held message and
+  // an older API's answer — and then no chip and no React is drawn.
+  reactions?: Reaction[] | null
 }
 
-// The first read and each page back, oldest first.
+// The seven kinds, Like first and then the server's own order.
+export const REACTION_KINDS = ['like', 'heart', 'laugh', 'surprise', 'sad', 'thumbs_up', 'celebrate'] as const
+export type ReactionKind = (typeof REACTION_KINDS)[number]
+
+export interface Reaction {
+  kind: ReactionKind
+  count: number | null
+  mine: boolean
+}
+
+// Who left each kind on one message, names alone.
+export interface WhoReacted {
+  reactions: { kind: ReactionKind; names: string[] }[]
+}
+
+// The first read, each page back and each page on, oldest first. `newer`,
+// `first_unread`, `unread` and `typing` are CK-104's, and optional because an
+// older API answers without them.
 export interface ChatPage {
   items: ChatItem[]
   older: string | null
+  newer?: string | null
+  first_unread?: string | null
+  unread?: number | string | null
+  typing?: string[]
   as_of: string
   may_moderate: boolean
 }
@@ -67,6 +92,7 @@ export interface ChatChanges {
   items: ChatItem[]
   removed: string[]
   truncated: boolean
+  typing?: string[]
   as_of: string
   may_moderate: boolean
 }
@@ -79,6 +105,12 @@ export const CHAT_RETRY_MS = 5000
 // What a card reads once, to draw the newest three live entries.
 export const PREVIEW_LIMIT = 20
 export const PREVIEW_ENTRIES = 3
+// CK-105: a check says its person is typing while the box's words changed in
+// the last four seconds; a reading place is sent at most once a second; a
+// held message stays thirty days past its removal (REMOVED_BIN).
+export const TYPING_FRESH_MS = 4000
+export const MARK_GAP_MS = 1000
+export const CHAT_HOLD_MS = 30 * 86_400_000
 
 // --- the merge -----------------------------------------------------------------
 
@@ -94,17 +126,25 @@ export interface ChatList {
   // at or after it is here. Kept apart from the items, so it stands when the
   // oldest one loaded is removed.
   from: Position | null
+  // The cursor for the page after, while what is loaded stops short of the
+  // newest (CK-105): a gap below, which a check never fills.
+  newer: string | null
 }
 
-export const EMPTY_CHAT: ChatList = { byId: new Map(), left: new Set(), older: null, from: null }
+export const EMPTY_CHAT: ChatList = { byId: new Map(), left: new Set(), older: null, from: null, newer: null }
 
 export type ChatChange =
   // A first read, in place of whatever was there. `forgetLeft` where the
   // caller has come to run the chat: a message that left their view before
   // may be in this one as a held one.
-  | { type: 'first'; items: ChatItem[]; older: string | null; forgetLeft?: boolean }
-  | { type: 'check'; items: ChatItem[]; removed: string[] }
+  | { type: 'first'; items: ChatItem[]; older: string | null; newer?: string | null; forgetLeft?: boolean }
+  // `keep`: the ids whose reactions an answer landed for after this check
+  // was asked for, so its older word on them is not taken. `asOf`: the
+  // check's own instant, by which a held message's thirty days are counted.
+  | { type: 'check'; items: ChatItem[]; removed: string[]; keep?: ReadonlySet<string>; asOf?: string }
   | { type: 'earlier'; items: ChatItem[]; older: string | null }
+  | { type: 'after'; items: ChatItem[]; newer: string | null }
+  | { type: 'reacted'; id: string; reactions: Reaction[] }
   | { type: 'sent'; item: ChatItem }
   | { type: 'left'; id: string }
   // The caller no longer runs the chat: every held message goes.
@@ -146,6 +186,15 @@ function oldestOf(items: ChatItem[]): Position | null {
   )
 }
 
+// Whether `instant` is at or past `removedAt` and the thirty days after it, to
+// the microsecond: the server's two instants, never the device's clock.
+function holdIsOver(removedAt: string, instant: string): boolean {
+  const ends = splitInstant(removedAt)
+  const at = splitInstant(instant)
+  const order = at.second - (ends.second + CHAT_HOLD_MS) || textOrder(at.fraction, ends.fraction)
+  return order >= 0
+}
+
 // The one merge. It changes nothing it is given.
 export function mergeChat(list: ChatList, change: ChatChange): ChatList {
   const byId = new Map(list.byId)
@@ -167,21 +216,55 @@ export function mergeChat(list: ChatList, change: ChatChange): ChatList {
       const fresh = new Set(change.items.map((item) => item.id))
       for (const id of [...byId.keys()]) if (!fresh.has(id)) byId.delete(id)
       change.items.forEach(put)
-      return { byId, left, older: change.older, from: change.older === null ? null : oldestOf(change.items) }
+      return {
+        byId,
+        left,
+        older: change.older,
+        from: change.older === null ? null : oldestOf(change.items),
+        newer: change.newer ?? null,
+      }
     }
     case 'check':
       for (const item of change.items) {
+        const here = byId.get(item.id)
+        // Across a gap below, a check only updates what is loaded: added, a
+        // message would stand on its own below a page nobody has asked for.
+        if (list.newer !== null && here === undefined) continue
         // Something older than what is loaded, while an earlier page exists,
         // only updates what is here: added, it would stand on its own above a
         // page nobody has asked for.
-        if (list.from !== null && !byId.has(item.id) && compareEntries(item, list.from) < 0) continue
-        put(item)
+        if (list.from !== null && here === undefined && compareEntries(item, list.from) < 0) continue
+        // A reaction's answer landed after this check was asked for: its
+        // older word on the reactions is not taken, and the rest is.
+        if (here !== undefined && change.keep?.has(item.id)) put({ ...item, reactions: here.reactions })
+        else put(item)
       }
       change.removed.forEach(leave)
+      if (change.asOf !== undefined) {
+        const asOf = change.asOf
+        for (const item of [...byId.values()]) {
+          if (item.removed !== null && holdIsOver(item.removed.at, asOf)) leave(item.id)
+        }
+      }
       return { ...list, byId, left }
     case 'earlier':
       change.items.forEach(put)
-      return { byId, left, older: change.older, from: change.older === null ? null : (oldestOf(change.items) ?? list.from) }
+      return {
+        ...list,
+        byId,
+        left,
+        older: change.older,
+        from: change.older === null ? null : (oldestOf(change.items) ?? list.from),
+      }
+    case 'after':
+      change.items.forEach(put)
+      return { ...list, byId, left, newer: change.newer }
+    case 'reacted': {
+      const here = byId.get(change.id)
+      if (here === undefined || here.removed !== null) return list
+      byId.set(change.id, { ...here, reactions: change.reactions })
+      return { ...list, byId }
+    }
     case 'sent':
       put(change.item)
       return { ...list, byId, left }
@@ -230,9 +313,13 @@ function chatPath(place: ChatPlace): string {
   return place.kind === 'group' ? `/groups/${place.id}/chat` : `/gatherings/${place.id}/chat`
 }
 
-async function readAnswer<T>(path: string, notFound: (status: number) => boolean): Promise<ChatAnswer<T>> {
+async function readAnswer<T>(
+  path: string,
+  notFound: (status: number) => boolean,
+  init?: RequestInit,
+): Promise<ChatAnswer<T>> {
   try {
-    const response = await authFetch(path)
+    const response = await authFetch(path, init)
     if (notFound(response.status)) return { status: 'notFound' }
     if (!response.ok) return { status: 'failed' }
     return { status: 'ok', value: (await response.json()) as T }
@@ -256,13 +343,119 @@ export function readEarlier(place: ChatPlace, before: string): Promise<ChatAnswe
   )
 }
 
-// What changed since the server's own instant, encoded: its offset's `+`
-// reads as a space in a query.
-export function checkChat(place: ChatPlace, since: string): Promise<ChatAnswer<ChatChanges>> {
-  return readAnswer<ChatChanges>(
-    `${chatPath(place)}?since=${encodeURIComponent(since)}`,
-    (status) => status === 404,
-  )
+// The page a chat opens at (CK-105): the first message its person hasn't
+// reached and what stands before it, or the newest page where there is none.
+export function readOpen(place: ChatPlace): Promise<ChatAnswer<ChatPage>> {
+  return readAnswer<ChatPage>(`${chatPath(place)}?open=true`, (status) => status === 404 || status === 422)
+}
+
+// The page after a cursor, toward the newest.
+export function readAfter(place: ChatPlace, after: string): Promise<ChatAnswer<ChatPage>> {
+  return readAnswer<ChatPage>(`${chatPath(place)}?after=${encodeURIComponent(after)}`, (status) => status === 404)
+}
+
+// What changed since the server's own instant. Since CK-105 the instant rides
+// X-Chat-Since and never the address, so the address is the same on every
+// check and its preflight is asked for once; X-Chat-Typing says the caller is
+// typing, on a check alone.
+export function checkChat(place: ChatPlace, since: string, typing = false): Promise<ChatAnswer<ChatChanges>> {
+  const headers: Record<string, string> = { 'X-Chat-Since': since }
+  if (typing) headers['X-Chat-Typing'] = '1'
+  return readAnswer<ChatChanges>(chatPath(place), (status) => status === 404, { headers })
+}
+
+// How far the caller has reached: the one id, forward only (the server's
+// rule). Whether it landed, and nothing else; `keepalive` for the one owed
+// as the page goes.
+export async function markRead(place: ChatPlace, through: string, keepalive = false): Promise<boolean> {
+  try {
+    const response = await authFetch(`${chatPath(place)}/read`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ through }),
+      keepalive,
+    })
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+export type ReactOutcome =
+  | { status: 'ok'; reactions: Reaction[] }
+  | { status: 'notFound' }
+  | { status: 'refused' }
+  | { status: 'unreachable' }
+
+// Leave or take back one of the caller's own reactions, the kind in the body
+// and so in no address, and what came of it.
+export async function setReaction(id: string, kind: ReactionKind, on: boolean): Promise<ReactOutcome> {
+  let response: Response
+  try {
+    response = await authFetch(`/messages/${id}/reactions`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, on }),
+    })
+  } catch {
+    return { status: 'unreachable' }
+  }
+  if (response.status === 404) return { status: 'notFound' }
+  if (!response.ok) return { status: 'refused' }
+  try {
+    const body = (await response.json()) as { reactions?: unknown }
+    return { status: 'ok', reactions: cleanReactions(body.reactions) ?? [] }
+  } catch {
+    return { status: 'refused' }
+  }
+}
+
+// Who left each kind on one message.
+export async function readWhoReacted(id: string): Promise<ChatAnswer<WhoReacted>> {
+  const answer = await readAnswer<{ reactions?: unknown }>(`/messages/${id}/reactions`, (status) => status === 404)
+  if (answer.status !== 'ok') return answer
+  const listed = Array.isArray(answer.value?.reactions) ? answer.value.reactions : []
+  const reactions = listed.flatMap((entry): WhoReacted['reactions'] => {
+    const { kind, names } = (entry ?? {}) as { kind?: unknown; names?: unknown }
+    if (!isKind(kind) || !Array.isArray(names)) return []
+    return [{ kind, names: names.filter((name): name is string => typeof name === 'string') }]
+  })
+  return { status: 'ok', value: { reactions } }
+}
+
+// --- the quiet forms: what this build can draw of a field, and nothing else ----
+
+function isKind(value: unknown): value is ReactionKind {
+  return (REACTION_KINDS as readonly unknown[]).includes(value)
+}
+
+function cleanReactions(value: unknown): Reaction[] | null {
+  if (!Array.isArray(value)) return null
+  return value.flatMap((entry): Reaction[] => {
+    const { kind, count, mine } = (entry ?? {}) as { kind?: unknown; count?: unknown; mine?: unknown }
+    if (!isKind(kind) || typeof mine !== 'boolean') return []
+    if (count !== null && !(typeof count === 'number' && Number.isInteger(count) && count > 0)) return []
+    return [{ kind, count, mine }]
+  })
+}
+
+// A message's reactions, or null where the server sent none to draw.
+export function reactionsOf(item: ChatItem): Reaction[] | null {
+  return cleanReactions((item as { reactions?: unknown }).reactions)
+}
+
+export function typingOf(body: { typing?: unknown }): string[] {
+  return Array.isArray(body.typing) ? body.typing.filter((name): name is string => typeof name === 'string') : []
+}
+
+export function newerOf(body: { newer?: unknown }): string | null {
+  return typeof body.newer === 'string' ? body.newer : null
+}
+
+// The first message not yet reached, where it is among the items sent.
+export function firstUnreadOf(body: { items: ChatItem[]; first_unread?: unknown }): string | null {
+  const id = body.first_unread
+  return typeof id === 'string' && body.items.some((item) => item.id === id) ? id : null
 }
 
 // The gathering behind a gathering's chat: its name, its cover, who is
@@ -474,6 +667,109 @@ export function daysLeftWords(removedAt: string, now: number): string | null {
 export function spoken(item: ChatItem, group: string | null): string | null {
   if (item.removed !== null) return null
   return isMessage(item) ? `${atStart(item.author.display_name)}: ${item.body ?? ''}` : lineWords(item, group)
+}
+
+// --- the words: CK-105's kickoff, approved by Steven on 2026-11-26 ----------------
+
+const REACTION_NAMES: Record<ReactionKind, string> = {
+  like: 'Like',
+  heart: 'Heart',
+  laugh: 'Laughing',
+  surprise: 'Surprised',
+  sad: 'Sad',
+  thumbs_up: 'Thumbs up',
+  celebrate: 'Celebrate',
+}
+
+// Like is drawn as the mockup's own mark; the rest as these.
+export const REACTION_EMOJI: Record<Exclude<ReactionKind, 'like'>, string> = {
+  heart: '❤️',
+  laugh: '😂',
+  surprise: '😮',
+  sad: '😢',
+  thumbs_up: '👍',
+  celebrate: '🎉',
+}
+
+export const CHOOSE_A_REACTION = 'Choose a reaction'
+export const WHO_REACTED = 'Who reacted'
+export const WHO_FAILED = "Who reacted couldn't be loaded just now."
+export const NEW_MESSAGES = 'New messages'
+export const GO_TO_NEWEST = 'Go to the newest message'
+export const GO_TO_NEWEST_NEW = 'Go to the newest message, new messages below'
+export const NEWER_FAILED = "Newer messages couldn't be loaded just now."
+
+export function reactionName(kind: ReactionKind): string {
+  return REACTION_NAMES[kind]
+}
+
+// A chip's name: the kind and its count, or the kind alone where the server
+// sent no count (a memorial's chat).
+export function chipLabel(kind: ReactionKind, count: number | null): string {
+  return count === null ? reactionName(kind) : `${reactionName(kind)}, ${count}`
+}
+
+export function reactLabel(author: ChatItem['author']): string {
+  return author.is_self ? 'React to your message' : `React to ${possessive(author.display_name)} message`
+}
+
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? ''
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
+
+// The people who left one kind: You first where the caller's is there, with
+// one copy of the caller's own name taken out of the server's list.
+export function whoNames(names: string[], mine: boolean, me: string | null): string {
+  const rest = [...names]
+  if (mine && me !== null) {
+    const at = rest.indexOf(me)
+    if (at >= 0) rest.splice(at, 1)
+  }
+  if (mine) return joinNames([YOU, ...rest])
+  return joinNames(rest.map((name, at) => (at === 0 ? atStart(name) : name)))
+}
+
+// A rail tile's name where its group's chat has something new.
+export function tileLabel(name: string): string {
+  return `${name}, new messages`
+}
+
+// A reaction that failed: the house line, or the house's network line.
+export function reactionLine(outcome: 'refused' | 'unreachable'): string {
+  return removeLine(outcome)
+}
+
+// The header's line while other people are typing.
+export function typingLine(names: string[]): string {
+  if (names.length === 0) return ''
+  if (names.length === 1) return `${atStart(names[0])} is typing…`
+  if (names.length === 2) return `${atStart(names[0])} and ${names[1]} are typing…`
+  return 'Several people are typing…'
+}
+
+// The names as the server sent them, each kept in its place while it stays
+// and a new one joining at the end, so the line doesn't shuffle as their
+// signals are renewed.
+export function steadyTyping(before: string[], names: string[]): string[] {
+  const owed = new Map<string, number>()
+  for (const name of names) owed.set(name, (owed.get(name) ?? 0) + 1)
+  const kept: string[] = []
+  for (const name of before) {
+    const left = owed.get(name) ?? 0
+    if (left > 0) {
+      kept.push(name)
+      owed.set(name, left - 1)
+    }
+  }
+  for (const name of names) {
+    const left = owed.get(name) ?? 0
+    if (left > 0) {
+      kept.push(name)
+      owed.set(name, left - 1)
+    }
+  }
+  return kept
 }
 
 // --- days, in the profile zone ------------------------------------------------------

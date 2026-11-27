@@ -1,4 +1,7 @@
-// The fake server and the app around it, for the chat's route tests (CK-103):
+// The fake server and the app around it, for the chat's route tests (CK-103;
+// the second pair since CK-105 — the page at the first unread, the pages on
+// below it, a check by its header, typing, reactions and who left them, the
+// reading place, and GET /chats/new):
 // the real route table, the real AuthProvider over the real session store, and
 // a chat per place that answers as backend/app/api/chat.py does — a page, a
 // page back, a check, a send, a remove, and held messages for whoever runs it
@@ -34,7 +37,23 @@ export interface ChatState {
   removed: string[]
   moderate: boolean
   page: number
+  // The first message the caller hasn't read, as the server would find it from
+  // their place; null or absent, nothing unread (the open page is the newest).
+  firstUnread?: string | null
+  // The other people typing, as every check answers them.
+  typing?: string[]
+  // The server's clock, where a test sets it; else a microsecond on each read.
+  asOf?: string
 }
+
+type Kind = 'like' | 'heart' | 'laugh' | 'surprise' | 'sad' | 'thumbs_up' | 'celebrate'
+const KINDS: Kind[] = ['like', 'heart', 'laugh', 'surprise', 'sad', 'thumbs_up', 'celebrate']
+export interface Reaction {
+  kind: Kind
+  count: number | null
+  mine: boolean
+}
+type WithReactions = ChatItem & { reactions?: Reaction[] | null }
 
 interface Staged {
   method: string
@@ -48,8 +67,11 @@ interface Staged {
 
 export interface Logged {
   method: string
+  // The address as asked, then ` since=…` and ` typing=…` where a check sent
+  // those headers (CK-105).
   path: string
   body: unknown
+  keepalive: boolean
 }
 
 type Body = Record<string, unknown>
@@ -63,6 +85,14 @@ export interface World {
   staged: Staged[]
   sent: number
   asOf: number
+  // GET /chats/new's answer.
+  chatsNew: { groups: string[]; gatherings: string[] }
+  // GET /messages/{id}/reactions's answer, where a test sets one; the PUT
+  // keeps it in step with the caller's own.
+  who: Record<string, { kind: Kind; names: string[] }[]>
+  // Each message's reactions as the server holds them: other people's count
+  // and whether the caller's is there, kind by kind.
+  tables: Record<string, Partial<Record<Kind, { others: number; mine: boolean }>>>
 }
 
 export let world: World
@@ -158,6 +188,9 @@ export function resetWorld() {
     staged: [],
     sent: 0,
     asOf: 0,
+    chatsNew: { groups: [], gatherings: [] },
+    who: {},
+    tables: {},
   }
 }
 
@@ -215,18 +248,99 @@ function json(status: number, payload: unknown): Response {
 
 const notFound = () => json(404, { detail: 'Not Found' })
 
-function answer(method: string, path: string, body: unknown): Response {
+function isMemorial(key: string): boolean {
+  const [kind, id] = key.split(':')
+  return kind === 'gathering' && world.gatherings[id]?.gathering_type === 'memorial'
+}
+
+function findItem(id: string) {
+  for (const [key, chat] of Object.entries(world.chats)) {
+    const index = chat.items.findIndex((item) => item.id === id)
+    if (index !== -1) return { key, chat, index, item: chat.items[index] as WithReactions }
+  }
+  return null
+}
+
+function tableOf(item: WithReactions) {
+  world.tables[item.id] ??= Object.fromEntries(
+    (item.reactions ?? []).map((one) => [
+      one.kind,
+      { others: one.count === null ? (one.mine ? 0 : 1) : one.count - (one.mine ? 1 : 0), mine: one.mine },
+    ]),
+  )
+  return world.tables[item.id]
+}
+
+// A message's reactions from the server's table: the kinds in their own order,
+// no count in a memorial's chat.
+function reactionsFrom(key: string, id: string): Reaction[] {
+  const table = world.tables[id] ?? {}
+  return KINDS.flatMap((kind) => {
+    const one = table[kind]
+    if (one === undefined || one.others + (one.mine ? 1 : 0) === 0) return []
+    return [{ kind, count: isMemorial(key) ? null : one.others + (one.mine ? 1 : 0), mine: one.mine }]
+  })
+}
+
+function answer(
+  method: string,
+  path: string,
+  body: unknown,
+  headers: { since: string | null; typing: string | null } = { since: null, typing: null },
+): Response {
   const [p, query = ''] = path.split('?')
   const params = new URLSearchParams(query)
 
-  const chatPath = /^\/(groups|gatherings)\/([^/]+)\/chat$/.exec(p)
+  if (p === '/chats/new' && method === 'GET') return json(200, world.chatsNew)
+
+  const reactionsPath = /^\/messages\/([^/]+)\/reactions$/.exec(p)
+  if (reactionsPath) {
+    const found = findItem(reactionsPath[1])
+    if (found === null || found.item.removed !== null) return notFound()
+    if (found.item.kind !== 'message') {
+      return json(409, { detail: { code: 'not_a_message', message: 'A line the chat wrote itself takes no reactions.' } })
+    }
+    const { key, chat, index, item } = found
+    if (method === 'GET') {
+      return json(200, {
+        reactions:
+          world.who[item.id] ??
+          (item.reactions ?? []).map((one) => ({ kind: one.kind, names: one.mine ? [ME] : [] })),
+      })
+    }
+    if (method === 'PUT') {
+      const { kind, on } = body as { kind: Kind; on: boolean }
+      const table = tableOf(item)
+      table[kind] = { others: table[kind]?.others ?? 0, mine: on }
+      const reactions = reactionsFrom(key, item.id)
+      const updated = { ...item, reactions } as ChatItem
+      chat.items[index] = updated
+      chat.changes = [...chat.changes.filter((change) => change.id !== item.id), updated]
+      const who = world.who[item.id]
+      if (who !== undefined) {
+        const names = (who.find((one) => one.kind === kind)?.names ?? []).filter((name) => name !== ME)
+        const next = on ? [...names, ME] : names
+        world.who[item.id] = KINDS.flatMap((one) => {
+          if (one === kind) return next.length > 0 ? [{ kind, names: next }] : []
+          const other = who.find((each) => each.kind === one)
+          return other === undefined ? [] : [other]
+        })
+      }
+      return json(200, { reactions })
+    }
+    return notFound()
+  }
+
+  const chatPath = /^\/(groups|gatherings)\/([^/]+)\/chat(\/read)?$/.exec(p)
   if (chatPath) {
     const kind = chatPath[1] === 'groups' ? 'group' : 'gathering'
     const known = kind === 'group' ? world.groups[chatPath[2]] : world.gatherings[chatPath[2]]
     if (!known || (kind === 'gathering' && known.caller_view !== 'full')) return notFound()
     const chat = chatOf(`${kind}:${chatPath[2]}`)
+    // The reading place: moved forward by the server, answered with nothing.
+    if (chatPath[3] === '/read') return method === 'PUT' ? new Response(null, { status: 204 }) : notFound()
     world.asOf += 1
-    const as_of = `2026-11-24T15:00:00.${String(world.asOf).padStart(6, '0')}+00:00`
+    const as_of = chat.asOf ?? `2026-11-24T15:00:00.${String(world.asOf).padStart(6, '0')}+00:00`
     if (method === 'POST') {
       world.sent += 1
       const item = chatItem(`sent-${world.sent}`, {
@@ -239,23 +353,60 @@ function answer(method: string, path: string, body: unknown): Response {
       return json(201, item)
     }
     const shown = chat.items.filter((item) => chat.moderate || item.removed === null)
-    if (params.has('since')) {
+    // A check: since CK-105 its instant in X-Chat-Since, as the route still
+    // takes it in the query too.
+    if (headers.since !== null || params.has('since')) {
       return json(200, {
         items: chat.changes.filter((item) => chat.moderate || item.removed === null),
         removed: chat.removed,
         truncated: false,
         as_of,
         may_moderate: chat.moderate,
+        typing: chat.typing ?? [],
       })
     }
+    const limit = Number(params.get('limit') ?? chat.page)
+    // On below a cursor, oldest first (a cursor here is an index into what the
+    // caller is shown).
+    if (params.has('after')) {
+      const start = Number(params.get('after'))
+      const end = Math.min(shown.length, start + limit)
+      return json(200, {
+        items: shown.slice(start, end),
+        newer: end < shown.length ? String(end) : null,
+        as_of,
+        may_moderate: chat.moderate,
+      })
+    }
+    const opening = params.get('open') === 'true'
+    if (opening && chat.firstUnread != null) {
+      const at = shown.findIndex((item) => item.id === chat.firstUnread)
+      if (at !== -1) {
+        const start = Math.max(0, at - Math.min(20, limit - 1))
+        const end = Math.min(shown.length, start + limit)
+        const unread = shown
+          .slice(at)
+          .filter((item) => item.kind === 'message' && item.removed === null && !item.author.is_self).length
+        return json(200, {
+          items: shown.slice(start, end),
+          older: start > 0 ? String(start) : null,
+          newer: end < shown.length ? String(end) : null,
+          first_unread: chat.firstUnread,
+          unread: Math.min(100, unread),
+          as_of,
+          may_moderate: chat.moderate,
+        })
+      }
+    }
     const end = params.has('before') ? Number(params.get('before')) : shown.length
-    const start = Math.max(0, end - Number(params.get('limit') ?? chat.page))
-    return json(200, {
+    const start = Math.max(0, end - limit)
+    const page = {
       items: shown.slice(start, end),
       older: start > 0 ? String(start) : null,
       as_of,
       may_moderate: chat.moderate,
-    })
+    }
+    return json(200, opening ? { ...page, first_unread: null, unread: 0, newer: null } : page)
   }
 
   const removePath = /^\/messages\/([^/]+)\/remove$/.exec(p)
@@ -314,10 +465,14 @@ function listItem(body: Body): Body {
 
 export function stubServer() {
   vi.stubGlobal('fetch', async (input: unknown, init: RequestInit = {}) => {
-    const path = pathOf(input)
+    const headers = new Headers(init.headers)
+    const since = headers.get('x-chat-since')
+    const typing = headers.get('x-chat-typing')
+    const address = pathOf(input)
+    const path = `${address}${since === null ? '' : ` since=${since}`}${typing === null ? '' : ` typing=${typing}`}`
     const method = init.method ?? 'GET'
     const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined
-    world.log.push({ method, path, body })
+    world.log.push({ method, path, body, keepalive: init.keepalive === true })
     world.inflight += 1
     try {
       const at = world.staged.findIndex((one) => one.method === method && one.match.test(path))
@@ -328,7 +483,7 @@ export function stubServer() {
       if (one?.status !== undefined) {
         return one.status === 204 ? new Response(null, { status: 204 }) : json(one.status, one.body ?? {})
       }
-      return answer(method, path, body)
+      return answer(method, address, body, { since, typing })
     } finally {
       world.inflight -= 1
     }
@@ -380,10 +535,14 @@ export async function quiet() {
 }
 
 // A check at once, as the tab's return asks for one, and its answer landed.
+// MOVED AT CK-105, with its reason: a check is known by its X-Chat-Since header
+// (THE DESIGN §1), which the log writes as ` since=`; the query's form is
+// still read, so the unchanged code's checks count too.
+export const CHECKED = /[? ]since=/
 export async function check() {
-  const before = asked(/\/chat\?since=/).length
+  const before = asked(CHECKED).length
   await act(async () => void document.dispatchEvent(new Event('visibilitychange')))
-  await waitFor(() => expect(asked(/\/chat\?since=/).length).toBeGreaterThan(before))
+  await waitFor(() => expect(asked(CHECKED).length).toBeGreaterThan(before))
   await quiet()
 }
 
@@ -421,7 +580,161 @@ export function startWorld(screenSize: { wide?: boolean; hover?: boolean } = {})
   setToken('session-test')
 }
 
+// --- the thread's geometry, as the browser would measure it (CK-105) ----------------
+//
+// A thread 400 tall whose list starts 100 down, each entry `tall(li)` tall (100
+// unless a test says otherwise), the place of each arithmetic; the sentinel
+// sits at the list's end. jsdom has no layout, so this is all a test can see.
+
+export interface Geometry {
+  readonly top: number
+  at: (value: number) => Promise<void>
+  bottom: () => number
+  place: (element: Element) => { top: number; bottom: number }
+}
+
+export function stubGeometry(tall: (li: HTMLLIElement) => number = () => 100): Geometry {
+  const isThread = (element: Element) => element.classList.contains('thread')
+  const rows = (threadElement: Element) => [...threadElement.querySelectorAll('li')]
+  const height = (threadElement: Element) => 100 + rows(threadElement).reduce((sum, li) => sum + tall(li), 0)
+  let top = 0
+  vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockImplementation(function (this: Element) {
+    return isThread(this) ? height(this) : 0
+  })
+  vi.spyOn(Element.prototype, 'clientHeight', 'get').mockImplementation(function (this: Element) {
+    return isThread(this) ? 400 : 0
+  })
+  vi.spyOn(Element.prototype, 'scrollTop', 'get').mockImplementation(function (this: Element) {
+    return isThread(this) ? top : 0
+  })
+  vi.spyOn(Element.prototype, 'scrollTop', 'set').mockImplementation(function (this: Element, value: number) {
+    if (isThread(this)) top = Math.max(0, Math.min(value, height(this) - 400))
+  })
+  const place = (element: Element) => {
+    const threadElement = element.closest('.thread')
+    if (threadElement === null) return { top: 0, bottom: 0 }
+    if (element === threadElement) return { top: 0, bottom: 400 }
+    if (element.classList.contains('sentinel')) {
+      const end = height(threadElement) - top
+      return { top: end, bottom: end + 1 }
+    }
+    if (element.tagName !== 'LI') return { top: 0, bottom: 0 }
+    let at = 100 - top
+    for (const li of rows(threadElement)) {
+      if (li === element) return { top: at, bottom: at + tall(li) }
+      at += tall(li)
+    }
+    return { top: 0, bottom: 0 }
+  }
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    const { top: y, bottom } = place(this)
+    return { top: y, bottom, height: bottom - y, left: 0, right: 0, width: 0, x: 0, y } as DOMRect
+  })
+  return {
+    get top() {
+      return top
+    },
+    at: async (value: number) => {
+      top = value
+      await act(async () => void fireEvent.scroll(thread()))
+      await observers.look()
+    },
+    bottom: () => height(thread()) - 400,
+    place,
+  }
+}
+
+// IntersectionObserver as the browser has it: an observer calls back only
+// after `observe()` (the Gotcha's rule 2), with what is in its root's box
+// widened by its margin, and again on `look()`, as after a scroll.
+interface Watch {
+  callback: IntersectionObserverCallback
+  observer: IntersectionObserver
+  root: Element | null
+  margin: number
+  targets: Set<Element>
+}
+
+let watches: Watch[] = []
+
+export const observers = {
+  // How many watch something now.
+  count: () => watches.filter((watch) => watch.targets.size > 0).length,
+  async look() {
+    await act(async () => {
+      for (const watch of [...watches]) call(watch, [...watch.targets])
+    })
+  },
+}
+
+function call(watch: Watch, targets: Element[]) {
+  if (targets.length === 0 || !watches.includes(watch)) return
+  const view = watch.root?.getBoundingClientRect() ?? ({ top: 0, bottom: 400 } as DOMRect)
+  const entries = targets.map((target) => {
+    const box = target.getBoundingClientRect()
+    const isIntersecting = box.bottom > view.top - watch.margin && box.top < view.bottom + watch.margin
+    return {
+      target,
+      isIntersecting,
+      intersectionRatio: isIntersecting ? 1 : 0,
+      boundingClientRect: box,
+      rootBounds: view,
+      intersectionRect: box,
+      time: 0,
+    } as IntersectionObserverEntry
+  })
+  watch.callback(entries, watch.observer)
+}
+
+export function stubObservers() {
+  watches = []
+  class FakeObserver {
+    readonly root: Element | null
+    readonly rootMargin: string
+    readonly thresholds: number[] = [0]
+    private readonly watch: Watch
+    constructor(callback: IntersectionObserverCallback, options: IntersectionObserverInit = {}) {
+      this.root = (options.root as Element | null | undefined) ?? null
+      this.rootMargin = options.rootMargin ?? '0px'
+      this.watch = {
+        callback,
+        observer: this as unknown as IntersectionObserver,
+        root: this.root,
+        margin: Number.parseFloat(this.rootMargin) || 0,
+        targets: new Set(),
+      }
+      watches.push(this.watch)
+    }
+    observe(target: Element) {
+      this.watch.targets.add(target)
+      setTimeout(() => call(this.watch, [target]), 0)
+    }
+    unobserve(target: Element) {
+      this.watch.targets.delete(target)
+    }
+    disconnect() {
+      this.watch.targets.clear()
+      watches = watches.filter((watch) => watch !== this.watch)
+    }
+    takeRecords() {
+      return []
+    }
+  }
+  vi.stubGlobal('IntersectionObserver', FakeObserver)
+}
+
+// The tab hidden or shown, as the browser says it and tells the page.
+export async function setHidden(value: boolean) {
+  vi.spyOn(document, 'hidden', 'get').mockReturnValue(value)
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue(value ? 'hidden' : 'visible')
+  await act(async () => void document.dispatchEvent(new Event('visibilitychange')))
+}
+
+// The marks of the reading place asked, in order.
+export const marksAsked = () => world.log.filter((call) => call.method === 'PUT' && /\/chat\/read$/.test(call.path))
+
 export function endWorld() {
+  watches = []
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()

@@ -3838,7 +3838,7 @@ body.menu-open {
   margin-top: 2px;
 }
 
-/* ---------- the chat (CK-103; the mockup's .chatbar, .thread, .msgs, .msg, .bubble, .sysline, .dayline, .composer, .sendbtn, .chatprev, .chathead and .fakebox, and look B's held row) ---------- */
+/* ---------- the chat (CK-103; the mockup's .chatbar, .thread, .msgs, .msg, .bubble, .sysline, .dayline, .composer, .sendbtn, .chatprev, .chathead and .fakebox, and look B's held row; CK-105's look: .rxadd, .rx, .rxchip, .picker, .who, .newline, .jump, .dot and the typing line) ---------- */
 
 /* What a screen reader is told and nobody sees: in the page, out of sight. */
 .visually-hidden {
@@ -3927,6 +3927,26 @@ body.menu-open {
   margin: 0;
   font-size: 0.8125rem;
   color: var(--ck-muted);
+}
+
+/* Who is typing (CK-105), in place of the count: the accent's ink, one line,
+   cut with an ellipsis. */
+.chatbar p.typing {
+  overflow: hidden;
+  font-weight: 600;
+  color: var(--ck-active-ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The thread's frame (CK-105): the thread and, over its foot, the button to
+   the newest — never over the box. */
+.threadframe {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
 }
 
 /* The browser's own anchoring is off: where the thread stands as things come
@@ -4258,6 +4278,280 @@ body.menu-open {
   background: var(--pg-events-accent-2);
 }
 
+/* --- the chat's second pair (CK-105; the look's frames) --- */
+
+/* The New messages line: the accent's rule either side of its words. */
+.newline {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ck-active-ink);
+}
+
+.newline::before,
+.newline::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--pg-events-accent);
+}
+
+/* The loaded end of a thread that stops short of the newest. */
+.sentinel {
+  height: 1px;
+}
+
+/* The button to the newest: round, 44, at the right of the thread's foot. */
+.jump {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 999px;
+  background: var(--pg-surface);
+  color: var(--pg-text);
+  box-shadow: var(--ck-lift);
+  cursor: pointer;
+}
+
+/* The dot: the accent, decorative, its words for a screen reader beside it. */
+.dot {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--pg-events-accent);
+}
+
+.jump .dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  box-shadow: 0 0 0 2px var(--pg-surface);
+}
+
+.rail-item .dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  box-shadow: 0 0 0 2px var(--pg-bg);
+}
+
+.chathead h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* React: after the time, before Delete or Remove; shown as the word is. */
+.rxadd {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--ck-muted);
+  cursor: pointer;
+}
+
+.rxadd[aria-expanded='true'] {
+  background: var(--ck-tint);
+  color: var(--ck-active-ink);
+}
+
+.rxadd .ico {
+  width: 18px;
+  height: 18px;
+}
+
+@media (hover: hover) {
+  .msg .rxadd {
+    opacity: 0;
+  }
+
+  .msg:hover .rxadd,
+  .msg:focus-within .rxadd,
+  .msg .rxadd[aria-expanded='true'] {
+    opacity: 1;
+  }
+}
+
+/* The chips beneath the bubble. Rows that wrap stand 14px apart, and the last
+   2px above the message's foot, so a chip's touch area (7px out) and the next
+   message's React or word (8px out) meet at the midpoints (CK-99). */
+.rx {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 4px;
+  margin: 5px 0 2px;
+}
+
+.msg.me .rx {
+  justify-content: flex-end;
+}
+
+.rxchip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 44px;
+  min-height: 30px;
+  padding: 0 0.6rem;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 999px;
+  background: var(--pg-surface);
+  color: var(--pg-text);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.rxchip.mine {
+  border-color: var(--pg-events-accent);
+  background: var(--ck-tint);
+  color: var(--ck-active-ink);
+}
+
+.rxchip .e,
+.who .e {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* The Like mark, in the accent where the look draws it. */
+.ck-like {
+  display: block;
+  flex: none;
+  width: 1.1em;
+  height: 1.1em;
+}
+
+.rxchip .ck-like,
+.picker .ck-like,
+.who .ck-like {
+  color: var(--pg-events-accent);
+}
+
+/* The panel: the picker, and Who reacted beneath it, as wide as the row. */
+.picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  width: max-content;
+  max-width: 100%;
+  margin-top: 6px;
+  padding: 4px;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 24px;
+  background: var(--pg-surface);
+  box-shadow: var(--ck-lift);
+}
+
+.msg:not(.me) .picker,
+.msg:not(.me) .who {
+  max-width: calc(100% + 46px);
+  margin-left: -46px;
+}
+
+.picker button {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  font-size: 1.375rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.picker button.mine {
+  background: var(--ck-tint);
+}
+
+.picker .ck-like {
+  width: 26px;
+  height: 26px;
+}
+
+.who {
+  max-width: 300px;
+  margin-top: 6px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--pg-surface-edge);
+  border-radius: 14px;
+  background: var(--pg-surface);
+  font-size: 0.8125rem;
+  text-align: left;
+}
+
+.who b {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--ck-muted);
+}
+
+.who div {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 26px;
+  overflow-wrap: anywhere;
+}
+
+.who .e {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+}
+
+.who-failed {
+  margin: 6px 0 0;
+  font-size: 0.8125rem;
+  color: var(--ck-muted);
+}
+
+.rxline {
+  margin: 6px 0 0;
+}
+
+/* The foot's line for a newer page that failed, with its Try again. */
+.chat-later {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--ck-muted);
+}
+
+.chat-later:not(:empty) {
+  padding-bottom: 0.5rem;
+}
+
 /* The update notice covers neither the way back nor the box: beneath the
    header, and beside the way back in a window too short for both. */
 :root:has(.chat) .update-notice {
@@ -4349,7 +4643,11 @@ body.menu-open {
     .day,
     .occurrence-where a,
     .act,
-    .sendbtn
+    .sendbtn,
+    .rxadd,
+    .rxchip,
+    .picker button,
+    .jump
   ) {
   position: relative;
 }
@@ -4372,6 +4670,10 @@ body.menu-open {
 .occurrence-where a::after,
 .act::after,
 .sendbtn::after,
+.rxadd::after,
+.rxchip::after,
+.picker button::after,
+.jump::after,
 .varrow::after,
 .rail-item::after {
   content: '';

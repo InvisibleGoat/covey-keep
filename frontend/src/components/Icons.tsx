@@ -31,6 +31,8 @@ export type IconName =
   | 'cards'
   | 'chat'
   | 'send'
+  | 'smile'
+  | 'down'
 
 const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
   groups: {
@@ -101,6 +103,19 @@ const ICONS: Record<IconName, { paths: ReactNode; width?: number }> = {
     ),
     width: 2,
   },
+  // A message's React and the button to the newest (CK-105; the look's
+  // `smile` and `down`).
+  smile: {
+    paths: (
+      <>
+        <circle cx="12" cy="12" r="8.5" />
+        <path d="M8.5 14c.9 1.3 2.1 2 3.5 2s2.6-.7 3.5-2" />
+        <circle cx="9.2" cy="10" r=".7" fill="currentColor" />
+        <circle cx="14.8" cy="10" r=".7" fill="currentColor" />
+      </>
+    ),
+  },
+  down: { paths: <path d="M6 9l6 6 6-6" />, width: 2 },
   // A gathering page's Add photos (CK-87; the mockup's `addpic`).
   addpic: {
     paths: (
@@ -196,6 +211,23 @@ export function Icon({ name, className = 'ico' }: { name: IconName; className?: 
       focusable="false"
     >
       {icon.paths}
+    </svg>
+  )
+}
+
+// The Like mark (CK-105; the mockup's LIKE_FILL, defined once): filled, in
+// `currentColor`. Decorative beside a name that says it, or an image named
+// Like where it stands alone.
+export function LikeMark({ label }: { label?: string }) {
+  const named = label === undefined ? { 'aria-hidden': true as const } : { role: 'img', 'aria-label': label }
+  return (
+    <svg className="ck-like" viewBox="0 0 24 24" focusable="false" {...named}>
+      <path
+        fill="currentColor"
+        d="M12 21C6.2 17 3.4 13.8 3.4 10.6 3.4 8.2 5.2 6.4 7.5 6.4 9.3 6.4 10.9 7.4 12 9 13.1 7.4 14.7 6.4 16.5 6.4 18.8 6.4 20.6 8.2 20.6 10.6 20.6 13.8 17.8 17 12 21Z"
+      />
+      <path d="M12 8.6C11.4 5.6 12.6 3.4 15 3.1" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <circle cx="15.9" cy="3.3" r="1.9" fill="currentColor" />
     </svg>
   )
 }

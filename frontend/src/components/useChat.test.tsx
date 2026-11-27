@@ -7,10 +7,11 @@
 import { act, cleanup, render } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ChatItem, ChatPlace } from '../lib/chat'
+import { MARK_GAP_MS, TYPING_FRESH_MS, type ChatItem, type ChatPlace } from '../lib/chat'
+import { askChatsNew, chatsNewNow, isNew } from '../lib/chatsNew'
 import { clearToken, setToken } from '../lib/session'
-import { chatChanges, chatItem, chatPage, heldItem, pathOf } from '../test-support/chat'
-import { useChat, type Chat, type RemoveResult, type SendResult } from './useChat'
+import { AS_OF, chatChanges, chatItem, chatPage, heldItem, pathOf } from '../test-support/chat'
+import { useChat, type Chat, type ReactResult, type RemoveResult, type SendResult } from './useChat'
 
 const GROUP: ChatPlace = { kind: 'group', id: 'g-1' }
 const OTHER: ChatPlace = { kind: 'group', id: 'g-2' }
@@ -22,6 +23,7 @@ interface Asked {
   path: string
   body: unknown
   at: number
+  keepalive: boolean
   settled: boolean
   answer: (status: number, body?: unknown) => Promise<void>
   fail: () => Promise<void>
@@ -49,11 +51,18 @@ const advance = (ms: number) => act(async () => void (await vi.advanceTimersByTi
 function stubFetch() {
   vi.stubGlobal('fetch', (input: unknown, init: RequestInit = {}) => {
     return new Promise<Response>((resolve, reject) => {
+      // MOVED AT CK-105, with its reason: a check carries its instant and its
+      // typing signal in headers (THE DESIGN §1, §9), so the path a test
+      // matches is the address as asked and then those two headers, if sent.
+      const headers = new Headers(init.headers)
+      const since = headers.get('x-chat-since')
+      const typing = headers.get('x-chat-typing')
       const call: Asked = {
         method: init.method ?? 'GET',
-        path: pathOf(input),
+        path: `${pathOf(input)}${since === null ? '' : ` since=${since}`}${typing === null ? '' : ` typing=${typing}`}`,
         body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined,
         at: Date.now(),
+        keepalive: init.keepalive === true,
         settled: false,
         answer: async (status, body) => {
           call.settled = true
@@ -85,11 +94,13 @@ const last = (match: RegExp, method = 'GET') => {
   expect(calls.length, `one ${method} ${match} waiting`).toBeGreaterThan(0)
   return calls[calls.length - 1]
 }
-const checks = () => asked.filter((call) => /chat\?since=/.test(call.path))
-const CHECK = /\/chat\?since=/
-const FRESH = /\/chat$/
+// MOVED AT CK-105, with its reason: a check is the chat's own address with
+// X-Chat-Since, and the first and fresh reads are `?open=true` (THE DESIGN §1).
+const CHECK = / since=/
+const checks = () => asked.filter((call) => CHECK.test(call.path))
+const FRESH = /\/chat\?open=true$/
 const EARLIER = /\/chat\?before=/
-const sinceOf = (call: Asked) => new URLSearchParams(call.path.split('?')[1]).get('since')
+const sinceOf = (call: Asked) => / since=(\S+)/.exec(call.path)?.[1] ?? null
 
 function open(at: ChatPlace) {
   place = at
@@ -113,13 +124,13 @@ const gathering = (over = {}) => ({
 async function openGroup(page = chatPage([]), id = 'g-1') {
   open({ kind: 'group', id })
   await last(new RegExp(`^/groups/${id}$`)).answer(200, group(id))
-  await last(new RegExp(`^/groups/${id}/chat$`)).answer(200, page)
+  await last(new RegExp(`^/groups/${id}/chat\\?open=true$`)).answer(200, page)
 }
 
 async function openGathering(page = chatPage([]), body = gathering()) {
   open(GATHERING)
   await last(/^\/gatherings\/x-1$/).answer(200, body)
-  await last(/^\/gatherings\/x-1\/chat$/).answer(200, page)
+  await last(/^\/gatherings\/x-1\/chat\?open=true$/).answer(200, page)
 }
 
 const ids = () => chat.entries.map((item) => item.id)
@@ -159,10 +170,10 @@ describe('the first read', () => {
     open(GROUP)
     expect(chat.status).toBe('loading')
     expect(waitingFor(/^\/groups\/g-1$/).length).toBeGreaterThan(0)
-    expect(waitingFor(/^\/groups\/g-1\/chat$/).length).toBeGreaterThan(0)
+    expect(waitingFor(/^\/groups\/g-1\/chat\?open=true$/).length).toBeGreaterThan(0)
     await last(/^\/groups\/g-1$/).answer(200, group())
     expect(chat.status).toBe('loading')
-    await last(/^\/groups\/g-1\/chat$/).answer(
+    await last(/^\/groups\/g-1\/chat\?open=true$/).answer(
       200,
       chatPage([at('b', '14:00:02.000000'), at('a', '14:00:01.000000')], {
         may_moderate: true,
@@ -179,7 +190,7 @@ describe('the first read', () => {
     open(GATHERING)
     expect(waitingFor(/chat/)).toEqual([])
     await last(/^\/gatherings\/x-1$/).answer(200, gathering())
-    await last(/^\/gatherings\/x-1\/chat$/).answer(200, chatPage([at('a', '14:00:01.000000')]))
+    await last(/^\/gatherings\/x-1\/chat\?open=true$/).answer(200, chatPage([at('a', '14:00:01.000000')]))
     expect(chat.status).toBe('loaded')
     expect(chat.subject?.kind).toBe('gathering')
     expect(ids()).toEqual(['a'])
@@ -200,24 +211,24 @@ describe('the first read', () => {
   it('is not there for a 404 on either read, and has failed for anything else', async () => {
     open(GROUP)
     await last(/^\/groups\/g-1$/).answer(404, {})
-    await last(/^\/groups\/g-1\/chat$/).answer(200, chatPage([at('a', '14:00:01.000000')]))
+    await last(/^\/groups\/g-1\/chat\?open=true$/).answer(200, chatPage([at('a', '14:00:01.000000')]))
     expect([chat.status, ids()]).toEqual(['notFound', []])
     view.unmount()
 
     open(GROUP)
     await last(/^\/groups\/g-1$/).answer(200, group())
-    await last(/^\/groups\/g-1\/chat$/).answer(404, {})
+    await last(/^\/groups\/g-1\/chat\?open=true$/).answer(404, {})
     expect(chat.status).toBe('notFound')
     view.unmount()
 
     open(GROUP)
     await last(/^\/groups\/g-1$/).answer(500, {})
-    await last(/^\/groups\/g-1\/chat$/).answer(200, chatPage([]))
+    await last(/^\/groups\/g-1\/chat\?open=true$/).answer(200, chatPage([]))
     expect(chat.status).toBe('failed')
     await act(async () => chat.retry())
     expect(chat.status).toBe('loading')
     await last(/^\/groups\/g-1$/).answer(200, group())
-    await last(/^\/groups\/g-1\/chat$/).answer(200, chatPage([at('a', '14:00:01.000000')]))
+    await last(/^\/groups\/g-1\/chat\?open=true$/).answer(200, chatPage([at('a', '14:00:01.000000')]))
     expect([chat.status, ids()]).toEqual(['loaded', ['a']])
   })
 })
@@ -439,17 +450,17 @@ describe('another place', () => {
     await late.answer(200, chatChanges([at('b', '15:00:01.000000')]))
     expect([chat.status, ids()]).toEqual(['loading', []])
     await last(/^\/groups\/g-2$/).answer(200, group('g-2', 'Finch'))
-    await last(/^\/groups\/g-2\/chat$/).answer(200, chatPage([at('z', '14:00:09.000000')]))
+    await last(/^\/groups\/g-2\/chat\?open=true$/).answer(200, chatPage([at('z', '14:00:09.000000')]))
     expect([chat.status, ids()]).toEqual(['loaded', ['z']])
   })
 
   it('ignores a first read that lands after the move', async () => {
     open(GROUP)
-    const first = [last(/^\/groups\/g-1$/), last(/^\/groups\/g-1\/chat$/)]
+    const first = [last(/^\/groups\/g-1$/), last(/^\/groups\/g-1\/chat\?open=true$/)]
     place = OTHER
     view.rerender(tree())
     await last(/^\/groups\/g-2$/).answer(200, group('g-2', 'Finch'))
-    await last(/^\/groups\/g-2\/chat$/).answer(200, chatPage([at('z', '14:00:09.000000')]))
+    await last(/^\/groups\/g-2\/chat\?open=true$/).answer(200, chatPage([at('z', '14:00:09.000000')]))
     await first[0].answer(200, group())
     await first[1].answer(200, chatPage([at('a', '14:00:01.000000')]))
     expect(ids()).toEqual(['z'])
@@ -776,5 +787,399 @@ describe('what arrived', () => {
     await advance(2000)
     await last(CHECK).answer(200, chatChanges([chatItem('n', { kind: 'photos_added', body: null })]))
     expect(chat.arrived).toBeNull()
+  })
+})
+
+// --- the second pair (CK-105; THE DESIGN §1 to §3, §5, §6, §7, §9 to §11 of its
+// kickoff, approved by Steven on 2026-11-26) -----------------------------------
+
+const AFTER = /\/chat\?after=/
+const NEWEST = /^\/groups\/g-1\/chat$/
+const MARK = /\/chat\/read$/
+const marks = () => asked.filter((call) => call.method === 'PUT' && MARK.test(call.path))
+const T = (time: string) => `2026-11-24T${time}+00:00`
+
+describe('the second pair: opening', () => {
+  it('opens at the first unread, with the line and the page below it', async () => {
+    await openGroup(
+      chatPage([at('a', '14:00:01.000000'), at('b', '14:00:02.000000'), at('c', '14:00:03.000000')], {
+        first_unread: 'b',
+        unread: 2,
+        newer: 'n1',
+      }),
+    )
+    expect(chat.line).toEqual({ created_at: T('14:00:02.000000'), id: 'b' })
+    expect([chat.newer, chat.opened]).toEqual([true, 1])
+  })
+
+  it('opens at the newest with no line where nothing is unread, a count beside it or not', async () => {
+    for (const over of [{ first_unread: null, unread: 3 }, { first_unread: null, unread: 0 }, {}]) {
+      asked = []
+      await openGroup(chatPage([at('a', '14:00:01.000000')], over))
+      expect([chat.line, chat.newer]).toEqual([null, false])
+      view.unmount()
+    }
+  })
+
+  it('reads on below one page at a time, from each page’s own cursor', async () => {
+    await openGroup(chatPage([at('a', '14:00:01.000000')], { first_unread: 'a', unread: 1, newer: 'n1' }))
+    await act(async () => chat.showLater())
+    await act(async () => chat.showLater())
+    expect(chat.later).toBe('loading')
+    expect(waitingFor(AFTER).map((call) => call.path)).toEqual(['/groups/g-1/chat?after=n1'])
+    await last(AFTER).answer(200, { items: [at('b', '14:00:02.000000')], newer: 'n2', as_of: T('15:59:59.000000'), may_moderate: false })
+    expect([ids(), chat.newer, chat.later]).toEqual([['a', 'b'], true, 'idle'])
+    await act(async () => chat.showLater())
+    expect(last(AFTER).path).toBe('/groups/g-1/chat?after=n2')
+    await last(AFTER).answer(200, { items: [at('c', '14:00:03.000000')], newer: null, as_of: T('15:59:59.000000'), may_moderate: false })
+    expect([ids(), chat.newer]).toEqual([['a', 'b', 'c'], false])
+    await act(async () => chat.showLater())
+    expect(waitingFor(AFTER)).toEqual([])
+    // An after page's instant is never what the next check goes on from.
+    await advance(2000)
+    expect(sinceOf(checks()[0])).toBe(AS_OF)
+  })
+
+  it('says a later page failed, and asks for it again', async () => {
+    await openGroup(chatPage([at('a', '14:00:01.000000')], { newer: 'n1' }))
+    await act(async () => chat.showLater())
+    await last(AFTER).answer(500, {})
+    expect([chat.later, chat.newer, ids()]).toEqual(['failed', true, ['a']])
+    await act(async () => chat.showLater())
+    await last(AFTER).answer(200, { items: [at('b', '14:00:02.000000')], newer: null, as_of: AS_OF, may_moderate: false })
+    expect([chat.later, ids()]).toEqual(['idle', ['a', 'b']])
+  })
+
+  it('is not there for a 404 on a later page', async () => {
+    await openGroup(chatPage([at('a', '14:00:01.000000')], { newer: 'n1' }))
+    await act(async () => chat.showLater())
+    await last(AFTER).answer(404, {})
+    expect([chat.status, ids()]).toEqual(['notFound', []])
+  })
+
+  it('never joins a later page asked for before the list was read afresh', async () => {
+    await openGroup(chatPage([at('a', '14:00:01.000000')], { newer: 'n1' }))
+    await act(async () => chat.showLater())
+    const late = last(AFTER)
+    await advance(2000)
+    await last(CHECK).answer(200, chatChanges([], { truncated: true }))
+    await last(FRESH).answer(200, chatPage([at('z', '15:00:02.000000')]))
+    await late.answer(200, { items: [at('b', '14:00:02.000000')], newer: null, as_of: AS_OF, may_moderate: false })
+    expect([ids(), chat.later, chat.opened]).toEqual([['z'], 'idle', 2])
+  })
+})
+
+describe('the second pair: the check', () => {
+  it('carries its instant in X-Chat-Since and nothing in the address', async () => {
+    await openGroup(chatPage([], { as_of: '2026-11-24T15:00:00.111111+00:00' }))
+    await advance(2000)
+    expect(checks().map((call) => call.path)).toEqual(['/groups/g-1/chat since=2026-11-24T15:00:00.111111+00:00'])
+  })
+
+  it('adds nothing across a gap below, and still updates what is loaded', async () => {
+    await openGroup(chatPage([at('a', '14:00:01.000000')], { newer: 'n1' }))
+    await advance(2000)
+    await last(CHECK).answer(200, chatChanges([at('z', '15:00:09.000000'), at('a', '14:00:01.000000', { body: 'New words' })]))
+    expect(ids()).toEqual(['a'])
+    expect(chat.entries[0].body).toBe('New words')
+    expect(chat.arrived).toBeNull()
+  })
+
+  it('lets a held row go at the check whose instant is thirty days past its removal', async () => {
+    const gone = heldItem(at('h', '14:00:01.000000'), { at: '2026-11-24T14:30:00.000000+00:00' })
+    await openGroup(chatPage([gone, at('a', '14:00:02.000000')], { may_moderate: true }))
+    await advance(2000)
+    await last(CHECK).answer(200, chatChanges([], { may_moderate: true, as_of: '2026-12-24T14:29:59.999999+00:00' }))
+    expect(ids()).toEqual(['h', 'a'])
+    await advance(2000)
+    await last(CHECK).answer(200, chatChanges([], { may_moderate: true, as_of: '2026-12-24T14:30:00.000000+00:00' }))
+    expect(ids()).toEqual(['a'])
+    await advance(2000)
+    await last(CHECK).answer(200, chatChanges([gone], { may_moderate: true, as_of: '2026-12-24T14:30:02.000000+00:00' }))
+    expect(ids()).toEqual(['a'])
+  })
+})
+
+describe('the second pair: typing, sent', () => {
+  it('is on a check while the box holds words changed in the last four seconds', async () => {
+    expect(TYPING_FRESH_MS).toBe(4000)
+    await openGroup()
+    await act(async () => chat.typed('Hel'))
+    await advance(2000)
+    expect(last(CHECK).path).toMatch(/ typing=1$/)
+    await last(CHECK).answer(200, chatChanges())
+    await advance(2000)
+    expect(last(CHECK).path).not.toMatch(/typing/)
+    await last(CHECK).answer(200, chatChanges())
+    await act(async () => chat.typed('Hello'))
+    await advance(2000)
+    expect(last(CHECK).path).toMatch(/ typing=1$/)
+    await last(CHECK).answer(200, chatChanges())
+    await act(async () => chat.typed('   '))
+    await advance(2000)
+    expect(last(CHECK).path).not.toMatch(/typing/)
+  })
+
+  it('stops with a send that landed, until the next change', async () => {
+    await openGroup()
+    await act(async () => chat.typed('Hi'))
+    const sent = await start<SendResult>(() => chat.send('Hi'))
+    await last(/chat$/, 'POST').answer(201, mine('m', '15:00:01.000000', 'Hi'))
+    expect(sent.value).toEqual({ status: 'sent' })
+    await advance(2000)
+    expect(last(CHECK).path).not.toMatch(/typing/)
+    await last(CHECK).answer(200, chatChanges())
+    await act(async () => chat.typed('Next'))
+    await advance(2000)
+    expect(last(CHECK).path).toMatch(/ typing=1$/)
+  })
+
+  it('is never on another read', async () => {
+    await openGroup(chatPage([at('a', '14:00:01.000000')], { older: 'c', newer: 'n1' }))
+    await act(async () => chat.typed('Words'))
+    await act(async () => chat.showEarlier())
+    await act(async () => chat.showLater())
+    expect(last(EARLIER).path).toBe('/groups/g-1/chat?before=c')
+    expect(last(AFTER).path).toBe('/groups/g-1/chat?after=n1')
+    await act(async () => void chat.goToNewest())
+    expect(waitingFor(NEWEST)).toHaveLength(1)
+    // From here: StrictMode's first mount left its own open read unanswered.
+    const from = asked.length
+    await advance(2000)
+    await last(CHECK).answer(200, chatChanges([], { truncated: true }))
+    expect(asked.slice(from).filter((call) => !call.settled && FRESH.test(call.path))).toHaveLength(1)
+  })
+})
+
+describe('the second pair: typing, shown', () => {
+  it('is the check’s names, each kept in its place while it stays', async () => {
+    await openGroup()
+    expect(chat.typing).toEqual([])
+    await advance(2000)
+    await last(CHECK).answer(200, chatChanges([], { typing: ['Kelly Brandt', 'Leo Brandt'] }))
+    expect(chat.typing).toEqual(['Kelly Brandt', 'Leo Brandt'])
+    await advance(2000)
+    await last(CHECK).answer(200, chatChanges([], { typing: ['Leo Brandt', 'Kelly Brandt'] }))
+    expect(chat.typing).toEqual(['Kelly Brandt', 'Leo Brandt'])
+    await advance(2000)
+    await last(CHECK).answer(200, chatChanges([at('b', '15:00:01.000000')], { typing: ['Ray Brandt', 'Leo Brandt'] }))
+    expect(chat.typing).toEqual(['Leo Brandt', 'Ray Brandt'])
+    await advance(2000)
+    await last(CHECK).answer(200, chatChanges())
+    expect(chat.typing).toEqual([])
+  })
+
+  it('goes with a failed check and a hidden tab', async () => {
+    await openGroup()
+    await advance(2000)
+    await last(CHECK).answer(200, chatChanges([], { typing: ['Kelly Brandt'] }))
+    await advance(2000)
+    await last(CHECK).answer(500, {})
+    expect(chat.typing).toEqual([])
+    await advance(5000)
+    await last(CHECK).answer(200, chatChanges([], { typing: ['Kelly Brandt'] }))
+    expect(chat.typing).toEqual(['Kelly Brandt'])
+    await setHidden(true)
+    expect(chat.typing).toEqual([])
+  })
+})
+
+describe('the second pair: the mark', () => {
+  const three = () => chatPage([at('a', '14:00:01.000000'), at('b', '14:00:02.000000'), at('c', '14:00:03.000000')])
+
+  it('sends the newest entry seen, only when it is later than the last one sent, and nothing on opening', async () => {
+    expect(MARK_GAP_MS).toBe(1000)
+    await openGroup(three())
+    await advance(5000)
+    expect(marks()).toEqual([])
+    await act(async () => chat.markSeen('b'))
+    expect(marks().map((call) => [call.path, call.body])).toEqual([['/groups/g-1/chat/read', { through: 'b' }]])
+    await marks()[0].answer(204)
+    await advance(1000)
+    await act(async () => chat.markSeen('a'))
+    await act(async () => chat.markSeen('b'))
+    expect(marks()).toHaveLength(1)
+    await act(async () => chat.markSeen('c'))
+    expect(marks().map((call) => call.body)).toEqual([{ through: 'b' }, { through: 'c' }])
+  })
+
+  it('is sent at most once a second, and never two at once', async () => {
+    await openGroup(three())
+    await act(async () => chat.markSeen('a'))
+    await act(async () => chat.markSeen('b'))
+    expect(marks()).toHaveLength(1)
+    await advance(3000)
+    expect(marks()).toHaveLength(1)
+    await marks()[0].answer(204)
+    // More than a second since the last went: the one owed goes at once.
+    expect(marks().map((call) => call.body)).toEqual([{ through: 'a' }, { through: 'b' }])
+    await marks()[1].answer(204)
+    await act(async () => chat.markSeen('c'))
+    expect(marks()).toHaveLength(2)
+    await advance(999)
+    expect(marks()).toHaveLength(2)
+    await advance(1)
+    expect(marks().map((call) => call.body)).toEqual([{ through: 'a' }, { through: 'b' }, { through: 'c' }])
+  })
+
+  it('drops a failed mark, and sends again for the next entry seen', async () => {
+    await openGroup(three())
+    await act(async () => chat.markSeen('a'))
+    await marks()[0].fail()
+    await advance(5000)
+    await act(async () => chat.markSeen('a'))
+    expect(marks()).toHaveLength(1)
+    await act(async () => chat.markSeen('b'))
+    expect(marks().map((call) => call.body)).toEqual([{ through: 'a' }, { through: 'b' }])
+  })
+
+  it('sends nothing for what is seen while the tab is hidden', async () => {
+    await openGroup(three())
+    await setHidden(true)
+    await act(async () => chat.markSeen('c'))
+    await advance(5000)
+    await setHidden(false)
+    await advance(5000)
+    expect(marks()).toEqual([])
+  })
+
+  it('sends one still owed with keepalive as the page goes, and nothing where none is owed', async () => {
+    await openGroup(three())
+    await act(async () => chat.markSeen('a'))
+    await marks()[0].answer(204)
+    await act(async () => chat.markSeen('b'))
+    expect(marks()).toHaveLength(1)
+    view.unmount()
+    expect(marks().map((call) => [call.body, call.keepalive])).toEqual([
+      [{ through: 'a' }, false],
+      [{ through: 'b' }, true],
+    ])
+    asked = []
+    await openGroup(three())
+    await act(async () => chat.markSeen('a'))
+    await marks()[0].answer(204)
+    view.unmount()
+    expect(marks()).toHaveLength(1)
+  })
+
+  it('counts what stands above the line as read already', async () => {
+    await openGroup(chatPage(three().items, { first_unread: 'c', unread: 1 }))
+    await act(async () => chat.markSeen('b'))
+    expect(marks()).toEqual([])
+    await act(async () => chat.markSeen('c'))
+    expect(marks().map((call) => call.body)).toEqual([{ through: 'c' }])
+  })
+
+  it('takes the open chat out of the dot once its newest is marked and nothing newer is left', async () => {
+    askChatsNew()
+    await last(/^\/chats\/new$/).answer(200, { groups: ['g-1'], gatherings: [] })
+    await openGroup(chatPage([at('a', '14:00:01.000000')], { first_unread: 'a', unread: 2, newer: 'n1' }))
+    await act(async () => chat.markSeen('a'))
+    await marks()[0].answer(204)
+    expect(isNew(chatsNewNow(), GROUP)).toBe(true)
+    await act(async () => chat.showLater())
+    await last(AFTER).answer(200, { items: [at('b', '14:00:02.000000')], newer: null, as_of: AS_OF, may_moderate: false })
+    await advance(1000)
+    await act(async () => chat.markSeen('b'))
+    expect(isNew(chatsNewNow(), GROUP)).toBe(true)
+    await marks()[1].answer(204)
+    expect(isNew(chatsNewNow(), GROUP)).toBe(false)
+  })
+})
+
+describe('the second pair: reactions', () => {
+  const REACT = /^\/messages\/a\/reactions$/
+  const heart = (count: number, mine_: boolean) => [{ kind: 'heart' as const, count, mine: mine_ }]
+
+  it('leaves one, and the answer’s reactions replace the message’s', async () => {
+    await openGroup(chatPage([at('a', '14:00:01.000000', { reactions: [] })]))
+    const result = await start<ReactResult>(() => chat.react('a', 'heart', true))
+    const put = last(REACT, 'PUT')
+    expect(put.body).toEqual({ kind: 'heart', on: true })
+    await put.answer(200, { reactions: heart(1, true) })
+    expect(result.value).toBe('ok')
+    expect(chat.entries[0].reactions).toEqual(heart(1, true))
+  })
+
+  it('is not undone by a check that began before its answer landed', async () => {
+    await openGroup(chatPage([at('a', '14:00:01.000000', { reactions: heart(1, false) })]))
+    await advance(2000)
+    const before = last(CHECK)
+    await start<ReactResult>(() => chat.react('a', 'heart', true))
+    await last(REACT, 'PUT').answer(200, { reactions: heart(2, true) })
+    await before.answer(200, chatChanges([at('a', '14:00:01.000000', { body: 'Merged', reactions: heart(1, false) })]))
+    expect(chat.entries[0].reactions).toEqual(heart(2, true))
+    expect(chat.entries[0].body).toBe('Merged')
+    await advance(2000)
+    await last(CHECK).answer(200, chatChanges([at('a', '14:00:01.000000', { reactions: heart(3, true) })]))
+    expect(chat.entries[0].reactions).toEqual(heart(3, true))
+  })
+
+  it('checks at once where the message has gone', async () => {
+    await openGroup(chatPage([at('a', '14:00:01.000000', { reactions: [] })]))
+    const result = await start<ReactResult>(() => chat.react('a', 'like', true))
+    await last(REACT, 'PUT').answer(404, {})
+    expect([result.value, checks().length]).toEqual(['notFound', 1])
+  })
+
+  it('says what failed and changes nothing', async () => {
+    await openGroup(chatPage([at('a', '14:00:01.000000', { reactions: heart(1, true) })]))
+    let result = await start<ReactResult>(() => chat.react('a', 'heart', false))
+    await last(REACT, 'PUT').answer(409, { detail: { code: 'not_a_message' } })
+    expect([result.value, chat.entries[0].reactions]).toEqual(['refused', heart(1, true)])
+    result = await start<ReactResult>(() => chat.react('a', 'heart', false))
+    await last(REACT, 'PUT').fail()
+    expect([result.value, chat.entries[0].reactions]).toEqual(['unreachable', heart(1, true)])
+  })
+})
+
+describe('the second pair: the button to the newest', () => {
+  it('goes to the foot of what is loaded where nothing is newer, asking nothing', async () => {
+    await openGroup(chatPage([at('a', '14:00:01.000000')]))
+    const before = [chat.toNewest, asked.length]
+    let result: string | null = null
+    await act(async () => void chat.goToNewest().then((value) => (result = value)))
+    expect([result, chat.toNewest, asked.length]).toEqual(['ok', before[0] + 1, before[1]])
+  })
+
+  it('reads the newest page first across a gap, in place of the list and with no line', async () => {
+    await openGroup(chatPage([at('a', '14:00:01.000000'), at('b', '14:00:02.000000')], { first_unread: 'b', unread: 9, newer: 'n1' }))
+    const before = chat.toNewest
+    let result: string | null = null
+    await act(async () => void chat.goToNewest().then((value) => (result = value)))
+    expect(chat.toNewest).toBe(before)
+    await last(NEWEST).answer(200, chatPage([at('y', '15:00:01.000000'), at('z', '15:00:02.000000')], { older: 'c' }))
+    expect([result, ids(), chat.newer, chat.line, chat.toNewest, chat.older]).toEqual(['ok', ['y', 'z'], false, null, before + 1, true])
+  })
+
+  it('stays where it is when the newest page could not be read, and is not there for a 404', async () => {
+    await openGroup(chatPage([at('a', '14:00:01.000000')], { newer: 'n1' }))
+    let result: string | null = null
+    await act(async () => void chat.goToNewest().then((value) => (result = value)))
+    await last(NEWEST).answer(500, {})
+    expect([result, ids(), chat.newer]).toEqual(['failed', ['a'], true])
+    await act(async () => void chat.goToNewest().then((value) => (result = value)))
+    await last(NEWEST).answer(404, {})
+    expect([result, chat.status]).toEqual(['over', 'notFound'])
+  })
+})
+
+describe('the second pair: sending', () => {
+  it('names the message it sent, so its top can be brought into view', async () => {
+    await openGroup(chatPage([at('a', '14:00:01.000000')]))
+    const sent = await start<SendResult>(() => chat.send('Hello'))
+    await last(/chat$/, 'POST').answer(201, mine('m', '15:00:01.000000', 'Hello'))
+    expect([sent.value, chat.sent]).toEqual([{ status: 'sent' }, 'm'])
+  })
+
+  it('reads the newest page before its message is shown, where a gap is below', async () => {
+    await openGroup(chatPage([at('a', '14:00:01.000000')], { newer: 'n1' }))
+    const newest = chat.newest
+    const sent = await start<SendResult>(() => chat.send('Hello'))
+    await last(/chat$/, 'POST').answer(201, mine('m', '15:00:01.000000', 'Hello'))
+    expect(sent.value).toEqual({ status: 'sent' })
+    expect([ids(), chat.newest]).toEqual([['a'], newest])
+    await last(NEWEST).answer(200, chatPage([at('x', '15:00:00.000000'), mine('m', '15:00:01.000000', 'Hello')]))
+    expect([ids(), chat.newer, chat.sent, chat.newest]).toEqual([['x', 'm'], false, 'm', newest + 1])
   })
 })

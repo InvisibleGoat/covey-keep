@@ -4,7 +4,8 @@ import type { Person } from '../auth/context'
 import { useAuth } from '../auth/useAuth'
 import { MAKER_LINE, PRODUCT_NAME } from '../brand'
 import { GROUP_DATES_LINE } from '../lib/calendar'
-import { CHAT, ONLY_MEMBERS } from '../lib/chat'
+import { CHAT, ONLY_MEMBERS, tileLabel } from '../lib/chat'
+import { askChatsNew, isNew, useChatsNew, type ChatsNew } from '../lib/chatsNew'
 import { onCoverChange } from '../lib/covers'
 import { effectiveZone } from '../lib/datetime'
 import {
@@ -25,6 +26,7 @@ import { useMenuLayout } from '../lib/menuLayout'
 import { QuailHead } from './AuthArt'
 import { Cover } from './Cover'
 import { Icon } from './Icons'
+import { NewMark, NewWords } from './NewDot'
 import { useFocusRequest } from './useFocusRequest'
 
 // The menu, in its two layouts (CK-82 One list; CK-89 Rail and panel; the
@@ -59,6 +61,12 @@ import { useFocusRequest } from './useFocusRequest'
 // every read is cancelled on unmount. The menu reads neither
 // `/groups/{id}/gatherings` nor `/members`. An empty list leaves its heading
 // out; a failed read is one quiet line with Try again.
+//
+// THE DOT (CK-105): with each read of its lists the menu asks the store in
+// lib/chatsNew.ts to read `GET /chats/new`, as a request of its own and never
+// inside the lists' all-or-nothing, so its failure draws nothing. A group's
+// chat lights its group's row or tile and its panel's Chat row; a gathering's
+// chat lights its own row.
 
 export type Owed = 'back-row' | 'home-tile' | null
 
@@ -114,13 +122,17 @@ function GatheringRow({
   gathering,
   line,
   current,
+  lit,
   onPress,
 }: {
   gathering: GatheringListItem
   line: string | null
   current?: boolean
+  // Its chat has something new.
+  lit: ChatsNew
   onPress?: (event: MouseEvent) => void
 }) {
+  const fresh = isNew(lit, { kind: 'gathering', id: gathering.id })
   return (
     <li>
       <Link
@@ -132,8 +144,10 @@ function GatheringRow({
         <Cover subject="gathering" id={gathering.id} cover={gathering.cover} variant="thumb" />
         <span className="t">
           <b>{gathering.title}</b>
+          {fresh && <NewWords />}
           {line !== null && <span>{line}</span>}
         </span>
+        {fresh && <NewMark />}
       </Link>
     </li>
   )
@@ -182,10 +196,12 @@ function MenuFailed({ onRetry, buttonRef }: { onRetry: () => void; buttonRef: Re
 function Rail({
   groups,
   chosen,
+  lit,
   press,
 }: {
   groups: Group[]
   chosen: string | null
+  lit: ChatsNew
   press: (kind: MenuPress) => (event: MouseEvent) => void
 }) {
   return (
@@ -201,19 +217,23 @@ function Rail({
         <QuailHead />
       </Link>
       <span className="rail-sep" aria-hidden="true" />
-      {groups.map((group) => (
-        <Link
-          key={group.id}
-          className="rail-item"
-          to={`/groups/${group.id}`}
-          aria-label={group.name}
-          title={group.name}
-          aria-current={chosen === group.id ? 'true' : undefined}
-          onClick={press({ keepOpen: true, owed: 'back-row' })}
-        >
-          <Cover subject="group" id={group.id} cover={group.cover} variant="thumb" />
-        </Link>
-      ))}
+      {groups.map((group) => {
+        const fresh = isNew(lit, { kind: 'group', id: group.id })
+        return (
+          <Link
+            key={group.id}
+            className="rail-item"
+            to={`/groups/${group.id}`}
+            aria-label={fresh ? tileLabel(group.name) : group.name}
+            title={group.name}
+            aria-current={chosen === group.id ? 'true' : undefined}
+            onClick={press({ keepOpen: true, owed: 'back-row' })}
+          >
+            <Cover subject="group" id={group.id} cover={group.cover} variant="thumb" />
+            {fresh && <NewMark />}
+          </Link>
+        )
+      })}
       {groups.length > 0 && <span className="rail-sep" aria-hidden="true" />}
       <Link className="rail-item rail-add" to="/groups/new" aria-label="New group" title="New group">
         <Icon name="plus" />
@@ -228,6 +248,7 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
   const layout = useMenuLayout()
   const current = sectionOf(pathname)
   const zone = effectiveZone(person?.timezone)
+  const lit = useChatsNew()
   const [lists, setLists] = useState<MenuLists | null>(null)
   // Bumped by Try again: the two reads over again, once per press.
   const [reloadKey, setReloadKey] = useState(0)
@@ -259,6 +280,8 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
 
   useEffect(() => {
     let cancelled = false
+    // The dot's read, beside the lists' and never inside them.
+    askChatsNew()
     void (async () => {
       const result = await readMenuLists()
       if (cancelled) return
@@ -322,17 +345,22 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
               Your groups
             </h2>
             <ul className="nrows" aria-labelledby={groupsHeading}>
-              {groups.map((group) => (
-                <li key={group.id}>
-                  <Link className="nrow" to={`/groups/${group.id}`}>
-                    <Cover subject="group" id={group.id} cover={group.cover} variant="thumb" />
-                    <span className="t">
-                      <b>{group.name}</b>
-                      <span>{memberCountLabel(group.member_count)}</span>
-                    </span>
-                  </Link>
-                </li>
-              ))}
+              {groups.map((group) => {
+                const fresh = isNew(lit, { kind: 'group', id: group.id })
+                return (
+                  <li key={group.id}>
+                    <Link className="nrow" to={`/groups/${group.id}`}>
+                      <Cover subject="group" id={group.id} cover={group.cover} variant="thumb" />
+                      <span className="t">
+                        <b>{group.name}</b>
+                        {fresh && <NewWords />}
+                        <span>{memberCountLabel(group.member_count)}</span>
+                      </span>
+                      {fresh && <NewMark />}
+                    </Link>
+                  </li>
+                )
+              })}
             </ul>
           </>
         )}
@@ -344,7 +372,12 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
             </h2>
             <ul className="nrows" aria-labelledby={upcomingHeading}>
               {upcoming.map((gathering) => (
-                <GatheringRow key={gathering.id} gathering={gathering} line={panelGatheringLine(gathering, zone, now)} />
+                <GatheringRow
+                  key={gathering.id}
+                  gathering={gathering}
+                  line={panelGatheringLine(gathering, zone, now)}
+                  lit={lit}
+                />
               ))}
             </ul>
           </>
@@ -364,7 +397,7 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
 
   return (
     <>
-      <Rail groups={groups} chosen={panel.kind === 'group' ? panel.group.id : null} press={press} />
+      <Rail groups={groups} chosen={panel.kind === 'group' ? panel.group.id : null} lit={lit} press={press} />
       <nav className="panel" aria-label="Main" ref={setPanelNav}>
         {panel.kind === 'home' && lists !== null && (
           <>
@@ -382,6 +415,7 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
                       key={gathering.id}
                       gathering={gathering}
                       line={panelGatheringLine(gathering, zone, now)}
+                      lit={lit}
                       // A gathering in a group changes the panel under the press.
                       onPress={press({ keepOpen: false, owed: 'back-row' })}
                     />
@@ -400,6 +434,7 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
                       key={gathering.id}
                       gathering={gathering}
                       line={panelGatheringLine(gathering, zone, now)}
+                      lit={lit}
                     />
                   ))}
                 </ul>
@@ -445,8 +480,10 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
                   <Icon name="chat" />
                   <span className="t">
                     <b>{CHAT}</b>
+                    {isNew(lit, { kind: 'group', id: panel.group.id }) && <NewWords />}
                     <span>{ONLY_MEMBERS}</span>
                   </span>
+                  {isNew(lit, { kind: 'group', id: panel.group.id }) && <NewMark />}
                   <Icon name="chevron" className="chev" />
                 </Link>
               </li>
@@ -500,6 +537,7 @@ export function Menu({ onPress }: { onPress?: (press: MenuPress) => void } = {})
               zone={zone}
               now={now}
               currentId={panel.gatheringId}
+              lit={lit}
             />
           </>
         )}
@@ -515,12 +553,14 @@ function PanelGatherings({
   zone,
   now,
   currentId,
+  lit,
 }: {
   items: GatheringListItem[]
   labelledBy: string
   zone: string
   now: number
   currentId: string | null
+  lit: ChatsNew
 }) {
   if (items.length === 0) return <p className="facts facts-none">No gatherings yet.</p>
   return (
@@ -531,6 +571,7 @@ function PanelGatherings({
           gathering={gathering}
           line={panelGatheringLine(gathering, zone, now)}
           current={gathering.id === currentId}
+          lit={lit}
         />
       ))}
     </ul>

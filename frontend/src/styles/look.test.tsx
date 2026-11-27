@@ -232,6 +232,31 @@ test('the chat (CK-103): its styles name no colour and add no token, and hold th
   expect(rule('.visually-hidden')).not.toContain('display: none')
 })
 
+test('the chat’s second pair (CK-105): in the chat block, naming no colour and adding no token', () => {
+  const start = appCss.indexOf('/* ---------- the chat (CK-103')
+  const end = appCss.indexOf('/* ---------- the touch area (CK-99')
+  const css = stripCss(appCss.slice(start, end))
+  expect(css).not.toMatch(COLOUR_LITERAL)
+  expect(css).not.toMatch(/--[\w-]+\s*:/)
+  // Every new class is styled there and nowhere before it; the touch area
+  // after it (CK-99, its own pin) names the four controls on purpose.
+  const outside = stripCss(appCss.slice(0, start))
+  const startsRule = (name: string, after: string) =>
+    new RegExp(String.raw`(^|[},\n])\s*\.${name}` + after)
+  for (const name of ['newline', 'jump', 'dot', 'rxadd', 'rx', 'rxchip', 'picker', 'who', 'threadframe', 'chat-later', 'sentinel', 'ck-like']) {
+    expect(css, name).toMatch(startsRule(name, String.raw`[\s,{.:\[]`))
+    expect(outside, name).not.toMatch(startsRule(name, String.raw`[\s,{.:\[]`))
+  }
+  // The dot, the line's rule and a chip that is the caller's are the accent,
+  // never honey; who is typing is the accent's ink.
+  expect(css).not.toMatch(/honey/)
+  expect(css).toMatch(/\.dot \{[^}]*background: var\(--pg-events-accent\);/)
+  expect(css).toMatch(/\.newline::after \{[^}]*background: var\(--pg-events-accent\);/)
+  expect(css).toMatch(/\.chatbar p\.typing \{[^}]*color: var\(--ck-active-ink\);[^}]*white-space: nowrap;/)
+  // React hides only where the pointer hovers, and shows on focus and while open.
+  expect(css).toMatch(/@media \(hover: hover\) \{\s*\.msg \.rxadd \{\s*opacity: 0;\s*\}\s*\.msg:hover \.rxadd,\s*\.msg:focus-within \.rxadd,\s*\.msg \.rxadd\[aria-expanded='true'\] \{\s*opacity: 1;/)
+})
+
 test('the font: Source Serif 4 self-hosted from a file in the repo, its OFL licence beside it', () => {
   const face = /@font-face\s*\{([^}]*)\}/.exec(baseCss)?.[1] ?? ''
   expect(face).toContain('font-family: "Source Serif 4"')

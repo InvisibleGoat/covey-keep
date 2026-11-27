@@ -1,7 +1,8 @@
 // A chat's elements by its message's id (CK-103): its row, the word it carries
-// and a held row's button, for focus and for the thread's place. One ref
-// function per id for the life of the page, so a message that has not changed
-// is never drawn again for its ref.
+// and a held row's button, for focus and for the thread's place; since CK-105
+// its React, and its chips and picker buttons by `${id}:${kind}`. One ref
+// function per key for the life of the page, so a message that has not
+// changed is never drawn again for its ref.
 import { useState } from 'react'
 
 export interface Kept<E extends HTMLElement> {
@@ -13,6 +14,9 @@ export interface ChatRows {
   row: Kept<HTMLLIElement>
   word: Kept<HTMLButtonElement>
   toggle: Kept<HTMLButtonElement>
+  react: Kept<HTMLButtonElement>
+  chip: Kept<HTMLButtonElement>
+  pick: Kept<HTMLButtonElement>
 }
 
 function keep<E extends HTMLElement>(): Kept<E> {
@@ -32,6 +36,13 @@ function keep<E extends HTMLElement>(): Kept<E> {
 }
 
 export function useChatRows(): ChatRows {
-  const [rows] = useState<ChatRows>(() => ({ row: keep(), word: keep(), toggle: keep() }))
+  const [rows] = useState<ChatRows>(() => ({
+    row: keep(),
+    word: keep(),
+    toggle: keep(),
+    react: keep(),
+    chip: keep(),
+    pick: keep(),
+  }))
   return rows
 }

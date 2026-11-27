@@ -12,8 +12,14 @@
 //
 // FOCUS (§12) is CK-94's one mechanism, each act with its own container: a
 // step's acts may take focus from its own row, so a person who has gone to
-// another message keeps their place. A check moves focus only out of a step
-// that has gone with its message.
+// another message keeps their place. A check moves focus only out of a step,
+// or a message's reactions, that has gone with its message.
+//
+// THE SECOND PAIR (CK-105): the New messages line where the first read says,
+// the button to the newest over the thread's foot, the page after asked for
+// as the loaded end nears (Sentinel), each entry seen told to the hook as the
+// reading place, who is typing in the header, and a live message's reactions
+// — one panel open at a time in the thread, never beside a step.
 import {
   Fragment,
   useCallback,
@@ -36,10 +42,13 @@ import {
   backTo,
   CHAT_FAILED,
   CHECKS_FAILING,
+  compareEntries,
   dayLine,
   EARLIER_FAILED,
   GATHERING_NOTICE,
   gatheringChatLine,
+  GO_TO_NEWEST,
+  GO_TO_NEWEST_NEW,
   groupChatLine,
   groupNotice,
   isMessage,
@@ -47,10 +56,14 @@ import {
   localDay,
   messageLabel,
   MESSAGES,
+  NEW_MESSAGES,
   newMessages,
+  NEWER_FAILED,
   NO_CHAT_HERE,
   NO_MESSAGES,
   NOTHING_HERE,
+  reactionLine,
+  readWhoReacted,
   removeLine,
   SEND,
   sendLine,
@@ -58,15 +71,17 @@ import {
   spoken,
   stillToSend,
   TRY_AGAIN,
+  typingLine,
   type ChatItem,
   type ChatPlace,
+  type ReactionKind,
   type SendRefusal,
 } from '../lib/chat'
 import type { CoverBody } from '../lib/covers'
 import { effectiveZone } from '../lib/datetime'
 import { groupLine, outsideFlags } from '../lib/outsideInvitations'
 import { ChatArrivalContext } from './chatArrival'
-import { ChatLine, ChatMessage, ChatStep, HeldRow } from './ChatEntry'
+import { ChatLine, ChatMessage, ChatStep, HeldRow, type ReactPress, type WhoState } from './ChatEntry'
 import { Cover } from './Cover'
 import { Icon } from './Icons'
 import { useChat, type Chat, type ChatSubject } from './useChat'
@@ -228,7 +243,8 @@ function OpenChat({
 }) {
   const { person } = useAuth()
   const zone = effectiveZone(person?.timezone)
-  const { entries, older, earlier, mayModerate, now, remove, showEarlier } = chat
+  const me = person?.display_name ?? null
+  const { entries, older, earlier, newer, later, mayModerate, now, remove, showEarlier, showLater, typing } = chat
   const { name, line, notice, group, to, id, cover } = described
 
   const byId = useMemo(() => new Map(entries.map((item) => [item.id, item])), [entries])
@@ -239,10 +255,35 @@ function OpenChat({
     [entries, group],
   )
   const firstOfDay = useMemo(() => firstOfEachDay(drawn, zone), [drawn, zone])
+  // The entry the New messages line stands above: the one it names, or the
+  // first after it where that one isn't drawn.
+  const unreadAt = chat.line
+  const lineAbove = useMemo(
+    () => (unreadAt === null ? null : (drawn.find((item) => compareEntries(item, unreadAt) >= 0)?.id ?? null)),
+    [drawn, unreadAt],
+  )
 
+  const frame = useRef<HTMLDivElement>(null)
   const thread = useRef<HTMLElement>(null)
+  const list = useRef<HTMLUListElement>(null)
+  const newLine = useRef<HTMLLIElement>(null)
   const rows = useChatRows()
-  useThreadScroll(thread, { entries: drawn, newest: chat.newest, above: `${notice}|${older}|${earlier}` }, rows.row.get)
+  const view = useThreadScroll(
+    thread,
+    list,
+    newLine,
+    {
+      entries: drawn,
+      opened: chat.opened,
+      newest: chat.newest,
+      sent: chat.sent,
+      toNewest: chat.toNewest,
+      newer,
+      reached: chat.reached,
+    },
+    rows.row.get,
+    chat.markSeen,
+  )
 
   // --- focus
 
@@ -300,6 +341,8 @@ function OpenChat({
   const onAct = useCallback(
     (one: string) => {
       if (sending.current !== null) return
+      // A step opening closes any panel in the thread.
+      setPanel(null)
       setStep({ id: one, phase: 'asking', line: null })
       moveFocus(() => rows.row.get(one), stepGroup)
     },
@@ -349,6 +392,143 @@ function OpenChat({
     )
   }
 
+  // --- reactions (THE DESIGN §7)
+
+  // The one message whose panel is open: React opens it, and closes any step;
+  // a step closes it; it goes with its message.
+  const [panel, setPanel] = useState<string | null>(null)
+  const panelNow = useRef(panel)
+  panelNow.current = panel
+  if (panel !== null && byId.get(panel)?.removed !== null) setPanel(null)
+  // Who reacted to the message whose panel is open, read once as it opens.
+  const [who, setWho] = useState<{ id: string; state: WhoState } | null>(null)
+  // The messages a press is waiting on: one press at a time each.
+  const [waiting, setWaiting] = useState<ReadonlySet<string>>(() => new Set())
+  const waitingNow = useRef(waiting)
+  waitingNow.current = waiting
+  // What the last press that failed left beneath its chips, gone on the next.
+  const [rxLine, setRxLine] = useState<{ id: string; line: string } | null>(null)
+
+  const onReactOpen = useCallback(
+    (one: string) => {
+      const toReact = () => rows.react.get(one)
+      if (panelNow.current === one) {
+        setPanel(null)
+        moveFocus(() => rows.row.get(one), toReact)
+        return
+      }
+      setStep(null)
+      setPanel(one)
+      setWho({ id: one, state: 'loading' })
+      void readWhoReacted(one).then((answer) => {
+        const state: WhoState = answer.status === 'ok' ? answer.value : 'failed'
+        setWho((was) => (was?.id === one ? { id: one, state } : was))
+      })
+      moveFocus(
+        () => rows.row.get(one),
+        () => rows.pick.get(`${one}:like`),
+      )
+    },
+    [moveFocus, rows],
+  )
+
+  const onPanelKey = useCallback(
+    (one: string, event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setPanel(null)
+      moveFocus(
+        () => rows.row.get(one),
+        () => rows.react.get(one),
+      )
+    },
+    [moveFocus, rows],
+  )
+
+  const { react } = chat
+  const onReact = useCallback<ReactPress>(
+    (one: string, kind: ReactionKind, on: boolean, from: 'chip' | 'picker') => {
+      if (waitingNow.current.has(one)) return
+      const asked = new Set(waitingNow.current)
+      asked.add(one)
+      waitingNow.current = asked
+      setWaiting(asked)
+      setRxLine((was) => (was?.id === one ? null : was))
+      void react(one, kind, on).then((outcome) => {
+        setWaiting((was) => {
+          const next = new Set(was)
+          next.delete(one)
+          return next
+        })
+        if (outcome === 'over') return
+        const inRow = () => rows.row.get(one)
+        const toReact = () => rows.react.get(one)
+        if (outcome === 'ok') {
+          if (from === 'picker') {
+            setPanel((was) => (was === one ? null : was))
+            moveFocus(inRow, toReact)
+          } else moveFocus(inRow, () => rows.chip.get(`${one}:${kind}`) ?? toReact())
+        } else if (outcome === 'notFound') {
+          // A check is on its way: where the message has gone, focus goes to
+          // the thread once it lands (below).
+          moveFocus(inRow, () => toReact() ?? thread.current)
+        } else {
+          setRxLine({ id: one, line: reactionLine(outcome) })
+          moveFocus(inRow, () =>
+            from === 'picker' ? rows.pick.get(`${one}:${kind}`) : (rows.chip.get(`${one}:${kind}`) ?? toReact()),
+          )
+        }
+      })
+    },
+    [react, moveFocus, rows],
+  )
+
+  // The message whose reactions hold focus: where a check takes it away, or
+  // makes it a held row, focus goes to the thread rather than nowhere.
+  const reactFocus = useRef<string | null>(null)
+  useEffect(() => {
+    const one = reactFocus.current
+    if (one === null) return
+    if (byId.get(one)?.removed === null) return
+    reactFocus.current = null
+    moveFocus(() => null, thread)
+  }, [byId, moveFocus])
+
+  // --- the button to the newest, and reading on below
+
+  const jumpButton = useRef<HTMLButtonElement>(null)
+  async function toNewest() {
+    const outcome = await chat.goToNewest()
+    if (outcome === 'ok') moveFocus(() => frame.current, thread)
+    else if (outcome === 'failed') moveFocus(() => frame.current, jumpButton)
+  }
+
+  const laterPlace = useRef<HTMLDivElement>(null)
+  const laterRetry = useRef<HTMLButtonElement>(null)
+  // The last entry before a Try again was pressed: the first after it is
+  // where focus lands.
+  const laterOwed = useRef<string | null | undefined>(undefined)
+  useEffect(() => {
+    if (later === 'loading' || laterOwed.current === undefined) return
+    const before = laterOwed.current
+    laterOwed.current = undefined
+    if (later === 'failed') {
+      moveFocus(() => laterPlace.current, laterRetry)
+      return
+    }
+    const at = drawn.findIndex((item) => item.id === before)
+    const first = at === -1 ? undefined : drawn[at + 1]
+    moveFocus(
+      () => frame.current,
+      () => {
+        const target = first === undefined ? null : rows.row.get(first.id)
+        if (target === null) return thread.current
+        target.tabIndex = -1
+        return target
+      },
+    )
+  }, [later, drawn, moveFocus, rows])
+
   // --- earlier messages
 
   const earlierPlace = useRef<HTMLDivElement>(null)
@@ -380,82 +560,176 @@ function OpenChat({
           <h1 ref={heading} tabIndex={-1}>
             {name}
           </h1>
-          <p>{line}</p>
+          {/* Who is typing, in place of the count: never live, never said. */}
+          {typing.length > 0 ? <p className="typing">{typingLine(typing)}</p> : <p>{line}</p>}
         </div>
       </header>
 
-      <section ref={thread} className="thread" aria-label={MESSAGES} tabIndex={0}>
-        <p className="notice">{notice}</p>
-        {older && (
-          <div ref={earlierPlace} className="earlier">
-            <button
-              ref={earlierButton}
-              type="button"
-              className="btn btn-small"
-              disabled={earlier === 'loading'}
-              onClick={() => {
-                earlierOwed.current = true
-                showEarlier()
-              }}
-            >
-              {SHOW_EARLIER}
-            </button>
-            {earlier === 'failed' && (
-              <p className="form-error" role="alert">
-                <span aria-hidden="true">⚠ </span>
-                {EARLIER_FAILED}
-              </p>
-            )}
-          </div>
+      <div ref={frame} className="threadframe">
+        <section
+          ref={thread}
+          className="thread"
+          aria-label={MESSAGES}
+          tabIndex={0}
+          onFocus={(event) => {
+            reactFocus.current = (event.target as Element).closest('[data-rx]')?.getAttribute('data-rx') ?? null
+          }}
+        >
+          <p className="notice">{notice}</p>
+          {older && (
+            <div ref={earlierPlace} className="earlier">
+              <button
+                ref={earlierButton}
+                type="button"
+                className="btn btn-small"
+                disabled={earlier === 'loading'}
+                onClick={() => {
+                  earlierOwed.current = true
+                  showEarlier()
+                }}
+              >
+                {SHOW_EARLIER}
+              </button>
+              {earlier === 'failed' && (
+                <p className="form-error" role="alert">
+                  <span aria-hidden="true">⚠ </span>
+                  {EARLIER_FAILED}
+                </p>
+              )}
+            </div>
+          )}
+          {drawn.length === 0 && !older && <p className="nothing">{NO_MESSAGES}</p>}
+          {drawn.length > 0 && (
+            <ul ref={list} className="msgs">
+              {drawn.map((item) => (
+                <Fragment key={item.id}>
+                  {lineAbove === item.id && (
+                    <li ref={newLine} className="newline">
+                      {NEW_MESSAGES}
+                    </li>
+                  )}
+                  {firstOfDay.has(item.id) && <li className="dayline">{dayLine(item.created_at, zone, now)}</li>}
+                  {item.removed !== null ? (
+                    <HeldRow
+                      item={item}
+                      zone={zone}
+                      now={now}
+                      shown={shown.has(item.id)}
+                      rows={rows}
+                      onToggle={onToggle}
+                    />
+                  ) : isMessage(item) ? (
+                    <ChatMessage
+                      item={item}
+                      zone={zone}
+                      act={actOn(item, mayModerate)}
+                      rows={rows}
+                      onAct={onAct}
+                      open={panel === item.id}
+                      busy={waiting.has(item.id)}
+                      line={rxLine?.id === item.id ? rxLine.line : null}
+                      who={panel === item.id && who?.id === item.id ? who.state : undefined}
+                      me={me}
+                      onReactOpen={onReactOpen}
+                      onReact={onReact}
+                      onPanelKey={onPanelKey}
+                    >
+                      {step !== null && stepAct !== null && step.id === item.id && (
+                        <ChatStep
+                          item={item}
+                          act={stepAct}
+                          busy={step.phase !== 'asking'}
+                          line={step.line}
+                          stepRef={stepGroup}
+                          redRef={redButton}
+                          hadFocus={hadFocus}
+                          onConfirm={() => void confirm(item.id)}
+                          onKeep={() => keep(item.id)}
+                        />
+                      )}
+                    </ChatMessage>
+                  ) : (
+                    <ChatLine words={lineWords(item, group) ?? ''} rowRef={rows.row.ref(item.id)} />
+                  )}
+                </Fragment>
+              ))}
+            </ul>
+          )}
+          {/* The loaded end: as it nears the view, the page after it is asked for. */}
+          {newer && later !== 'failed' && <Sentinel key={drawn.at(-1)?.id ?? ''} thread={thread} onNear={showLater} />}
+        </section>
+        {view.jump && (
+          <button
+            ref={jumpButton}
+            type="button"
+            className="jump"
+            aria-label={view.dot ? GO_TO_NEWEST_NEW : GO_TO_NEWEST}
+            onClick={() => void toNewest()}
+          >
+            <Icon name="down" />
+            {view.dot && <span className="dot" aria-hidden="true" />}
+          </button>
         )}
-        {drawn.length === 0 && !older && <p className="nothing">{NO_MESSAGES}</p>}
-        {drawn.length > 0 && (
-          <ul className="msgs">
-            {drawn.map((item) => (
-              <Fragment key={item.id}>
-                {firstOfDay.has(item.id) && <li className="dayline">{dayLine(item.created_at, zone, now)}</li>}
-                {item.removed !== null ? (
-                  <HeldRow
-                    item={item}
-                    zone={zone}
-                    now={now}
-                    shown={shown.has(item.id)}
-                    rows={rows}
-                    onToggle={onToggle}
-                  />
-                ) : isMessage(item) ? (
-                  <ChatMessage item={item} zone={zone} act={actOn(item, mayModerate)} rows={rows} onAct={onAct}>
-                    {step !== null && stepAct !== null && step.id === item.id && (
-                      <ChatStep
-                        item={item}
-                        act={stepAct}
-                        busy={step.phase !== 'asking'}
-                        line={step.line}
-                        stepRef={stepGroup}
-                        redRef={redButton}
-                        hadFocus={hadFocus}
-                        onConfirm={() => void confirm(item.id)}
-                        onKeep={() => keep(item.id)}
-                      />
-                    )}
-                  </ChatMessage>
-                ) : (
-                  <ChatLine words={lineWords(item, group) ?? ''} rowRef={rows.row.ref(item.id)} />
-                )}
-              </Fragment>
-            ))}
-          </ul>
-        )}
-      </section>
+      </div>
 
       <div className="chat-foot">
+        <div ref={laterPlace} className="chat-later" role="status">
+          {later === 'failed' && (
+            <>
+              <span>{NEWER_FAILED}</span>
+              <button
+                ref={laterRetry}
+                type="button"
+                className="btn btn-small"
+                onClick={() => {
+                  laterOwed.current = drawn.at(-1)?.id ?? null
+                  showLater()
+                }}
+              >
+                {TRY_AGAIN}
+              </button>
+            </>
+          )}
+        </div>
         <p className="chat-status" role="status">
           {chat.checksFailing && <span>{CHECKS_FAILING}</span>}
         </p>
-        <Composer name={name} send={chat.send} forgetLost={chat.forgetLost} settled={chat.settled} />
+        <Composer
+          name={name}
+          send={chat.send}
+          forgetLost={chat.forgetLost}
+          settled={chat.settled}
+          typed={chat.typed}
+        />
       </div>
     </>
   )
+}
+
+// The loaded end of a thread that stops short of the newest (THE DESIGN §3):
+// seen by an IntersectionObserver on the thread with a margin of one view's
+// height, it asks for the page after; the hook asks one page at a time. One
+// element a cursor, so a page that lands is watched afresh.
+function Sentinel({ thread, onNear }: { thread: RefObject<HTMLElement | null>; onNear: () => void }) {
+  const element = useRef<HTMLDivElement>(null)
+  const near = useRef(onNear)
+  useLayoutEffect(() => {
+    near.current = onNear
+  })
+  useEffect(() => {
+    const target = element.current
+    const root = thread.current
+    if (target === null || root === null || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver(
+      (seen) => {
+        if (seen.some((one) => one.isIntersecting)) near.current()
+      },
+      { root, rootMargin: `${root.clientHeight}px 0px` },
+    )
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [thread])
+  return <div ref={element} className="sentinel" aria-hidden="true" />
 }
 
 function firstOfEachDay(items: ChatItem[], zone: string): ReadonlySet<string> {
@@ -489,11 +763,13 @@ function Composer({
   send,
   forgetLost,
   settled,
+  typed,
 }: {
   name: string
   send: Chat['send']
   forgetLost: Chat['forgetLost']
   settled: Chat['settled']
+  typed: Chat['typed']
 }) {
   const [words, setWords] = useState('')
   const [sending, setSending] = useState(false)
@@ -560,6 +836,8 @@ function Composer({
             setWords(event.target.value)
             setRefusal(null)
             forgetLost()
+            // Whether the next check says the caller is typing.
+            typed(event.target.value)
           }}
           onKeyDown={onKeyDown}
         />

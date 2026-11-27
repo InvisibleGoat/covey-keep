@@ -1,11 +1,28 @@
 # CoveyKeep — Repo Operational Guide
 
-**Version:** 1.133.1
-**Last Updated:** 2026-11-26
+**Version:** 1.134.0
+**Last Updated:** 2026-11-27
 **Source:** the one-line list of every phase from CK-2 to CK-80 that stood here moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); each phase is named in its own changelog entry, here or there.
 **Audience:** Any Claude session working in this repo.
 
 **Changelog:**
+- **1.134.0** (2026-11-27): Phase CK-105 — **The chat's second pair on the surface: reactions, where a chat opens and what holds it, the button to the newest, the reading place, the dot and typing** — the chat record's phase 4, made a phase at Steven's approval of 2026-11-26 (*"Yes, start it"*, to *"Start CK-105 with all five answers as recommended and the words as drafted?"*), the answers built as given: typing in the header, the *New messages* line, the button to the newest, the dot and the picker as drawn (Q1); *Who reacted* beneath the picker, read as React opens it (Q2); the words as drafted (Q3); (a)–(d), the dot read every 60 s while the tab is visible (Q4); one phase (Q5) (`decisions/2026-11-21-the-chat-who-reads-it-and-what-it-keeps.md` 1.5.0 — banners on §4, §5, §8, §10, §14 and §15; `decisions/2026-10-31-the-design-and-how-it-is-merged.md` 1.22.0 — §4; `reference/frontend/components.md` 1.62.0 — The chat's second pair on the surface; `reference/strategy/covey-keep-roadmap.md` 1.33.0). Rule 1 moved the entry 1.132.0 to `CLAUDE-history.md`, which takes 1.15.0. **Frontend only; no route, field, migration or notice version:**
+  - **new:** `components/NewDot.tsx` and `lib/chatsNew.ts`;
+  - **changed:** `components/ChatView.tsx`, `ChatEntry.tsx`, `useChat.ts`, `useThreadScroll.ts`, `useChatRows.ts`, `ChatPreview.tsx`, `Menu.tsx`, `Frame.tsx` and `Icons.tsx`, `lib/chat.ts`, `App.css` (the second pair's block, four controls in the touch area's), and `test-support/chat.ts` and `chatWorld.ts`;
+  - **tests:** new `lib/chatsNew.test.ts` (11), `routes/chat-reading.test.tsx` (30), `routes/chat-reactions.test.tsx` (19) and `routes/chat-dot.test.tsx` (9); new tests in `components/useChat.test.tsx` (30), `lib/chat.test.ts` (24), `routes/focus-chat.test.tsx` (11), `styles/touch-area.test.ts` (9) and `styles/look.test.tsx` (1); pins moved, each with its reason: the first read's address, the 48px follow and the check's `since` in `chat.test.tsx` (six), `useChat.test.tsx`, `lib/chat.test.ts`, `focus-chat.test.tsx` and `test-support/chatWorld.ts`; a stage on the chat's read kept off `/chats/new` in `chat-ways-in.test.tsx` (seven), `calendar.test.tsx` (two) and `rail-and-panel.test.tsx` (one); the menu's reads in `menu.test.tsx`; `withEmptyChat` answering `/chats/new` empty, and `groups.test.tsx` wrapped in it, no assertion changed; the class lists in `look.test.tsx` and `touch-area.test.ts`;
+  - **untouched:** every backend file (1177 tests, not run again), every route and field, the notice at version 6, `render.yaml`, `netlify.toml`, both locks and every dependency, every environment variable, the service worker's routes, `WORKING-ON-NOW.md` and the docs-root `CLAUDE.md`.
+
+  **2001 frontend tests in 94 files** (1857 in 90 before): **144 new**. Red first against the unchanged code: 40 of the 184 tests in the four files that loaded — all 19 of `chat-reactions.test.tsx`, 15 of `focus-chat.test.tsx` and the six moved pins of `chat.test.tsx` — and five files failed whole at import, what they import not there (`chat-reading.test.tsx`, `lib/chat.test.ts`, `useChat.test.tsx`, `chatsNew.test.ts` and `chat-dot.test.tsx`); a test written later was run red alone or made to fail by its plant. **44 mutations: 42 caught by a named failing test, and two that would not compile, each replaced by a compiling variant that was caught.** Build and lint clean (`index-CjNKXWvI.js`, `index-BxlQCktk.css`, 1013.62 KiB precache, 11 entries; 993.40 before). One code commit; in the Hub, one.
+
+  **THE BUILD** is the *chat's second pair on the surface* bullet under Deploys. **Built otherwise than the kickoff, each with its reason**: the thread's own size changing while its newest is in view keeps the newest in view, where a keyboard opening at the foot would otherwise hide it; `newer` set lights the button's dot, nothing past the loaded end having been read; and the dot leaves out what the person had reached when the chat opened, so the read messages above the line never light it.
+
+  **THE MEASUREMENTS** in headless Chrome against a stand-in API (`D:\projects\temp\CK-105-harness`; the shots in `D:\projects\temp\CK-105-screenshots`), 14 runs at 320 to 1440 in both themes with no miss: the line's top within 0.375px of the view's top; the topmost entry within 0.72px through every change another person makes; the caller's 40-line send with its top 0.34px from the view's top; four newer pages moving nothing; the button over neither the box nor Send; the picker on one line from 375 and on two at 320; React, a chip, a picker button and the button 44 to the touch; the lowest contrast 5.04; every ring whole.
+
+  **THE LOCAL RUN** in console mode against the dev DB (`D:\projects\temp\CK-105-local`), reserved addresses alone and every write declared; run twice, the first stopping at a third window that never started: reactions both ways in the other's next check, *Who reacted* naming *You*, a memorial's chips with no digit; the first of five unread at the foot and the first of seventy at the view's top, read on to all seventy in order with nine marks at least a second apart; a chat at its foot not moving as three arrived; the dot on every row, tile and card in both layouts, gone after reading and back in 56.6 s; with one window, the dot read twice in 125 s visible, never in 70 s hidden, and 86 ms after the return; typing seen in 3.0 s, gone 10.1 s after the last keystroke and 2.0 s after a send; a quiet check one request with no preflight in 20 s; no word, name, kind or typing in the API's log. Every throwaway's account deleted; three groups kept with their posts under *a former member*.
+
+  **Found and not fixed:** while a gap is below, the button's dot is lit whatever lies beyond it; the dot's pace reads `GET /chats/new` once a minute on every signed-in page while the tab is visible; React's touch area is not capped at its sides; a chat's header and the menu still keep a count until the page is opened again (CK-103's). The report lists every one.
+
+  Not pushed. The push redeploys Netlify and both Render services, their code unchanged; no migration, so no verifier run is owed. **The phone is `(rh)`'s**: a keyboard opening at the foot, the picker at 320, and a mark sent with `keepalive` as a phone's tab goes. Report: `D:\projects\temp\CK-105-report.md`.
 - **1.133.1** (2026-11-26): **CK-104's fix-up after review: deleting or removing a message takes its reactions** — at Steven's answer of 2026-11-26 (*"Yes, fix first"*, to *"Fix the reactions on a removed message before the push?"*), relayed by the planning session. Version 6 of the notice says a person can take their reactions away *from any message you can still read*; the people who run a place read a held message for 30 days, and `PUT /messages/{id}/reactions` answers a removed message the 404 for everyone, so a reaction of theirs stayed on it with no way off. Now none is left on one; no word of the notice changes, and it stays version 6. Rule 1 moved the entry 1.131.1 to `CLAUDE-history.md`, which takes 1.14.0. One code commit; in the Hub, one (`decisions/2026-11-21-the-chat-who-reads-it-and-what-it-keeps.md` 1.4.0 — §6's reading changed by Steven, banners on §5, §14, §16 and §18, and CK-103's *not pushed* corrected; `reference/backend/api-reference.md` 1.54.1 — the two routes; `reference/backend/database-schema.md` 2.45.1 — the verifier and decision 55; `decisions/2026-08-31-private-alpha-scope.md` 1.8.1 — version 6's preamble; `reference/architecture/consent-and-compliance.md` 2.9.1). **Backend; no route, field, word or migration:**
   - **changed:** `api/chat.py` (`remove_message` deletes every reaction on the message, after its guarded UPDATE has taken, in its transaction) and `scripts/verify_schema.py` (one data line, *no reaction is on a message that isn't live*);
   - **tests:** 6 new in `tests/test_chat_reactions.py` — a writer's delete and a moderator's removal in both kinds of chat taking every kind and every person's on that message and no other's; a reaction committed before the removal's UPDATE, and one committed while it waits, staged; an account's deletion against a removal staged in both orders, and between the removal's read and its UPDATE — and a plant in `tests/test_chat_0039.py`; pins moved, each with its reason: a removed message's reactions in `test_chat_reactions.py` (gone with it, where they stayed until the sweep), and the verifier's count, 500 to 501, and its planted tallies, in eleven files;
@@ -41,22 +58,7 @@
   **THE BROWSER** (the CK-103 harness, at 375 and 1440, the old bundle and the new): through a held send the old box was read-only at every frame of the wait and the words typed into it were lost; the new one is at none, focus never leaves it, and *and more* is there after the 201 with the caret at its end, as it is after a lost answer found. **No phone's keyboard was tried**: `(qr)` on Steven's phone is the proof. **Found and not fixed**: a word still being composed as the answer lands has its composition ended when the box is set; what was typed stays, but an input method that then commits the whole word writes it after itself (*mormore*, staged in desktop Chrome). What an Android keyboard does there isn't known.
 
   Not pushed; it rides the push that carries `c30bb28`, which redeploys Netlify and both Render services as it already did. Report: `D:\projects\temp\CK-103-fix-up-report.md`.
-- **1.132.0** (2026-11-24): Phase CK-103 — **The chat's screens: reading, sending, deleting and removing, and the ways in** — the chat record's phase 2, made a phase at Steven's approval of 2026-11-24 (*"Yes, start it"*, to *"Start CK-103 with these answers, dropping "for everyone" from the two steps?"*), his answers built as given: a held message is look B, one row with *Show it* (*"I actually like 'B'. Keeps it cleaner"*); the two steps say what a press does and no more (*"Remove the part 'The group's admin and co-admins can still see it for 30 days, and then it's gone for good.'"*); the six readings as recommended, with no photo button in this pair; one phase (*"We can do one phase"*) (`decisions/2026-11-21-the-chat-who-reads-it-and-what-it-keeps.md` 1.2.0 — banners on §6, §10, §14, §15 and §16; `decisions/2026-10-04-a-groups-gathering-stays-in-the-group.md` 1.11.0 — §6's line moved; `decisions/2026-10-31-the-design-and-how-it-is-merged.md` 1.21.0 — §4; `reference/frontend/components.md` 1.61.0 — The chat on the surface; `reference/backend/api-reference.md` 1.53.0 — the two fields; `reference/strategy/covey-keep-roadmap.md` 1.31.0). Rule 1 moved the entry 1.129.0 to `CLAUDE-history.md`, which takes 1.11.0. **Frontend, and two fields on answers that existed; no migration:**
-  - **new:** `lib/chat.ts`, `components/ChatView.tsx`, `ChatEntry.tsx`, `ChatPreview.tsx`, `useChat.ts`, `useChatRows.ts`, `useThreadScroll.ts`, `useVisualViewport.ts` and `chatArrival.ts`, `routes/Chat.tsx`, and `test-support/chat.ts` and `chatWorld.ts`;
-  - **changed:** `App.tsx` (the two routes), `App.css` (the chat's block, two controls in the touch area's), `Frame.tsx` (no bar on a chat; the drawer's row owes the chat's `<h1>` focus), `lib/frame.ts` (`isChatAddress`; a chat's panel), `Menu.tsx` (the *Chat* row; *Cover, chat and photos*), `Icons.tsx`, `lib/gatherings.ts`, `GroupDetail.tsx` and `GatheringDetail.tsx` (the card; the pill; the line into the card), `GatheringMedia.tsx` (comments alone); on the backend `api/gatherings.py` (`_invited_count`, on the detail's body and the setting route's answer alone) and `api/chat.py` (`by_self`);
-  - **tests:** new `tests/test_invited_count.py` (12), `lib/chat.test.ts` (44), `components/useChat.test.tsx` (41), `routes/chat.test.tsx` (85), `routes/focus-chat.test.tsx` (34) and `routes/chat-ways-in.test.tsx` (22); one new test in each of `test_chat.py`, `frame.test.tsx` and `look.test.tsx`, and two controls in `touch-area.test.ts`; pins moved, each with its reason beside it: `test_chat.py` (the `removed` keys), `gathering-page`, `group-detail`, `rail-and-panel`, `outside-invitations` and `frame`, and three the kickoff had not named — `test_member_places.py` (the two views' bodies), `gatherings.test.tsx` (the page's anchors) and `group-detail`'s id in the markup; the stubs of twelve files answer the chat's read empty through one helper (`withEmptyChat`), no assertion changed by it;
-  - **untouched:** the chat's routes, their audience, the hold, the sweep and the notice (version 5), every model, no migration (head stays 0038), the verifier at 484, no log line, `render.yaml`, `netlify.toml`, neither lock and no dependency, no environment variable, `WORKING-ON-NOW.md` and the docs-root `CLAUDE.md`.
-
-  **1059 backend tests** (1046 before): **13 new**; **1824 frontend tests in 90 files** (1592 in 85): **232 new**. Red first against the unchanged code: 14 backend tests (the 13 and the moved pin), 81 of `chat.test.tsx`'s then 82, all 34 of `focus-chat.test.tsx` and 18 of `chat-ways-in.test.tsx`'s then 21 — of the four that passed, three assert what holds before by design and one a stub's own shape; `lib/chat.test.ts` and `useChat.test.tsx` failed whole, their modules not there. **75 mutations, 74 caught by a named test**; the other (the timer alone kept on unmount) changes nothing a person or a server can see, the session being closed. The first whole run of the finished code found one fault, fixed here: pressing *Show earlier messages* within 48px of the newest moved the thread, and the plant that should have caught it had been marked caught by a test that was failing unplanted; both are in the table now. Build and lint clean (`index-DsEy5bJ9.js`, `index-DzVkLmsQ.css`, 992.68 KiB precache, 11 entries; 959.04 before); `alembic check` clean and the verifier on the dev DB 484 of 484.
-
-  **THE BUILD** is the *chat's screens* bullet under Deploys. **THE MEASUREMENTS** in headless Chrome against a stand-in API (`D:\projects\temp\CK-103-harness`; the shots in `D:\projects\temp\CK-103-screenshots`), 184 rows at 320 to 1440 in both themes with no miss at the end: the thread the only scroller with the header and the box still, a keyboard's shorter window, the newest, an arrival while reading, an earlier page within 1px, the extremes, held rows and their touch areas, the update notice over nothing, every control 44 to the touch, the contrasts (5.09 at the lowest, Send's icon) and the focus ring whole. They found two clipped focus rings, fixed here.
-
-  **THE LOCAL RUN** in console mode against the dev DB, reserved addresses alone, every write declared in its script and the report; run twice, each leaving one group and one gathering under *a former member*: words arriving in the other window in 0.1 to 1.9 s; the join line; each step opening on itself and Keep it going back; a held row from each seat, its words out of the page until *Show it*; a co-admin made and unmade, and the setting turned on and off, with the chats open; the outsider's chat, and the not-found screen once they were out; the photos-only member's none of it, no chat request sent; 4,001 characters and the 31st message refused with their words kept; no check while hidden and one 78 ms after the return; nothing of a chat in storage, the console or the API's log.
-
-  **Found and not fixed:** each check is **two** requests and two access lines, because `since` changes the address every time and a preflight is cached by its address; a chat's header, and the menu, keep a count until the page is opened again; a preview does not shorten a long message. The report lists every one.
-
-  Not pushed. The push redeploys Netlify and both Render services — the API's code changed, the worker's did not; no migration, so no verifier run is owed. The deploy window is the bullet's. Report: `D:\projects\temp\CK-103-report.md`.
-- *The 49 changelog entries that stood here — versions **1.131.1 down to 1.85.0** (2026-11-23 back to 2026-10-27), Phases CK-78 to CK-102 and the seventh doc audit's first and fifth fix batches — moved VERBATIM to `CLAUDE-history.md`, 1.122.0 to 1.85.0 at 1.126.0, 1.123.0 at 1.127.0, 1.124.0 at 1.128.0, 1.125.0 at 1.128.1, 1.126.0 at 1.129.0, 1.127.0 at 1.130.0, 1.128.0 at 1.131.0, 1.128.1 at 1.131.1, 1.129.0 at 1.132.0, 1.130.0 at 1.132.1, 1.131.0 at 1.133.0 and 1.131.1 at 1.133.1; nothing in them was rewritten.*
+- *The 50 changelog entries that stood here — versions **1.132.0 down to 1.85.0** (2026-11-24 back to 2026-10-27), Phases CK-78 to CK-103 and the seventh doc audit's first and fifth fix batches — moved VERBATIM to `CLAUDE-history.md`, 1.122.0 to 1.85.0 at 1.126.0, 1.123.0 at 1.127.0, 1.124.0 at 1.128.0, 1.125.0 at 1.128.1, 1.126.0 at 1.129.0, 1.127.0 at 1.130.0, 1.128.0 at 1.131.0, 1.128.1 at 1.131.1, 1.129.0 at 1.132.0, 1.130.0 at 1.132.1, 1.131.0 at 1.133.0, 1.131.1 at 1.133.1 and 1.132.0 at 1.134.0; nothing in them was rewritten.*
 - *The 87 changelog entries that stood here — versions **1.84.0 down to 1.0.0** (2026-10-25 back to 2026-08-17) — moved VERBATIM to `CLAUDE-history.md` at 1.88.0 (2026-10-28); nothing in them was rewritten.*
 
 ---
@@ -593,6 +595,7 @@ npm run test       # vitest (jsdom) — brand pins (CK-14) + gathering surface (
                    # + the notice's version 5 (CK-102: version 4's every paragraph unchanged and the chat's after the covers, sentence by sentence; TOS_VERSION, 6 since CK-104)
                    # + the chat's screens (CK-103: the pages, the check and the merge, sending, Delete and Remove, a held message's row, the thread's place, focus, the ways in)
                    # + the notice's version 6 (CK-104: version 5's every paragraph unchanged but the chat's one new sentence, the paragraph after it sentence by sentence; TOS_VERSION 6)
+                   # + the chat's second pair (CK-105: where a chat opens and what holds it, the button and its dot, the reading place, reactions, typing, the dot)
 ```
 
 ### Dev database (repo root)
@@ -2349,8 +2352,9 @@ is Steven's call, not a session's: `.env` is his file.
   row, whose line is the group's count — and *Gatherings*, whose rows open their
   pages directly; since CK-89.1 there is no facts line beneath the cover, because
   its *{N} people* was the People row's line word for word (Steven, 2026-11-07).
-  **There is no gathering's panel** (Steven; §2's banner). **The menu reads nothing
-  new**, never `/members` nor a group's gatherings. **It re-reads at once after an
+  **There is no gathering's panel** (Steven; §2's banner). **The menu reads its two
+  lists and the chats with something new** (`GET /chats/new`, the dot's; the CK-105
+  bullet), never `/members` nor a group's gatherings. **It re-reads at once after an
   act that changes what it draws with no page change** (CK-89.1): a rename, an
   approval and a removal on a People page, and Edit gathering's save and a date
   added, edited or removed on a gathering's page, each announce
@@ -2875,8 +2879,9 @@ is Steven's call, not a session's: `.env` is his file.
   phone's keyboard — and the update notice covers none of them. **The
   check** (`components/useChat.ts`): 2 s after the last answer, 5 s after
   one that failed, never two at once, none while the tab is hidden and one
-  at once on its return; `since` is the server's clock and never the
-  device's. **The merge** is one pure function in `lib/chat.ts`: the
+  at once on its return; its instant is the server's clock and never the
+  device's, sent as `X-Chat-Since` and never in the address. **The merge**
+  is one pure function in `lib/chat.ts`: the
   server's order to the microsecond, an id that left never back, a held
   message never replaced by a live copy of itself. In the photos-only view
   the address asks nothing for the chat and is the not-found screen, as a
@@ -2895,10 +2900,11 @@ is Steven's call, not a session's: `.env` is his file.
   sentence. **A held message is one dashed row in its place — what happened
   and *Show it* — its words out of the page until the press**, with the
   time and the days left when shown; the server alone decides who is sent
-  one, and which are shown is the page's own state. **The thread** opens at
-  the newest and stays there within 48px of it; anywhere else nothing moves
-  what is on screen, an earlier page included
-  (`components/useThreadScroll.ts`, by hand). One polite live region says
+  one, and which are shown is the page's own state. **In the thread nothing
+  another person does moves what is on screen**, an earlier page included
+  (`components/useThreadScroll.ts`, by hand); where it opens, the caller's
+  own send and the button to the newest are the CK-105 bullet's. One polite
+  live region says
   what a check brought from other people. **Nothing of a chat is stored on
   the device, in an address or in a log**; a link opens only on a press and
   no preview is fetched. **The ways in**: the **Chat card** on a group's
@@ -2915,15 +2921,14 @@ is Steven's call, not a session's: `.env` is his file.
   bundle on the old API reads neither, so for those minutes a gathering's
   header says *Chat* alone and the row of a message you removed yourself
   gives your name; an old bundle ignores both. No route, no log line and no
-  migration, so no verifier run is owed. Not built: the second pair's
-  screens (reactions, the mark for something new, a jump to the newest,
-  typing — the next bullet's backend),
-  the third pair's (*Added N photos* cards, the photo button) and keeping
-  unsent words. Detail: `reference/frontend/components.md` 1.61.1, The chat
-  on the surface convention; `reference/backend/api-reference.md` 1.53.0.
+  migration, so no verifier run is owed. Not built: the third pair's screens
+  (*Added N photos* cards, the photo button) and keeping unsent words; the
+  second pair's are the CK-105 bullet's. Detail:
+  `reference/frontend/components.md` 1.62.0, The chat on the surface
+  convention; `reference/backend/api-reference.md` 1.53.0.
 - Reactions, reading, what is new and typing in the chat (CK-104; migration
   0039; backend and the notice): **the chat's second pair, its backend; its
-  screens are the next phase's**
+  screens are the next bullet's**
   (`decisions/2026-11-21-the-chat-who-reads-it-and-what-it-keeps.md` §4, §5,
   §8, §14 phase 3; Steven's answers of 2026-11-25, Q1–Q5 as recommended).
   **Migration 0039** makes `post_reaction_kind` by `CREATE TYPE` (`like`,
@@ -2978,12 +2983,62 @@ is Steven's call, not a session's: `.env` is his file.
   (sending 6) before the API has redeployed is a 422 for those minutes; the
   old instance serving during the pre-deploy names neither table nor the new
   column; an old bundle ignores every new field; and a migration means the
-  verifier is owed on the deploy (head 0039, 501). Not built: the screens for
-  all of it (the reaction picker and chips, the *New messages* line, the dot,
-  the typing line, sending either header), replies, and "seen by", which stays
-  out. Detail: `reference/backend/api-reference.md` 1.54.1, the Chat router;
+  verifier is owed on the deploy (head 0039, 501). Not built: replies, and
+  "seen by", which stays out. Detail: `reference/backend/api-reference.md`
+  1.54.1, the Chat router;
   `reference/backend/database-schema.md` 2.45.1, migration 0039 and decision
   55.
+- The chat's second pair on the surface (CK-105; frontend only): **reactions,
+  where a chat opens and what holds it still, the button to the newest, the
+  reading place, the dot and typing** — the screens for CK-104's backend
+  (`decisions/2026-11-21-the-chat-who-reads-it-and-what-it-keeps.md` §4, §5,
+  §8, §14 phase 4; Steven's answers of 2026-11-26, Q1–Q5 as recommended and
+  the words as drafted). **Where a chat opens**: the first read is
+  `?open=true`; with `first_unread` set the *New messages* line is drawn above
+  that message at the top of the thread's view, the read ones above it, or the
+  thread is at its foot where what is below is short; with none, at the
+  newest. The line stays where it was drawn for the page's life. While `newer`
+  is set a sentinel at the loaded end (an `IntersectionObserver`) reads
+  `?after=` one page at a time, added below without moving the view, and a
+  check adds nothing across the gap. **What holds the thread still**: nothing
+  another person does moves what is on screen, at the foot as anywhere — an
+  arrival, chips growing a row, a held row, a newer page, typing — the topmost
+  entry kept in place and the list watched by a `ResizeObserver`; only
+  opening, the caller's own send (brought into view whole, or its top at the
+  view's top where it is taller), the button to the newest, *Show earlier
+  messages* and the person's own scrolling move it, and the thread's own size
+  changing while its newest is in view keeps the newest in view. **The button
+  to the newest** (`.jump`, 44px, over the thread alone) shows while the last
+  entry's foot is more than 48px below the view or `newer` is set, with **its
+  dot** while a live message from someone else is below the view, neither seen
+  nor reached when the chat opened; a press reads the newest page first across
+  a gap, and focus goes to the thread. **The reading place**: an entry is seen
+  when, with the tab visible, its foot has been in the view or it has filled
+  the view; one `PUT …/chat/read` carries the newest seen, when later than the
+  last sent, at most once a second, never two at once, with `keepalive` as the
+  page goes, and nothing on opening or while hidden. **Reactions** on a live
+  message, the caller's own included, never on a line, a held row or a Chat
+  card: chips in the server's order, the count unless null (a memorial's
+  chat), no total anywhere; **React** opens the picker's seven and *Who
+  reacted* beneath it, read as it opens (Q2); one press at a time, its answer
+  replacing the item's. **Typing** in the header in place of the count (Q1); a
+  check says `X-Chat-Typing: 1` while the box's words changed in the last four
+  seconds. **One request a check**: the instant rides `X-Chat-Since`, so the
+  address never changes and its preflight is kept two hours. **The dot**
+  (`lib/chatsNew.ts`, `components/NewDot.tsx`): one store in the page's memory
+  of `GET /chats/new`, read beside the menu's two reads, at once on the tab's
+  return and every 60 s while it is visible (Q4), never while it is hidden;
+  drawn on One list's rows, Rail and panel's tiles and rows, a group panel's
+  *Chat* row and both Chat cards, and never on the lists' cards or the tabs,
+  nor as a count. **Nothing is stored on the device**; the place moves only as
+  messages are seen, and no notice version is owed (version 6, read against
+  the screens sentence by sentence). **The deploy window**: the API it reads
+  is CK-104's, already live, so there is none; a tab on the old bundle keeps
+  CK-103's screens until the update notice's Reload. Not built: the third
+  pair (*Added N photos* cards, a gathering's photos in its chat, the photo
+  button); never in this arc "seen by" or a count of unread messages on
+  screen. Detail: `reference/frontend/components.md` 1.62.0, The chat's
+  second pair on the surface convention.
 - Browser session (CK-6, lifetime CK-9): `/auth/verify` 302s to
   `${APP_BASE_URL}/auth/callback#token=<jwt>` — the JWT rides the URL
   **fragment**, never the query string; the frontend stores it in
@@ -3121,9 +3176,9 @@ covey-keep/            # the code root (this repo)
 │       │   ├── Cover.tsx             # THE cover component: a 42px thumbnail, a page's cover card at the mockup's measure (wide — a group's page and a gathering's, with a badge on a gathering's; with no cover its empty cover a row in the flow, .cover-lead, beside Change cover), a list's featured card (hero) or grid card (tile), a section's head on a group's page (banner: never the empty cover, minted as it nears the viewport), or a group's panel in Rail and panel (panel: the web layer, the words on their own scrim), or a calendar day's cover (mark: the thumbnail layer, sized by its container); the layer from the variant's one table, the empty cover or the ground; a blob: URL from the cache, never a presigned one; DateBadge; CardLine (a card's date and time kept whole)
 │       │   ├── cover.test.tsx        # the component's states and layers, no presigned URL anywhere, the covers' styles adding no token, the menu through the cache; the wide card's empty cover a row in the flow
 │       │   ├── PageCover.tsx         # a page's cover card (the wide card, and a gathering page's badge) with the <h1> inside; for organisers Change cover over its panel: Upload a picture (followed to ready), Remove cover's step — the card's own — the hint; after an answer focus in the panel: the step on itself, never its Remove cover, a landing on Upload a picture (CK-95)
-│       │   ├── Frame.tsx             # the frame around every signed-in page: the two bars (neither on a chat), the menu as a drawer or a column from 900px; calls useKeepPlace once
+│       │   ├── Frame.tsx             # the frame around every signed-in page: the two bars (neither on a chat), the menu as a drawer or a column from 900px; calls useKeepPlace once; the dot's pace
 │       │   ├── frame.test.tsx        # the frame through the real route table: which routes carry it, the bars, the drawer as a dialog, the column, Home retired
-│       │   ├── Menu.tsx              # the menu in either layout: One list, or the rail and a panel read from the address (a group's has five chevron rows); re-reads on its signal
+│       │   ├── Menu.tsx              # the menu in either layout: One list, or the rail and a panel read from the address (a group's has five chevron rows); re-reads on its signal; draws the dot
 │       │   ├── menu.test.tsx         # the two lists, at most five coming up, never photos-only, Try again, the re-read on navigation, the footer
 │       │   ├── Icons.tsx             # the mockup's hand-drawn icons, the chat's bubble and Send's among them, 24px, currentColor, aria-hidden; no icon set
 │       │   ├── appUpdate.ts          # the update-state context and its type
@@ -3141,13 +3196,14 @@ covey-keep/            # the code root (this repo)
 │       │   ├── useKeepPlace.ts       # THE ONE OWNER OF A NAVIGATION'S SCROLL, called once from Frame: acts only on a pathname change; a return by history or by a link to the page just left, or a new page at the top; the record in a ref alone; a return held until the window (5 s), the person's act, a pathname change or the frame going; focus back to a link pressed from the keyboard
 │       │   ├── pagePlace.ts          # the context a page reads about its own visit: isReturn, shownAll, rememberShownAll; outside the frame every page is a new visit
 │       │   ├── CalendarView.tsx      # the calendar, one component for the tab, a group's calendar and Your gatherings' Calendar view: one read per shown month of CK-90's route alone, in the profile's zone; the month card (a button per day, one tab stop, the arrows), covers on a phone and chips from 640px, the day's list with each row's answer chip or photo count; every move replaces ?day=, never a history entry; Nothing on this day. only once the answer lands; Try again landing on the day's heading or the new Try again (CK-96)
-│       │   ├── ChatView.tsx          # a chat's screen, either kind: the header, the thread (the only scroller), the box; sending, the steps, held rows, focus, the live region
-│       │   ├── ChatEntry.tsx         # what a thread holds: a message and its links, Delete or Remove and its step, a held message's row, a line the chat wrote
-│       │   ├── ChatPreview.tsx       # the Chat card: Open chat, the newest three live entries from one read, the box as a link, empty and failed states; a 404 is no card
-│       │   ├── useChat.ts            # a chat read and kept current: the first read, the check's pace, a send whose answer was lost; one session a place
+│       │   ├── ChatView.tsx          # a chat's screen, either kind: the header (typing), the thread (the only scroller), the box; the line, the button to the newest, reading on, panels, focus
+│       │   ├── ChatEntry.tsx         # what a thread holds: a message (its chips, React, the picker, who reacted), Delete or Remove and its step, a held message's row, a line the chat wrote
+│       │   ├── ChatPreview.tsx       # the Chat card: Open chat with the dot, the newest three live entries from one read, the box as a link, empty and failed states; a 404 is no card
+│       │   ├── NewDot.tsx            # the dot: NewWords, its visually hidden words, and NewMark, its aria-hidden mark; drawn from lib/chatsNew.ts's store
+│       │   ├── useChat.ts            # a chat read and kept current: the open read, later pages, the check's pace, sending, reactions, typing, the reading place; one session a place
 │       │   ├── useChat.test.tsx      # the hook on fake timers under StrictMode, every answer given by hand
-│       │   ├── useChatRows.ts        # a chat's elements by message id, for focus and for the thread's place
-│       │   ├── useThreadScroll.ts    # where a thread stands: opens at the newest, stays within 48px of it, and otherwise nothing moves what is on screen
+│       │   ├── useChatRows.ts        # a chat's elements by message id (rows, React, chips, picker buttons), for focus and for the thread's place
+│       │   ├── useThreadScroll.ts    # where a thread stands: opens at the line or the newest, nothing another person does moves it, the caller's send in view, the button's dot, what is seen
 │       │   ├── useVisualViewport.ts  # the part of the window that can be seen, a phone's keyboard aside
 │       │   ├── chatArrival.ts        # the context that tells a chat its <h1> is owed focus, where the drawer closed on it
 │       │   ├── OutsideInvitations.tsx # inviting people outside the group: the card (its switch never moved before the server answers; the turn-on step always, the turn-off step only when the preview names someone or something pending; the page's email form and Waiting on handed in) and the alert (Got it posts the dismissal once); after a failed change focus goes back where it can be tried again, and no move takes focus from outside the card or the alert (CK-93.1), on the shared hook since CK-94; reads only what the page hands it — the body decides
@@ -3197,6 +3253,8 @@ covey-keep/            # the code root (this repo)
 │       │   ├── calendar.test.ts      # the days in a zone forced to differ, across a daylight-saving change and east of UTC; the days a date covers; the selection; every line as literals
 │       │   ├── chat.ts               # the chat's types, calls, merge and every approved line; nothing stored, nothing logged
 │       │   ├── chat.test.ts          # the merge and the server's order, what a sent message leaves in the box, the calls' codes, links, day lines, every line as a literal
+│       │   ├── chatsNew.ts           # THE DOT'S STORE, in memory alone: GET /chats/new beside the menu's reads, every 60 s while visible, never hidden; emptied with the session
+│       │   ├── chatsNew.test.ts      # the pace on fake timers, hidden and back, never two at once, a change of session, the open chat kept out
 │       │   ├── gatheringsView.ts     # THE ONE MODULE that names Your gatherings' view key (covey-keep:gatherings-view): exactly calendar is the Calendar view; a refused choice held for the load; a subscription
 │       │   ├── gatheringsView.test.ts # exactly calendar is the Calendar view; a throwing read, a write alone throwing; the subscription
 │       │   ├── menuLayout.test.ts    # exactly rail is Rail and panel; a throwing read, a write alone throwing; the subscription
@@ -3237,6 +3295,9 @@ covey-keep/            # the code root (this repo)
 │       │   ├── Chat.tsx                    # `/groups/:id/chat` and `/gatherings/:id/chat`: ChatView, keyed by its place
 │       │   ├── chat.test.tsx               # both pages through the real route table: what is drawn, sending, Delete and Remove by seat, held rows, the thread, the live region
 │       │   ├── chat-ways-in.test.tsx       # the Chat card on both pages, the pill, the photos-only view's none of it, the panel's row
+│       │   ├── chat-dot.test.tsx           # the dot in both layouts and on both cards, one read beside the menu's, nowhere else, the session
+│       │   ├── chat-reactions.test.tsx     # the chips by seat and kind, a memorial's, none on a line, a held row or a card; React, the picker, who reacted, each refusal
+│       │   ├── chat-reading.test.tsx       # where a chat opens, what holds it on a stub scroller, the caller's send, the button and its dot, reading on, the reading place, typing
 │       │   ├── focus-chat.test.tsx         # focus after every act's answer in a chat, a 404 and the drawer's row, a person who moved on keeping their place
 │       │   ├── co-hosts.test.tsx            # the role from caller_role; co-host management from both seats; a step found by its sentence (CK-94)
 │       │   ├── covers.test.tsx              # covers through the pages: the lists, the cards, Change cover by seat, the upload, Remove cover, the viewer's two buttons
@@ -3290,7 +3351,7 @@ covey-keep/            # the code root (this repo)
 │       │   └── you.test.tsx                 # You's words, Menu layout first and the stored choice, Appearance and the stored theme, the rows, Sign out; no Favorites
 │       └── test-support/  # files only the test suite loads
 │           ├── focus.ts       # gate, settle, dropFocusToBody and pressHeld: a request held on a released promise, and focus dropped to the body by hand as Chrome drops it from a disabled control (jsdom does not)
-│           ├── chat.ts       # withEmptyChat (a chat read answered empty ahead of a stub) and the builders of entries, held ones, pages and checks
+│           ├── chat.ts       # withEmptyChat (a chat read and the dot's read answered empty ahead of a stub) and the builders of entries, held ones, pages and checks
 │           ├── chatWorld.ts  # the fake server behind the chat tests, the app around it, stage (hold, refuse or lose a request), the clock stopped
 │           ├── photos.ts      # the fake server behind the photos' focus tests (CK-95): a gathering's photos, their acts, the viewer's layers, the uploads, the covers and a group's page, each answer changing the world as the backend would; photosWorld.answer refuses an act, photosWorld.hold holds it; a second gathering (CK-97), with its own detail and photos and a log of every list read (CK-98)
 │           ├── world96.ts     # the fake server behind CK-96's focus tests: sign-in, the plan, the join landing, the menu, the calendar, the lists, a gathering's and a group's pages, the People page, Settings' passkeys; world96.answer refuses a read or an act, world96.hold holds it, world96.inflight counts what is still in flight; the two invitation pages' preview and accept (CK-97)

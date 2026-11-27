@@ -98,7 +98,11 @@ describe('a group’s chat', () => {
     expect(box().hasAttribute('maxlength')).toBe(false)
     expect(sendButton().disabled).toBe(false)
     // Read once, together, and nothing else of the group's.
-    expect(asked(/^\/groups\/g-1(\/|\?|$)/).map((call) => call.path)).toEqual(['/groups/g-1', '/groups/g-1/chat'])
+    // MOVED AT CK-105, with its reason: the first read is `?open=true` (THE DESIGN §1).
+    expect(asked(/^\/groups\/g-1(\/|\?|$)/).map((call) => call.path)).toEqual([
+      '/groups/g-1',
+      '/groups/g-1/chat?open=true',
+    ])
   })
 
   test('its count, and Chat alone where there is none', async () => {
@@ -129,9 +133,10 @@ describe('a gathering’s chat', () => {
     expect(screen.getByText('4 invited · Chat')).toBeTruthy()
     expect(screen.getByRole('textbox', { name: 'Message Dinner' })).toBeTruthy()
     expect(within(thread()).getByText('The words of a')).toBeTruthy()
+    // MOVED AT CK-105, with its reason: the first read is `?open=true` (THE DESIGN §1).
     expect(asked(/^\/gatherings\/x-1(\/|\?|$)/).map((call) => call.path)).toEqual([
       '/gatherings/x-1',
-      '/gatherings/x-1/chat',
+      '/gatherings/x-1/chat?open=true',
     ])
     // Nothing of the group's is read for it.
     expect(asked(/^\/groups\/g-1/)).toEqual([])
@@ -175,7 +180,10 @@ describe('a gathering’s chat', () => {
     await quiet()
     expect(screen.getByText("There's no chat to show at this address.")).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Back to your gatherings' }).getAttribute('href')).toBe('/gatherings')
-    expect(asked(/chat/)).toEqual([])
+    // MOVED AT CK-105, with its reason: the frame's menu reads GET /chats/new for
+    // the dot (THE DESIGN §8), which is no read of this chat's; the pattern
+    // names a chat's own address alone.
+    expect(asked(/\/chat(?!s)/)).toEqual([])
     expect(text(main())).not.toContain('Surprise')
   })
 })
@@ -193,7 +201,8 @@ describe('no chat, and one that couldn’t be read', () => {
 
   test('a failed first read says so, and Try again reads it again', async () => {
     g1().items = [said('a', 20)]
-    stage('GET', /^\/groups\/g-1\/chat$/, { status: 500 })
+    // MOVED AT CK-105, with its reason: the first read is `?open=true` (THE DESIGN §1).
+    stage('GET', /^\/groups\/g-1\/chat\?open=true$/, { status: 500 })
     renderApp(GROUP)
     expect(await screen.findByRole('heading', { level: 1, name: 'Something went wrong' })).toBeTruthy()
     expect(text(screen.getByRole('alert'))).toContain("This chat couldn't be loaded just now.")
@@ -229,7 +238,8 @@ describe('no chat, and one that couldn’t be read', () => {
 
   test('No messages yet. only once the read has landed', async () => {
     const hold = gate()
-    stage('GET', /^\/groups\/g-1\/chat$/, { hold })
+    // MOVED AT CK-105, with its reason: the first read is `?open=true` (THE DESIGN §1).
+    stage('GET', /^\/groups\/g-1\/chat\?open=true$/, { hold })
     renderApp(GROUP)
     await screen.findByText('Loading…')
     await act(async () => void (await new Promise((resolve) => setTimeout(resolve, 20))))
@@ -1002,7 +1012,8 @@ describe('what a screen reader is told', () => {
     g1().page = 1
     g1().items = [said('a', 6), said('b', 5)]
     const hold = gate()
-    stage('GET', /^\/groups\/g-1\/chat$/, { hold })
+    // MOVED AT CK-105, with its reason: the first read is `?open=true` (THE DESIGN §1).
+    stage('GET', /^\/groups\/g-1\/chat\?open=true$/, { hold })
     renderApp(GROUP)
     await screen.findByText('Loading…')
     const region = live()
@@ -1098,7 +1109,8 @@ describe('what leaves the page', () => {
     await openChatAt(GROUP)
     type('Half a thought')
     const hold = gate()
-    stage('GET', /^\/groups\/g-2\/chat$/, { hold })
+    // MOVED AT CK-105, with its reason: the first read is `?open=true` (THE DESIGN §1).
+    stage('GET', /^\/groups\/g-2\/chat\?open=true$/, { hold })
     await go(FINCH)
     expect(text(main())).toContain('Loading…')
     expect(text(main())).not.toContain('The words of a')
@@ -1151,19 +1163,24 @@ describe('the thread', () => {
 
   const ten = () => Array.from({ length: 10 }, (_, n) => said(`a${n}`, 30 - n))
 
-  test('opens at the newest, and stays there as messages arrive', async () => {
+  // MOVED AT CK-105, with its reason: nothing another person does moves the
+  // screen (THE DESIGN §4), so the 48px follow is gone: an arrival at the foot
+  // leaves the view where it was, and the button to the newest is the way down.
+  test('opens at the newest, and an arrival at the foot moves nothing on screen', async () => {
     g1().items = ten()
     const scroll = stubHeights()
+    stubPlaces(scroll)
     await openChatAt(GROUP)
     expect(scroll.top).toBe(scroll.bottom())
+    const opened = scroll.top
     say('group:g-1', said('new', 0))
     await check()
-    expect(scroll.top).toBe(scroll.bottom())
-    // Within 48px is the bottom.
+    expect(scroll.top).toBe(opened)
     await scroll.at(scroll.bottom() - 48)
+    const near = scroll.top
     say('group:g-1', said('newer', 0))
     await check()
-    expect(scroll.top).toBe(scroll.bottom())
+    expect(scroll.top).toBe(near)
   })
 
   test('moves for nothing anywhere else, except your own send', async () => {
@@ -1209,7 +1226,8 @@ describe('the thread', () => {
     expect(scroll.top).toBe(900)
   })
 
-  test('even within 48px of the bottom, where an arrival would go to the newest', async () => {
+  // Renamed at CK-105: an arrival no longer goes to the newest (THE DESIGN §4).
+  test('even within 48px of the bottom', async () => {
     g1().page = 3
     g1().items = [...Array.from({ length: 2 }, (_, n) => said(`b${n}`, 60 - n)), ...ten().slice(7)]
     const scroll = stubHeights()

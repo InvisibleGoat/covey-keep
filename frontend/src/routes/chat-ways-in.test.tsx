@@ -91,7 +91,9 @@ describe('a group’s page', () => {
       mine('c', 20, { body: 'I have the truck.' }),
     ]
     await openGroup()
-    expect(asked(/\/chat/).map((call) => call.path)).toEqual(['/groups/g-1/chat?limit=20'])
+    // MOVED AT CK-105, with its reason: the menu's GET /chats/new (THE DESIGN §8) is no
+    // read of a chat's; the pattern names a chat's own address alone.
+    expect(asked(/\/chat(?!s)/).map((call) => call.path)).toEqual(['/groups/g-1/chat?limit=20'])
     expect(entries()).toEqual([
       flat(`LB${LEO}${formatTime(chat.items[1].created_at, ZONE)}Ten o’clock?`),
       'Kelly Brandt joined the group. Kelly Brandt sees the chat from today on.',
@@ -108,7 +110,9 @@ describe('a group’s page', () => {
     await openGroup()
     await act(async () => void document.dispatchEvent(new Event('visibilitychange')))
     await act(async () => void (await new Promise((resolve) => setTimeout(resolve, 2300))))
-    expect(asked(/\/chat/)).toHaveLength(1)
+    // MOVED AT CK-105, with its reason: the menu's GET /chats/new (THE DESIGN §8) is no
+    // read of a chat's; the pattern names a chat's own address alone.
+    expect(asked(/\/chat(?!s)/)).toHaveLength(1)
   })
 
   test('a time is alone today, and has its day otherwise', async () => {
@@ -124,8 +128,10 @@ describe('a group’s page', () => {
   })
 
   test('empty, and only once the read has landed', async () => {
+    // MOVED AT CK-105, with its reason: the menu's GET /chats/new (THE DESIGN §8) is no
+    // read of a chat's; the card's read is staged by a chat's own address alone.
     const hold = gate()
-    stage('GET', /\/chat/, { hold })
+    stage('GET', /\/chat(?!s)/, { hold })
     renderApp('/groups/g-1')
     await screen.findByRole('heading', { level: 1, name: 'The Lees' })
     await settle()
@@ -136,8 +142,10 @@ describe('a group’s page', () => {
   })
 
   test('a failure says so, Open chat and the box still there, and Try again reads it again', async () => {
+    // MOVED AT CK-105, with its reason: the menu's GET /chats/new (THE DESIGN §8) is no
+    // read of a chat's; the card's read is staged by a chat's own address alone.
     chatOf('group:g-1').items = [said('a', 5)]
-    stage('GET', /\/chat/, { status: 500 })
+    stage('GET', /\/chat(?!s)/, { status: 500 })
     await openGroup()
     expect(text(within(card()).getByRole('alert'))).toContain("The chat couldn't be loaded just now.")
     expect(within(card()).getByRole('link', { name: 'Open chat' })).toBeTruthy()
@@ -146,12 +154,12 @@ describe('a group’s page', () => {
     // Failing again: the new Try again.
     const first = again()
     let hold = gate()
-    stage('GET', /\/chat/, { hold, status: 500 })
+    stage('GET', /\/chat(?!s)/, { hold, status: 500 })
     await pressHeld(first, hold)
     expect(document.activeElement).toBe(again())
     // Landing: the heading.
     hold = gate()
-    stage('GET', /\/chat/, { hold })
+    stage('GET', /\/chat(?!s)/, { hold })
     await pressHeld(again(), hold)
     expect(within(card()).getByText('The words of a')).toBeTruthy()
     expect(document.activeElement).toBe(within(card()).getByRole('heading', { level: 2 }))
@@ -159,17 +167,21 @@ describe('a group’s page', () => {
   })
 
   test('Try again leaves a person who moved on where they are', async () => {
-    stage('GET', /\/chat/, { status: 500 })
+    // MOVED AT CK-105, with its reason: the menu's GET /chats/new (THE DESIGN §8) is no
+    // read of a chat's; the card's read is staged by a chat's own address alone.
+    stage('GET', /\/chat(?!s)/, { status: 500 })
     await openGroup()
     const hold = gate()
-    stage('GET', /\/chat/, { hold })
+    stage('GET', /\/chat(?!s)/, { hold })
     const people = screen.getByRole('link', { name: 'People' })
     await pressHeld(within(card()).getByRole('button', { name: 'Try again' }), hold, people)
     expect(document.activeElement).toBe(people)
   })
 
   test('a 404 is no card', async () => {
-    stage('GET', /\/chat/, { status: 404, always: true })
+    // MOVED AT CK-105, with its reason: the menu's GET /chats/new (THE DESIGN §8) is no
+    // read of a chat's; the card's read is staged by a chat's own address alone.
+    stage('GET', /\/chat(?!s)/, { status: 404, always: true })
     await openGroup()
     expect(noCard()).toBeNull()
     expect(screen.queryByText('Open chat')).toBeNull()
@@ -198,7 +210,9 @@ describe('a group’s page', () => {
     expect(within(card()).getByRole('link', { name: 'Message Finch' }).getAttribute('href')).toBe('/groups/g-2/chat')
     await act(async () => hold.release())
     expect(await within(card()).findByText('The words of z')).toBeTruthy()
-    expect(asked(/\/chat/)).toHaveLength(2)
+    // MOVED AT CK-105, with its reason: the menu's GET /chats/new (THE DESIGN §8) is no
+    // read of a chat's; the pattern names a chat's own address alone.
+    expect(asked(/\/chat(?!s)/)).toHaveLength(2)
   })
 
   test('a late answer for the group left behind is ignored', async () => {
@@ -239,7 +253,9 @@ describe('a gathering’s page, in full', () => {
     const heading = within(card()).getByRole('heading', { level: 2 })
     expect(inOrder(heading, card().querySelector('.gline')!, within(card()).getByRole('listitem'))).toBe(true)
     expect(within(card()).getByRole('link', { name: 'Message Dinner' }).getAttribute('href')).toBe('/gatherings/x-1/chat')
-    expect(asked(/\/chat/).map((call) => call.path)).toEqual(['/gatherings/x-1/chat?limit=20'])
+    // MOVED AT CK-105, with its reason: the menu's GET /chats/new (THE DESIGN §8) is no
+    // read of a chat's; the pattern names a chat's own address alone.
+    expect(asked(/\/chat(?!s)/).map((call) => call.path)).toEqual(['/gatherings/x-1/chat?limit=20'])
     // It is nowhere else on the page: not in Photos.
     expect(screen.getAllByText(CLOSED_LINE)).toHaveLength(1)
   })
@@ -315,7 +331,9 @@ describe('a gathering’s page, photos only', () => {
     expect(noCard()).toBeNull()
     expect(screen.queryByRole('link', { name: /Chat/ })).toBeNull()
     expect(screen.queryByText('Open chat')).toBeNull()
-    expect(asked(/\/chat/)).toEqual([])
+    // MOVED AT CK-105, with its reason: the menu's GET /chats/new (THE DESIGN §8) is no
+    // read of a chat's; the pattern names a chat's own address alone.
+    expect(asked(/\/chat(?!s)/)).toEqual([])
     const line = screen.getByText(CLOSED_LINE)
     expect(line.closest('.media-block')).not.toBeNull()
   })

@@ -107,8 +107,13 @@ function stubServer(server: Server = {}) {
   return mock
 }
 
+// MOVED AT CK-105, with its reason: the menu asks GET /chats/new with its two
+// lists (THE DESIGN §8), the dot's read and none of the lists'; its pins are in
+// routes/chat-dot.test.tsx, so the lists' reads are counted without it.
 function reads(mock: ReturnType<typeof vi.fn>) {
-  return mock.mock.calls.map(([url]) => String(url).replace(/^https?:\/\/[^/]+/, ''))
+  return mock.mock.calls
+    .map(([url]) => String(url).replace(/^https?:\/\/[^/]+/, ''))
+    .filter((path) => path !== '/chats/new')
 }
 
 function renderMenu(who: Person | null = person, at = '/groups') {
