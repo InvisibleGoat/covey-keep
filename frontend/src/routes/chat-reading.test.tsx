@@ -265,6 +265,48 @@ describe('what holds the thread still', () => {
     expect(line()).toBeNull()
     expect(scroll.top).toBe(scroll.bottom())
   })
+
+  // THE CK-105 FIX-UP: the keyboard rule had no pin (the review's R1).
+  test('a keyboard opening at the foot keeps the newest in view: the thread’s own size changing', async () => {
+    g1().items = ten()
+    const scroll = stubGeometry()
+    await openChatAt(GROUP)
+    expect(scroll.top).toBe(scroll.bottom())
+    await scroll.resize(250)
+    expect(scroll.top).toBe(scroll.bottom())
+    expect(scroll.place(rowOf('a9')).bottom).toBe(250)
+    expect(jump()).toBeNull()
+    // And closing it again.
+    await scroll.resize(400)
+    expect(scroll.top).toBe(scroll.bottom())
+    expect(scroll.place(rowOf('a9')).bottom).toBe(400)
+  })
+
+  test('the same change while scrolled up keeps the topmost entry in place, and the view doesn’t go to the foot', async () => {
+    g1().items = ten()
+    const scroll = stubGeometry()
+    await openChatAt(GROUP)
+    await scroll.at(330)
+    const anchor = () => scroll.place(rowOf('a2')).top
+    const was = anchor()
+    await scroll.resize(250)
+    expect(anchor()).toBe(was)
+    expect(scroll.top).toBe(330)
+    expect(scroll.top).toBeLessThan(scroll.bottom())
+  })
+
+  test('at the foot, a growth of the list alone (another person’s message) still moves nothing', async () => {
+    g1().items = ten()
+    const scroll = stubGeometry()
+    await openChatAt(GROUP)
+    const was = scroll.top
+    expect(was).toBe(scroll.bottom())
+    say('group:g-1', said('new', 0))
+    await check()
+    expect(screen.getByText('The words of new')).toBeTruthy()
+    expect(scroll.top).toBe(was)
+    expect(scroll.top).toBeLessThan(scroll.bottom())
+  })
 })
 
 // --- §5: the button to the newest ----------------------------------------------------------
@@ -321,6 +363,24 @@ describe('the button to the newest', () => {
     await openChatAt(GROUP)
     expect(line()).toBeNull()
     await scroll.at(0)
+    expect(jump()!.getAttribute('aria-label')).toBe('Go to the newest message')
+    expect(jump()!.querySelector('.dot')).toBeNull()
+  })
+
+  // THE CK-105 FIX-UP: a held message's part in the dot had no pin (the review's R2).
+  test('none for a message from someone else below the view that is taken out: a held row now', async () => {
+    g1().moderate = true
+    g1().items = ten()
+    const scroll = stubGeometry()
+    await openChatAt(GROUP)
+    await scroll.at(0)
+    say('group:g-1', said('new', 0))
+    await check()
+    expect(jump()!.getAttribute('aria-label')).toBe('Go to the newest message, new messages below')
+    takeOut('group:g-1', 'new', { by: 'Kelly Brandt', by_self: false })
+    await check()
+    expect(thread().querySelectorAll('.heldrow')).toHaveLength(1)
+    expect(scroll.top).toBe(0)
     expect(jump()!.getAttribute('aria-label')).toBe('Go to the newest message')
     expect(jump()!.querySelector('.dot')).toBeNull()
   })

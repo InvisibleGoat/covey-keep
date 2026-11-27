@@ -1062,6 +1062,79 @@ describe('the second pair: the mark', () => {
     expect(marks()).toHaveLength(1)
   })
 
+  // THE CK-105 FIX-UP: on a phone the page going is the tab hidden first (an
+  // app closed from the switcher never unmounts), so one still owed goes then.
+  it('sends one still owed at once with keepalive as the tab is hidden, inside the second’s gap', async () => {
+    await openGroup(three())
+    await act(async () => chat.markSeen('a'))
+    await marks()[0].answer(204)
+    await act(async () => chat.markSeen('b'))
+    expect(marks()).toHaveLength(1)
+    await setHidden(true)
+    expect(marks().map((call) => [call.body, call.keepalive])).toEqual([
+      [{ through: 'a' }, false],
+      [{ through: 'b' }, true],
+    ])
+    expect(marks()[1].at - marks()[0].at).toBeLessThan(MARK_GAP_MS)
+    await marks()[1].answer(204)
+    // Nothing for what comes into view while hidden, the gap opening or not.
+    await act(async () => chat.markSeen('c'))
+    await advance(5000)
+    expect(marks()).toHaveLength(2)
+  })
+
+  it('sends nothing as the tab is hidden where nothing is owed', async () => {
+    await openGroup(three())
+    await setHidden(true)
+    await setHidden(false)
+    expect(marks()).toEqual([])
+    await act(async () => chat.markSeen('a'))
+    await marks()[0].answer(204)
+    await setHidden(true)
+    await advance(5000)
+    expect(marks().map((call) => call.body)).toEqual([{ through: 'a' }])
+  })
+
+  it('sends nothing more as the tab is hidden while one is out, and the owed one with keepalive once it lands', async () => {
+    await openGroup(three())
+    await act(async () => chat.markSeen('a'))
+    await act(async () => chat.markSeen('b'))
+    expect(marks()).toHaveLength(1)
+    await setHidden(true)
+    expect(marks()).toHaveLength(1)
+    await act(async () => chat.markSeen('c'))
+    await marks()[0].answer(204)
+    expect(marks().map((call) => [call.body, call.keepalive])).toEqual([
+      [{ through: 'a' }, false],
+      [{ through: 'b' }, true],
+    ])
+    await marks()[1].answer(204)
+    await advance(5000)
+    expect(marks()).toHaveLength(2)
+  })
+
+  it('keeps its pace once the tab is back: a second from the last one sent', async () => {
+    await openGroup(three())
+    await act(async () => chat.markSeen('a'))
+    await marks()[0].answer(204)
+    await advance(500)
+    await act(async () => chat.markSeen('b'))
+    await setHidden(true)
+    await marks()[1].answer(204)
+    await setHidden(false)
+    expect(marks()).toHaveLength(2)
+    await act(async () => chat.markSeen('c'))
+    expect(marks()).toHaveLength(2)
+    await advance(999)
+    expect(marks()).toHaveLength(2)
+    await advance(1)
+    expect(marks().map((call) => [call.body, call.keepalive])).toEqual([
+      [{ through: 'a' }, false],
+      [{ through: 'b' }, true],
+      [{ through: 'c' }, false],
+    ])
+  })
+
   it('counts what stands above the line as read already', async () => {
     await openGroup(chatPage(three().items, { first_unread: 'c', unread: 1 }))
     await act(async () => chat.markSeen('b'))

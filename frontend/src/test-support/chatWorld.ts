@@ -585,12 +585,15 @@ export function startWorld(screenSize: { wide?: boolean; hover?: boolean } = {})
 // A thread 400 tall whose list starts 100 down, each entry `tall(li)` tall (100
 // unless a test says otherwise), the place of each arithmetic; the sentinel
 // sits at the list's end. jsdom has no layout, so this is all a test can see.
+// `resize` changes the thread's own height, as a phone's keyboard does, and
+// fires the scroll event the browser fires with it.
 
 export interface Geometry {
   readonly top: number
   at: (value: number) => Promise<void>
   bottom: () => number
   place: (element: Element) => { top: number; bottom: number }
+  resize: (height: number) => Promise<void>
 }
 
 export function stubGeometry(tall: (li: HTMLLIElement) => number = () => 100): Geometry {
@@ -598,22 +601,23 @@ export function stubGeometry(tall: (li: HTMLLIElement) => number = () => 100): G
   const rows = (threadElement: Element) => [...threadElement.querySelectorAll('li')]
   const height = (threadElement: Element) => 100 + rows(threadElement).reduce((sum, li) => sum + tall(li), 0)
   let top = 0
+  let view = 400
   vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockImplementation(function (this: Element) {
     return isThread(this) ? height(this) : 0
   })
   vi.spyOn(Element.prototype, 'clientHeight', 'get').mockImplementation(function (this: Element) {
-    return isThread(this) ? 400 : 0
+    return isThread(this) ? view : 0
   })
   vi.spyOn(Element.prototype, 'scrollTop', 'get').mockImplementation(function (this: Element) {
     return isThread(this) ? top : 0
   })
   vi.spyOn(Element.prototype, 'scrollTop', 'set').mockImplementation(function (this: Element, value: number) {
-    if (isThread(this)) top = Math.max(0, Math.min(value, height(this) - 400))
+    if (isThread(this)) top = Math.max(0, Math.min(value, height(this) - view))
   })
   const place = (element: Element) => {
     const threadElement = element.closest('.thread')
     if (threadElement === null) return { top: 0, bottom: 0 }
-    if (element === threadElement) return { top: 0, bottom: 400 }
+    if (element === threadElement) return { top: 0, bottom: view }
     if (element.classList.contains('sentinel')) {
       const end = height(threadElement) - top
       return { top: end, bottom: end + 1 }
@@ -639,8 +643,14 @@ export function stubGeometry(tall: (li: HTMLLIElement) => number = () => 100): G
       await act(async () => void fireEvent.scroll(thread()))
       await observers.look()
     },
-    bottom: () => height(thread()) - 400,
+    bottom: () => height(thread()) - view,
     place,
+    resize: async (value: number) => {
+      view = value
+      top = Math.max(0, Math.min(top, height(thread()) - view))
+      await act(async () => void fireEvent.scroll(thread()))
+      await observers.look()
+    },
   }
 }
 

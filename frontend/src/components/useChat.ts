@@ -27,8 +27,8 @@
 // THE READING PLACE (CK-105): the newest entry its person has had in view,
 // sent at most once a second and never two at once, never for what is in view
 // while the tab is hidden, a failed one dropped, and one still owed sent with
-// keepalive as the page goes. Nothing on opening: what stands above the line
-// is reached already.
+// keepalive as the tab is hidden or the page goes. Nothing on opening: what
+// stands above the line is reached already.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   canDraw,
@@ -617,19 +617,24 @@ export function openChat(place: ChatPlace, publish: (snapshot: ChatSnapshot) => 
     return marked === null || compareEntries(inView, marked) > 0 ? inView : null
   }
 
+  // While the tab is hidden the page may be frozen or gone before the second
+  // has passed — a phone's app closed from the switcher never unmounts — so
+  // one still owed goes at once, with keepalive, as soon as none is out.
   function sendMark() {
-    if (closed || markOut || !gapOpen) return
+    const hiding = document.hidden
+    if (closed || markOut || (!gapOpen && !hiding)) return
     const through = markOwed()
     if (through === null) return
     marked = through
     markOut = true
     gapOpen = false
+    if (gapTimer !== null) clearTimeout(gapTimer)
     gapTimer = setTimeout(() => {
       gapTimer = null
       gapOpen = true
       sendMark()
     }, MARK_GAP_MS)
-    void markRead(place, through.id).then((landed) => {
+    void markRead(place, through.id, hiding).then((landed) => {
       markOut = false
       if (closed) return
       if (landed) clearIfNewest(through)
@@ -646,11 +651,13 @@ export function openChat(place: ChatPlace, publish: (snapshot: ChatSnapshot) => 
     if (newest === undefined || compareEntries(through, newest) >= 0) clearOpenChat(place)
   }
 
-  // On the tab's return, at once; straight after one left in flight.
+  // On the tab's return, at once; straight after one left in flight. As it is
+  // hidden, a mark still owed.
   function onVisibility() {
     if (document.hidden) {
       clearTimer()
       setTyping([])
+      if (!moved()) sendMark()
       return
     }
     void checkNow()

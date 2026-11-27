@@ -1,11 +1,12 @@
 # CoveyKeep — Repo Operational Guide: history (moved from `CLAUDE.md`)
 
-**Version:** 1.15.0
+**Version:** 1.16.0
 **Last Updated:** 2026-11-27
 **Source:** Moved from the code-root `CLAUDE.md` v1.87.0 (`23bc47d`) at its 1.88.0 (2026-10-28) — the sixth doc audit's condensing proposal (Hub `covey-keep/audits/2026-10-28-doc-audit.md` 1.2.0 §19), applied at Steven's go. The `**Source:**` line and 87 changelog entries — versions 1.84.0 down to 1.0.0 (2026-10-25 back to 2026-08-17) — moved here byte for byte and in their original order.
 **Audience:** Any session that needs why the code-root `CLAUDE.md` changed, and when. Not auto-loaded: Claude Code loads `CLAUDE.md` alone.
 
 **Changelog:**
+- **1.16.0** (2026-11-27): One section appended at the code-root `CLAUDE.md` 1.134.1 (CK-105's fix-up), under its rule 1 — the changelog keeps its newest four entries: the entry 1.132.1 (2026-11-24, CK-103's fix-up), as it stood in v1.134.0. Verbatim; above it only this entry, the version line, the paragraph saying what 1.16.0 added and the section heading are new. 994,147 → 998,249 bytes.
 - **1.15.0** (2026-11-27): One section appended at the code-root `CLAUDE.md` 1.134.0 (Phase CK-105), under its rule 1 — the changelog keeps its newest four entries: the entry 1.132.0 (2026-11-24, Phase CK-103), as it stood in v1.133.1. Verbatim; above it only this entry, the version and date lines, the paragraph saying what 1.15.0 added and the section heading are new. 986,984 → 994,147 bytes.
 - **1.14.0** (2026-11-26): One section appended at the code-root `CLAUDE.md` 1.133.1 (CK-104's fix-up), under its rule 1 — the changelog keeps its newest four entries: the entry 1.131.1 (2026-11-23, CK-102's two fix-ups), as it stood in v1.133.0. Verbatim; above it only this entry, the version line, the paragraph saying what 1.14.0 added and the section heading are new. 982,452 → 986,984 bytes.
 - **1.13.0** (2026-11-26): One section appended at the code-root `CLAUDE.md` 1.133.0 (Phase CK-104), under its rule 1 — the changelog keeps its newest four entries: the entry 1.131.0 (2026-11-22, Phase CK-102), as it stood in v1.132.1. Verbatim; above it only this entry, the version and date lines, the paragraph saying what 1.13.0 added and the section heading are new. 974,868 → 982,452 bytes.
@@ -54,6 +55,8 @@
 **What 1.14.0 added.** One section at the end, moved from `CLAUDE.md` at its 1.133.1 (2026-11-26, CK-104's fix-up) under its rule 1: the changelog entry 1.131.1 (CK-102's two fix-ups), as it stood in v1.133.0. Verbatim, proved against `CLAUDE.md` at `938edd5` by CK-53's six conditions.
 
 **What 1.15.0 added.** One section at the end, moved from `CLAUDE.md` at its 1.134.0 (2026-11-27, Phase CK-105) under its rule 1: the changelog entry 1.132.0 (Phase CK-103), as it stood in v1.133.1. Verbatim, proved against `CLAUDE.md` at `60029aa` by CK-53's six conditions.
+
+**What 1.16.0 added.** One section at the end, moved from `CLAUDE.md` at its 1.134.1 (2026-11-27, CK-105's fix-up) under its rule 1: the changelog entry 1.132.1 (CK-103's fix-up), as it stood in v1.134.0. Verbatim, proved against `CLAUDE.md` at `a188920` by CK-53's six conditions.
 
 ---
 ## The `**Source:**` line, as it stood in `CLAUDE.md` v1.87.0
@@ -1049,3 +1052,19 @@ The three Deploys bullets that carried no amendment mark, so the 1.89.0 rewrite 
   **Found and not fixed:** each check is **two** requests and two access lines, because `since` changes the address every time and a preflight is cached by its address; a chat's header, and the menu, keep a count until the page is opened again; a preview does not shorten a long message. The report lists every one.
 
   Not pushed. The push redeploys Netlify and both Render services — the API's code changed, the worker's did not; no migration, so no verifier run is owed. The deploy window is the bullet's. Report: `D:\projects\temp\CK-103-report.md`.
+
+---
+## Changelog entry 1.132.1, as it stood in `CLAUDE.md` v1.134.0
+
+- **1.132.1** (2026-11-24): **CK-103's fix-up after review: the box stays open while a send waits** — at Steven's answer of 2026-11-24 (*"Yes, fix first"*, to *"Fix the Android keyboard before the push?"*), relayed by the planning session. While a send waited the box was `readOnly`, which lost what a person typed meanwhile and, in Chrome on Android, would drop the phone's keyboard. Rule 1 moved the entry 1.130.0 to `CLAUDE-history.md`, which takes 1.12.0. Code `bca7fa5`, in the Hub `766650f` (`reference/frontend/components.md` 1.61.1 — The chat on the surface's *Sending*, and the `/tos` row and the `Tos` entry at the notice's version 5; `reference/strategy/covey-keep-roadmap.md` 1.31.1 — *phase 1 of its six*). **Frontend; no request, route, word, class or field:**
+  - **changed:** `lib/chat.ts` (`stillToSend`), `components/useChat.ts` (`forgetLost` lets a lost send go only once it has answered) and `components/ChatView.tsx` (no `readOnly`; what a 201, or a lost answer found later, leaves in the box);
+  - **tests:** 17 new in `lib/chat.test.ts`, 2 in `components/useChat.test.tsx` and 13 in `routes/chat.test.tsx`, one of them the role's return after a step, a rule CK-103 built with no pin; one pin moved and renamed, the one that held the box read-only;
+  - **untouched:** the backend (1059 tests, not run again), the notice, `render.yaml`, both locks, `WORKING-ON-NOW.md` and the docs-root `CLAUDE.md`; CK-103's own findings 1, 3 and 5 left on purpose.
+
+  **1856 frontend tests in 90 files** (1824 before): **32 new**. Red first against the unchanged code: 31 of the 32 and the moved pin; the role's return passes there by design, its plant being its proof. **16 mutations, each compiling and caught by a named test**, and CK-103's nine on sending run again, all caught. Build and lint clean (`index-BZeWpXET.js`, `index-DzVkLmsQ.css`, 992.80 KiB precache, 11 entries).
+
+  **THE BUILD**: the box is never read-only and never disabled; Send is disabled while a send waits, and a second send, Enter's among them, refused. `stillToSend(box, sent)`, pure, is what a send that landed leaves: the words that went out of the box, what was typed after them kept, and a rewritten box as it is. A refusal keeps everything. A keystroke while a lost answer is being asked after lets nothing go, because the send would end as *it never arrived* though it was written, and be sent twice; one after the line is drawn lets it go, as before.
+
+  **THE BROWSER** (the CK-103 harness, at 375 and 1440, the old bundle and the new): through a held send the old box was read-only at every frame of the wait and the words typed into it were lost; the new one is at none, focus never leaves it, and *and more* is there after the 201 with the caret at its end, as it is after a lost answer found. **No phone's keyboard was tried**: `(qr)` on Steven's phone is the proof. **Found and not fixed**: a word still being composed as the answer lands has its composition ended when the box is set; what was typed stays, but an input method that then commits the whole word writes it after itself (*mormore*, staged in desktop Chrome). What an Android keyboard does there isn't known.
+
+  Not pushed; it rides the push that carries `c30bb28`, which redeploys Netlify and both Render services as it already did. Report: `D:\projects\temp\CK-103-fix-up-report.md`.
